@@ -14,7 +14,13 @@ RUN go mod download
 
 # Build cozy-stack
 COPY . .
-RUN ./scripts/build.sh release ./cozy-stack
+# scripts/build.sh runs `git describe` / `git rev-parse` to compute the
+# version string. When the working tree is COPY-ed into the container its
+# ownership no longer matches the host user, so recent git versions reject
+# operations on it ("detected dubious ownership"). Mark /app as safe so the
+# build step can read git metadata.
+RUN git config --global --add safe.directory /app \
+ && ./scripts/build.sh release ./cozy-stack
 
 
 # Multi-stage image: the main image
