@@ -55,5 +55,7 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha_tag }}
+          build-args: |
+            VERSION_STRING=${{ steps.meta.outputs.tag }}-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
