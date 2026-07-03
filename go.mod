@@ -51,13 +51,13 @@ require (
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/ugorji/go/codec v1.2.12
 	github.com/yuin/goldmark v1.7.4
-	golang.org/x/crypto v0.48.0
+	golang.org/x/crypto v0.51.0
 	golang.org/x/image v0.38.0
-	golang.org/x/net v0.50.0
+	golang.org/x/net v0.55.0
 	golang.org/x/oauth2 v0.35.0
 	golang.org/x/sync v0.20.0
-	golang.org/x/term v0.40.0
-	golang.org/x/text v0.35.0
+	golang.org/x/term v0.43.0
+	golang.org/x/text v0.37.0
 	google.golang.org/api v0.260.0
 )
 
@@ -186,7 +186,7 @@ require (
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/appengine/v2 v2.0.2 // indirect
 	google.golang.org/genproto v0.0.0-20260128011058-8636f8732409 // indirect
