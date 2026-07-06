@@ -10,6 +10,7 @@ node_modules
 /storage
 tmp
 /.idea
+.opencode
 
 *.log
 *.enc
