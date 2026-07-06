@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 )
 
@@ -50,18 +49,18 @@ type avatarInfo struct {
 }
 
 // grep linear-gradient path-to/cozy-ui/react/Avatar/helpers.js
-var cozyUIAvatarColorSchemes = map[string]*linearGradient{
-	"sunrise":     {CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#F8D280"}, {OffsetPerc: 96.03, Color: "#F2AC69"}}},
-	"downy":       {CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#81EAD4"}, {OffsetPerc: 96.03, Color: "#62C6B7"}}},
-	"sugarCoral":  {CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#F19E86"}, {OffsetPerc: 96.03, Color: "#F95967"}}},
-	"pinkBonnet":  {CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#E4ABF0"}, {OffsetPerc: 96.03, Color: "#D96EED"}}},
-	"blueMana":    {CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#85D9FD"}, {OffsetPerc: 96.03, Color: "#2A9EFC"}}},
-	"nightBlue":   {CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 39.32, Color: "#80AEFF"}, {OffsetPerc: 96.03, Color: "#883DFE"}}},
-	"snowPea":     {CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#BDF4A1"}, {OffsetPerc: 96.03, Color: "#52CE64"}}},
-	"pluviophile": {CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#A1D6F4"}, {OffsetPerc: 96.03, Color: "#52CEC2"}}},
-	"cornflower":  {CSSAngleDeg: 135, Stops: []linearGradientStop{{OffsetPerc: 00.00, Color: "#86D9D3"}, {OffsetPerc: 100.0, Color: "#1CCFB4"}}},
-	"paleGreen":   {CSSAngleDeg: 135, Stops: []linearGradientStop{{OffsetPerc: 00.00, Color: "#E2FA17"}, {OffsetPerc: 100.0, Color: "#75D8CB"}}},
-	"moonBlue":    {CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#6DCFFF"}, {OffsetPerc: 96.03, Color: "#3D88F8"}}},
+var cozyUIAvatarColorSchemes = []*linearGradient{
+	{CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#F8D280"}, {OffsetPerc: 96.03, Color: "#F2AC69"}}},
+	{CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#81EAD4"}, {OffsetPerc: 96.03, Color: "#62C6B7"}}},
+	{CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#F19E86"}, {OffsetPerc: 96.03, Color: "#F95967"}}},
+	{CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#E4ABF0"}, {OffsetPerc: 96.03, Color: "#D96EED"}}},
+	{CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#85D9FD"}, {OffsetPerc: 96.03, Color: "#2A9EFC"}}},
+	{CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 39.32, Color: "#80AEFF"}, {OffsetPerc: 96.03, Color: "#883DFE"}}},
+	{CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#BDF4A1"}, {OffsetPerc: 96.03, Color: "#52CE64"}}},
+	{CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#A1D6F4"}, {OffsetPerc: 96.03, Color: "#52CEC2"}}},
+	{CSSAngleDeg: 135, Stops: []linearGradientStop{{OffsetPerc: 00.00, Color: "#86D9D3"}, {OffsetPerc: 100.0, Color: "#1CCFB4"}}},
+	{CSSAngleDeg: 135, Stops: []linearGradientStop{{OffsetPerc: 00.00, Color: "#E2FA17"}, {OffsetPerc: 100.0, Color: "#75D8CB"}}},
+	{CSSAngleDeg: 136, Stops: []linearGradientStop{{OffsetPerc: 14.84, Color: "#6DCFFF"}, {OffsetPerc: 96.03, Color: "#3D88F8"}}},
 }
 
 // Encode an unclosed XML tag with the provided attributes
@@ -132,21 +131,12 @@ func encodeLinearGradient(encoder *xml.Encoder, gradient *linearGradient) error 
 	)
 }
 
-var cozyUIAvatarColorSchemes_sortedKeys []string
-
 // Deterministically pick one of the `cozyUIAvatarColorSchemes` for a given `gradientHash` number
 func getGradientByHash(gradientHash int) *linearGradient {
-	if len(cozyUIAvatarColorSchemes_sortedKeys) == 0 {
-		cozyUIAvatarColorSchemes_sortedKeys = make([]string, 0, len(cozyUIAvatarColorSchemes))
-		for k := range cozyUIAvatarColorSchemes {
-			cozyUIAvatarColorSchemes_sortedKeys = append(cozyUIAvatarColorSchemes_sortedKeys, k)
-		}
-		sort.Strings(cozyUIAvatarColorSchemes_sortedKeys)
-	}
 	if gradientHash < 0 {
 		gradientHash = -gradientHash
 	}
-	return cozyUIAvatarColorSchemes[cozyUIAvatarColorSchemes_sortedKeys[gradientHash%len(cozyUIAvatarColorSchemes_sortedKeys)]]
+	return cozyUIAvatarColorSchemes[gradientHash%len(cozyUIAvatarColorSchemes)]
 }
 
 var fontMap = make(map[fontDescriptor]string)
