@@ -79,4 +79,7 @@ var (
 	ErrFileInTrash = errors.New("Cannot share trashed file")
 	// ErrSystemFolder is used when trying to share a system folder
 	ErrSystemFolder = errors.New("Cannot share system folder")
+	// ErrGroupReadOnlyConflict is used when changing a group's read-only flag
+	// would conflict with another group's state for a member belonging to both.
+	ErrGroupReadOnlyConflict = errors.New("Cannot change group read-only flag: a member also belongs to another group with a conflicting read-only state")
 )

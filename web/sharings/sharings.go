@@ -1110,6 +1110,8 @@ func Routes(router *echo.Group) {
 	router.POST("/:sharing-id/recipients/self/readonly", DowngradeToReadOnly, checkSharingWritePermissions)  // On the recipient
 	router.DELETE("/:sharing-id/recipients/:index/readonly", RemoveReadOnly)                                 // On the sharer
 	router.DELETE("/:sharing-id/recipients/self/readonly", UpgradeToReadWrite, checkSharingWritePermissions) // On the recipient
+	router.POST("/:sharing-id/groups/:index/readonly", AddReadOnlyToGroup)                                   // On the sharer
+	router.DELETE("/:sharing-id/groups/:index/readonly", RemoveReadOnlyFromGroup)                            // On the sharer
 	router.DELETE("/:sharing-id", RevocationRecipientNotif)                                                  // On the recipient
 	router.DELETE("/:sharing-id/recipients/self", RevokeRecipientBySelf)                                     // On the recipient
 	router.DELETE("/:sharing-id/answer", RevocationOwnerNotif)
@@ -1291,7 +1293,7 @@ func wrapErrors(err error) error {
 		return jsonapi.Errorf(http.StatusRequestEntityTooLarge, "%s", err)
 	case permission.ErrExpiredToken:
 		return jsonapi.BadRequest(err)
-	case sharing.ErrGroupCannotBeAddedTwice, sharing.ErrMemberAlreadyAdded, sharing.ErrMemberAlreadyInGroup:
+	case sharing.ErrGroupCannotBeAddedTwice, sharing.ErrMemberAlreadyAdded, sharing.ErrMemberAlreadyInGroup, sharing.ErrGroupReadOnlyConflict:
 		return jsonapi.BadRequest(err)
 	case sharing.ErrFolderAlreadyShared:
 		return jsonapi.Conflict(err)

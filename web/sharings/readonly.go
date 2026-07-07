@@ -34,6 +34,9 @@ func AddReadOnly(c echo.Context) error {
 		return jsonapi.InvalidParameter("index", errors.New("Invalid index"))
 	}
 	if s.Owner {
+		if err = s.CheckMemberGroupReadOnlyConsistency(index); err != nil {
+			return jsonapi.BadRequest(errors.New("This member belongs to a group, change the group read-only flag instead"))
+		}
 		if err = s.AddReadOnlyFlag(inst, index); err != nil {
 			return wrapErrors(err)
 		}
@@ -88,6 +91,9 @@ func RemoveReadOnly(c echo.Context) error {
 		return jsonapi.InvalidParameter("index", errors.New("Invalid index"))
 	}
 	if s.Owner {
+		if err = s.CheckMemberGroupReadOnlyConsistency(index); err != nil {
+			return jsonapi.BadRequest(errors.New("This member belongs to a group, change the group read-only flag instead"))
+		}
 		if err = s.RemoveReadOnlyFlag(inst, index); err != nil {
 			return wrapErrors(err)
 		}

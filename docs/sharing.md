@@ -1246,6 +1246,8 @@ This route is used to add the read-only flag on a recipient of a sharing.
 
 **Note**: 0 is not accepted for `index`, as it is the sharer him-self.
 
+It returns 400 if the member belongs to any non-revoked group.
+
 ##### Request
 
 ```http
@@ -1300,10 +1302,66 @@ This route is used to remove the read-only flag on a recipient of a sharing.
 
 **Note**: 0 is not accepted for `index`, as it is the sharer him-self.
 
+It returns 400 if the member belongs to any non-revoked group.
+
 ##### Request
 
 ```http
 DELETE /sharings/ce8835a061d0ef68947afe69a0046722/recipients/3/readonly HTTP/1.1
+Host: alice.example.net
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+### POST /sharings/:sharing-id/groups/:group-index/readonly
+
+Downgrade all the members of a group to read-only.
+
+- The owner can always call this route.
+- A non-owner can call it only if:
+  - they are a member of the target group,
+  - the group is currently read-write,
+  - the sharing is not an OrgDrive.
+- The change is propagated to recipients via the standard credentials
+  exchange.
+
+#### Request
+
+```http
+POST /sharings/ce8835a061d0ef68947afe69a0046722/groups/0/readonly HTTP/1.1
+Host: alice.example.net
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+It returns 400 `group_read_only_conflict` if:
+
+- a member of the group also belongs to another group whose read-only state
+  differs from the target, or
+- a member of the group was added individually (`only_in_groups: false`) and
+  their individual `read_only` flag conflicts with the target state.
+
+### DELETE /sharings/:sharing-id/groups/:group-index/readonly
+
+Upgrade all the members of a group to read-write.
+
+- Only the owner can call this route.
+
+It returns 400 `group_read_only_conflict` under the same conditions as
+`POST /sharings/:sharing-id/groups/:group-index/readonly`.
+
+#### Request
+
+```http
+DELETE /sharings/ce8835a061d0ef68947afe69a0046722/groups/0/readonly HTTP/1.1
 Host: alice.example.net
 ```
 
