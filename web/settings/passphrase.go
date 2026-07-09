@@ -209,7 +209,7 @@ func (h *HTTPHandler) registerPassphraseFlagship(c echo.Context) error {
 		}
 		if !skipCertification {
 			_ = client.SetCreatedAtOnboarding(inst)
-			return auth.ReturnSessionCode(c, http.StatusAccepted, inst)
+			return auth.ReturnSessionCode(c, http.StatusAccepted, inst, "password")
 		}
 	}
 

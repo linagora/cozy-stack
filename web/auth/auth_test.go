@@ -3037,6 +3037,145 @@ func TestTokenExchange(t *testing.T) {
 			JSON().Object().
 			ValueEqual("error", `scope "io.cozy.unknown" is not allowed`)
 	})
+
+	// -----------------------------------------------------------------------
+	// Session code minting via app token exchange tokens
+	// -----------------------------------------------------------------------
+
+	t.Run("AppTokenMintsSessionCode", func(t *testing.T) {
+		const sid = "mail-app-sid-session-code-01"
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss": issuer,
+			"aud": []string{appTokenAudience},
+			"sub": "mail-user",
+			"sid": sid,
+			"iat": time.Now().Unix(),
+			"exp": time.Now().Add(time.Hour).Unix(),
+		})
+
+		resp := e.POST("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Origin", "https://mail."+testInstance.Domain).
+			WithJSON(map[string]string{
+				"id_token":      idToken,
+				"exchange_type": "app",
+			}).
+			Expect().
+			Status(http.StatusOK)
+
+		accessToken := resp.JSON().Object().Value("access_token").String().Raw()
+		require.NotEmpty(t, accessToken)
+
+		codeResp := e.POST("/auth/session_code").
+			WithHost(testInstance.Domain).
+			WithHeader("Authorization", "Bearer "+accessToken).
+			Expect().
+			Status(http.StatusCreated).
+			JSON().Object()
+
+		code := codeResp.Value("session_code").String().NotEmpty().Raw()
+		require.NotEmpty(t, code)
+	})
+
+	t.Run("AdminTokenCannotMintSessionCode", func(t *testing.T) {
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss":        issuer,
+			"aud":        []string{clientID},
+			"sub":        "admin-user",
+			"sid":        "admin-sid-session-code-02",
+			"iat":        time.Now().Unix(),
+			"exp":        time.Now().Add(time.Hour).Unix(),
+			"org_id":     testInstance.OrgID,
+			"org_domain": testInstance.OrgDomain,
+			"org_role":   "owner",
+		})
+
+		resp := e.POST("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Origin", "https://admin.example.com").
+			WithJSON(map[string]string{
+				"id_token": idToken,
+				"scope":    "io.cozy.files",
+			}).
+			Expect().
+			Status(http.StatusOK)
+
+		accessToken := resp.JSON().Object().Value("access_token").String().Raw()
+		require.NotEmpty(t, accessToken)
+
+		e.POST("/auth/session_code").
+			WithHost(testInstance.Domain).
+			WithHeader("Authorization", "Bearer "+accessToken).
+			Expect().
+			Status(http.StatusUnauthorized)
+	})
+
+	t.Run("NoTokenCannotMintSessionCode", func(t *testing.T) {
+		e.POST("/auth/session_code").
+			WithHost(testInstance.Domain).
+			Expect().
+			Status(http.StatusUnauthorized)
+	})
+
+	t.Run("AppTokenSessionCodeRoundTrip", func(t *testing.T) {
+		const sid = "mail-app-sid-roundtrip-03"
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss": issuer,
+			"aud": []string{appTokenAudience},
+			"sub": "mail-user",
+			"sid": sid,
+			"iat": time.Now().Unix(),
+			"exp": time.Now().Add(time.Hour).Unix(),
+		})
+
+		resp := e.POST("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Origin", "https://mail."+testInstance.Domain).
+			WithJSON(map[string]string{
+				"id_token":      idToken,
+				"exchange_type": "app",
+			}).
+			Expect().
+			Status(http.StatusOK)
+
+		accessToken := resp.JSON().Object().Value("access_token").String().Raw()
+		require.NotEmpty(t, accessToken)
+
+		codeResp := e.POST("/auth/session_code").
+			WithHost(testInstance.Domain).
+			WithHeader("Authorization", "Bearer "+accessToken).
+			Expect().
+			Status(http.StatusCreated).
+			JSON().Object()
+
+		sCode := codeResp.Value("session_code").String().NotEmpty().Raw()
+		require.NotEmpty(t, sCode)
+
+		// First use of session_code: should create a session and redirect
+		first := e.GET("/").
+			WithQuery("session_code", sCode).
+			WithHost(appTokenAppSlug+"."+testInstance.Domain).
+			WithRedirectPolicy(httpexpect.DontFollowRedirects).
+			Expect()
+
+		first.Status(http.StatusSeeOther)
+		first.Cookie("cozysessid").Value().NotEmpty()
+		first.Header("Location").NotContains("session_code")
+
+		// Second use of the same code (no cookie): code already consumed,
+		// should redirect to login
+		second := e.GET("/").
+			WithQuery("session_code", sCode).
+			WithHost(appTokenAppSlug+"."+testInstance.Domain).
+			WithRedirectPolicy(httpexpect.DontFollowRedirects).
+			Expect()
+
+		second.Status(http.StatusFound)
+		second.Header("Location").Contains("/auth/login")
+	})
 }
 
 func getLoginCSRFToken(e *httpexpect.Expect) string {
