@@ -169,20 +169,42 @@ half-migrated instance.
 `--dry-run`: walk + report counts/sizes without writing or flipping.
 `--purge-source`: NOT the default — see Rollback.
 
-### 6. Rollback & safety
+### 6. Rollback command
 
-- Source Swift data is **kept** by default. `--purge-source` is a **separate,
-  deferred** step (its own command / explicit flag) run only after a confidence
-  period.
-- Rollback while source is retained: set `FsScheme = ""` (or `swift`) and
-  reopen. Cheap and instant.
+Because the source backend is **retained by default**, rollback reuses the same
+generic `--to <scheme>` engine — there is no separate code path — with two
+modes:
+
+1. **Instant flip-back** —
+   `cozy-stack instances migrate-storage <domain> --to swift --flag-only`:
+   switches `fs_scheme` back **without copying**, pointing the instance at the
+   still-present Swift snapshot. Runs in a read-only window and verifies the
+   source objects are present before flipping.
+   - Refuses if the source was already purged (`--purge-source` has run).
+   - Any writes made on S3 **since the cutover are lost** (the Swift snapshot is
+     stale), so it warns and requires `--force`. Intended for immediate
+     post-cutover recovery, before real traffic writes to S3.
+
+2. **Safe re-migration** —
+   `cozy-stack instances migrate-storage <domain> --to swift`:
+   the same engine in reverse (read-only window, copy S3→Swift, verify, flip).
+   **No data loss**; use this once real writes have landed on S3.
+
+`--flag-only` is a general primitive ("switch the pointer to a backend that is
+already populated"); it is only meaningful for rollback since the forward
+migration must copy first.
+
+### 7. Safety & idempotence
+
+- Source data is **kept** by default. `--purge-source` is a **separate,
+  deferred** step run only after a confidence period.
 - Read-only window ⇒ the copied snapshot is consistent (no concurrent writes).
 - Copy is **idempotent**: re-running overwrites target objects; a failed run
-  leaves the flag unchanged (instance still on Swift), reopens the instance,
-  and reports. Partial target objects are overwritten on retry or removed by
-  `--purge-source` on the target if aborted.
+  leaves the flag unchanged (instance still on the source), reopens the
+  instance, and reports. Partial target objects are overwritten on retry or
+  removed by `--purge-source` on the target if aborted.
 
-### 7. Error handling
+### 8. Error handling
 
 - Any failure in copy or verify ⇒ do **not** flip `FsScheme`; reopen the
   instance on its original backend; surface the error with the failing
@@ -190,7 +212,7 @@ half-migrated instance.
 - Guard against running when the S3 target is unconfigured, or when `--to`
   equals the current scheme (no-op).
 
-### 8. Testing
+### 9. Testing
 
 - Reuse the MinIO testcontainer already in the VFS suite; use the afero
   backend as the migration **source** (no Swift server needed).
