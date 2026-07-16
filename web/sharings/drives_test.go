@@ -2327,6 +2327,136 @@ func TestSharedDriveDelegatedRecipientAddition(t *testing.T) {
 		require.ElementsMatch(t, []string{"Charlie Mixed", "Erin Mixed"}, sharingInvitationRecipientNames(t, env.betty, sharingID))
 	})
 
+	t.Run("CredentialsArePersistedBeforeCozyAutoAccept", func(t *testing.T) {
+		sharingID := createAcceptedSharedDriveForRecipient(
+			t,
+			env,
+			RecipientInfo{Name: "Betty Auto Accept", Email: "betty@example.net", ReadOnly: false},
+			env.betty,
+			env.tsB.URL,
+		)
+		eOwner, eBetty, _ := env.createClients(t)
+
+		ownerSharing, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		require.NotEmpty(t, ownerSharing.Rules)
+		require.NotEmpty(t, ownerSharing.Rules[0].Values)
+		fileID := createFile(t, eOwner, ownerSharing.Rules[0].Values[0], "auto-accept.txt", env.acmeToken)
+
+		render, _ := statik.NewDirRenderer("../../assets")
+		autoAcceptResult := make(chan error, 1)
+		var invitee *instance.Instance
+		invitee, inviteeToken, inviteeServer := newDriveRecipientTestServer(
+			t,
+			testify(t, "delegated_auto_accept_invitee"),
+			"invitee-auto-accept@example.net",
+			"Invitee Auto Accept",
+			render,
+			map[string]func(*echo.Group){
+				"/sharings": func(g *echo.Group) {
+					g.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+						return func(c echo.Context) error {
+							if err := next(c); err != nil {
+								return err
+							}
+							if c.Request().Method != http.MethodPut ||
+								c.QueryParam("shortcut") != "true" ||
+								c.Param("sharing-id") != sharingID {
+								return nil
+							}
+
+							recipientSharing, err := sharing.FindSharing(invitee, sharingID)
+							if err == nil && (len(recipientSharing.Members) == 0 || len(recipientSharing.Credentials) == 0) {
+								err = sharing.ErrInvalidSharing
+							}
+							if err == nil {
+								recipientSharing.Members[0].Instance = env.tsA.URL
+								err = couchdb.UpdateDoc(invitee, recipientSharing)
+							}
+							if err == nil {
+								err = sharing.HandleAutoAccept(invitee, &sharing.AutoAcceptMsg{
+									SharingID: sharingID,
+									State:     recipientSharing.Credentials[0].State,
+								})
+							}
+							select {
+							case autoAcceptResult <- err:
+							default:
+							}
+							return nil
+						}
+					})
+					sharings.Routes(g)
+				},
+			},
+		)
+
+		inviteeContact := createContactWithCozy(
+			t,
+			env.betty,
+			"Invitee Auto Accept",
+			"invitee-auto-accept@example.net",
+			inviteeServer.URL,
+		)
+		duplicate := createContactWithCozy(
+			t,
+			env.betty,
+			"Betty Duplicate",
+			"betty@example.net",
+			env.tsB.URL,
+		)
+
+		eBetty.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(makeAddRecipientsPayload(t, sharingID, "recipients", inviteeContact.ID(), duplicate.ID())).
+			Expect().Status(http.StatusOK)
+
+		select {
+		case err := <-autoAcceptResult:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "auto-accept did not run during the shortcut request")
+		}
+
+		require.Eventually(t, func() bool {
+			s, err := sharing.FindSharing(env.acme, sharingID)
+			if err != nil {
+				return false
+			}
+			for _, member := range s.Members {
+				if member.Email == "invitee-auto-accept@example.net" {
+					return member.Status == sharing.MemberStatusReady
+				}
+			}
+			return false
+		}, 5*time.Second, 50*time.Millisecond, "owner should see the auto-accepted recipient as ready")
+
+		require.Eventually(t, func() bool {
+			s, err := sharing.FindSharing(invitee, sharingID)
+			return err == nil && s.Active
+		}, 5*time.Second, 50*time.Millisecond, "invitee sharing should be active")
+
+		require.Eventually(t, func() bool {
+			req, err := http.NewRequestWithContext(
+				context.Background(),
+				http.MethodGet,
+				inviteeServer.URL+"/sharings/drives/"+sharingID+"/"+fileID,
+				nil,
+			)
+			if err != nil {
+				return false
+			}
+			req.Header.Set("Authorization", "Bearer "+inviteeToken)
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return false
+			}
+			_ = res.Body.Close()
+			return res.StatusCode == http.StatusOK
+		}, 10*time.Second, 100*time.Millisecond, "auto-accepted recipient should access shared files")
+	})
+
 	t.Run("GroupMemberWithoutAddressIsSynchronizedWithoutInvitation", func(t *testing.T) {
 		sharingID := createAcceptedSharedDriveForRecipient(
 			t,

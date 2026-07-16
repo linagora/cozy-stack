@@ -454,6 +454,83 @@ func authorizeDelegatedRecipientAddition(c echo.Context, s *sharing.Sharing, mem
 	return nil
 }
 
+const maxDelegatedRecipientUpdateRetries = 3
+
+// persistDelegatedRecipients stores the complete batch before any shortcut is
+// sent. A trusted recipient can auto-accept while the shortcut request is still
+// in progress, so its credential state must already be visible on the owner.
+func persistDelegatedRecipients(
+	c echo.Context,
+	inst *instance.Instance,
+	s *sharing.Sharing,
+	body *delegatedAddRecipientsBody,
+) (map[string]string, bool, error) {
+	current := s
+	for attempt := 0; ; attempt++ {
+		member, err := requestMember(c, current)
+		if err != nil {
+			return nil, false, wrapErrors(err)
+		}
+		if err = authorizeDelegatedRecipientAddition(c, current, member, body); err != nil {
+			return nil, false, err
+		}
+
+		memberIndex := -1
+		for i, m := range current.Members {
+			if m.Instance == member.Instance {
+				memberIndex = i
+			}
+		}
+		if memberIndex == -1 {
+			return nil, false, jsonapi.InternalServerError(sharing.ErrInvalidSharing)
+		}
+
+		for _, g := range body.Data.Relationships.Groups.Data {
+			g.AddedBy = memberIndex
+			current.Groups = append(current.Groups, g)
+		}
+
+		states := make(map[string]string)
+		hasShortcutInvitations := false
+		for _, m := range body.Data.Relationships.Recipients.Data {
+			state, err := current.AddDelegatedContact(inst, m)
+			if err != nil {
+				// Adding recipients is idempotent: keep processing the batch when a
+				// recipient is already active.
+				if errors.Is(err, sharing.ErrAlreadyAccepted) {
+					continue
+				}
+				if len(m.Groups) > 0 {
+					continue
+				}
+				return nil, false, wrapErrors(err)
+			}
+			if m.Instance != "" {
+				states[m.Instance] = state
+				hasShortcutInvitations = true
+			} else if m.Email != "" {
+				states[m.Email] = state
+			}
+		}
+
+		err = couchdb.UpdateDoc(inst, current)
+		if err == nil {
+			if current != s {
+				*s = *current
+			}
+			return states, hasShortcutInvitations, nil
+		}
+		if !couchdb.IsConflictError(err) || attempt >= maxDelegatedRecipientUpdateRetries {
+			return nil, false, wrapErrors(err)
+		}
+
+		current, err = sharing.FindSharing(inst, s.SID)
+		if err != nil {
+			return nil, false, wrapErrors(err)
+		}
+	}
+}
+
 // AddRecipientsDelegated is used to add members and groups to a sharing on the
 // owner's cozy when it's the recipient's cozy that sends the mail invitation.
 func AddRecipientsDelegated(c echo.Context) error {
@@ -466,67 +543,29 @@ func AddRecipientsDelegated(c echo.Context) error {
 	if !s.Owner || (!s.Open && !s.Drive) {
 		return echo.NewHTTPError(http.StatusForbidden)
 	}
-	member, err := requestMember(c, s)
-	if err != nil {
-		return wrapErrors(err)
-	}
-	memberIndex := -1
-	for i, m := range s.Members {
-		if m.Instance == member.Instance {
-			memberIndex = i
-		}
-	}
-	if memberIndex == -1 {
-		return jsonapi.InternalServerError(sharing.ErrInvalidSharing)
-	}
 
 	var body delegatedAddRecipientsBody
 	if err = json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
 		return jsonapi.BadJSON()
 	}
-	if err = authorizeDelegatedRecipientAddition(c, s, member, &body); err != nil {
+
+	states, hasShortcutInvitations, err := persistDelegatedRecipients(c, inst, s, &body)
+	if err != nil {
 		return err
 	}
 
-	for _, g := range body.Data.Relationships.Groups.Data {
-		g.AddedBy = memberIndex
-		s.Groups = append(s.Groups, g)
-	}
-
-	states := make(map[string]string)
-	for _, m := range body.Data.Relationships.Recipients.Data {
-		state, err := s.AddDelegatedContact(inst, m)
-		if err != nil {
-			// Adding recipients is idempotent: keep processing the batch when a
-			// recipient is already active.
-			if errors.Is(err, sharing.ErrAlreadyAccepted) {
-				continue
-			}
-			if len(m.Groups) > 0 {
-				continue
-			}
-			return wrapErrors(err)
-		}
-		// If we have an URL for the Cozy, we can create a shortcut as an invitation
-		if m.Instance != "" {
-			states[m.Instance] = state
-			var perms *permission.Permission
-			if s.PreviewPath != "" {
-				if perms, err = s.CreatePreviewPermissions(inst); err != nil {
-					return wrapErrors(err)
-				}
-			}
-			if err = s.SendInvitations(inst, perms); err != nil {
+	if hasShortcutInvitations {
+		var perms *permission.Permission
+		if s.PreviewPath != "" {
+			if perms, err = s.CreatePreviewPermissions(inst); err != nil {
 				return wrapErrors(err)
 			}
-		} else if m.Email != "" {
-			states[m.Email] = state
+		}
+		if err = s.SendInvitations(inst, perms); err != nil {
+			return wrapErrors(err)
 		}
 	}
 
-	if err := couchdb.UpdateDoc(inst, s); err != nil {
-		return wrapErrors(err)
-	}
 	cloned := s.Clone().(*sharing.Sharing)
 	go cloned.NotifyRecipients(inst, nil)
 	return c.JSON(http.StatusOK, states)

@@ -97,19 +97,22 @@ func (s *Sharing) updateMemberStatusesWithRetry(inst *instance.Instance) error {
 		if err == nil || !couchdb.IsConflictError(err) || attempt >= maxRetries {
 			return err
 		}
-		s, err = FindSharing(inst, s.SID)
+		latest, err := FindSharing(inst, s.SID)
 		if err != nil {
 			return err
 		}
 		for i, status := range desiredStatuses {
-			if i >= len(s.Members) {
+			if i >= len(latest.Members) {
 				continue
 			}
-			if s.Members[i].Status == MemberStatusReady {
+			if latest.Members[i].Status == MemberStatusReady {
 				continue
 			}
-			s.Members[i].Status = status
+			latest.Members[i].Status = status
 		}
+		// Keep the caller-owned sharing synchronized with the document used by
+		// the next retry.
+		*s = *latest
 	}
 }
 

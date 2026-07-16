@@ -1054,7 +1054,9 @@ recipient invitations. Data for direct recipients should contain an email
 address but if it is not known, an instance URL can also be provided. For
 shared drives, each delegated recipient or group can also carry a `read_only`
 flag, and the owner applies the drive-specific reshare rules when processing
-the request.
+the request. The owner persists the complete member and credential batch before
+sending shortcuts, so immediate auto-acceptance can safely resolve the
+invitation state.
 
 #### Request
 
