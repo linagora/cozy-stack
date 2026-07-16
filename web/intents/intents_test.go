@@ -1,16 +1,19 @@
 package intents
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/intent"
 	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/gavv/httpexpect/v2"
@@ -121,6 +124,29 @@ func TestIntents(t *testing.T) {
 			Object()
 
 		intentID = checkIntentResult(obj, appPerms, true, "https://app.cozy.example.net")
+	})
+
+	t.Run("NewAPIIntentMatchesGetEndpoint", func(t *testing.T) {
+		doc := &intent.Intent{}
+		require.NoError(t, couchdb.GetDoc(ins, consts.Intents, intentID, doc))
+
+		api := NewAPIIntent(doc, ins)
+		raw, err := jsonapi.MarshalObject(api)
+		require.NoError(t, err)
+
+		var got map[string]interface{}
+		require.NoError(t, json.Unmarshal(raw, &got))
+
+		require.Equal(t, "io.cozy.intents", got["type"])
+		require.Equal(t, intentID, got["id"])
+
+		attrs := got["attributes"].(map[string]interface{})
+		require.Equal(t, "PICK", attrs["action"])
+		require.Equal(t, "io.cozy.files", attrs["type"])
+		require.Equal(t, "https://app.cozy.example.net", attrs["client"])
+
+		links := got["links"].(map[string]interface{})
+		require.Equal(t, "/intents/"+intentID, links["self"])
 	})
 
 	t.Run("GetIntent", func(t *testing.T) {

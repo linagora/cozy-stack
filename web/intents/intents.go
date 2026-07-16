@@ -152,6 +152,10 @@ func wrapIntentsError(err error) error {
 	return jsonapi.InternalServerError(err)
 }
 
+func NewAPIIntent(doc *intent.Intent, ins *instance.Instance) *apiIntent {
+	return &apiIntent{doc: doc, ins: ins}
+}
+
 // Routes sets the routing for the intents service
 func Routes(router *echo.Group) {
 	router.POST("", createIntent)
