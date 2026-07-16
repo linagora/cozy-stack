@@ -28,6 +28,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/pkg/registry"
 	"github.com/cozy/cozy-stack/web/auth"
+	"github.com/cozy/cozy-stack/web/intents"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/cozy/cozy-stack/web/settings"
 	"github.com/cozy/cozy-stack/web/statik"
@@ -272,8 +273,6 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 		intentDoc = handleIntent(c, i, slug, intentID)
 	}
 
-	_ = intentDoc // threaded into serveParams in the next change
-
 	if route.Public && slug == consts.DataProxySlug {
 		// Allow to dataproxy to be embedded in a iframe from the login page of the
 		// stack for cleaning.
@@ -296,7 +295,7 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 	// XXX: Force include Warnings template in all app indexes
 	tmplText := string(buf)
 	if closeTagIdx := strings.Index(tmplText, "</head>"); closeTagIdx >= 0 {
-		tmplText = tmplText[:closeTagIdx] + "\n{{.Warnings}}\n" + tmplText[closeTagIdx:]
+		tmplText = tmplText[:closeTagIdx] + "\n{{.Warnings}}\n{{.IntentData}}\n" + tmplText[closeTagIdx:]
 	} else {
 		needsOpenTag := true
 		if openTagIdx := strings.Index(tmplText, "<head>"); openTagIdx >= 0 {
@@ -313,7 +312,7 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 				tmplText += "\n<head>"
 			}
 
-			tmplText += "\n{{.Warnings}}\n</head>\n" + after
+			tmplText += "\n{{.Warnings}}\n{{.IntentData}}\n</head>\n" + after
 		}
 	}
 
@@ -335,7 +334,7 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 			}
 		}
 	}
-	params := buildServeParams(c, i, webapp, isLoggedIn, sessID)
+	params := buildServeParams(c, i, webapp, intentDoc, isLoggedIn, sessID)
 
 	generated := &bytes.Buffer{}
 	if err := tmpl.Execute(generated, params); err != nil {
@@ -365,6 +364,7 @@ func buildServeParams(
 	c echo.Context,
 	inst *instance.Instance,
 	webapp *app.WebappManifest,
+	intentDoc *intent.Intent,
 	isLoggedIn bool,
 	sessID string,
 ) serveParams {
@@ -388,6 +388,7 @@ func buildServeParams(
 		Token:      token,
 		SubDomain:  subdomainsType,
 		Tracking:   tracking,
+		intent:     intentDoc,
 		webapp:     webapp,
 		instance:   inst,
 		isLoggedIn: isLoggedIn,
@@ -496,6 +497,7 @@ type serveParams struct {
 	Token      string
 	SubDomain  string
 	Tracking   bool
+	intent     *intent.Intent
 	webapp     *app.WebappManifest
 	instance   *instance.Instance
 	isLoggedIn bool
@@ -627,9 +629,26 @@ func (s serveParams) Warnings() (template.HTML, error) {
 	return warningsHTML(s.instance, s.isLoggedIn)
 }
 
+func (s serveParams) IntentData() (template.HTML, error) {
+	if s.intent == nil {
+		return "", nil
+	}
+	api := intents.NewAPIIntent(s.intent, s.instance)
+	raw, err := jsonapi.MarshalObject(api)
+	if err != nil {
+		return "", err
+	}
+	buf := new(bytes.Buffer)
+	if err := intentTemplate.Execute(buf, string(raw)); err != nil {
+		return "", err
+	}
+	return template.HTML(buf.String()), nil
+}
+
 var clientTemplate *template.Template
 var barTemplate *template.Template
 var warningsTemplate *template.Template
+var intentTemplate *template.Template
 
 // BuildTemplates ensure that cozy-client-js and the bar can be injected in templates
 func BuildTemplates() {
@@ -649,6 +668,10 @@ func BuildTemplates() {
 <meta name="user-action-required" data-title="{{ .Title }}" data-code="{{ .Code }}" data-detail="{{ .Detail }}" {{with .Links}}{{with .Self}}data-links="{{ . }}"{{end}}{{end}} />
 {{end}}
 {{end}}`,
+	))
+
+	intentTemplate = template.Must(template.New("intent-data").Parse(
+		`<script>window.__COZY_INTENT__ = JSON.parse({{.}})</script>`,
 	))
 }
 

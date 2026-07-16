@@ -274,17 +274,37 @@ func TestApps(t *testing.T) {
 		u, err := url.Parse(intent.Services[0].Href)
 		require.NoError(t, err)
 
-		csp := e.GET(u.Path).
+		resp := e.GET(u.Path).
 			WithHost(slug+"."+testInstance.Domain).
 			WithQueryString(u.RawQuery).
 			WithCookie("cozysessid", cozysessID).
-			Expect().Status(200).
-			Header(echo.HeaderContentSecurityPolicy)
+			Expect().Status(200)
+
+		csp := resp.Header(echo.HeaderContentSecurityPolicy)
 		csp.Contains("script-src")
 		csp.Contains("'wasm-unsafe-eval'")
 		csp.Contains("connect-src blob:")
 		csp.Contains("worker-src 'self' blob:;")
 		csp.Contains("frame-ancestors 'self' https://test-app.cozywithapps.example.net;")
+
+		body := resp.Body()
+		body.Contains(`window.__COZY_INTENT__ = JSON.parse(`)
+		body.Contains(intent.ID())
+		body.Contains("PICK")
+		body.Contains("io.cozy.foos")
+		body.Contains("https://test-app.cozywithapps.example.net")
+	})
+
+	t.Run("ServeWithoutIntentDoesNotInline", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		body := e.GET("/foo").
+			WithHost(slug+"."+testInstance.Domain).
+			WithCookie("cozysessid", cozysessID).
+			Expect().Status(200).
+			Body()
+
+		body.NotContains(`window.__COZY_INTENT__`)
 	})
 
 	t.Run("ServeWithAnIntentsClientURL", func(t *testing.T) {
