@@ -16,6 +16,7 @@ import (
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/model/vfs/vfsafero"
+	"github.com/cozy/cozy-stack/model/vfs/vfss3"
 	"github.com/cozy/cozy-stack/model/vfs/vfsswift"
 	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -196,6 +197,11 @@ func (i *Instance) GetContextName() string {
 	return i.ContextName
 }
 
+// GetOrgID returns the organization ID of the instance.
+func (i *Instance) GetOrgID() string {
+	return i.OrgID
+}
+
 // SessionSecret returns the session secret.
 func (i *Instance) SessionSecret() []byte {
 	// The prefix is here to invalidate all the sessions that were created on
@@ -261,6 +267,8 @@ func (i *Instance) MakeVFS() error {
 		default:
 			err = ErrInvalidSwiftLayout
 		}
+	case config.SchemeS3:
+		i.vfs, err = vfss3.New(i, index, disk, mutex)
 	default:
 		err = fmt.Errorf("instance: unknown storage provider %s", fsURL.Scheme)
 	}
@@ -285,6 +293,11 @@ func (i *Instance) AvatarFS() vfs.Avatarer {
 		default:
 			panic(ErrInvalidSwiftLayout)
 		}
+	case config.SchemeS3:
+		client := config.GetS3Client()
+		bucket := vfss3.BucketName(i.GetOrgID(), config.GetS3BucketPrefix())
+		keyPrefix := i.DBPrefix() + "/"
+		return vfss3.NewAvatarFs(client, bucket, keyPrefix)
 	default:
 		panic(fmt.Sprintf("instance: unknown storage provider %s", fsURL.Scheme))
 	}
@@ -309,6 +322,11 @@ func (i *Instance) ThumbsFS() vfs.Thumbser {
 		default:
 			panic(ErrInvalidSwiftLayout)
 		}
+	case config.SchemeS3:
+		client := config.GetS3Client()
+		bucket := vfss3.BucketName(i.GetOrgID(), config.GetS3BucketPrefix())
+		keyPrefix := i.DBPrefix() + "/"
+		return vfss3.NewThumbsFs(client, bucket, keyPrefix)
 	default:
 		panic(fmt.Sprintf("instance: unknown storage provider %s", fsURL.Scheme))
 	}

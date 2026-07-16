@@ -83,6 +83,8 @@ const (
 	// SchemeSwiftSecure is the URL scheme used to configure the swift filesystem
 	// in secure mode (HTTPS).
 	SchemeSwiftSecure = "swift+https"
+	// SchemeS3 is the URL scheme used to configure an S3-compatible filesystem.
+	SchemeS3 = "s3"
 )
 
 // defaultAdminSecretFileName is the default name of the file containing the

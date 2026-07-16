@@ -14,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	multierror "github.com/hashicorp/go-multierror"
+	"github.com/minio/minio-go/v7"
 	"github.com/ncw/swift/v2"
 	"github.com/spf13/afero"
 )
@@ -45,6 +46,8 @@ func SystemArchiver() Archiver {
 		return newAferoArchiver(fs)
 	case config.SchemeSwift, config.SchemeSwiftSecure:
 		return newSwiftArchiver()
+	case config.SchemeS3:
+		return newS3Archiver()
 	default:
 		panic(fmt.Errorf("exports: unknown storage provider %s", fsURL.Scheme))
 	}
@@ -148,4 +151,85 @@ func (a *switfArchiver) RemoveArchives(exportDocs []*ExportDoc) error {
 		return err
 	}
 	return nil
+}
+
+func newS3Archiver() Archiver {
+	client := config.GetS3Client()
+	bucket := config.GetS3BucketPrefix() + "-exports"
+	return &s3Archiver{
+		client: client,
+		bucket: bucket,
+		ctx:    context.Background(),
+	}
+}
+
+type s3Archiver struct {
+	client *minio.Client
+	bucket string
+	ctx    context.Context
+}
+
+func (a *s3Archiver) ensureBucket() error {
+	err := a.client.MakeBucket(a.ctx, a.bucket, minio.MakeBucketOptions{})
+	if err != nil {
+		code := minio.ToErrorResponse(err).Code
+		if code == "BucketAlreadyOwnedByYou" || code == "BucketAlreadyExists" {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (a *s3Archiver) OpenArchive(inst *instance.Instance, exportDoc *ExportDoc) (io.ReadCloser, error) {
+	objectName := exportDoc.Domain + "/" + exportDoc.ID()
+	obj, err := a.client.GetObject(a.ctx, a.bucket, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	// Verify the object exists by calling Stat; GetObject itself does not
+	// perform a network request until Read is called, and Stat triggers
+	// a HEAD that surfaces NoSuchKey early.
+	if _, err := obj.Stat(); err != nil {
+		obj.Close()
+		return nil, err
+	}
+	return obj, nil
+}
+
+func (a *s3Archiver) CreateArchive(exportDoc *ExportDoc) (io.WriteCloser, error) {
+	if err := a.ensureBucket(); err != nil {
+		return nil, err
+	}
+
+	objectName := exportDoc.Domain + "/" + exportDoc.ID()
+	pr, pw := io.Pipe()
+
+	go func() {
+		_, err := a.client.PutObject(a.ctx, a.bucket, objectName,
+			pr, -1,
+			minio.PutObjectOptions{ContentType: "application/tar+gzip"})
+		// Close the read side so that any error is propagated to the writer.
+		pr.CloseWithError(err)
+	}()
+
+	return pw, nil
+}
+
+func (a *s3Archiver) RemoveArchives(exportDocs []*ExportDoc) error {
+	if len(exportDocs) == 0 {
+		return nil
+	}
+
+	objectsCh := make(chan minio.ObjectInfo, len(exportDocs))
+	for _, e := range exportDocs {
+		objectsCh <- minio.ObjectInfo{Key: e.Domain + "/" + e.ID()}
+	}
+	close(objectsCh)
+
+	var errm error
+	for e := range a.client.RemoveObjects(a.ctx, a.bucket, objectsCh, minio.RemoveObjectsOptions{}) {
+		errm = multierror.Append(errm, e.Err)
+	}
+	return errm
 }
