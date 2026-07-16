@@ -90,6 +90,14 @@ security features. Please do not use this binary as your production server.
 		return nil, nil, fmt.Errorf("failed to init the S3 connection: %w", err)
 	}
 
+	// When a storage migration target is configured (e.g. migrating instances
+	// to S3 while the global default is still Swift), init that connection too.
+	if config.HasS3Target() {
+		if err := config.InitS3Connection(config.Fs{URL: config.MigrationTargetURL()}); err != nil {
+			return nil, nil, fmt.Errorf("failed to init the S3 migration target connection: %w", err)
+		}
+	}
+
 	workersList, err := job.GetWorkersList()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get the workers list: %w", err)
