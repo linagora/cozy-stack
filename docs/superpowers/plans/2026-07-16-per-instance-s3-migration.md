@@ -16,6 +16,7 @@
 - No cosign trailers in commits (project convention).
 - Only Swift-v3 (`SwiftLayout == 2`) is a supported migration source; reject v1/v2.
 - Migrated-but-unverified state is never persisted: `FsScheme` flips only after verification passes.
+- **S3 tests require a live MinIO container via Docker.** There is NO per-package `newTestS3VFS` fixture. The real, existing harness is `testutils.StartMinio(t) *MinioFixture` (`tests/testutils/minio_utils.go`) exposing `Client(t) *minio.Client` and `FsURL(bucketPrefix string) *url.URL`. Build an S3 VFS exactly like `makeS3FS` in `model/vfs/vfs_test.go:916`: `mf := testutils.StartMinio(t); config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}); s3fs, _ := vfss3.New(db, index, &diskImpl{}, mutex)`. Any test in this plan that references a `newTestS3VFS`/`newTestAvatarS3`/`minioGetOpts` helper means "build the S3 VFS/avatarer with this StartMinio pattern" — reuse it, do not invent a new container fixture. Tests that must reach unexported `*s3VFS` fields go in `package vfss3` (or an external `vfss3_test` package if importing `tests/testutils` would cycle — the implementer verifies and picks).
 
 ---
 
