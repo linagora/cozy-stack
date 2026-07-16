@@ -20,6 +20,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestShouldRetryDelegatedRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		response *http.Response
+		expected bool
+	}{
+		{name: "missing response"},
+		{name: "unauthorized", response: &http.Response{StatusCode: http.StatusUnauthorized}, expected: true},
+		{name: "forbidden", response: &http.Response{StatusCode: http.StatusForbidden}, expected: true},
+		{name: "moved", response: &http.Response{StatusCode: http.StatusGone}, expected: true},
+		{name: "bad request", response: &http.Response{StatusCode: http.StatusBadRequest}},
+		{name: "conflict", response: &http.Response{StatusCode: http.StatusConflict}},
+		{name: "not found", response: &http.Response{StatusCode: http.StatusNotFound}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, shouldRetryDelegatedRequest(tt.response))
+		})
+	}
+}
+
 func TestPreserveDelegatedResponseError(t *testing.T) {
 	t.Run("prefers the response returned after token refresh", func(t *testing.T) {
 		preRefreshRes := &http.Response{StatusCode: http.StatusUnauthorized}

@@ -390,7 +390,7 @@ func (s *Sharing) SendDelegated(inst *instance.Instance, api *APIDelegateAddCont
 	}
 	res, err := request.Req(opts)
 	preRefreshRes, preRefreshErr := res, err
-	if res != nil && res.StatusCode/100 == 4 {
+	if shouldRetryDelegatedRequest(res) {
 		res, err = RefreshToken(inst, res, err, s, &s.Members[0], c, opts, body)
 	}
 	if err != nil {
@@ -447,6 +447,20 @@ func (s *Sharing) SendDelegated(inst *instance.Instance, api *APIDelegateAddCont
 		}
 	}
 	return s.SendInvitationsToMembers(inst, api.members, states)
+}
+
+// shouldRetryDelegatedRequest restricts replay to authentication and instance
+// relocation responses. Retrying other client errors can duplicate invitations.
+func shouldRetryDelegatedRequest(res *http.Response) bool {
+	if res == nil {
+		return false
+	}
+	switch res.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusGone:
+		return true
+	default:
+		return false
+	}
 }
 
 func preserveDelegatedResponseError(
