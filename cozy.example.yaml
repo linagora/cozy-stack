@@ -67,6 +67,7 @@ fs:
 
   # url: file://localhost/var/lib/cozy
   # url: swift://openstack/?UserName={{ .Env.OS_USERNAME }}&Password={{ .Env.OS_PASSWORD }}&ProjectName={{ .Env.OS_PROJECT_NAME }}&UserDomainName={{ .Env.OS_USER_DOMAIN_NAME }}&Timeout={{ .Env.GOSWIFT_TIMEOUT }}
+  # url: s3://{{ .Env.S3_ENDPOINT }}?access_key={{ .Env.S3_ACCESS_KEY }}&secret_key={{ .Env.S3_SECRET_KEY }}&region={{ .Env.S3_REGION }}&bucket_prefix=cozy&use_ssl=true
 
   # Swift FS can be used with advanced parameters to activate TLS properties.
   # For using swift with https, you must use the "swift+https" scheme.

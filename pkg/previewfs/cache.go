@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/minio/minio-go/v7"
 	"github.com/ncw/swift/v2"
 	"github.com/spf13/afero"
 )
@@ -41,6 +42,10 @@ func SystemCache() Cache {
 		conn := config.GetSwiftConnection()
 		ctx := context.Background()
 		return swiftCache{conn, ctx}
+	case config.SchemeS3:
+		client := config.GetS3Client()
+		bucket := config.GetS3BucketPrefix() + "-previews"
+		return newS3Cache(client, bucket)
 	default:
 		panic(fmt.Errorf("previewfs: unknown storage provider %s", fsURL.Scheme))
 	}
@@ -149,6 +154,81 @@ func (s swiftCache) SetPreview(md5sum []byte, buffer *bytes.Buffer) error {
 		}
 	}
 	return err
+}
+
+type s3Cache struct {
+	client *minio.Client
+	bucket string
+	ctx    context.Context
+}
+
+func newS3Cache(client *minio.Client, bucket string) s3Cache {
+	return s3Cache{client: client, bucket: bucket, ctx: context.Background()}
+}
+
+func (s s3Cache) ensureBucket() error {
+	err := s.client.MakeBucket(s.ctx, s.bucket, minio.MakeBucketOptions{})
+	if err != nil {
+		code := minio.ToErrorResponse(err).Code
+		if code == "BucketAlreadyOwnedByYou" || code == "BucketAlreadyExists" {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (s s3Cache) getObject(name string) (*bytes.Buffer, error) {
+	obj, err := s.client.GetObject(s.ctx, s.bucket, name, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer obj.Close()
+
+	buf := &bytes.Buffer{}
+	_, err = buf.ReadFrom(obj)
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return nil, os.ErrNotExist
+		}
+		return nil, err
+	}
+	return buf, nil
+}
+
+func (s s3Cache) putObject(name string, buffer *bytes.Buffer) error {
+	data := buffer.Bytes()
+	_, err := s.client.PutObject(s.ctx, s.bucket, name,
+		bytes.NewReader(data), int64(len(data)),
+		minio.PutObjectOptions{ContentType: "image/jpg"})
+	if err != nil {
+		code := minio.ToErrorResponse(err).Code
+		if code == "NoSuchBucket" {
+			if berr := s.ensureBucket(); berr != nil {
+				return berr
+			}
+			_, err = s.client.PutObject(s.ctx, s.bucket, name,
+				bytes.NewReader(data), int64(len(data)),
+				minio.PutObjectOptions{ContentType: "image/jpg"})
+		}
+	}
+	return err
+}
+
+func (s s3Cache) GetIcon(md5sum []byte) (*bytes.Buffer, error) {
+	return s.getObject(iconFilename(md5sum))
+}
+
+func (s s3Cache) SetIcon(md5sum []byte, buffer *bytes.Buffer) error {
+	return s.putObject(iconFilename(md5sum), buffer)
+}
+
+func (s s3Cache) GetPreview(md5sum []byte) (*bytes.Buffer, error) {
+	return s.getObject(previewFilename(md5sum))
+}
+
+func (s s3Cache) SetPreview(md5sum []byte, buffer *bytes.Buffer) error {
+	return s.putObject(previewFilename(md5sum), buffer)
 }
 
 func iconFilename(md5sum []byte) string {
