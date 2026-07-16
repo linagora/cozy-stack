@@ -53,6 +53,12 @@ func InitDynamicAssetFS(fsURL string) error {
 			return err
 		}
 
+	case config.SchemeS3:
+		assetFS, err = NewS3FS()
+		if err != nil {
+			return err
+		}
+
 	default:
 		return fmt.Errorf("Invalid scheme %s for dynamic assets FS", u.Scheme)
 	}

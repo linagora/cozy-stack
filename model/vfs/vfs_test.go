@@ -17,6 +17,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/model/vfs/vfsafero"
+	"github.com/cozy/cozy-stack/model/vfs/vfss3"
 	"github.com/cozy/cozy-stack/model/vfs/vfsswift"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -54,6 +55,7 @@ func TestVfs(t *testing.T) {
 
 	aferoFS := makeAferoFS(t)
 	swiftFS := makeSwiftFS(t)
+	s3FS := makeS3FS(t)
 
 	var tests = []struct {
 		name string
@@ -61,6 +63,7 @@ func TestVfs(t *testing.T) {
 	}{
 		{"afero", aferoFS},
 		{"swift", swiftFS},
+		{"s3", s3FS},
 	}
 
 	for _, tt := range tests {
@@ -908,4 +911,32 @@ func makeSwiftFS(t *testing.T) vfs.VFS {
 	})
 
 	return swiftFs
+}
+
+func makeS3FS(t *testing.T) vfs.VFS {
+	t.Helper()
+
+	minioFixture := testutils.StartMinio(t)
+	db := &contexter{0, "io.cozy.vfs.s3.test", "io.cozy.vfs.s3.test", "cozy_beta"}
+	index := vfs.NewCouchdbIndexer(db)
+
+	require.NoError(t, config.InitS3Connection(config.Fs{
+		URL: minioFixture.FsURL("test"),
+	}))
+
+	mutex = config.Lock().ReadWrite(db, "vfs-s3-test")
+	s3Fs, err := vfss3.New(db, index, &diskImpl{}, mutex)
+	require.NoError(t, err)
+
+	require.NoError(t, couchdb.ResetDB(db, consts.Files))
+	t.Cleanup(func() { _ = couchdb.DeleteDB(db, consts.Files) })
+
+	g, _ := errgroup.WithContext(context.Background())
+	couchdb.DefineIndexes(g, db, couchdb.IndexesByDoctype(consts.Files))
+	couchdb.DefineViews(g, db, couchdb.ViewsByDoctype(consts.Files))
+
+	require.NoError(t, g.Wait())
+	require.NoError(t, s3Fs.InitFs())
+
+	return s3Fs
 }
