@@ -233,6 +233,10 @@ type Fs struct {
 	Versioning            FsVersioning
 	Contexts              map[string]interface{}
 	S3                    FsS3
+	// MigrationTarget, when set, is an alternate storage URL (e.g. s3://...)
+	// whose connection is initialized alongside the default one, so instances
+	// can be migrated to it while the global scheme stays unchanged.
+	MigrationTarget *url.URL
 }
 
 // FsS3 configures bucket provisioning and destinations by storage type.
@@ -509,6 +513,17 @@ func GetRedis(v *viper.Viper, mainOpt *redis.UniversalOptions, key, ptr string) 
 // FsURL returns a copy of the filesystem URL
 func FsURL() *url.URL {
 	return config.Fs.URL
+}
+
+// MigrationTargetURL returns the configured storage migration target URL, or nil.
+func MigrationTargetURL() *url.URL {
+	return config.Fs.MigrationTarget
+}
+
+// HasS3Target reports whether an S3 storage migration target is configured.
+func HasS3Target() bool {
+	u := config.Fs.MigrationTarget
+	return u != nil && u.Scheme == SchemeS3
 }
 
 // ServerAddr returns the address on which the stack is run
@@ -886,6 +901,14 @@ func UseViper(v *viper.Viper) error {
 		}
 	}
 
+	var migrationTarget *url.URL
+	if raw := v.GetString("fs.migration_target"); raw != "" {
+		migrationTarget, err = url.Parse(raw)
+		if err != nil {
+			return err
+		}
+	}
+
 	couch, err := makeCouch(v)
 	if err != nil {
 		return err
@@ -1200,8 +1223,9 @@ func UseViper(v *viper.Viper) error {
 				MaxNumberToKeep:            v.GetInt("fs.versioning.max_number_of_versions_to_keep"),
 				MinDelayBetweenTwoVersions: v.GetDuration("fs.versioning.min_delay_between_two_versions"),
 			},
-			Contexts: v.GetStringMap("fs.contexts"),
-			S3:       s3,
+			Contexts:        v.GetStringMap("fs.contexts"),
+			S3:              s3,
+			MigrationTarget: migrationTarget,
 		},
 		CouchDB: couch,
 		Jobs:    jobs,
