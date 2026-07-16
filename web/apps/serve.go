@@ -113,11 +113,13 @@ func handleAppNotFound(c echo.Context, i *instance.Instance, slug string) error 
 }
 
 // handleIntent will allow iframes from another app if the current app is
-// opened as an intent
-func handleIntent(c echo.Context, i *instance.Instance, slug, intentID string) {
+// opened as an intent. It returns the loaded intent so the caller can inline
+// it into the served page. A nil return means the intent could not be used
+// in that case the caller simply skips inlining, preserving the previous behavior.
+func handleIntent(c echo.Context, i *instance.Instance, slug, intentID string) *intent.Intent {
 	intent := &intent.Intent{}
 	if err := couchdb.GetDoc(i, consts.Intents, intentID, intent); err != nil {
-		return
+		return nil
 	}
 	allowed := false
 	for _, service := range intent.Services {
@@ -126,11 +128,11 @@ func handleIntent(c echo.Context, i *instance.Instance, slug, intentID string) {
 		}
 	}
 	if !allowed {
-		return
+		return nil
 	}
 	parts := strings.SplitN(intent.Client, "/", 2)
 	if len(parts) < 2 || parts[0] != consts.Apps {
-		return
+		return nil
 	}
 	from := app.ResolveClientURL(i, parts[1])
 	if !config.GetConfig().CSPDisabled {
@@ -143,6 +145,7 @@ func handleIntent(c echo.Context, i *instance.Instance, slug, intentID string) {
 			middlewares.AppendCSPRule(c, "frame-ancestors", defaultFrom)
 		}
 	}
+	return intent
 }
 
 // ServeAppFile will serve the requested file using the specified application
@@ -264,9 +267,12 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 		}
 	}
 
+	var intentDoc *intent.Intent
 	if intentID := c.QueryParam("intent"); intentID != "" {
-		handleIntent(c, i, slug, intentID)
+		intentDoc = handleIntent(c, i, slug, intentID)
 	}
+
+	_ = intentDoc // threaded into serveParams in the next change
 
 	if route.Public && slug == consts.DataProxySlug {
 		// Allow to dataproxy to be embedded in a iframe from the login page of the
