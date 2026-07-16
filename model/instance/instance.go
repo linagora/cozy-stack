@@ -88,6 +88,11 @@ type Instance struct {
 	// See model/vfs/vfsswift for more details.
 	SwiftLayout int `json:"swift_cluster,omitempty"`
 
+	// FsScheme, when non-empty, overrides the global fs.url scheme for this
+	// instance. Used to migrate a single instance to another storage backend
+	// (e.g. "s3") without changing the stack-wide default. Empty = global default.
+	FsScheme string `json:"fs_scheme,omitempty"`
+
 	CouchCluster int `json:"couch_cluster,omitempty"`
 
 	// PassphraseHash is a hash of a hash of the user's passphrase: the
@@ -187,6 +192,15 @@ func (i *Instance) DBPrefix() string {
 	return i.Domain
 }
 
+// StorageScheme returns the storage backend scheme effective for this instance:
+// the per-instance FsScheme override when set, otherwise the global fs.url scheme.
+func (i *Instance) StorageScheme() string {
+	if i.FsScheme != "" {
+		return i.FsScheme
+	}
+	return config.FsURL().Scheme
+}
+
 // DomainName returns the main domain name of the instance.
 func (i *Instance) DomainName() string {
 	return i.Domain
@@ -252,14 +266,13 @@ func (i *Instance) MakeVFS() error {
 	if i.vfs != nil {
 		return nil
 	}
-	fsURL := config.FsURL()
 	mutex := config.Lock().ReadWrite(i, "vfs")
 	index := vfs.NewCouchdbIndexer(i)
 	disk := vfs.DiskThresholder(i)
 	var err error
-	switch fsURL.Scheme {
+	switch i.StorageScheme() {
 	case config.SchemeFile, config.SchemeMem:
-		i.vfs, err = vfsafero.New(i, index, disk, mutex, fsURL, i.DirName())
+		i.vfs, err = vfsafero.New(i, index, disk, mutex, config.FsURL(), i.DirName())
 	case config.SchemeSwift, config.SchemeSwiftSecure:
 		switch i.SwiftLayout {
 		case 2:
@@ -270,16 +283,16 @@ func (i *Instance) MakeVFS() error {
 	case config.SchemeS3:
 		i.vfs, err = vfss3.New(i, index, disk, mutex)
 	default:
-		err = fmt.Errorf("instance: unknown storage provider %s", fsURL.Scheme)
+		err = fmt.Errorf("instance: unknown storage provider %s", i.StorageScheme())
 	}
 	return err
 }
 
 // AvatarFS returns the hidden filesystem for storing the avatar.
 func (i *Instance) AvatarFS() vfs.Avatarer {
-	fsURL := config.FsURL()
-	switch fsURL.Scheme {
+	switch i.StorageScheme() {
 	case config.SchemeFile:
+		fsURL := config.FsURL()
 		baseFS := afero.NewBasePathFs(afero.NewOsFs(),
 			path.Join(fsURL.Path, i.DirName(), vfs.ThumbsDirName))
 		return vfsafero.NewAvatarFs(baseFS)
@@ -299,16 +312,16 @@ func (i *Instance) AvatarFS() vfs.Avatarer {
 		keyPrefix := i.DBPrefix() + "/"
 		return vfss3.NewAvatarFs(client, bucket, keyPrefix)
 	default:
-		panic(fmt.Sprintf("instance: unknown storage provider %s", fsURL.Scheme))
+		panic(fmt.Sprintf("instance: unknown storage provider %s", i.StorageScheme()))
 	}
 }
 
 // ThumbsFS returns the hidden filesystem for storing the thumbnails of the
 // photos/image
 func (i *Instance) ThumbsFS() vfs.Thumbser {
-	fsURL := config.FsURL()
-	switch fsURL.Scheme {
+	switch i.StorageScheme() {
 	case config.SchemeFile:
+		fsURL := config.FsURL()
 		baseFS := afero.NewBasePathFs(afero.NewOsFs(),
 			path.Join(fsURL.Path, i.DirName(), vfs.ThumbsDirName))
 		return vfsafero.NewThumbsFs(baseFS)
@@ -328,7 +341,7 @@ func (i *Instance) ThumbsFS() vfs.Thumbser {
 		keyPrefix := i.DBPrefix() + "/"
 		return vfss3.NewThumbsFs(client, bucket, keyPrefix)
 	default:
-		panic(fmt.Sprintf("instance: unknown storage provider %s", fsURL.Scheme))
+		panic(fmt.Sprintf("instance: unknown storage provider %s", i.StorageScheme()))
 	}
 }
 
