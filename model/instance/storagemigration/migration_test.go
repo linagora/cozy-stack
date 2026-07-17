@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/storagemigration"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/model/vfs/vfsafero"
@@ -259,4 +260,103 @@ func assertFileContentOn(t *testing.T, fs vfs.VFS, doc *vfs.FileDoc, want []byte
 	require.NoError(t, err)
 	require.NoError(t, r.Close())
 	assert.Equal(t, want, got)
+}
+
+// setupMigrateInstance creates a real instance (via testutils, on the global
+// test backend, "mem") and populates it with a couple of files and an
+// avatar, then starts a MinIO test server and wires up the global S3 client
+// so config.HasS3Client() is true and Migrate can build an S3 target.
+func setupMigrateInstance(t *testing.T) *instance.Instance {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+
+	mf := testutils.StartMinio(t)
+	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}))
+
+	createInstanceFile(t, inst, "migrate-file1.txt", []byte("hello from migrate file 1"))
+	createInstanceFile(t, inst, "migrate-file2.txt", []byte("hello from migrate file 2, a bit longer"))
+
+	aw, err := inst.AvatarFS().CreateAvatar("image/png")
+	require.NoError(t, err)
+	_, err = aw.Write([]byte("fake png bytes for the migrate avatar"))
+	require.NoError(t, err)
+	require.NoError(t, aw.Close())
+
+	return inst
+}
+
+// createInstanceFile creates a file of the given name/content on the
+// instance's current VFS.
+func createInstanceFile(t *testing.T, inst *instance.Instance, name string, content []byte) *vfs.FileDoc {
+	t.Helper()
+
+	doc, err := vfs.NewFileDoc(name, "", int64(len(content)), nil, "text/plain", "text", time.Now(), false, false, false, []string{})
+	require.NoError(t, err)
+
+	f, err := inst.VFS().CreateFile(doc, nil)
+	require.NoError(t, err)
+
+	_, err = io.Copy(f, bytes.NewReader(content))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	got, err := inst.VFS().FileByPath("/" + name)
+	require.NoError(t, err)
+	return got
+}
+
+func TestMigrateFlipsSchemeAfterVerify(t *testing.T) {
+	inst := setupMigrateInstance(t)
+
+	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	require.NoError(t, err)
+	require.NotNil(t, rep)
+
+	assert.Equal(t, config.SchemeS3, inst.FsScheme)
+	assert.Greater(t, rep.Files, 0)
+	assert.False(t, inst.Blocked, "instance must be unblocked after a successful migration")
+
+	// Reads are now served from S3: build a fresh S3 VFS for the instance
+	// (mirroring what inst.VFS() would now build) and confirm the migrated
+	// files are readable from it.
+	index := vfs.NewCouchdbIndexer(inst)
+	disk := vfs.DiskThresholder(inst)
+	mutex := config.Lock().ReadWrite(inst, "vfs-migrate-test-read")
+	s3fs, err := vfss3.New(inst, index, disk, mutex)
+	require.NoError(t, err)
+
+	doc1, err := s3fs.FileByPath("/migrate-file1.txt")
+	require.NoError(t, err)
+	assertFileContentOn(t, s3fs, doc1, []byte("hello from migrate file 1"))
+
+	doc2, err := s3fs.FileByPath("/migrate-file2.txt")
+	require.NoError(t, err)
+	assertFileContentOn(t, s3fs, doc2, []byte("hello from migrate file 2, a bit longer"))
+}
+
+func TestMigrateDryRunDoesNotFlip(t *testing.T) {
+	inst := setupMigrateInstance(t)
+
+	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, DryRun: true})
+	require.NoError(t, err)
+	require.NotNil(t, rep)
+	assert.Greater(t, rep.Files, 0)
+
+	assert.Equal(t, "", inst.FsScheme)
+	assert.False(t, inst.Blocked, "instance must be unblocked after a dry-run migration")
+}
+
+func TestMigrateFlagOnlyRequiresForce(t *testing.T) {
+	inst := setupMigrateInstance(t)
+
+	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, FlagOnly: true})
+	require.Error(t, err)
+	assert.Equal(t, "", inst.FsScheme)
 }
