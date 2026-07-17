@@ -8,6 +8,7 @@
 package storagemigration
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,10 +16,16 @@ import (
 	"os"
 	"strings"
 
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/vfs"
+	"github.com/cozy/cozy-stack/model/vfs/vfss3"
+	"github.com/cozy/cozy-stack/model/vfs/vfsswift"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/cozy-stack/pkg/s3util"
 )
 
 // contentWriter is implemented by target VFS backends that can write object
@@ -263,4 +270,189 @@ func splitVersionID(versionDocID string) (fileID, internalID string) {
 		return versionDocID[:i], versionDocID[i+1:]
 	}
 	return versionDocID, ""
+}
+
+// Options configures a call to Migrate.
+type Options struct {
+	// To is the target storage scheme: config.SchemeS3 or config.SchemeSwift.
+	To string
+	// DryRun copies and verifies the content on the target backend but does
+	// not flip the instance's FsScheme: the instance keeps serving reads and
+	// writes from its current (source) backend.
+	DryRun bool
+	// FlagOnly switches the instance's FsScheme pointer to an already
+	// populated target backend without copying anything. It is intended for
+	// rollback (switching back to a backend that a previous migration left
+	// populated) and requires Force, since any write performed against the
+	// source since that previous cutover is lost.
+	FlagOnly bool
+	// Force is required together with FlagOnly, acknowledging the data-loss
+	// risk described above.
+	Force bool
+	// PurgeSource deletes the source backend's objects after a successful
+	// flip. It is a best-effort cleanup performed once the instance is
+	// already fully served from the target: a failure here does not revert
+	// the flip.
+	PurgeSource bool
+}
+
+// containerNamer is implemented by VFS backends (vfsswift's V3 layout) that
+// expose the underlying object-storage container name(s) they use, so
+// storagemigration can ensure the target container exists without
+// hand-rolling the naming scheme itself.
+type containerNamer interface {
+	ContainerNames() map[string]string
+}
+
+// Migrate moves an instance's object-storage content (files, versions,
+// avatar) from its current backend to opts.To, verifies the copy, and only
+// then flips the instance's FsScheme to the target. The instance is blocked
+// (instance.BlockedMoving) for the duration of the copy/verify and unblocked
+// on every return path.
+//
+// FsScheme is updated ONLY after Verify succeeds (or, for FlagOnly, after the
+// target backend has been validated); a DryRun or a failed Verify always
+// leaves FsScheme unchanged.
+func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
+	switch opts.To {
+	case config.SchemeS3, config.SchemeSwift:
+	default:
+		return nil, fmt.Errorf("storagemigration: unsupported target scheme %q", opts.To)
+	}
+
+	srcScheme := inst.StorageScheme()
+	if opts.To == srcScheme {
+		return nil, fmt.Errorf("storagemigration: instance %s already uses %q as its storage scheme", inst.DomainName(), opts.To)
+	}
+
+	if opts.To == config.SchemeS3 && !config.HasS3Client() {
+		return nil, errors.New("storagemigration: cannot migrate to s3: no S3 client is configured")
+	}
+	if opts.To == config.SchemeSwift && !config.HasSwiftConnection() {
+		return nil, errors.New("storagemigration: cannot migrate to swift: no swift connection is configured")
+	}
+
+	if srcScheme == config.SchemeSwift || srcScheme == config.SchemeSwiftSecure {
+		if inst.SwiftLayout != 2 {
+			return nil, fmt.Errorf("storagemigration: source swift layout %d is not supported, only layout 2 (v3) can be migrated", inst.SwiftLayout)
+		}
+	}
+
+	if opts.FlagOnly && !opts.Force {
+		return nil, errors.New("storagemigration: flag-only migration requires Force: any write performed against the source since the previous cutover would be lost")
+	}
+
+	// Build the SOURCE from the instance's current backend before touching
+	// anything (the instance already knows how to build it for its current
+	// scheme).
+	src := inst.VFS()
+	srcAv := inst.AvatarFS()
+
+	dst, dstAv, err := buildTarget(inst, opts.To)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := lifecycle.Block(inst, instance.BlockedMoving.Code); err != nil {
+		return nil, fmt.Errorf("storagemigration: block instance: %w", err)
+	}
+	defer func() {
+		_ = lifecycle.Unblock(inst)
+	}()
+
+	if opts.FlagOnly {
+		return flip(inst, opts, srcScheme, &Report{})
+	}
+
+	rep, err := CopyContent(inst, src, dst, srcAv, dstAv)
+	if err != nil {
+		return rep, err
+	}
+	if err := Verify(inst, dst, dstAv, rep); err != nil {
+		return rep, err
+	}
+
+	if opts.DryRun {
+		return rep, nil
+	}
+
+	return flip(inst, opts, srcScheme, rep)
+}
+
+// buildTarget constructs the VFS + Avatarer pair for the target scheme,
+// ensuring the underlying bucket/container exists, without touching the
+// CouchDB index (no InitFs: the index is shared with the source and must not
+// be reinitialized).
+func buildTarget(inst *instance.Instance, to string) (vfs.VFS, vfs.Avatarer, error) {
+	index := vfs.NewCouchdbIndexer(inst)
+	disk := vfs.DiskThresholder(inst)
+	mutex := config.Lock().ReadWrite(inst, "vfs-migration-target")
+
+	switch to {
+	case config.SchemeS3:
+		dst, err := vfss3.New(inst, index, disk, mutex)
+		if err != nil {
+			return nil, nil, fmt.Errorf("storagemigration: build s3 target: %w", err)
+		}
+		bucket := vfss3.BucketName(inst.GetOrgID(), config.GetS3BucketPrefix())
+		if err := s3util.EnsureBucket(context.Background(), config.GetS3Client(), bucket, config.GetS3Region()); err != nil {
+			return nil, nil, fmt.Errorf("storagemigration: ensure target bucket: %w", err)
+		}
+		dstAv := vfss3.NewAvatarFs(config.GetS3Client(), bucket, inst.DBPrefix()+"/")
+		return dst, dstAv, nil
+
+	case config.SchemeSwift:
+		dst, err := vfsswift.NewV3(inst, index, disk, mutex)
+		if err != nil {
+			return nil, nil, fmt.Errorf("storagemigration: build swift target: %w", err)
+		}
+		if cn, ok := dst.(containerNamer); ok {
+			if container, ok := cn.ContainerNames()["container"]; ok && container != "" {
+				if err := config.GetSwiftConnection().ContainerCreate(context.Background(), container, nil); err != nil {
+					return nil, nil, fmt.Errorf("storagemigration: ensure target container: %w", err)
+				}
+			}
+		}
+		dstAv := vfsswift.NewAvatarFsV3(config.GetSwiftConnection(), inst)
+		return dst, dstAv, nil
+
+	default:
+		return nil, nil, fmt.Errorf("storagemigration: unsupported target scheme %q", to)
+	}
+}
+
+// flip persists the FsScheme change to the target scheme and, if requested,
+// purges the source backend's objects on a best-effort basis. It never
+// reverts the flip: once the instance points at the target, the target is
+// the source of truth for the instance's content.
+func flip(inst *instance.Instance, opts Options, srcScheme string, rep *Report) (*Report, error) {
+	inst.FsScheme = opts.To
+	if err := instance.Update(inst); err != nil {
+		return rep, fmt.Errorf("storagemigration: persist storage scheme flip: %w", err)
+	}
+
+	if opts.PurgeSource {
+		if err := purgeSource(inst, srcScheme); err != nil {
+			return rep, fmt.Errorf("storagemigration: purge source after flip: %w", err)
+		}
+	}
+
+	return rep, nil
+}
+
+// purgeSource best-effort deletes the source backend's objects after a
+// successful flip. The instance already fully serves reads/writes from the
+// target at this point, so a purge failure is reported but never reverts the
+// flip.
+func purgeSource(inst *instance.Instance, srcScheme string) error {
+	switch srcScheme {
+	case config.SchemeS3:
+		bucket := vfss3.BucketName(inst.GetOrgID(), config.GetS3BucketPrefix())
+		prefix := inst.DBPrefix() + "/"
+		return s3util.DeletePrefixObjects(context.Background(), config.GetS3Client(), bucket, prefix)
+	case config.SchemeSwift, config.SchemeSwiftSecure:
+		return errors.New("storagemigration: purging a swift source is not implemented")
+	default:
+		return fmt.Errorf("storagemigration: purging source scheme %q is not implemented", srcScheme)
+	}
 }
