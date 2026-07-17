@@ -1,9 +1,10 @@
 // Package storagemigration implements the engine that copies an instance's
 // object-storage content (files, versions, avatar) from one VFS backend to
 // another, without touching the shared CouchDB index. It is used to move an
-// instance's files from Swift to S3 (or vice versa) while all other
-// instances sharing the same CouchDB cluster keep working against the same
-// io.cozy.files / io.cozy.files.versions documents.
+// instance's files between Swift and S3 — either direction, S3 to Swift as
+// well as Swift to S3 — while all other instances sharing the same CouchDB
+// cluster keep working against the same io.cozy.files /
+// io.cozy.files.versions documents.
 package storagemigration
 
 import (

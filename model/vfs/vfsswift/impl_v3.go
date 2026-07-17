@@ -579,6 +579,23 @@ func (sfs *swiftVFSV3) ImportFileVersion(version *vfs.Version, content io.ReadCl
 	return sfs.Indexer.CreateVersion(version)
 }
 
+// WriteContentAt streams content into the object backing the (docID,
+// internalID) key in this instance's container, creating NO CouchDB
+// document. Used by storage migration, which preserves the shared index and
+// only moves bytes.
+func (sfs *swiftVFSV3) WriteContentAt(docID, internalID string, content io.Reader, size int64) error {
+	objName := MakeObjectNameV3(docID, internalID)
+	f, err := sfs.c.ObjectCreate(sfs.ctx, sfs.container, objName, true, "", "application/octet-stream", nil)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(f, content); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 func (sfs *swiftVFSV3) RevertFileVersion(doc *vfs.FileDoc, version *vfs.Version) error {
 	if lockerr := sfs.mu.Lock(); lockerr != nil {
 		return lockerr
