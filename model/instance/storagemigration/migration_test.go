@@ -56,6 +56,11 @@ type migrationFixture struct {
 
 	srcAv vfs.Avatarer
 	dstAv vfs.Avatarer
+
+	// minioClient and bucket give tests raw access to the S3 target, e.g. to
+	// delete an object behind the target VFS's back for negative-path checks.
+	minioClient *minio.Client
+	bucket      string
 }
 
 func setupMigrationFixture(t *testing.T) *migrationFixture {
@@ -110,11 +115,13 @@ func setupMigrationFixture(t *testing.T) *migrationFixture {
 	dstAv := vfss3.NewAvatarFs(client, bucket, keyPrefix)
 
 	return &migrationFixture{
-		db:    db,
-		src:   src,
-		dst:   dst,
-		srcAv: srcAv,
-		dstAv: dstAv,
+		db:          db,
+		src:         src,
+		dst:         dst,
+		srcAv:       srcAv,
+		dstAv:       dstAv,
+		minioClient: client,
+		bucket:      bucket,
 	}
 }
 
@@ -221,6 +228,27 @@ func TestCopyContentMovesFilesVersionsAndAvatar(t *testing.T) {
 	assert.Equal(t, revBefore1, reread1.Rev())
 	assert.Equal(t, revBefore2, reread2.Rev())
 	assert.Equal(t, revBefore3, reread3.Rev())
+}
+
+func TestVerifySucceedsAfterCopyAndFailsWhenObjectMissing(t *testing.T) {
+	fx := setupMigrationFixture(t)
+
+	file1 := createSourceFile(t, fx, "file1.txt", []byte("hello from file 1"))
+	_ = createSourceFile(t, fx, "file2.txt", []byte("hello from file 2, a bit longer"))
+
+	rep, err := storagemigration.CopyContent(fx.db, fx.src, fx.dst, fx.srcAv, fx.dstAv)
+	require.NoError(t, err)
+
+	require.NoError(t, storagemigration.Verify(fx.db, fx.dst, fx.dstAv, rep))
+
+	// Remove one known target object directly via the raw MinIO client, then
+	// confirm Verify now detects the discrepancy.
+	keyPrefix := fx.db.DBPrefix() + "/"
+	objKey := vfss3.MakeObjectKey(keyPrefix, file1.DocID, file1.InternalID)
+
+	require.NoError(t, fx.minioClient.RemoveObject(context.Background(), fx.bucket, objKey, minio.RemoveObjectOptions{}))
+
+	assert.Error(t, storagemigration.Verify(fx.db, fx.dst, fx.dstAv, rep))
 }
 
 func assertFileContentOn(t *testing.T, fs vfs.VFS, doc *vfs.FileDoc, want []byte) {
