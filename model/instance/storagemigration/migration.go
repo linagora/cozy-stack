@@ -117,6 +117,51 @@ func Verify(db prefixer.Prefixer, dst vfs.VFS, dstAv vfs.Avatarer, expected *Rep
 	return nil
 }
 
+// sourceReport enumerates the instance's CouchDB documents (io.cozy.files
+// and io.cozy.files.versions) and checks srcAv for an avatar, to compute the
+// Report a FlagOnly flip expects the already-populated target to satisfy. It
+// does not read or write any object-storage content itself: it describes
+// what the source SHOULD have on the target, for Verify to confirm.
+func sourceReport(db prefixer.Prefixer, srcAv vfs.Avatarer) (*Report, error) {
+	rep := &Report{}
+
+	err := couchdb.ForeachDocs(db, consts.Files, func(_ string, raw json.RawMessage) error {
+		var doc vfs.FileDoc
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return fmt.Errorf("storagemigration: decode file doc: %w", err)
+		}
+		if doc.Type == consts.DirType {
+			return nil
+		}
+		rep.Files++
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	err = couchdb.ForeachDocs(db, consts.FilesVersions, func(_ string, _ json.RawMessage) error {
+		rep.Versions++
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	ar, _, err := srcAv.OpenAvatar()
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		// No avatar on the source: rep.AvatarCopied stays false.
+	case err != nil:
+		return nil, fmt.Errorf("storagemigration: open source avatar: %w", err)
+	default:
+		_ = ar.Close()
+		rep.AvatarCopied = true
+	}
+
+	return rep, nil
+}
+
 // verifyFiles re-enumerates every io.cozy.files document and confirms the
 // target object for each non-directory file exists with a matching size.
 func verifyFiles(db prefixer.Prefixer, stater contentStater, got *Report) error {
@@ -361,7 +406,20 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 	}()
 
 	if opts.FlagOnly {
-		return flip(inst, opts, srcScheme, &Report{})
+		// FlagOnly does not copy anything, but it must not flip onto a
+		// target that does not already hold the source's content: an
+		// unpopulated (or merely-existing, e.g. freshly EnsureBucket'd)
+		// target would otherwise silently strand the instance on zero
+		// files. Compute the expected counts from the source and verify
+		// the target really has them before flipping.
+		expected, err := sourceReport(inst, srcAv)
+		if err != nil {
+			return nil, err
+		}
+		if err := Verify(inst, dst, dstAv, expected); err != nil {
+			return expected, err
+		}
+		return flip(inst, opts, srcScheme, expected)
 	}
 
 	rep, err := CopyContent(inst, src, dst, srcAv, dstAv)
@@ -451,7 +509,20 @@ func purgeSource(inst *instance.Instance, srcScheme string) error {
 		prefix := inst.DBPrefix() + "/"
 		return s3util.DeletePrefixObjects(context.Background(), config.GetS3Client(), bucket, prefix)
 	case config.SchemeSwift, config.SchemeSwiftSecure:
-		return errors.New("storagemigration: purging a swift source is not implemented")
+		// The v3 swift layout uses a single, per-instance container (see
+		// vfsswift.NewV3), so purging the source is just deleting that
+		// container: build the same source VFS instance destroy/reset use
+		// (see lifecycle.destroy/reset calling inst.VFS().Delete()) and
+		// reuse its Delete(), which marks the container to-be-deleted and
+		// removes all its objects before removing the container itself.
+		index := vfs.NewCouchdbIndexer(inst)
+		disk := vfs.DiskThresholder(inst)
+		mutex := config.Lock().ReadWrite(inst, "vfs-migration-purge-source")
+		src, err := vfsswift.NewV3(inst, index, disk, mutex)
+		if err != nil {
+			return fmt.Errorf("storagemigration: build swift source for purge: %w", err)
+		}
+		return src.Delete()
 	default:
 		return fmt.Errorf("storagemigration: purging source scheme %q is not implemented", srcScheme)
 	}
