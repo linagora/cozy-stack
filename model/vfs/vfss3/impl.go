@@ -638,6 +638,22 @@ func (sfs *s3VFS) WriteContentAt(docID, internalID string, content io.Reader, si
 	return err
 }
 
+// StatContentAt returns the byte size of the object backing the (docID,
+// internalID) key, without touching CouchDB. It returns os.ErrNotExist when
+// the object is absent. Used by storage migration to verify a copy landed on
+// the target before flipping the instance's backend flag.
+func (sfs *s3VFS) StatContentAt(docID, internalID string) (int64, error) {
+	objKey := MakeObjectKey(sfs.keyPrefix, docID, internalID)
+	info, err := sfs.client.StatObject(sfs.ctx, sfs.bucket, objKey, minio.StatObjectOptions{})
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return 0, os.ErrNotExist
+		}
+		return 0, err
+	}
+	return info.Size, nil
+}
+
 func (sfs *s3VFS) RevertFileVersion(doc *vfs.FileDoc, version *vfs.Version) error {
 	if lockerr := sfs.mu.Lock(); lockerr != nil {
 		return lockerr

@@ -27,6 +27,13 @@ type contentWriter interface {
 	WriteContentAt(docID, internalID string, content io.Reader, size int64) error
 }
 
+// contentStater is implemented by target VFS backends that can report the
+// byte size of the object backing a (docID, internalID) key without
+// touching CouchDB. It returns os.ErrNotExist when the object is absent.
+type contentStater interface {
+	StatContentAt(docID, internalID string) (int64, error)
+}
+
 // Report summarizes a content copy performed by CopyContent.
 type Report struct {
 	Files        int
@@ -59,6 +66,103 @@ func CopyContent(db prefixer.Prefixer, src, dst vfs.VFS, srcAv, dstAv vfs.Avatar
 	}
 
 	return rep, nil
+}
+
+// Verify re-enumerates the same content that CopyContent copies (files,
+// versions, avatar) and confirms each object exists on dst with a byte size
+// matching the source CouchDB document, without creating or modifying any
+// CouchDB document. It compares the counted totals against expected (the
+// Report returned by CopyContent) and returns the FIRST discrepancy found as
+// a descriptive error.
+func Verify(db prefixer.Prefixer, dst vfs.VFS, dstAv vfs.Avatarer, expected *Report) error {
+	stater, ok := dst.(contentStater)
+	if !ok {
+		return fmt.Errorf("storagemigration: target backend does not support index-free stats")
+	}
+
+	got := &Report{}
+
+	if err := verifyFiles(db, stater, got); err != nil {
+		return err
+	}
+	if err := verifyVersions(db, stater, got); err != nil {
+		return err
+	}
+
+	if got.Files != expected.Files {
+		return fmt.Errorf("storagemigration: verify: expected %d files, found %d on target", expected.Files, got.Files)
+	}
+	if got.Versions != expected.Versions {
+		return fmt.Errorf("storagemigration: verify: expected %d versions, found %d on target", expected.Versions, got.Versions)
+	}
+
+	if expected.AvatarCopied {
+		ar, _, err := dstAv.OpenAvatar()
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("storagemigration: verify: avatar missing on target")
+		}
+		if err != nil {
+			return fmt.Errorf("storagemigration: verify: open target avatar: %w", err)
+		}
+		_ = ar.Close()
+	}
+
+	return nil
+}
+
+// verifyFiles re-enumerates every io.cozy.files document and confirms the
+// target object for each non-directory file exists with a matching size.
+func verifyFiles(db prefixer.Prefixer, stater contentStater, got *Report) error {
+	return couchdb.ForeachDocs(db, consts.Files, func(_ string, raw json.RawMessage) error {
+		var doc vfs.FileDoc
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return fmt.Errorf("storagemigration: decode file doc: %w", err)
+		}
+		if doc.Type == consts.DirType {
+			return nil
+		}
+
+		size, err := stater.StatContentAt(doc.DocID, doc.InternalID)
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("storagemigration: verify: file %s missing on target", doc.DocID)
+		}
+		if err != nil {
+			return fmt.Errorf("storagemigration: verify: stat target file %s: %w", doc.DocID, err)
+		}
+		if size != doc.ByteSize {
+			return fmt.Errorf("storagemigration: verify: file %s size mismatch: expected %d, got %d", doc.DocID, doc.ByteSize, size)
+		}
+
+		got.Files++
+		return nil
+	})
+}
+
+// verifyVersions re-enumerates every io.cozy.files.versions document and
+// confirms the target object for each version exists with a matching size.
+func verifyVersions(db prefixer.Prefixer, stater contentStater, got *Report) error {
+	return couchdb.ForeachDocs(db, consts.FilesVersions, func(_ string, raw json.RawMessage) error {
+		var ver vfs.Version
+		if err := json.Unmarshal(raw, &ver); err != nil {
+			return fmt.Errorf("storagemigration: decode version doc: %w", err)
+		}
+
+		fileID, internalID := splitVersionID(ver.DocID)
+
+		size, err := stater.StatContentAt(fileID, internalID)
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("storagemigration: verify: version %s missing on target", ver.DocID)
+		}
+		if err != nil {
+			return fmt.Errorf("storagemigration: verify: stat target version %s: %w", ver.DocID, err)
+		}
+		if size != ver.ByteSize {
+			return fmt.Errorf("storagemigration: verify: version %s size mismatch: expected %d, got %d", ver.DocID, ver.ByteSize, size)
+		}
+
+		got.Versions++
+		return nil
+	})
 }
 
 // copyFiles enumerates every io.cozy.files document (ForeachDocs is
