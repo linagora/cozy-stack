@@ -15,6 +15,7 @@ import (
 	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/instance/storagemigration"
 	"github.com/cozy/cozy-stack/model/notification"
 	"github.com/cozy/cozy-stack/model/notification/center"
 	"github.com/cozy/cozy-stack/model/oauth"
@@ -298,6 +299,26 @@ func deleteHandler(c echo.Context) error {
 		return wrapError(err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func migrateStorageHandler(c echo.Context) error {
+	domain := c.Param("domain")
+	inst, err := lifecycle.GetInstance(domain)
+	if err != nil {
+		return wrapError(err)
+	}
+	opts := storagemigration.Options{
+		To:          c.QueryParam("to"),
+		DryRun:      c.QueryParam("dry_run") == "true",
+		FlagOnly:    c.QueryParam("flag_only") == "true",
+		Force:       c.QueryParam("force") == "true",
+		PurgeSource: c.QueryParam("purge_source") == "true",
+	}
+	rep, err := storagemigration.Migrate(inst, opts)
+	if err != nil {
+		return wrapError(err)
+	}
+	return c.JSON(http.StatusOK, rep)
 }
 
 func setAuthMode(c echo.Context) error {
@@ -784,6 +805,9 @@ func Routes(router *echo.Group) {
 	router.GET("/contexts", lsContexts)
 	router.GET("/contexts/:name", showContext)
 	router.GET("/with-app-version/:slug/:version", appVersion)
+
+	// Storage migration
+	router.POST("/:domain/migrate-storage", migrateStorageHandler)
 
 	// Checks
 	router.GET("/:domain/fsck", fsckHandler)
