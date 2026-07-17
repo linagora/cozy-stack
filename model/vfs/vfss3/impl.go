@@ -625,6 +625,19 @@ func (sfs *s3VFS) ImportFileVersion(version *vfs.Version, content io.ReadCloser)
 	return sfs.Indexer.CreateVersion(version)
 }
 
+// WriteContentAt streams content into the object backing the (docID, internalID)
+// key, creating NO CouchDB document. It is used by storage migration, which
+// preserves the shared index and only moves object bytes. size may be -1 when
+// unknown (falls back to multipart).
+func (sfs *s3VFS) WriteContentAt(docID, internalID string, content io.Reader, size int64) error {
+	objKey := MakeObjectKey(sfs.keyPrefix, docID, internalID)
+	_, err := sfs.client.PutObject(sfs.ctx, sfs.bucket, objKey, content, size, minio.PutObjectOptions{
+		ContentType:    "application/octet-stream",
+		SendContentMd5: true,
+	})
+	return err
+}
+
 func (sfs *s3VFS) RevertFileVersion(doc *vfs.FileDoc, version *vfs.Version) error {
 	if lockerr := sfs.mu.Lock(); lockerr != nil {
 		return lockerr
