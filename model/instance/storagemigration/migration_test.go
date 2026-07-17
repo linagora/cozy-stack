@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"errors"
 	"io"
 	"net/url"
 	"testing"
@@ -14,12 +15,14 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/model/vfs/vfsafero"
 	"github.com/cozy/cozy-stack/model/vfs/vfss3"
+	"github.com/cozy/cozy-stack/model/vfs/vfsswift"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/minio/minio-go/v7"
+	swiftv2 "github.com/ncw/swift/v2"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -359,4 +362,120 @@ func TestMigrateFlagOnlyRequiresForce(t *testing.T) {
 	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, FlagOnly: true})
 	require.Error(t, err)
 	assert.Equal(t, "", inst.FsScheme)
+}
+
+// TestMigrateFlagOnlyFlipsWhenTargetPopulated covers the CRITICAL fix: a
+// FlagOnly+Force flip must succeed (and actually flip) once the target
+// backend genuinely already holds the source's content.
+func TestMigrateFlagOnlyFlipsWhenTargetPopulated(t *testing.T) {
+	inst := setupMigrateInstance(t)
+
+	// Populate the S3 target for real once, so it already contains the
+	// instance's full content (2 files + avatar) by the time the flag-only
+	// flip below relies on it.
+	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	require.NoError(t, err)
+	require.Equal(t, config.SchemeS3, inst.FsScheme)
+
+	// Simulate a rollback scenario: the instance is pointed back at its
+	// (still fully intact, never purged) previous scheme, and we now want
+	// to flip it back onto the S3 target without recopying anything, since
+	// that target is already fully populated from the migration above.
+	inst.FsScheme = ""
+
+	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, FlagOnly: true, Force: true})
+	require.NoError(t, err)
+	require.NotNil(t, rep)
+
+	assert.Equal(t, config.SchemeS3, inst.FsScheme)
+	assert.Equal(t, 2, rep.Files)
+	assert.True(t, rep.AvatarCopied)
+}
+
+// TestMigrateFlagOnlyFailsWhenTargetEmpty covers the CRITICAL fix's negative
+// path: a FlagOnly+Force flip against a target that only exists (e.g. an
+// empty bucket created by buildTarget's EnsureBucket call) but does not
+// actually hold the source's content must fail, and must NOT flip
+// FsScheme.
+func TestMigrateFlagOnlyFailsWhenTargetEmpty(t *testing.T) {
+	inst := setupMigrateInstance(t)
+
+	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, FlagOnly: true, Force: true})
+	require.Error(t, err)
+	assert.Equal(t, "", inst.FsScheme)
+}
+
+// TestMigratePurgeSourceRemovesSourceObjects covers the IMPORTANT fix: a
+// swift source must actually be purged (not return a "not implemented"
+// error) after a successful flip. It exercises the real swift-source purge
+// path end-to-end: an instance is first migrated from mem to a real
+// (in-memory swifttest server) swift backend, populating swift for real;
+// it is then migrated from swift to S3 with PurgeSource, and the test
+// confirms the swift container backing the instance is gone afterward.
+func TestMigratePurgeSourceRemovesSourceObjects(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	setup := testutils.NewSetup(t, t.Name())
+	setup.SetupSwiftTest()
+	inst := setup.GetTestInstance()
+
+	// GetTestInstance created this instance against the test config's
+	// default (non-swift) scheme, so it was never assigned a swift layout.
+	// Migrate requires layout v3 for any swift source (see the SwiftLayout
+	// guard in Migrate), so set it explicitly here to simulate a real
+	// swift-scheme instance, as would exist in production.
+	inst.SwiftLayout = 2
+	require.NoError(t, instance.Update(inst))
+
+	mf := testutils.StartMinio(t)
+	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}))
+
+	createInstanceFile(t, inst, "purge-file1.txt", []byte("hello from purge file 1"))
+	createInstanceFile(t, inst, "purge-file2.txt", []byte("hello from purge file 2, a bit longer"))
+
+	// Step 1: migrate mem -> swift for real, so the swift container backing
+	// this instance is genuinely populated.
+	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeSwift})
+	require.NoError(t, err)
+	require.Equal(t, config.SchemeSwift, inst.FsScheme)
+
+	containerName := swiftContainerName(t, inst)
+
+	// Sanity check: the container really exists before the purge.
+	_, _, err = config.GetSwiftConnection().Container(context.Background(), containerName)
+	require.NoError(t, err, "the swift container must exist after the first migration")
+
+	// Step 2: migrate swift -> S3 with PurgeSource, exercising the swift
+	// source purge implementation.
+	_, err = storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, PurgeSource: true})
+	require.NoError(t, err)
+	assert.Equal(t, config.SchemeS3, inst.FsScheme)
+
+	// The swift container must be gone now: purgeSource must have actually
+	// deleted it, not returned a "not implemented" error after a
+	// successful (and now unrevertable) flip.
+	_, _, err = config.GetSwiftConnection().Container(context.Background(), containerName)
+	assert.True(t, errors.Is(err, swiftv2.ContainerNotFound), "expected the swift container to be gone after purge, got err=%v", err)
+}
+
+// swiftContainerName builds the same per-instance swift V3 container that
+// buildTarget/purgeSource use, so tests can inspect it directly against the
+// swift connection.
+func swiftContainerName(t *testing.T, inst *instance.Instance) string {
+	t.Helper()
+
+	index := vfs.NewCouchdbIndexer(inst)
+	disk := vfs.DiskThresholder(inst)
+	mutex := config.Lock().ReadWrite(inst, "storagemigration-test-swift-container-name")
+
+	sfs, err := vfsswift.NewV3(inst, index, disk, mutex)
+	require.NoError(t, err)
+
+	cn, ok := sfs.(interface{ ContainerNames() map[string]string })
+	require.True(t, ok, "vfsswift.NewV3 must expose ContainerNames()")
+
+	return cn.ContainerNames()["container"]
 }
