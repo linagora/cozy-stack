@@ -323,7 +323,8 @@ type Options struct {
 	To string
 	// DryRun copies and verifies the content on the target backend but does
 	// not flip the instance's FsScheme: the instance keeps serving reads and
-	// writes from its current (source) backend.
+	// writes from its current (source) backend. Combined with FlagOnly, it
+	// still verifies the already-populated target but likewise never flips.
 	DryRun bool
 	// FlagOnly switches the instance's FsScheme pointer to an already
 	// populated target backend without copying anything. It is intended for
@@ -338,6 +339,13 @@ type Options struct {
 	// flip. It is a best-effort cleanup performed once the instance is
 	// already fully served from the target: a failure here does not revert
 	// the flip.
+	//
+	// If To already equals the instance's current storage scheme,
+	// PurgeSource switches Migrate into purge-only mode: nothing is copied,
+	// verified, or flipped, and only the OTHER backend's leftover data for
+	// this instance is deleted. This is what makes a deferred reclaim
+	// (running --purge-source well after the flip, or retrying an inline
+	// purge that failed) possible.
 	PurgeSource bool
 }
 
@@ -358,6 +366,11 @@ type containerNamer interface {
 // FsScheme is updated ONLY after Verify succeeds (or, for FlagOnly, after the
 // target backend has been validated); a DryRun or a failed Verify always
 // leaves FsScheme unchanged.
+//
+// If opts.To already equals the instance's current storage scheme AND
+// opts.PurgeSource is set, Migrate runs in purge-only mode instead: see
+// purgeOnly. Without PurgeSource, opts.To == the current scheme is still an
+// error.
 func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 	switch opts.To {
 	case config.SchemeS3, config.SchemeSwift:
@@ -367,6 +380,14 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 
 	srcScheme := inst.StorageScheme()
 	if opts.To == srcScheme {
+		if opts.PurgeSource {
+			// Purge-only mode: the instance is already on opts.To (either
+			// because a previous migration flipped it, or the caller is
+			// retrying an inline purge that failed after that flip). There
+			// is nothing to copy, verify, or flip: just reclaim the OTHER
+			// backend's leftover data for this instance.
+			return purgeOnly(inst, opts.To)
+		}
 		return nil, fmt.Errorf("storagemigration: instance %s already uses %q as its storage scheme", inst.DomainName(), opts.To)
 	}
 
@@ -418,6 +439,9 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 		}
 		if err := Verify(inst, dst, dstAv, expected); err != nil {
 			return expected, err
+		}
+		if opts.DryRun {
+			return expected, nil
 		}
 		return flip(inst, opts, srcScheme, expected)
 	}
@@ -526,4 +550,41 @@ func purgeSource(inst *instance.Instance, srcScheme string) error {
 	default:
 		return fmt.Errorf("storagemigration: purging source scheme %q is not implemented", srcScheme)
 	}
+}
+
+// purgeOnly implements Migrate's purge-only mode: opts.To already equals the
+// instance's current storage scheme, so there is nothing to copy, verify, or
+// flip. It only deletes the OTHER backend's (still-retained) leftover data
+// for this instance, which is what makes the documented deferred reclaim
+// step (running --purge-source well after the flip) work, and also gives a
+// retry path when an inline purge failed after a previous flip. The active
+// backend (to) is never touched and the instance is not blocked, since reads
+// and writes against it are unaffected.
+func purgeOnly(inst *instance.Instance, to string) (*Report, error) {
+	var otherScheme string
+	switch to {
+	case config.SchemeS3:
+		otherScheme = config.SchemeSwift
+	case config.SchemeSwift:
+		otherScheme = config.SchemeS3
+	default:
+		return nil, fmt.Errorf("storagemigration: unsupported target scheme %q", to)
+	}
+
+	switch otherScheme {
+	case config.SchemeS3:
+		if !config.HasS3Client() {
+			return nil, errors.New("storagemigration: cannot purge s3: no S3 client is configured")
+		}
+	case config.SchemeSwift:
+		if !config.HasSwiftConnection() {
+			return nil, errors.New("storagemigration: cannot purge swift: no swift connection is configured")
+		}
+	}
+
+	if err := purgeSource(inst, otherScheme); err != nil {
+		return nil, fmt.Errorf("storagemigration: purge-only: %w", err)
+	}
+
+	return &Report{}, nil
 }

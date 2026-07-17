@@ -479,3 +479,117 @@ func swiftContainerName(t *testing.T, inst *instance.Instance) string {
 
 	return cn.ContainerNames()["container"]
 }
+
+// TestMigratePurgeOnlyReclaimsOtherBackend covers the CRITICAL fix: once an
+// instance already sits on its target scheme (a previous migration flipped
+// it, and the Swift source was deliberately retained for rollback, as
+// docs/s3.md step 4 describes), a later call with PurgeSource and the SAME
+// To must not hit the "already uses that scheme" guard. Instead it must run
+// in purge-only mode: reclaim the other backend's leftover data without
+// copying, verifying, or flipping anything.
+func TestMigratePurgeOnlyReclaimsOtherBackend(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	setup := testutils.NewSetup(t, t.Name())
+	setup.SetupSwiftTest()
+	inst := setup.GetTestInstance()
+
+	// See TestMigratePurgeSourceRemovesSourceObjects: a swift source requires
+	// layout v3 to be migrated.
+	inst.SwiftLayout = 2
+	require.NoError(t, instance.Update(inst))
+
+	mf := testutils.StartMinio(t)
+	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}))
+
+	createInstanceFile(t, inst, "purge-only-file1.txt", []byte("hello from purge-only file 1"))
+	createInstanceFile(t, inst, "purge-only-file2.txt", []byte("hello from purge-only file 2, a bit longer"))
+
+	// Step 1: migrate mem -> swift for real, so the swift container backing
+	// this instance is genuinely populated.
+	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeSwift})
+	require.NoError(t, err)
+	require.Equal(t, config.SchemeSwift, inst.FsScheme)
+
+	containerName := swiftContainerName(t, inst)
+
+	// Step 2: migrate swift -> S3 WITHOUT PurgeSource, so the instance ends
+	// on S3 while the swift source is deliberately retained, exactly as
+	// docs/s3.md's rollback window describes.
+	_, err = storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	require.NoError(t, err)
+	require.Equal(t, config.SchemeS3, inst.FsScheme)
+
+	// Sanity check: the retained swift container still exists after the
+	// flip, since PurgeSource was not requested.
+	_, _, err = config.GetSwiftConnection().Container(context.Background(), containerName)
+	require.NoError(t, err, "the swift container must still exist: PurgeSource was not requested on the flip")
+
+	// Step 3 (the deferred reclaim, run later): call Migrate again with
+	// To == the instance's CURRENT scheme (s3) and PurgeSource set. This
+	// must not error out on the "already uses that scheme" guard; it must
+	// instead purge the other backend (swift) and leave the instance as-is.
+	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, PurgeSource: true})
+	require.NoError(t, err)
+	require.NotNil(t, rep)
+	assert.Equal(t, config.SchemeS3, inst.FsScheme, "purge-only must not change the instance's scheme")
+	assert.False(t, inst.Blocked, "purge-only must not leave the instance blocked")
+
+	// The swift container must be gone now.
+	_, _, err = config.GetSwiftConnection().Container(context.Background(), containerName)
+	assert.True(t, errors.Is(err, swiftv2.ContainerNotFound), "expected the swift container to be gone after purge-only, got err=%v", err)
+
+	// The instance's S3 content (the active backend) must be untouched.
+	index := vfs.NewCouchdbIndexer(inst)
+	disk := vfs.DiskThresholder(inst)
+	mutex := config.Lock().ReadWrite(inst, "vfs-migrate-test-purge-only-read")
+	s3fs, err := vfss3.New(inst, index, disk, mutex)
+	require.NoError(t, err)
+	doc1, err := s3fs.FileByPath("/purge-only-file1.txt")
+	require.NoError(t, err)
+	assertFileContentOn(t, s3fs, doc1, []byte("hello from purge-only file 1"))
+}
+
+// TestMigratePurgeOnlyWithoutPurgeFlagStillErrors covers the guard that must
+// still hold for a plain re-run against the current scheme without
+// PurgeSource: purge-only mode is only entered when PurgeSource is set.
+func TestMigratePurgeOnlyWithoutPurgeFlagStillErrors(t *testing.T) {
+	inst := setupMigrateInstance(t)
+
+	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	require.NoError(t, err)
+	require.Equal(t, config.SchemeS3, inst.FsScheme)
+
+	_, err = storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	require.Error(t, err)
+	assert.Equal(t, config.SchemeS3, inst.FsScheme)
+}
+
+// TestMigrateFlagOnlyDryRunDoesNotFlip covers the IMPORTANT fix: combining
+// FlagOnly with DryRun must still verify the target, but must NOT flip
+// FsScheme, even with Force set.
+func TestMigrateFlagOnlyDryRunDoesNotFlip(t *testing.T) {
+	inst := setupMigrateInstance(t)
+
+	// Populate the S3 target for real once, so it already contains the
+	// instance's full content by the time the flag-only dry-run below
+	// relies on it.
+	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	require.NoError(t, err)
+	require.Equal(t, config.SchemeS3, inst.FsScheme)
+
+	// Reset the scheme, as a rollback scenario would have it, then attempt a
+	// flag-only flip back onto S3 as a dry run.
+	inst.FsScheme = ""
+
+	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, FlagOnly: true, Force: true, DryRun: true})
+	require.NoError(t, err)
+	require.NotNil(t, rep)
+	assert.Equal(t, 2, rep.Files)
+
+	assert.Equal(t, "", inst.FsScheme, "a dry-run flag-only migration must not flip FsScheme")
+	assert.False(t, inst.Blocked, "instance must be unblocked after a dry-run flag-only migration")
+}
