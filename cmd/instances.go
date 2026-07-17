@@ -45,6 +45,11 @@ var flagPassphrase string
 var flagForce bool
 var flagJSON bool
 var flagSwiftLayout int
+var flagMigrateTo string
+var flagMigrateDryRun bool
+var flagMigrateFlagOnly bool
+var flagMigrateForce bool
+var flagMigratePurgeSource bool
 var flagCouchCluster int
 var flagUUID string
 var flagOIDCID string
@@ -244,6 +249,33 @@ be used as the error message.
 				}
 			}
 		}
+		return nil
+	},
+}
+
+var migrateStorageCmd = &cobra.Command{
+	Use:   "migrate-storage <domain>",
+	Short: "Migrate an instance's file storage to another backend (e.g. s3)",
+	Long: `cozy-stack instances migrate-storage copies an instance's files, file
+versions and avatar to another storage backend and switches the instance to it.
+The source data is kept unless --purge-source is given.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) != 1 {
+			return cmd.Usage()
+		}
+		ac := newAdminClient()
+		rep, err := ac.MigrateStorage(args[0], client.MigrateStorageOptions{
+			To:          flagMigrateTo,
+			DryRun:      flagMigrateDryRun,
+			FlagOnly:    flagMigrateFlagOnly,
+			Force:       flagMigrateForce,
+			PurgeSource: flagMigratePurgeSource,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("migrated: %d files, %d versions, %d bytes, avatar=%v\n",
+			rep.Files, rep.Versions, rep.Bytes, rep.AvatarCopied)
 		return nil
 	},
 }
@@ -1064,6 +1096,7 @@ func init() {
 	instanceCmdGroup.AddCommand(showInstanceCmd)
 	instanceCmdGroup.AddCommand(showDBPrefixInstanceCmd)
 	instanceCmdGroup.AddCommand(addInstanceCmd)
+	instanceCmdGroup.AddCommand(migrateStorageCmd)
 	instanceCmdGroup.AddCommand(modifyInstanceCmd)
 	instanceCmdGroup.AddCommand(countInstanceCmd)
 	instanceCmdGroup.AddCommand(lsInstanceCmd)
@@ -1101,6 +1134,11 @@ func init() {
 	addInstanceCmd.Flags().StringVar(&flagPhone, "phone", "", "The phone number of the owner")
 	addInstanceCmd.Flags().StringVar(&flagSettings, "settings", "", "A list of settings (eg context:foo,offer:premium)")
 	addInstanceCmd.Flags().IntVar(&flagSwiftLayout, "swift-layout", -1, "Specify the layout to use for Swift (from 0 for layout V1 to 2 for layout V3, -1 means the default)")
+	migrateStorageCmd.Flags().StringVar(&flagMigrateTo, "to", "s3", "Target storage scheme")
+	migrateStorageCmd.Flags().BoolVar(&flagMigrateDryRun, "dry-run", false, "Report what would be copied without writing or switching")
+	migrateStorageCmd.Flags().BoolVar(&flagMigrateFlagOnly, "flag-only", false, "Switch the backend pointer without copying (rollback to a retained source)")
+	migrateStorageCmd.Flags().BoolVar(&flagMigrateForce, "force", false, "Required with --flag-only; writes since cutover are lost")
+	migrateStorageCmd.Flags().BoolVar(&flagMigratePurgeSource, "purge-source", false, "Delete source objects after a successful switch")
 	addInstanceCmd.Flags().IntVar(&flagCouchCluster, "couch-cluster", -1, "Specify the CouchDB cluster where the instance will be created (-1 means the default)")
 	addInstanceCmd.Flags().StringVar(&flagDiskQuota, "disk-quota", "", "The quota allowed to the instance's VFS")
 	addInstanceCmd.Flags().StringSliceVar(&flagApps, "apps", nil, "Apps to be preinstalled")
