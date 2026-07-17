@@ -633,6 +633,54 @@ git commit -m "feat(storagemigration): copy files, versions and avatar between b
 
 ---
 
+## Task 5b: Index-free content writer on the Swift backend
+
+Rationale: the rollback design offers a full S3→Swift re-migration (`--to swift`), so Swift must also be a valid copy TARGET. Mirror Task 3 for vfsswift v3.
+
+**Files:**
+- Modify: `model/vfs/vfsswift/impl_v3.go` (near `ImportFileVersion`)
+- Modify: `model/instance/storagemigration/migration.go` (package doc comment: Swift↔S3 is now accurate)
+- Test: `model/vfs/vfsswift/write_content_at_v3_test.go` (external `package vfsswift_test`, MinIO not needed — Swift uses a swift test server; mirror the existing swift test setup in the package/`model/vfs/vfs_test.go` `makeSwiftFS`)
+
+**Interfaces:**
+- Produces: `func (sfs *swiftVFSV3) WriteContentAt(docID, internalID string, content io.Reader, size int64) error` — `ObjectCreate` at `MakeObjectNameV3(docID, internalID)` in the instance container, creating no CouchDB document.
+
+- [ ] **Step 1: Write the failing test** in `package vfsswift_test`, building the swift VFS the way `makeSwiftFS` (`model/vfs/vfs_test.go:876`) does; write via the interface assertion `sfs.(interface{ WriteContentAt(...) })`; read back the object via the swift connection at `MakeObjectNameV3(docID, internalID)` and assert bytes. Use 32-char docID + 16-char internalID.
+
+- [ ] **Step 2: Run it, verify RED** — `go test ./model/vfs/vfsswift/ -run TestWriteContentAt -timeout 120s -v` → `WriteContentAt` undefined.
+
+- [ ] **Step 3: Implement** in `model/vfs/vfsswift/impl_v3.go` (receiver name and container/ctx access mirror `ImportFileVersion`/`CreateFile` in this file):
+```go
+// WriteContentAt streams content into the object backing the (docID, internalID)
+// key in this instance's container, creating NO CouchDB document. Used by
+// storage migration, which preserves the shared index and only moves bytes.
+func (sfs *swiftVFSV3) WriteContentAt(docID, internalID string, content io.Reader, size int64) error {
+	objName := MakeObjectNameV3(docID, internalID)
+	f, err := sfs.c.ObjectCreate(sfs.ctx, sfs.container, objName, true, "", "application/octet-stream", nil)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(f, content); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+```
+(Verify the exact receiver type name — `swiftVFSV3`/`swiftVFS` — and field names `c`/`ctx`/`container` against the file; adapt if they differ. `ObjectCreate` with an empty checksum skips server-side hash verification, matching the streaming path already used in this file.)
+
+- [ ] **Step 4: Also update** the `storagemigration/migration.go` package doc comment so it no longer implies only-S3-target (Swift↔S3 both now supported as targets). Rebuild.
+
+- [ ] **Step 5: Run test, verify GREEN**, `go build ./...` clean.
+
+- [ ] **Step 6: Commit**
+```bash
+git add model/vfs/vfsswift/impl_v3.go model/vfs/vfsswift/write_content_at_v3_test.go model/instance/storagemigration/migration.go
+git commit -m "feat(vfsswift): add index-free WriteContentAt for storage migration"
+```
+
+---
+
 ## Task 6: Verification pass
 
 **Files:**
@@ -664,7 +712,7 @@ Expected: FAIL — `Verify undefined`.
 
 - [ ] **Step 3: Implement `Verify`**
 
-Add to `migration.go`. Re-run the same enumeration, but instead of copying, stat the target object via a new `contentStater` capability (add `StatContentAt(docID, internalID string) (int64, error)` to `vfss3` mirroring `WriteContentAt`, returning `os.ErrNotExist` on NoSuchKey) and compare sizes. Count files+versions and compare totals to `expected`. Return the first discrepancy as an error. (Add the `StatContentAt` method + a `contentStater` interface here, symmetric to Task 3.)
+Add to `migration.go`. Re-run the same enumeration, but instead of copying, stat the target object via a new `contentStater` capability (add `StatContentAt(docID, internalID string) (int64, error)` to BOTH `vfss3` and `vfsswift` v3, mirroring `WriteContentAt`, returning `os.ErrNotExist` when the object is absent) and compare sizes. Count files+versions and compare totals to `expected`. Return the first discrepancy as an error. (Add the `StatContentAt` methods + a `contentStater` interface here, symmetric to Task 3/5b.) Since either backend can be the target, both must implement it.
 
 - [ ] **Step 4: Run test, verify pass**
 
