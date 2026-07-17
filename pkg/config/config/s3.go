@@ -95,6 +95,14 @@ func GetS3Client() *minio.Client {
 	return s3Client
 }
 
+// HasS3Client reports whether the global S3 client has been initialized,
+// without panicking. Callers that need to guard against a missing S3
+// connection (e.g. before attempting a storage migration to S3) should use
+// this instead of recovering from GetS3Client's panic.
+func HasS3Client() bool {
+	return s3Client != nil
+}
+
 // GetS3BucketPrefix returns the configured bucket prefix.
 func GetS3BucketPrefix() string {
 	return s3BucketPrefix
