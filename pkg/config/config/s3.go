@@ -141,3 +141,8 @@ func GetS3Storage(kind string) S3Storage {
 	}
 	return storage
 }
+
+// HasS3Client reports whether the S3 files destination has been initialized.
+func HasS3Client() bool {
+	return s3Storages[S3StorageFiles].Client != nil
+}
