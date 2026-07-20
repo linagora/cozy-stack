@@ -928,6 +928,8 @@ HTTP/1.1 204 No Content
 This route allows the sharer to add new recipients (and groups of recipients)
 to a sharing. It can also be used by a recipient when the sharing has
 `open_sharing` set to true if the recipient doesn't have the `read_only` flag.
+Adding a recipient who is already active is idempotent: that recipient is
+ignored, while the other recipients from the same request are still processed.
 
 #### Request
 

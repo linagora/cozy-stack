@@ -459,6 +459,42 @@ func findSharingMemberByEmail(t *testing.T, inst *instance.Instance, sharingID, 
 	return sharing.Member{}
 }
 
+func sharingInvitationRecipientNames(t *testing.T, inst *instance.Instance, sharingID string) []string {
+	t.Helper()
+
+	req := couchdb.AllDocsRequest{}
+	var jobs []job.Job
+	require.NoError(t, couchdb.GetAllDocs(inst, consts.Jobs, &req, &jobs))
+
+	expectedPath := "/sharings/" + sharingID + "/discovery"
+	var names []string
+	for _, j := range jobs {
+		if j.WorkerType != "sendmail" {
+			continue
+		}
+
+		var msg map[string]interface{}
+		require.NoError(t, json.Unmarshal(j.Message, &msg))
+		if msg["template_name"] != "sharing_request" {
+			continue
+		}
+		values, ok := msg["template_values"].(map[string]interface{})
+		require.True(t, ok)
+		link, ok := values["SharingLink"].(string)
+		require.True(t, ok)
+		u, err := url.Parse(link)
+		require.NoError(t, err)
+		if u.Path != expectedPath {
+			continue
+		}
+		require.NotEmpty(t, u.Query().Get("state"))
+		name, ok := msg["recipient_name"].(string)
+		require.True(t, ok)
+		names = append(names, name)
+	}
+	return names
+}
+
 func findSharingMemberIndexByEmail(t *testing.T, inst *instance.Instance, sharingID, email string) int {
 	t.Helper()
 
@@ -2238,6 +2274,41 @@ func TestSharedDriveDelegatedRecipientAddition(t *testing.T) {
 
 		added := findSharingMemberByEmail(t, env.acme, sharingID, "rita@example.net")
 		require.True(t, added.ReadOnly)
+	})
+
+	t.Run("AlreadyActiveRecipientIsIgnoredInMixedBatch", func(t *testing.T) {
+		sharingID := createAcceptedSharedDriveForRecipient(
+			t,
+			env,
+			RecipientInfo{Name: "Betty", Email: "betty@example.net", ReadOnly: false},
+			env.betty,
+			env.tsB.URL,
+		)
+		charlie := createContact(t, env.betty, "Charlie Mixed", "charlie-mixed@example.net")
+		duplicate := createContact(t, env.betty, "Betty Duplicate", "betty@example.net")
+		erin := createContact(t, env.betty, "Erin Mixed", "erin-mixed@example.net")
+
+		eBetty.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(makeAddRecipientsPayload(t, sharingID, "recipients", charlie.ID(), duplicate.ID(), erin.ID())).
+			Expect().Status(http.StatusOK)
+
+		s, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		require.Len(t, s.Members, 4)
+		require.Equal(t, sharing.MemberStatusReady, findSharingMemberByEmail(t, env.acme, sharingID, "betty@example.net").Status)
+		findSharingMemberByEmail(t, env.acme, sharingID, "charlie-mixed@example.net")
+		findSharingMemberByEmail(t, env.acme, sharingID, "erin-mixed@example.net")
+
+		bettyCount := 0
+		for _, member := range s.Members {
+			if member.Email == "betty@example.net" {
+				bettyCount++
+			}
+		}
+		require.Equal(t, 1, bettyCount)
+		require.ElementsMatch(t, []string{"Charlie Mixed", "Erin Mixed"}, sharingInvitationRecipientNames(t, env.betty, sharingID))
 	})
 
 	t.Run("ReadOnlyRecipientCanInviteReadOnly", func(t *testing.T) {

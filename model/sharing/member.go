@@ -389,15 +389,12 @@ func (s *Sharing) SendDelegated(inst *instance.Instance, api *APIDelegateAddCont
 		ParseError: ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	originalRes, originalErr := res, err
+	preRefreshRes, preRefreshErr := res, err
 	if res != nil && res.StatusCode/100 == 4 {
 		res, err = RefreshToken(inst, res, err, s, &s.Members[0], c, opts, body)
 	}
 	if err != nil {
-		if originalRes != nil && originalRes.StatusCode == http.StatusForbidden {
-			return preserveDelegatedRequestError(originalRes.StatusCode, originalErr)
-		}
-		return err
+		return preserveDelegatedResponseError(res, err, preRefreshRes, preRefreshErr)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -450,6 +447,21 @@ func (s *Sharing) SendDelegated(inst *instance.Instance, api *APIDelegateAddCont
 		}
 	}
 	return s.SendInvitationsToMembers(inst, api.members, states)
+}
+
+func preserveDelegatedResponseError(
+	res *http.Response,
+	err error,
+	preRefreshRes *http.Response,
+	preRefreshErr error,
+) error {
+	if res != nil && res.StatusCode/100 == 4 {
+		return preserveDelegatedRequestError(res.StatusCode, err)
+	}
+	if preRefreshRes != nil && preRefreshRes.StatusCode/100 == 4 {
+		return preserveDelegatedRequestError(preRefreshRes.StatusCode, preRefreshErr)
+	}
+	return err
 }
 
 func preserveDelegatedRequestError(status int, err error) error {
@@ -1103,13 +1115,13 @@ func (s *Sharing) DelegateRevokeRecipient(inst *instance.Instance, index int) er
 		ParseError: ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	originalRes, originalErr := res, err
+	preRefreshRes, preRefreshErr := res, err
 	if res != nil && res.StatusCode/100 == 4 {
 		res, err = RefreshToken(inst, res, err, s, &s.Members[0], c, opts, nil)
 	}
 	if err != nil {
-		if originalRes != nil && originalRes.StatusCode == http.StatusForbidden {
-			return preserveDelegatedRequestError(originalRes.StatusCode, originalErr)
+		if preRefreshRes != nil && preRefreshRes.StatusCode == http.StatusForbidden {
+			return preserveDelegatedRequestError(preRefreshRes.StatusCode, preRefreshErr)
 		}
 		return err
 	}

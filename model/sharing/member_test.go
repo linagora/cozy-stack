@@ -2,20 +2,52 @@ package sharing
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/cozy/cozy-stack/client/auth"
+	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
+	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreserveDelegatedResponseError(t *testing.T) {
+	t.Run("prefers the response returned after token refresh", func(t *testing.T) {
+		preRefreshRes := &http.Response{StatusCode: http.StatusUnauthorized}
+		preRefreshErr := &request.Error{Detail: `{"errors":[{"status":"401","title":"Unauthorized"}]}`}
+		res := &http.Response{StatusCode: http.StatusConflict}
+		err := &request.Error{Detail: `{"errors":[{"status":"409","title":"Conflict","detail":"already active"}]}`}
+
+		got := preserveDelegatedResponseError(res, err, preRefreshRes, preRefreshErr)
+
+		var apiErr *jsonapi.Error
+		require.ErrorAs(t, got, &apiErr)
+		require.Equal(t, http.StatusConflict, apiErr.Status)
+		require.Equal(t, "already active", apiErr.Detail)
+	})
+
+	t.Run("falls back to the pre-refresh response when refresh fails", func(t *testing.T) {
+		preRefreshRes := &http.Response{StatusCode: http.StatusForbidden}
+		preRefreshErr := &request.Error{Detail: `{"errors":[{"status":"403","title":"Forbidden","detail":"read only"}]}`}
+		refreshErr := fmt.Errorf("refresh failed")
+
+		got := preserveDelegatedResponseError(nil, refreshErr, preRefreshRes, preRefreshErr)
+
+		var apiErr *jsonapi.Error
+		require.ErrorAs(t, got, &apiErr)
+		require.Equal(t, http.StatusForbidden, apiErr.Status)
+		require.Equal(t, "read only", apiErr.Detail)
+	})
+}
 
 func TestReadOnlyFlagRejectsBrokenRecipientCredentials(t *testing.T) {
 	cases := []struct {

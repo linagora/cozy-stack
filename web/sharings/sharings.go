@@ -497,6 +497,11 @@ func AddRecipientsDelegated(c echo.Context) error {
 	for _, m := range body.Data.Relationships.Recipients.Data {
 		state, err := s.AddDelegatedContact(inst, m)
 		if err != nil {
+			// Adding recipients is idempotent: keep processing the batch when a
+			// recipient is already active.
+			if errors.Is(err, sharing.ErrAlreadyAccepted) {
+				continue
+			}
 			if len(m.Groups) > 0 {
 				continue
 			}

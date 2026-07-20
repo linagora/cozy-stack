@@ -115,11 +115,23 @@ func (s *Sharing) updateMemberStatusesWithRetry(inst *instance.Instance) error {
 
 // SendInvitationsToMembers sends mails from a recipient (open_sharing) to
 // their contacts to invite them
-func (s *Sharing) SendInvitationsToMembers(inst *instance.Instance, members []Member, states map[string]string) error {
+func (s *Sharing) SendInvitationsToMembers(
+	inst *instance.Instance,
+	members []Member,
+	invitationStates map[string]string,
+) error {
 	sharer, desc := s.getSharerAndDescription(inst)
 
 	keys := make([]string, 0, len(members))
 	for _, m := range members {
+		if m.Email == "" && m.Instance == "" {
+			return ErrInvitationNotSent
+		}
+		state, ok := delegatedInvitationState(m, invitationStates)
+		if !ok {
+			continue
+		}
+
 		key := m.Email
 		if key == "" {
 			key = m.Instance
@@ -127,10 +139,7 @@ func (s *Sharing) SendInvitationsToMembers(inst *instance.Instance, members []Me
 		// If an instance URL is available, the owner's Cozy has already
 		// created a shortcut, so we don't need to send an invitation.
 		if m.Instance == "" {
-			if m.Email == "" {
-				return ErrInvitationNotSent
-			}
-			link := m.InvitationLink(inst, s, states[key], nil)
+			link := m.InvitationLink(inst, s, state, nil)
 			if err := m.SendMail(inst, s, sharer, desc, link); err != nil {
 				inst.Logger().WithNamespace("sharing").
 					Errorf("Can't send email for %#v: %s", m.Email, err)
@@ -173,6 +182,18 @@ func (s *Sharing) SendInvitationsToMembers(inst *instance.Instance, members []Me
 			return err
 		}
 	}
+}
+
+func delegatedInvitationState(m Member, invitationStates map[string]string) (string, bool) {
+	key := m.Instance
+	if key == "" {
+		key = m.Email
+	}
+	if key == "" {
+		return "", false
+	}
+	state, ok := invitationStates[key]
+	return state, ok && state != ""
 }
 
 func (s *Sharing) getSharerAndDescription(inst *instance.Instance) (string, string) {
