@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/realtime"
@@ -64,6 +65,28 @@ func TestShareGroupTrigger(t *testing.T) {
 			Verb:   realtime.EventUpdate,
 		})
 		require.NotNil(t, msg)
+	})
+
+	t.Run("The RabbitMQ group update has a typed old document", func(t *testing.T) {
+		oldGroup := contact.NewGroup()
+		oldGroup.SetID("id-marketing")
+		oldGroup.SetRev("1-abcdef")
+		oldGroup.Type = consts.Groups
+		oldGroup.M["name"] = "Marketing"
+		oldGroup.M["color"] = "#3367D6"
+
+		updated := oldGroup.JSONDoc.Clone().(*couchdb.JSONDoc)
+		updated.SetRev("2-abcdef")
+		updated.M["color"] = "#A142F4"
+
+		msg := trigger.match(&realtime.Event{
+			Doc:    updated,
+			OldDoc: oldGroup,
+			Verb:   realtime.EventUpdate,
+		})
+
+		require.NotNil(t, msg)
+		require.Same(t, updated, msg.RenamedGroup)
 	})
 
 	t.Run("The contact becomes invitable", func(t *testing.T) {

@@ -64,11 +64,11 @@ func (t *ShareGroupTrigger) matchGroup(e *realtime.Event) *ShareGroupMessage {
 	if e.Verb != realtime.EventUpdate {
 		return nil
 	}
-	newdoc, ok := e.Doc.(*couchdb.JSONDoc)
+	newdoc, ok := groupJSONDoc(e.Doc)
 	if !ok {
 		return nil
 	}
-	olddoc, ok := e.OldDoc.(*couchdb.JSONDoc)
+	olddoc, ok := groupJSONDoc(e.OldDoc)
 	if !ok {
 		return nil
 	}
@@ -78,6 +78,22 @@ func (t *ShareGroupTrigger) matchGroup(e *realtime.Event) *ShareGroupMessage {
 		return nil
 	}
 	return &ShareGroupMessage{RenamedGroup: newdoc}
+}
+
+// groupJSONDoc returns the generic document embedded in each supported group
+// event representation. couchdb.UpdateDoc keeps the old document in the
+// caller's concrete type (*contact.Group), while RTEvent clones the new
+// document through JSONDoc.Clone and publishes it as *couchdb.JSONDoc. Both
+// values represent the same doctype and must be normalized before comparison.
+func groupJSONDoc(doc realtime.Doc) (*couchdb.JSONDoc, bool) {
+	switch doc := doc.(type) {
+	case *couchdb.JSONDoc:
+		return doc, true
+	case *contact.Group:
+		return &doc.JSONDoc, true
+	default:
+		return nil, false
+	}
 }
 
 func (t *ShareGroupTrigger) matchContact(e *realtime.Event) *ShareGroupMessage {
