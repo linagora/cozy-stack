@@ -132,10 +132,7 @@ func (s *Sharing) SendInvitationsToMembers(
 			continue
 		}
 
-		key := m.Email
-		if key == "" {
-			key = m.Instance
-		}
+		key := invitationStateKey(m)
 		// If an instance URL is available, the owner's Cozy has already
 		// created a shortcut, so we don't need to send an invitation.
 		if m.Instance == "" {
@@ -184,11 +181,17 @@ func (s *Sharing) SendInvitationsToMembers(
 	}
 }
 
-func delegatedInvitationState(m Member, invitationStates map[string]string) (string, bool) {
-	key := m.Instance
-	if key == "" {
-		key = m.Email
+// invitationStateKey matches the owner response key: the Cozy instance URL is
+// preferred when available, with the email address as a fallback.
+func invitationStateKey(m Member) string {
+	if m.Instance != "" {
+		return m.Instance
 	}
+	return m.Email
+}
+
+func delegatedInvitationState(m Member, invitationStates map[string]string) (string, bool) {
+	key := invitationStateKey(m)
 	if key == "" {
 		return "", false
 	}
