@@ -54,6 +54,11 @@ func TestDelegatedInvitationState(t *testing.T) {
 			member: Member{Email: "alice@example.test"},
 			states: map[string]string{"alice@example.test": ""},
 		},
+		{
+			name:   "rejects member without address",
+			member: Member{Name: "Alice"},
+			states: map[string]string{},
+		},
 	}
 
 	for _, tt := range tests {

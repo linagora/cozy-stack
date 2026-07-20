@@ -124,9 +124,6 @@ func (s *Sharing) SendInvitationsToMembers(
 
 	keys := make([]string, 0, len(members))
 	for _, m := range members {
-		if m.Email == "" && m.Instance == "" {
-			return ErrInvitationNotSent
-		}
 		state, ok := delegatedInvitationState(m, invitationStates)
 		if !ok {
 			continue

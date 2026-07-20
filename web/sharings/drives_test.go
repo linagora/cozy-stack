@@ -459,6 +459,22 @@ func findSharingMemberByEmail(t *testing.T, inst *instance.Instance, sharingID, 
 	return sharing.Member{}
 }
 
+func findSharingMemberByName(t *testing.T, inst *instance.Instance, sharingID, name string) sharing.Member {
+	t.Helper()
+
+	s, err := sharing.FindSharing(inst, sharingID)
+	require.NoError(t, err)
+
+	for _, member := range s.Members {
+		if member.Name == name {
+			return member
+		}
+	}
+
+	require.FailNowf(t, "member not found", "name %s not found in sharing %s", name, sharingID)
+	return sharing.Member{}
+}
+
 func sharingInvitationRecipientNames(t *testing.T, inst *instance.Instance, sharingID string) []string {
 	t.Helper()
 
@@ -2309,6 +2325,57 @@ func TestSharedDriveDelegatedRecipientAddition(t *testing.T) {
 		}
 		require.Equal(t, 1, bettyCount)
 		require.ElementsMatch(t, []string{"Charlie Mixed", "Erin Mixed"}, sharingInvitationRecipientNames(t, env.betty, sharingID))
+	})
+
+	t.Run("GroupMemberWithoutAddressIsSynchronizedWithoutInvitation", func(t *testing.T) {
+		sharingID := createAcceptedSharedDriveForRecipient(
+			t,
+			env,
+			RecipientInfo{Name: "Betty", Email: "betty@example.net", ReadOnly: false},
+			env.betty,
+			env.tsB.URL,
+		)
+		group := createGroupOnInstance(t, env.betty, "No address group")
+		groupMember := contact.New()
+		groupMember.M["fullname"] = "No Address"
+		groupMember.M["relationships"] = map[string]interface{}{
+			"groups": map[string]interface{}{
+				"data": []interface{}{
+					map[string]interface{}{
+						"_id":   group.ID(),
+						"_type": consts.Groups,
+					},
+				},
+			},
+		}
+		require.NoError(t, couchdb.CreateDoc(env.betty, groupMember))
+
+		eBetty.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(mustJSON(t, map[string]interface{}{
+				"data": map[string]interface{}{
+					"type": consts.Sharings,
+					"id":   sharingID,
+					"relationships": map[string]interface{}{
+						"recipients": map[string]interface{}{
+							"data": []map[string]interface{}{
+								{"id": group.ID(), "type": consts.Groups},
+							},
+						},
+					},
+				},
+			})).
+			Expect().Status(http.StatusOK)
+
+		for _, inst := range []*instance.Instance{env.acme, env.betty} {
+			member := findSharingMemberByName(t, inst, sharingID, "No Address")
+			require.Equal(t, sharing.MemberStatusMailNotSent, member.Status)
+			require.True(t, member.OnlyInGroups)
+			require.Empty(t, member.Email)
+			require.Empty(t, member.Instance)
+		}
+		require.Empty(t, sharingInvitationRecipientNames(t, env.betty, sharingID))
 	})
 
 	t.Run("ReadOnlyRecipientCanInviteReadOnly", func(t *testing.T) {
