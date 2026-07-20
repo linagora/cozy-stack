@@ -153,6 +153,7 @@ Content-Type: application/vnd.api+json
         {
           "id": "51bbc980acb0013cb5f618c04daba326",
           "name": "G. people",
+          "color": "#22AA55",
           "addedBy": 0
         }
       ],

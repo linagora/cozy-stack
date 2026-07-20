@@ -334,7 +334,12 @@ func (s *Sharing) DelegateAddContactsAndGroups(inst *instance.Instance, groupIDs
 		if err != nil {
 			return err
 		}
-		g := Group{ID: groupID, Name: group.Name(), ReadOnly: readOnly}
+		g := Group{
+			ID:       groupID,
+			Name:     group.Name(),
+			Color:    group.Color(),
+			ReadOnly: readOnly,
+		}
 		api.groups = append(api.groups, g)
 
 		contacts, err := group.GetAllContacts(inst)

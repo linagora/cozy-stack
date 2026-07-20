@@ -25,6 +25,7 @@ import (
 type Group struct {
 	ID       string `json:"id,omitempty"`
 	Name     string `json:"name"`
+	Color    string `json:"color,omitempty"`
 	AddedBy  int    `json:"addedBy"` // The index of the member who added the group
 	ReadOnly bool   `json:"read_only"`
 	Revoked  bool   `json:"revoked,omitempty"`
@@ -64,7 +65,13 @@ func (s *Sharing) AddGroup(inst *instance.Instance, groupID string, readOnly boo
 		}
 	}
 
-	g := Group{ID: groupID, Name: group.Name(), AddedBy: 0, ReadOnly: readOnly}
+	g := Group{
+		ID:       groupID,
+		Name:     group.Name(),
+		Color:    group.Color(),
+		AddedBy:  0,
+		ReadOnly: readOnly,
+	}
 	s.Groups = append(s.Groups, g)
 	return nil
 }
@@ -127,7 +134,7 @@ func (s *Sharing) RevokeGroup(inst *instance.Instance, index int) error {
 // sharings.
 func UpdateGroups(inst *instance.Instance, msg job.ShareGroupMessage) error {
 	if msg.RenamedGroup != nil {
-		return updateRenamedGroup(inst, msg.RenamedGroup)
+		return updateGroupMetadata(inst, msg.RenamedGroup)
 	}
 
 	var c *contact.Contact
@@ -189,25 +196,25 @@ func UpdateGroups(inst *instance.Instance, msg job.ShareGroupMessage) error {
 	return errm
 }
 
-func updateRenamedGroup(inst *instance.Instance, doc *couchdb.JSONDoc) error {
+func updateGroupMetadata(inst *instance.Instance, doc *couchdb.JSONDoc) error {
 	sharings, err := FindActive(inst)
 	if err != nil {
 		return err
 	}
 
+	updatedGroup := &contact.Group{JSONDoc: *doc}
 	var errm error
 	for _, s := range sharings {
 		for idx, group := range s.Groups {
 			if group.ID == doc.ID() {
-				if name, ok := doc.M["name"].(string); ok {
-					group.Name = name
-					s.Groups[idx] = group
-					if err := couchdb.UpdateDoc(inst, s); err != nil {
-						errm = multierror.Append(errm, err)
-					}
-					cloned := s.Clone().(*Sharing)
-					go cloned.NotifyRecipients(inst, nil)
+				group.Name = updatedGroup.Name()
+				group.Color = updatedGroup.Color()
+				s.Groups[idx] = group
+				if err := couchdb.UpdateDoc(inst, s); err != nil {
+					errm = multierror.Append(errm, err)
 				}
+				cloned := s.Clone().(*Sharing)
+				go cloned.NotifyRecipients(inst, nil)
 			}
 		}
 	}

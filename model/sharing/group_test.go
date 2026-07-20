@@ -1,6 +1,7 @@
 package sharing
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,22 @@ import (
 	_ "github.com/cozy/cozy-stack/worker/mails"
 )
 
+func TestGroupColorJSON(t *testing.T) {
+	data, err := json.Marshal(Group{
+		ID:    "group-id",
+		Name:  "Marketing",
+		Color: "#22AA55",
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"id": "group-id",
+		"name": "Marketing",
+		"color": "#22AA55",
+		"addedBy": 0,
+		"read_only": false
+	}`, string(data))
+}
+
 func TestGroups(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
@@ -35,6 +52,8 @@ func TestGroups(t *testing.T) {
 	t.Run("RevokeGroup", func(t *testing.T) {
 		now := time.Now()
 		friends := createGroup(t, inst, "Friends")
+		friends.M["color"] = "#22AA55"
+		require.NoError(t, couchdb.UpdateDoc(inst, friends))
 		football := createGroup(t, inst, "Football")
 		bob := createContactInGroups(t, inst, "Bob", []string{friends.ID()})
 		_ = createContactInGroups(t, inst, "Charlie", []string{friends.ID(), football.ID()})
@@ -76,6 +95,7 @@ func TestGroups(t *testing.T) {
 
 		require.Len(t, s.Groups, 2)
 		require.Equal(t, s.Groups[0].Name, "Friends")
+		require.Equal(t, "#22AA55", s.Groups[0].Color)
 		assert.False(t, s.Groups[0].Revoked)
 		require.Equal(t, s.Groups[1].Name, "Football")
 		assert.False(t, s.Groups[1].Revoked)
@@ -107,6 +127,40 @@ func TestGroups(t *testing.T) {
 		require.Len(t, s.Groups, 2)
 		assert.True(t, s.Groups[0].Revoked)
 		assert.True(t, s.Groups[1].Revoked)
+	})
+
+	t.Run("UpdateGroupMetadata", func(t *testing.T) {
+		group := createGroup(t, inst, "Marketing")
+		group.M["color"] = "#3367D6"
+		require.NoError(t, couchdb.UpdateDoc(inst, group))
+
+		s := &Sharing{
+			Active: true,
+			Groups: []Group{{
+				ID:    group.ID(),
+				Name:  group.Name(),
+				Color: group.Color(),
+			}},
+		}
+		require.NoError(t, couchdb.CreateDoc(inst, s))
+
+		updated := group.JSONDoc.Clone().(*couchdb.JSONDoc)
+		updated.M["name"] = "Brand marketing"
+		updated.M["color"] = "#A142F4"
+		require.NoError(t, UpdateGroups(inst, job.ShareGroupMessage{RenamedGroup: updated}))
+
+		stored, err := FindSharing(inst, s.ID())
+		require.NoError(t, err)
+		require.Len(t, stored.Groups, 1)
+		require.Equal(t, "Brand marketing", stored.Groups[0].Name)
+		require.Equal(t, "#A142F4", stored.Groups[0].Color)
+
+		delete(updated.M, "color")
+		require.NoError(t, UpdateGroups(inst, job.ShareGroupMessage{RenamedGroup: updated}))
+
+		stored, err = FindSharing(inst, s.ID())
+		require.NoError(t, err)
+		require.Empty(t, stored.Groups[0].Color)
 	})
 
 	t.Run("UpdateGroups", func(t *testing.T) {

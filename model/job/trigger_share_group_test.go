@@ -14,6 +14,58 @@ import (
 func TestShareGroupTrigger(t *testing.T) {
 	trigger := &ShareGroupTrigger{}
 
+	t.Run("The group name or color changes", func(t *testing.T) {
+		group := &couchdb.JSONDoc{
+			Type: consts.Groups,
+			M: map[string]interface{}{
+				"_id":  "id-friends",
+				"_rev": "1-abcdef",
+				"name": "Friends",
+			},
+		}
+
+		unrelatedUpdate := group.Clone().(*couchdb.JSONDoc)
+		unrelatedUpdate.M["description"] = "Friends from school"
+		unrelatedUpdate.M["_rev"] = "2-abcdef"
+		msg := trigger.match(&realtime.Event{
+			Doc:    unrelatedUpdate,
+			OldDoc: group,
+			Verb:   realtime.EventUpdate,
+		})
+		require.Nil(t, msg)
+
+		colored := unrelatedUpdate.Clone().(*couchdb.JSONDoc)
+		colored.M["color"] = "#22AA55"
+		colored.M["_rev"] = "3-abcdef"
+		msg = trigger.match(&realtime.Event{
+			Doc:    colored,
+			OldDoc: unrelatedUpdate,
+			Verb:   realtime.EventUpdate,
+		})
+		require.NotNil(t, msg)
+		require.Same(t, colored, msg.RenamedGroup)
+
+		withoutColor := colored.Clone().(*couchdb.JSONDoc)
+		delete(withoutColor.M, "color")
+		withoutColor.M["_rev"] = "4-abcdef"
+		msg = trigger.match(&realtime.Event{
+			Doc:    withoutColor,
+			OldDoc: colored,
+			Verb:   realtime.EventUpdate,
+		})
+		require.NotNil(t, msg)
+
+		renamed := withoutColor.Clone().(*couchdb.JSONDoc)
+		renamed.M["name"] = "Best friends"
+		renamed.M["_rev"] = "5-abcdef"
+		msg = trigger.match(&realtime.Event{
+			Doc:    renamed,
+			OldDoc: withoutColor,
+			Verb:   realtime.EventUpdate,
+		})
+		require.NotNil(t, msg)
+	})
+
 	t.Run("The contact becomes invitable", func(t *testing.T) {
 		justName := &couchdb.JSONDoc{
 			Type: consts.Contacts,

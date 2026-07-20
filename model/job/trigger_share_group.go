@@ -72,7 +72,9 @@ func (t *ShareGroupTrigger) matchGroup(e *realtime.Event) *ShareGroupMessage {
 	if !ok {
 		return nil
 	}
-	if newdoc.M["name"] == olddoc.M["name"] {
+	newGroup := &contact.Group{JSONDoc: *newdoc}
+	oldGroup := &contact.Group{JSONDoc: *olddoc}
+	if newGroup.Name() == oldGroup.Name() && newGroup.Color() == oldGroup.Color() {
 		return nil
 	}
 	return &ShareGroupMessage{RenamedGroup: newdoc}

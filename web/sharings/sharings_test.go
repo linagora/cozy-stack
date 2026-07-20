@@ -296,6 +296,8 @@ func TestSharings(t *testing.T) {
 
 		group := createGroup(t, aliceInstance, "friends")
 		require.NotNil(t, group)
+		group.M["color"] = "#22AA55"
+		require.NoError(t, couchdb.UpdateDoc(aliceInstance, group))
 		fionaContact := addContactToGroup(t, aliceInstance, group, "Fiona")
 		require.NotNil(t, fionaContact)
 		gabyContact := addContactToGroup(t, aliceInstance, group, "Gaby")
@@ -361,6 +363,7 @@ func TestSharings(t *testing.T) {
 		g := groups.Value(0).Object()
 		g.HasValue("id", group.ID())
 		g.HasValue("name", "friends")
+		g.HasValue("color", "#22AA55")
 		g.HasValue("addedBy", 0)
 	})
 

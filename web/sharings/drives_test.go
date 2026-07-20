@@ -2508,6 +2508,50 @@ func TestSharedDriveDelegatedRecipientAddition(t *testing.T) {
 		require.Empty(t, sharingInvitationRecipientNames(t, env.betty, sharingID))
 	})
 
+	t.Run("GroupColorIsPropagated", func(t *testing.T) {
+		sharingID := createAcceptedSharedDriveForRecipient(
+			t,
+			env,
+			RecipientInfo{Name: "Betty", Email: "betty@example.net", ReadOnly: false},
+			env.betty,
+			env.tsB.URL,
+		)
+		group := createGroupOnInstance(t, env.betty, "Marketing")
+		group.M["color"] = "#3367D6"
+		require.NoError(t, couchdb.UpdateDoc(env.betty, group))
+		createContactInGroupWithCozy(
+			t,
+			env.betty,
+			group,
+			"Charlie Group",
+			"charlie-group@example.net",
+			"",
+		)
+
+		eBetty.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(mustJSON(t, map[string]interface{}{
+				"data": map[string]interface{}{
+					"type": consts.Sharings,
+					"id":   sharingID,
+					"relationships": map[string]interface{}{
+						"recipients": map[string]interface{}{
+							"data": []map[string]interface{}{
+								{"id": group.ID(), "type": consts.Groups},
+							},
+						},
+					},
+				},
+			})).
+			Expect().Status(http.StatusOK)
+
+		ownerSharing, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		require.NotEmpty(t, ownerSharing.Groups)
+		require.Equal(t, "#3367D6", ownerSharing.Groups[len(ownerSharing.Groups)-1].Color)
+	})
+
 	t.Run("ReadOnlyRecipientCanInviteReadOnly", func(t *testing.T) {
 		sharingID := createAcceptedSharedDriveForRecipient(
 			t,

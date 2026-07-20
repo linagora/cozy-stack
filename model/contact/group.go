@@ -32,6 +32,12 @@ func (g *Group) Name() string {
 	return name
 }
 
+// Color returns the color of the group.
+func (g *Group) Color() string {
+	color, _ := g.Get("color").(string)
+	return color
+}
+
 // FindGroup returns the group of contacts stored in database from a given ID
 func FindGroup(db prefixer.Prefixer, groupID string) (*Group, error) {
 	doc := &Group{}
