@@ -155,11 +155,22 @@ func TestGroups(t *testing.T) {
 		require.Equal(t, "Brand marketing", stored.Groups[0].Name)
 		require.Equal(t, "#A142F4", stored.Groups[0].Color)
 
+		updated.M["name"] = 42
+		updated.M["color"] = "#0F9D58"
+		require.NoError(t, UpdateGroups(inst, job.ShareGroupMessage{RenamedGroup: updated}))
+
+		stored, err = FindSharing(inst, s.ID())
+		require.NoError(t, err)
+		require.Equal(t, "Brand marketing", stored.Groups[0].Name)
+		require.Equal(t, "#0F9D58", stored.Groups[0].Color)
+
+		delete(updated.M, "name")
 		delete(updated.M, "color")
 		require.NoError(t, UpdateGroups(inst, job.ShareGroupMessage{RenamedGroup: updated}))
 
 		stored, err = FindSharing(inst, s.ID())
 		require.NoError(t, err)
+		require.Equal(t, "Brand marketing", stored.Groups[0].Name)
 		require.Empty(t, stored.Groups[0].Color)
 	})
 

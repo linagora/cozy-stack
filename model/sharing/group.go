@@ -207,7 +207,9 @@ func updateGroupMetadata(inst *instance.Instance, doc *couchdb.JSONDoc) error {
 	for _, s := range sharings {
 		for idx, group := range s.Groups {
 			if group.ID == doc.ID() {
-				group.Name = updatedGroup.Name()
+				if name, ok := doc.M["name"].(string); ok {
+					group.Name = name
+				}
 				group.Color = updatedGroup.Color()
 				s.Groups[idx] = group
 				if err := couchdb.UpdateDoc(inst, s); err != nil {
