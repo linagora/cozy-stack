@@ -638,23 +638,14 @@ func (s serveParams) IntentData() (template.HTML, error) {
 	if err != nil {
 		return "", err
 	}
-	// <script> content is raw text — HTML entities are not decoded by the
-	// browser, so html/template's default JS escaping would corrupt the
-	// JSON. We bypass it with template.HTML and neutralize </script>
-	// breakout ourselves. </ only occurs inside JSON string values, and \/
-	// is a valid JSON escape, so the substitution is parse-equivalent.
-	sanitized := strings.ReplaceAll(string(raw), "</", "<\\/")
-	buf := new(bytes.Buffer)
-	if err := intentTemplate.Execute(buf, template.HTML(sanitized)); err != nil {
-		return "", err
-	}
-	return template.HTML(buf.String()), nil
+	// jsonapi.MarshalObject uses json.Marshal that escapes <, >, & to \u003c, \u003e, \u0026, so the JSON is
+	// safe to embed in a <script> block (no </script> breakout).
+	return template.HTML(`<script type="application/json" id="cozy-intent">` + string(raw) + `</script>`), nil
 }
 
 var clientTemplate *template.Template
 var barTemplate *template.Template
 var warningsTemplate *template.Template
-var intentTemplate *template.Template
 
 // BuildTemplates ensure that cozy-client-js and the bar can be injected in templates
 func BuildTemplates() {
@@ -674,10 +665,6 @@ func BuildTemplates() {
 <meta name="user-action-required" data-title="{{ .Title }}" data-code="{{ .Code }}" data-detail="{{ .Detail }}" {{with .Links}}{{with .Self}}data-links="{{ . }}"{{end}}{{end}} />
 {{end}}
 {{end}}`,
-	))
-
-	intentTemplate = template.Must(template.New("intent-data").Parse(
-		`<script type="application/json" id="cozy-intent">{{.}}</script>`,
 	))
 }
 

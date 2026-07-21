@@ -367,6 +367,39 @@ func TestApps(t *testing.T) {
 		csp.Contains("frame-ancestors 'self' https://external.example.com https://clienturl-app.cozywithapps.example.net;")
 	})
 
+	t.Run("NoScriptTagBreakoutIntentData", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		intent := &intent.Intent{
+			Action: "PICK",
+			Type:   "io.cozy.foos",
+			Client: "io.cozy.apps/" + slug,
+		}
+		err := intent.Save(testInstance)
+		require.NoError(t, err)
+		err = intent.FillServices(testInstance)
+		require.NoError(t, err)
+		require.Len(t, intent.Services, 1)
+		intent.Action = "PICK</script><script>alert('XSS')</script>"
+		err = intent.Save(testInstance)
+		require.NoError(t, err)
+
+		u, err := url.Parse(intent.Services[0].Href)
+		require.NoError(t, err)
+
+		body := e.GET(u.Path).
+			WithHost(slug+"."+testInstance.Domain).
+			WithQueryString(u.RawQuery).
+			WithCookie("cozysessid", cozysessID).
+			Expect().Status(200).
+			Body().Raw()
+
+		// IntentData returns template.HTML (raw, unescaped by html/template).
+		// json.Marshal escapes < to \u003c to prevent </script> breakout
+		// inside the JSON embedded in a <script> block.
+		assert.Contains(t, body, `PICK\u003c/script\u003e`)
+	})
+
 	t.Run("FaviconWithContext", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
