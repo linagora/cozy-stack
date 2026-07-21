@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/web/middlewares"
@@ -55,21 +57,46 @@ func RevokeRecipient(c echo.Context) error {
 		go s.NotifyRecipients(inst, nil)
 		return c.NoContent(http.StatusNoContent)
 	}
-	if owner := sharing.LocalInstanceFromURL(s.Members[0].Instance); owner != nil && owner.Domain != inst.Domain {
+	if owner := LocalInstanceFromURL(s.Members[0].Instance); owner != nil && owner.Domain != inst.Domain {
 		if len(s.Credentials) == 0 || s.Credentials[0].AccessToken == nil {
 			return wrapErrors(sharing.ErrInvalidSharing)
 		}
-		// Re-enter the owner-side handler so delegated calls keep the same authorization path.
-		c.Request().Header.Set(echo.HeaderAuthorization, "Bearer "+s.Credentials[0].AccessToken.AccessToken)
-		middlewares.ForcePermission(c, nil)
-		c.Set("claims", nil)
-		middlewares.SetInstance(c, owner)
-		return RevokeRecipient(c)
+		return delegateRevokeRecipientLocally(c, inst, owner, s)
 	}
 	if err = s.DelegateRevokeRecipient(inst, index); err != nil {
 		return wrapErrors(err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func delegateRevokeRecipientLocally(
+	c echo.Context,
+	recipient, owner *instance.Instance,
+	s *sharing.Sharing,
+) error {
+	credentials := &s.Credentials[0]
+	err := callRevokeRecipientOnOwner(c, owner, credentials.AccessToken.AccessToken)
+	if !errors.Is(err, permission.ErrExpiredToken) {
+		return err
+	}
+
+	if err = credentials.Refresh(recipient, s, &s.Members[0]); err != nil {
+		return wrapErrors(err)
+	}
+	if credentials.AccessToken == nil {
+		return wrapErrors(sharing.ErrNoOAuthClient)
+	}
+	return callRevokeRecipientOnOwner(c, owner, credentials.AccessToken.AccessToken)
+}
+
+func callRevokeRecipientOnOwner(c echo.Context, owner *instance.Instance, accessToken string) error {
+	// Re-enter the owner-side handler so delegated calls keep the same authorization path.
+	c.Response().Header().Del(echo.HeaderWWWAuthenticate)
+	c.Request().Header.Set(echo.HeaderAuthorization, "Bearer "+accessToken)
+	middlewares.ForcePermission(c, nil)
+	c.Set("claims", nil)
+	middlewares.SetInstance(c, owner)
+	return RevokeRecipient(c)
 }
 
 func authorizeRevokeRecipient(c echo.Context, s *sharing.Sharing) error {
