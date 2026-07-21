@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/cozy/cozy-stack/model/account"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
@@ -117,6 +119,12 @@ type chatAssistant struct {
 	DocID         string                 `json:"_id,omitempty"`
 	DocRev        string                 `json:"_rev,omitempty"`
 	Relationships chatAssistantRelations `json:"relationships,omitempty"`
+	KnowledgeBase []knowledgeBaseEntry   `json:"knowledgeBase,omitempty"`
+}
+
+type knowledgeBaseEntry struct {
+	Doctype string `json:"doctype"`
+	DirID   string `json:"dirId"`
 }
 
 type chatAssistantRelations struct {
@@ -280,25 +288,46 @@ func getSources(event map[string]interface{}) ([]Source, error) {
 	return sources, nil
 }
 
+// assistantForChat loads the assistant bound to the conversation. It returns
+// (nil, nil) when the conversation has no assistant or the assistant was
+// deleted. An error means the caller could not determine how the
+// conversation is configured (e.g. a transient CouchDB error) and MUST NOT
+// proceed as if it were unscoped.
+func assistantForChat(inst *instance.Instance, chat *ChatConversation) (*chatAssistant, error) {
+	rel, ok := chat.Rels["assistant"]
+	if !ok {
+		return nil, nil
+	}
+	relData, _ := rel.Data.(map[string]interface{})
+	assistantID, _ := relData["_id"].(string)
+	if assistantID == "" {
+		return nil, nil
+	}
+	var assistant chatAssistant
+	if err := couchdb.GetDoc(inst, consts.ChatAssistants, assistantID, &assistant); err != nil {
+		// A missing document — or a missing assistants database, which is a
+		// reachable state since the database is only created when a first
+		// assistant doc is saved and Chat() does not check that the
+		// client-supplied assistant id exists — means no knowledge-base
+		// configuration can exist: treat the conversation as unscoped rather
+		// than failing it. Other errors (e.g. a transient CouchDB failure)
+		// keep failing closed: the assistant may exist and be folder-scoped.
+		if couchdb.IsNotFoundError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &assistant, nil
+}
+
 // buildLLMOverride returns the `metadata.llm_override` map forwarded to
 // OpenRAG when the conversation is bound to an assistant that uses an
 // external provider (OpenAI, Mistral, …). It returns nil to leave the
 // stack's default RAG configuration in place: either no assistant is
 // attached, the provider is the default "openrag", or the linked account
 // could not be resolved.
-func buildLLMOverride(inst *instance.Instance, chat *ChatConversation) map[string]interface{} {
-	rel, ok := chat.Rels["assistant"]
-	if !ok {
-		return nil
-	}
-	relData, _ := rel.Data.(map[string]interface{})
-	assistantID, _ := relData["_id"].(string)
-	if assistantID == "" {
-		return nil
-	}
-
-	var assistant chatAssistant
-	if err := couchdb.GetDoc(inst, consts.ChatAssistants, assistantID, &assistant); err != nil {
+func buildLLMOverride(inst *instance.Instance, assistant *chatAssistant) map[string]interface{} {
+	if assistant == nil {
 		return nil
 	}
 	provider := assistant.Relationships.Provider.Data
@@ -366,8 +395,31 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 		}
 		metadata["attachments"] = attachments
 	}
-	if override := buildLLMOverride(inst, &chat); override != nil {
+	msg := chat.Messages[len(chat.Messages)-1]
+	assistant, err := assistantForChat(inst, &chat)
+	if err != nil {
+		// Without the assistant we cannot know whether the conversation is
+		// scoped to a knowledge base, and a folder-scoped assistant must
+		// never silently answer unscoped: surface the error and stop. This
+		// deliberately also fails assistants that only carry an llm_override
+		// (which used to fall back to the stack's default RAG configuration
+		// on such errors): scoping cannot be ruled out without the doc.
+		logger.Warnf("cannot resolve assistant: %s", err)
+		publishError(inst, msg.ID, err)
+		return err
+	}
+	if override := buildLLMOverride(inst, assistant); override != nil {
 		metadata["llm_override"] = override
+	}
+	if dirID := knowledgeBaseDirID(assistant, logger); dirID != "" {
+		if err := ensureWorkspace(inst, logger, dirID); err != nil {
+			logger.Warnf("cannot ensure RAG workspace %s: %s", dirID, err)
+			// A folder-scoped assistant must never answer from the whole
+			// instance: surface the error to the client and stop.
+			publishError(inst, msg.ID, err)
+			return err
+		}
+		metadata["workspace"] = dirID
 	}
 	payload := map[string]interface{}{
 		"model":       fmt.Sprintf("ragondin-%s", inst.Domain),
@@ -385,47 +437,32 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	}
 	res, err := CallRAGQuery(inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 	if err != nil {
+		publishError(inst, msg.ID, err)
 		return err
 	}
 	if res.StatusCode == http.StatusNotFound {
 		res.Body.Close()
 		checkRes, err := CallRAGQuery(inst, http.MethodGet, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
 		if err != nil {
+			publishError(inst, msg.ID, err)
 			return err
 		}
 		checkRes.Body.Close()
 		if checkRes.StatusCode == http.StatusNotFound {
 			logger.Warnf("RAG partition not found, attempting creation")
-			partRes, partErr := CallRAGQuery(inst, http.MethodPost, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
-			if partErr != nil {
-				logger.Warnf("Failed to create RAG partition: %s", partErr)
-			} else {
-				partRes.Body.Close()
-				// 409 is treated as success since the partition is already created
-				if (partRes.StatusCode < 200 || partRes.StatusCode >= 300) && partRes.StatusCode != http.StatusConflict {
-					logger.Warnf("Failed to create RAG partition, status: %d", partRes.StatusCode)
-				}
-			}
+			createRAGPartition(inst.RAGServer(), inst.Domain, logger)
 			res, err = CallRAGQuery(inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 			if err != nil {
+				publishError(inst, msg.ID, err)
 				return err
 			}
 		}
 	}
 	defer res.Body.Close()
-	msg := chat.Messages[len(chat.Messages)-1]
 
 	if res.StatusCode != 200 {
 		ragErr := fmt.Errorf("POST status code: %d", res.StatusCode)
-		errorDoc := couchdb.JSONDoc{
-			Type: consts.ChatEvents,
-			M: map[string]interface{}{
-				"_id":     msg.ID,
-				"object":  "error",
-				"message": ragErr.Error(),
-			},
-		}
-		go realtime.GetHub().Publish(inst, realtime.EventCreate, &errorDoc, nil)
+		publishError(inst, msg.ID, ragErr)
 		return ragErr
 	}
 	var completion string
@@ -438,16 +475,7 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	}
 	if err != nil {
 		// Send error event to client
-		errorDoc := map[string]interface{}{
-			"_id":     msg.ID,
-			"object":  "error",
-			"message": err.Error(),
-		}
-		errorPayload := couchdb.JSONDoc{
-			Type: consts.ChatEvents,
-			M:    errorDoc,
-		}
-		go realtime.GetHub().Publish(inst, realtime.EventCreate, &errorPayload, nil)
+		publishError(inst, msg.ID, err)
 		return err
 	}
 
@@ -488,6 +516,20 @@ func publishSources(inst *instance.Instance, msgID string, sources []Source) {
 	}
 	doc.SetID(msgID)
 	realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
+}
+
+// publishError sends the `{object:"error"}` chat event, so a client waiting
+// on the realtime feed is never left hanging when the query cannot complete.
+func publishError(inst *instance.Instance, msgID string, err error) {
+	doc := couchdb.JSONDoc{
+		Type: consts.ChatEvents,
+		M: map[string]interface{}{
+			"object":  "error",
+			"message": err.Error(),
+		},
+	}
+	doc.SetID(msgID)
+	go realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
 }
 
 func publishDone(inst *instance.Instance, msgID string) {
@@ -586,17 +628,41 @@ func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.R
 	return completion, sources, nil
 }
 
-func CallRAGQuery(inst *instance.Instance, method string, payload []byte, path string, contentType string) (*http.Response, error) {
-	ragServer := inst.RAGServer()
-	if ragServer.URL == "" {
+// ragHTTPClient is the HTTP client used for the openRAG calls. It has no
+// global timeout (chat completions may stream for minutes) but bounds
+// connection establishment and the wait for response headers, so a hung
+// openRAG server cannot pin a rag-query worker — or a rag-index batch and
+// the per-instance lock it holds — forever.
+var ragHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Minute,
+	},
+}
+
+// callRAG is the instance-free part of CallRAGQuery, split out so the openRAG
+// HTTP mechanics can be unit-tested against an httptest server.
+func callRAG(server config.RAGServer, method string, payload []byte, path string, contentType string) (*http.Response, error) {
+	if server.URL == "" {
 		return nil, errors.New("no RAG server configured")
 	}
-	u, err := url.Parse(ragServer.URL)
+	u, err := url.Parse(server.URL)
 	if err != nil {
 		return nil, err
 	}
 
-	u.Path = path
+	// The path is treated as already percent-encoded: callers escape their
+	// dynamic segments with url.PathEscape (folder and file ids are arbitrary
+	// CouchDB ids and must not be able to break out of their path segment),
+	// and the escaped form must be sent as-is, without double encoding.
+	unescaped, err := url.PathUnescape(path)
+	if err != nil {
+		return nil, err
+	}
+	u.Path = unescaped
+	u.RawPath = path
 	var body io.Reader
 	if payload != nil {
 		body = bytes.NewReader(payload)
@@ -605,9 +671,34 @@ func CallRAGQuery(inst *instance.Instance, method string, payload []byte, path s
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Add(echo.HeaderAuthorization, "Bearer "+ragServer.APIKey)
+	req.Header.Add(echo.HeaderAuthorization, "Bearer "+server.APIKey)
 	req.Header.Add("Content-Type", contentType)
-	return http.DefaultClient.Do(req)
+	return ragHTTPClient.Do(req)
+}
+
+func CallRAGQuery(inst *instance.Instance, method string, payload []byte, path string, contentType string) (*http.Response, error) {
+	return callRAG(inst.RAGServer(), method, payload, path, contentType)
+}
+
+// createdOrExists tells whether an openRAG create endpoint reported success,
+// treating 409 (already created concurrently) as success.
+func createdOrExists(statusCode int) bool {
+	return (statusCode >= 200 && statusCode < 300) || statusCode == http.StatusConflict
+}
+
+// createRAGPartition creates the instance's partition on the openRAG server.
+// Best-effort: failures are only logged, and a 409 (partition already
+// created) is treated as success.
+func createRAGPartition(server config.RAGServer, domain string, logger logger.Logger) {
+	res, err := callRAG(server, http.MethodPost, nil, fmt.Sprintf("/partition/%s", domain), echo.MIMEApplicationJSON)
+	if err != nil {
+		logger.Warnf("Failed to create RAG partition: %s", err)
+		return
+	}
+	res.Body.Close()
+	if !createdOrExists(res.StatusCode) {
+		logger.Warnf("Failed to create RAG partition, status: %d", res.StatusCode)
+	}
 }
 
 func foreachSSE(r io.Reader, fn func(event map[string]interface{})) error {
