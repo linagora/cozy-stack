@@ -270,6 +270,9 @@ type Avatarer interface {
 	// but does if there was a problem deleting it.
 	DeleteAvatar() error
 	ServeAvatarContent(w http.ResponseWriter, req *http.Request) error
+	// OpenAvatar returns a reader over the stored avatar content and its
+	// content-type, or os.ErrNotExist if no avatar is stored.
+	OpenAvatar() (io.ReadCloser, string, error)
 }
 
 // Thumbser defines an interface to define a thumbnail filesystem.

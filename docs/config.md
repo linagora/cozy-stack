@@ -100,6 +100,34 @@ Magick, konnectors and services for example). And they can take several GB for
 the case of importing a Cozy. If needed, it is possible to configure the
 directory where they will be created via the `TMPDIR` environment variable.
 
+## Storage backend migration
+
+The `fs.url` parameter configures the storage backend (`file://`,
+`swift://` or `s3://`) used by all instances, as shown in
+[cozy.example.yaml](https://github.com/cozy/cozy-stack/blob/master/cozy.example.yaml)
+and detailed in the [S3 storage backend](s3.md) documentation.
+
+To move instances to a different backend one at a time, without changing
+the backend used by the rest of the fleet, an optional `fs.migration_target`
+key can be set to a second storage URL. Its connection is initialized
+alongside the default one at startup, so instances can be migrated to it
+while `fs.url` keeps pointing at the previous backend:
+
+```yaml
+fs:
+  url: swift://openstack/?UserName={{ .Env.OS_USERNAME }}&Password={{ .Env.OS_PASSWORD }}
+  migration_target: s3://s3.rbx.io.cloud.ovh.net?access_key=ACCESS&secret_key=SECRET&region=rbx&bucket_prefix=cozy&use_ssl=true
+```
+
+As with `fs.url`, S3 credentials are passed as `access_key` and `secret_key`
+query parameters of the URL.
+
+Once `fs.migration_target` is set, the
+[`cozy-stack instances migrate-storage`](cli/cozy-stack_instances_migrate-storage.md)
+command can move individual instances to it. See
+[Migrating an instance from Swift to S3](s3.md#migrating-an-instance-from-swift-to-s3)
+for the full procedure, including rollback.
+
 ## Multiple CouchDB clusters
 
 With a large number of instances, a single CouchDB cluster may not be enough.

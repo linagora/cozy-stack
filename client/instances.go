@@ -282,6 +282,63 @@ func (ac *AdminClient) ModifyInstance(opts *InstanceOptions) (*Instance, error) 
 	return readInstance(res)
 }
 
+// MigrateStorageOptions contains the options for MigrateStorage. It mirrors
+// the fields of storagemigration.Options in the model, without importing
+// that package: the client stays free of any model/... dependency.
+type MigrateStorageOptions struct {
+	To          string
+	DryRun      bool
+	FlagOnly    bool
+	Force       bool
+	PurgeSource bool
+}
+
+// MigrateStorageReport is the report returned by MigrateStorage. It mirrors
+// the fields of storagemigration.Report in the model.
+type MigrateStorageReport struct {
+	Files        int   `json:"Files"`
+	Versions     int   `json:"Versions"`
+	Bytes        int64 `json:"Bytes"`
+	AvatarCopied bool  `json:"AvatarCopied"`
+}
+
+// MigrateStorage moves an instance's object-storage content (files,
+// versions, avatar) from its current backend to the target scheme.
+func (ac *AdminClient) MigrateStorage(domain string, opts MigrateStorageOptions) (*MigrateStorageReport, error) {
+	if !validDomain(domain) {
+		return nil, fmt.Errorf("Invalid domain: %s", domain)
+	}
+	q := url.Values{
+		"to": {opts.To},
+	}
+	if opts.DryRun {
+		q.Add("dry_run", "true")
+	}
+	if opts.FlagOnly {
+		q.Add("flag_only", "true")
+	}
+	if opts.Force {
+		q.Add("force", "true")
+	}
+	if opts.PurgeSource {
+		q.Add("purge_source", "true")
+	}
+	res, err := ac.Req(&request.Options{
+		Method:  "POST",
+		Path:    "/instances/" + domain + "/migrate-storage",
+		Queries: q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	rep := &MigrateStorageReport{}
+	if err := json.NewDecoder(res.Body).Decode(rep); err != nil {
+		return nil, err
+	}
+	return rep, nil
+}
+
 // DestroyInstance is used to delete an instance and all its data.
 func (ac *AdminClient) DestroyInstance(domain string) error {
 	if !validDomain(domain) {

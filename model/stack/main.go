@@ -90,6 +90,20 @@ security features. Please do not use this binary as your production server.
 		return nil, nil, fmt.Errorf("failed to init the S3 connection: %w", err)
 	}
 
+	// When a storage migration target is configured (e.g. migrating instances
+	// to S3 while the global default is still Swift), init that connection too.
+	if config.HasS3Target() {
+		// If fs.url is already an s3 scheme, initializing the migration
+		// target here would silently overwrite the global S3 client with the
+		// migration endpoint: refuse to start instead of risking that.
+		if config.FsURL().Scheme == config.SchemeS3 {
+			return nil, nil, fmt.Errorf("fs.migration_target must not be set when fs.url is already an s3 scheme")
+		}
+		if err := config.InitS3Connection(config.Fs{URL: config.MigrationTargetURL()}); err != nil {
+			return nil, nil, fmt.Errorf("failed to init the S3 migration target connection: %w", err)
+		}
+	}
+
 	workersList, err := job.GetWorkersList()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get the workers list: %w", err)
