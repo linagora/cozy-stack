@@ -638,8 +638,14 @@ func (s serveParams) IntentData() (template.HTML, error) {
 	if err != nil {
 		return "", err
 	}
+	// <script> content is raw text — HTML entities are not decoded by the
+	// browser, so html/template's default JS escaping would corrupt the
+	// JSON. We bypass it with template.HTML and neutralize </script>
+	// breakout ourselves. </ only occurs inside JSON string values, and \/
+	// is a valid JSON escape, so the substitution is parse-equivalent.
+	sanitized := strings.ReplaceAll(string(raw), "</", "<\\/")
 	buf := new(bytes.Buffer)
-	if err := intentTemplate.Execute(buf, string(raw)); err != nil {
+	if err := intentTemplate.Execute(buf, template.HTML(sanitized)); err != nil {
 		return "", err
 	}
 	return template.HTML(buf.String()), nil
@@ -671,7 +677,7 @@ func BuildTemplates() {
 	))
 
 	intentTemplate = template.Must(template.New("intent-data").Parse(
-		`<script>window.__COZY_INTENT__ = JSON.parse({{.}})</script>`,
+		`<script type="application/json" id="cozy-intent">{{.}}</script>`,
 	))
 }
 

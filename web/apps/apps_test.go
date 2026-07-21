@@ -288,7 +288,7 @@ func TestApps(t *testing.T) {
 		csp.Contains("frame-ancestors 'self' https://test-app.cozywithapps.example.net;")
 
 		body := resp.Body()
-		body.Contains(`window.__COZY_INTENT__ = JSON.parse(`)
+		body.Contains(`<script type="application/json" id="cozy-intent">`)
 		body.Contains(intent.ID())
 		body.Contains("PICK")
 		body.Contains("io.cozy.foos")
@@ -304,7 +304,7 @@ func TestApps(t *testing.T) {
 			Expect().Status(200).
 			Body()
 
-		body.NotContains(`window.__COZY_INTENT__`)
+		body.NotContains(`id="cozy-intent"`)
 	})
 
 	t.Run("ServeWithAnIntentsClientURL", func(t *testing.T) {
