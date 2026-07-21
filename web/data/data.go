@@ -8,11 +8,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/stream"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
+	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/web/files"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
@@ -46,6 +48,39 @@ func fixErrorNoDatabaseIsWrongDoctype(err error) error {
 		err.(*couchdb.Error).Reason = "wrong_doctype"
 	}
 	return err
+}
+
+const managedDirectoryWriteReason = "managed organization directory documents are read-only"
+
+func managedDirectoryWriteError() error {
+	return jsonapi.Errorf(http.StatusForbidden, managedDirectoryWriteReason)
+}
+
+func rejectManagedDirectoryCreate(doc *couchdb.JSONDoc) error {
+	if orgdirectory.IsManagedDirectoryDoctype(doc.DocType()) && orgdirectory.IsManagedDirectoryDoc(doc) {
+		logger.WithNamespace("data").Warnf("rejecting create on managed organization directory document %s/%s: %s", doc.DocType(), doc.ID(), managedDirectoryWriteReason)
+		return managedDirectoryWriteError()
+	}
+	return nil
+}
+
+func rejectManagedDirectoryUpdate(doc, old *couchdb.JSONDoc) error {
+	if !orgdirectory.IsManagedDirectoryDoctype(doc.DocType()) {
+		return nil
+	}
+	if orgdirectory.IsManagedDirectoryDoc(doc) || orgdirectory.IsManagedDirectoryDoc(old) {
+		logger.WithNamespace("data").Warnf("rejecting update on managed organization directory document %s/%s: %s", doc.DocType(), doc.ID(), managedDirectoryWriteReason)
+		return managedDirectoryWriteError()
+	}
+	return nil
+}
+
+func rejectManagedDirectoryDelete(doc *couchdb.JSONDoc) error {
+	if orgdirectory.IsManagedDirectoryDoctype(doc.DocType()) && orgdirectory.IsManagedDirectoryDoc(doc) {
+		logger.WithNamespace("data").Warnf("rejecting delete on managed organization directory document %s/%s: %s", doc.DocType(), doc.ID(), managedDirectoryWriteReason)
+		return managedDirectoryWriteError()
+	}
+	return nil
 }
 
 func allDoctypes(c echo.Context) error {
@@ -136,6 +171,10 @@ func createDoc(c echo.Context) error {
 		return err
 	}
 
+	if err := rejectManagedDirectoryCreate(&doc); err != nil {
+		return err
+	}
+
 	if err := middlewares.Allow(c, permission.POST, &doc); err != nil {
 		return err
 	}
@@ -155,6 +194,10 @@ func createDoc(c echo.Context) error {
 
 func createNamedDoc(c echo.Context, doc couchdb.JSONDoc) error {
 	instance := middlewares.GetInstance(c)
+
+	if err := rejectManagedDirectoryCreate(&doc); err != nil {
+		return err
+	}
 
 	err := middlewares.Allow(c, permission.POST, &doc)
 	if err != nil {
@@ -212,17 +255,28 @@ func UpdateDoc(c echo.Context) error {
 		return createNamedDoc(c, doc)
 	}
 
+	if err := rejectManagedDirectoryUpdate(&doc, nil); err != nil {
+		return err
+	}
+
 	errWhole := middlewares.AllowWholeType(c, permission.PUT, doc.DocType())
-	if errWhole != nil {
-		// we cant apply to whole type, let's fetch old doc and see if it applies there
-		var old couchdb.JSONDoc
-		errFetch := couchdb.GetDoc(instance, doc.DocType(), doc.ID(), &old)
+	var old *couchdb.JSONDoc
+	if orgdirectory.IsManagedDirectoryDoctype(doc.DocType()) || errWhole != nil {
+		old = &couchdb.JSONDoc{}
+		errFetch := couchdb.GetDoc(instance, doc.DocType(), doc.ID(), old)
 		if errFetch != nil {
 			return errFetch
 		}
 		old.Type = doc.DocType()
+	}
+
+	if err := rejectManagedDirectoryUpdate(&doc, old); err != nil {
+		return err
+	}
+
+	if errWhole != nil {
 		// check if permissions set allows manipulating old doc
-		errOld := middlewares.Allow(c, permission.PUT, &old)
+		errOld := middlewares.Allow(c, permission.PUT, old)
 		if errOld != nil {
 			return errOld
 		}
@@ -279,6 +333,10 @@ func DeleteDoc(c echo.Context) error {
 	}
 	doc.Type = doctype
 	doc.SetRev(rev)
+
+	if err := rejectManagedDirectoryDelete(&doc); err != nil {
+		return err
+	}
 
 	err = middlewares.Allow(c, permission.DELETE, &doc)
 	if err != nil {

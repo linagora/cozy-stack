@@ -776,6 +776,13 @@ func FindDocsUnoptimized(db prefixer.Prefixer, doctype string, req *FindRequest,
 	return err
 }
 
+// FindDocsUnoptimizedRaw allows search on non-indexed fields and returns the
+// raw find response, including the bookmark used for pagination.
+// /!\ Use with care
+func FindDocsUnoptimizedRaw(db prefixer.Prefixer, doctype string, req *FindRequest, results interface{}) (*FindResponse, error) {
+	return findDocsRaw(db, doctype, req, results, true)
+}
+
 func findDocsRaw(db prefixer.Prefixer, doctype string, req interface{}, results interface{}, ignoreUnoptimized bool) (*FindResponse, error) {
 	url := "_find"
 	// prepare a structure to receive the results

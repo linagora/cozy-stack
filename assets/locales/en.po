@@ -554,8 +554,13 @@ msgstr "The link to log in to your Twake is truncated or has expired"
 msgid "Error Invalid mail token"
 msgstr "The link to confirm your email is truncated or has expired"
 
+msgid "Error Invalid sharing Title"
+msgstr "This item is no longer available"
+
 msgid "Error Invalid sharing"
-msgstr "It looks like the sharing was not found or has been revoked"
+msgstr ""
+"The file or folder was deleted or your access was removed.\n"
+"Contact the owner for more information."
 
 msgid "Error Sharing already accepted Title"
 msgstr "You have already accepted this sharing"

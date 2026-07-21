@@ -82,11 +82,10 @@ func (h *HTTPHandler) getInstance(c echo.Context) error {
 		return err
 	}
 
-	url, err := h.svc.GetLegalNoticeUrl(inst)
-	if err != nil {
-		return err
-	}
-	if url != "" {
+	if url, err := h.svc.GetLegalNoticeUrl(inst); err != nil {
+		inst.Logger().WithNamespace("settings").
+			Warnf("Failed to fetch the legal notice URL from the cloudery: %s", err)
+	} else if url != "" {
 		doc.M["legal_notice_url"] = url
 	}
 
@@ -123,6 +122,34 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 		delete(doc.M, "context")
 		delete(doc.M, "sponsorships")
 		delete(doc.M, "oidc_id")
+
+		// email and pending_email are never set through this generic update:
+		// changing the email must go through the passphrase-protected
+		// POST /settings/email flow (or the exempt CLI/admin path above), as it
+		// is the delivery address for password-reset, 2FA and magic-link mails.
+		// On signup-managed contexts, phone and recovery_email are additionally
+		// owned by the external signup flow (their RabbitMQ event handlers), so
+		// they are locked too. Restore the stored values so a client cannot set
+		// them directly (e.g. an email to another user's address, bypassing
+		// verification) nor erase them with a partial update. The settings doc is
+		// replaced wholesale on patch, so the stored value is put back rather than
+		// the incoming one merely dropped; a read failure aborts the request
+		// instead of risking a wipe.
+		guarded := []string{"email", "pending_email"}
+		if inst.HasSignup() {
+			guarded = append(guarded, "phone", "recovery_email")
+		}
+		current, err := inst.SettingsDocument()
+		if err != nil {
+			return err
+		}
+		for _, field := range guarded {
+			if v, ok := current.M[field]; ok {
+				doc.M[field] = v
+			} else {
+				delete(doc.M, field)
+			}
+		}
 	}
 
 	if err := lifecycle.Patch(inst, &lifecycle.Options{SettingsObj: doc}); err != nil {

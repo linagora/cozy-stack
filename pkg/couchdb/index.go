@@ -14,7 +14,7 @@ import (
 
 // IndexViewsVersion is the version of current definition of views & indexes.
 // This number should be incremented when this file changes.
-const IndexViewsVersion int = 38
+const IndexViewsVersion int = 39
 
 // Indexes is the index list required by an instance to run properly.
 var Indexes = []*mango.Index{
@@ -324,6 +324,7 @@ var globalIndexes = []*mango.Index{
 	mango.MakeIndex(consts.Instances, "by-oidcid", mango.IndexDef{Fields: []string{"oidc_id"}}),
 	mango.MakeIndex(consts.Instances, "by-olddomain", mango.IndexDef{Fields: []string{"old_domain"}}),
 	mango.MakeIndex(consts.Instances, "by-orgdomain", mango.IndexDef{Fields: []string{"org_domain"}}),
+	mango.MakeIndex(consts.Instances, "by-orgid", mango.IndexDef{Fields: []string{"org_id"}}),
 }
 
 // secretIndexes is the index list required on the secret databases to run

@@ -122,6 +122,12 @@ func (h *HTTPHandler) postEmail(c echo.Context) error {
 
 	inst := middlewares.GetInstance(c)
 
+	// On signup-managed contexts the email is owned by the external signup flow,
+	// so it cannot be changed through the stack.
+	if inst.HasSignup() {
+		return jsonapi.NewError(http.StatusForbidden, "email is managed externally and cannot be changed for this instance")
+	}
+
 	err = h.svc.StartEmailUpdate(inst, &csettings.UpdateEmailCmd{
 		Passphrase: []byte(args.Passphrase),
 		Email:      args.Email,

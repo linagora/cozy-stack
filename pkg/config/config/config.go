@@ -437,8 +437,9 @@ type OIDCAppTokenExchangeConfig struct {
 // OIDCAppTokenExchangeAppConfig contains the linked application allowed for an
 // OIDC token audience.
 type OIDCAppTokenExchangeAppConfig struct {
-	Audience   string
-	SoftwareID string `mapstructure:"software_id"`
+	Audience      string
+	SoftwareID    string `mapstructure:"software_id"`
+	InstanceClaim string `mapstructure:"instance_claim"`
 }
 
 // Worker contains the configuration fields for a specific worker type.
@@ -631,6 +632,7 @@ func GetOIDCAppTokenExchange(contextName string) (OIDCAppTokenExchangeConfig, er
 	for audience, appConfig := range apps {
 		appConfig.Audience = audience
 		appConfig.SoftwareID = strings.TrimSpace(appConfig.SoftwareID)
+		appConfig.InstanceClaim = strings.TrimSpace(appConfig.InstanceClaim)
 		if appConfig.SoftwareID == "" {
 			return cfg, fmt.Errorf("software_id is required for app token exchange audience %q", audience)
 		}

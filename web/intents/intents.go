@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/intent"
+	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -52,13 +54,32 @@ func (i *apiIntent) MarshalJSON() ([]byte, error) {
 	if len(parts) < 2 {
 		i.doc.Client = ""
 	} else {
-		u := i.ins.SubDomain(parts[1])
-		u.Path = ""
-		i.doc.Client = u.String()
+		i.doc.Client = i.resolveClientURL(parts[1])
 	}
 	res, err := json.Marshal(i.doc)
 	i.doc.Client = was
 	return res, err
+}
+
+func (i *apiIntent) resolveClientURL(slug string) string {
+	return app.ResolveClientURL(i.ins, slug)
+}
+
+func RequestAppSourceID(pdoc *permission.Permission) string {
+	if pdoc.Type != permission.TypeOauth {
+		return pdoc.SourceID
+	}
+
+	oc, ok := pdoc.Client.(*oauth.Client)
+	if !ok {
+		return pdoc.SourceID
+	}
+
+	if slug := oauth.GetLinkedAppSlug(oc.SoftwareID); slug != "" {
+		return consts.Apps + "/" + slug
+	}
+
+	return pdoc.SourceID
 }
 
 func createIntent(c echo.Context) error {
@@ -77,7 +98,7 @@ func createIntent(c echo.Context) error {
 	if intent.Type == "" {
 		return jsonapi.InvalidParameter("type", errors.New("Type is missing"))
 	}
-	intent.Client = pdoc.SourceID
+	intent.Client = RequestAppSourceID(pdoc)
 	intent.SetID("")
 	intent.SetRev("")
 	intent.Services = nil

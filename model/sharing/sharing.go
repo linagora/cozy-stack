@@ -45,6 +45,14 @@ const (
 	DriveRootTypeDirectory = "directory"
 	// DriveRootTypeFile means the shared drive root is a single file.
 	DriveRootTypeFile = "file"
+
+	// AccessModeAdditive is the default access mode for nested shared folders:
+	// parent access applies to children, and child scopes can add access.
+	AccessModeAdditive = "additive"
+	// AccessModeLimitedAccess is reserved for a future feature where a child
+	// folder becomes a restrictive boundary. It is stored but not activated
+	// in v1.
+	AccessModeLimitedAccess = "limited_access"
 )
 
 // Triggers keep record of which triggers are active
@@ -67,6 +75,7 @@ type Sharing struct {
 	Active        bool      `json:"active,omitempty"`
 	Owner         bool      `json:"owner,omitempty"`
 	Open          bool      `json:"open_sharing,omitempty"`
+	AccessMode    string    `json:"access_mode,omitempty"` // additive (default) | limited_access (reserved)
 	Description   string    `json:"description,omitempty"`
 	AppSlug       string    `json:"app_slug"`
 	PreviewPath   string    `json:"preview_path,omitempty"`
@@ -246,6 +255,15 @@ func (s *Sharing) ReadOnlyRules() bool {
 // forces a read-only mode.
 func (s *Sharing) ReadOnly() bool {
 	return s.ReadOnlyFlag() || s.ReadOnlyRules()
+}
+
+// EffectiveAccessMode returns the sharing's access mode, defaulting to
+// AccessModeAdditive when the field is empty for backwards compatibility.
+func (s *Sharing) EffectiveAccessMode() string {
+	if s.AccessMode == "" {
+		return AccessModeAdditive
+	}
+	return s.AccessMode
 }
 
 // BeOwner initializes a sharing on the cozy of its owner

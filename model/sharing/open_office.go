@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"net/url"
 
-	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/office"
 	"github.com/cozy/cozy-stack/model/settings"
@@ -138,12 +137,15 @@ func OpenOffice(inst *instance.Instance, fileID string) (*OfficeOpener, error) {
 // used in case of a shared office document, and other parameters.. and returns
 // the information.
 func (o *OfficeOpener) GetResult(memberIndex int, readOnly bool) (jsonapi.Object, error) {
+	prepared, err := o.PrepareOpenFileRequest(memberIndex, readOnly)
+	if err != nil {
+		return nil, err
+	}
 	var result *apiOfficeURL
-	var err error
-	if o.ShouldOpenLocally() {
-		result, err = o.openLocalDocument(memberIndex, readOnly)
+	if prepared.Opts == nil {
+		result, err = o.openLocalDocument(prepared.MemberIndex, prepared.ReadOnly)
 	} else {
-		result, err = o.openSharedDocument()
+		result, err = o.openSharedDocument(prepared)
 	}
 	if err != nil {
 		return nil, err
@@ -160,11 +162,10 @@ func (o *OfficeOpener) openLocalDocument(memberIndex int, readOnly bool) (*apiOf
 	}
 
 	// Create a local result
-	code, err := o.GetSharecode(memberIndex, readOnly)
+	params, err := o.OpenLocalFileForMember(memberIndex, readOnly)
 	if err != nil {
 		return nil, err
 	}
-	params := o.OpenLocalFile(code)
 	doc := apiOfficeURL{
 		DocID:     params.FileID,
 		Protocol:  params.Protocol,
@@ -246,20 +247,10 @@ func (o *OfficeOpener) openLocalDocument(memberIndex int, readOnly bool) (*apiOf
 	return &doc, nil
 }
 
-func (o *OfficeOpener) openSharedDocument() (*apiOfficeURL, error) {
-	prepared, err := o.PrepareRequestForSharedFile()
-	if err != nil {
-		return nil, err
-	}
-	if prepared.Opts == nil {
-		return o.openLocalDocument(prepared.MemberIndex, prepared.ReadOnly)
-	}
-
-	prepared.Opts.Path = "/office/" + prepared.XoredID + "/open"
-	res, err := request.Req(prepared.Opts)
-	if res != nil && res.StatusCode/100 == 4 {
-		res, err = RefreshToken(o.Inst, res, err, o.Sharing, prepared.Creator,
-			prepared.Creds, prepared.Opts, nil)
+func (o *OfficeOpener) openSharedDocument(prepared *PreparedRequest) (*apiOfficeURL, error) {
+	res, err := o.RequestSharedFile(prepared, "/office/"+prepared.XoredID+"/open")
+	if res != nil {
+		defer res.Body.Close()
 	}
 	if res != nil && res.StatusCode == 404 {
 		return o.openLocalDocument(prepared.MemberIndex, prepared.ReadOnly)
@@ -268,7 +259,6 @@ func (o *OfficeOpener) openSharedDocument() (*apiOfficeURL, error) {
 		o.Inst.Logger().WithNamespace("office").Infof("openSharedDocument error: %s", err)
 		return nil, ErrInternalServerError
 	}
-	defer res.Body.Close()
 	var doc apiOfficeURL
 	if _, err := jsonapi.Bind(res.Body, &doc); err != nil {
 		return nil, err

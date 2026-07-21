@@ -258,7 +258,8 @@ func TestConfigUnmarshal(t *testing.T) {
 				"allow_app_token_exchange": true,
 				"app_token_exchange": map[string]interface{}{
 					"twake-mail-web": map[string]interface{}{
-						"software_id": "registry://mail",
+						"software_id":    "registry://mail",
+						"instance_claim": "workplaceFqdn",
 					},
 				},
 			},
@@ -394,7 +395,8 @@ func TestGetOIDCAppTokenExchange(t *testing.T) {
 					"allow_app_token_exchange": true,
 					"app_token_exchange": map[string]interface{}{
 						"twake-mail-web": map[string]interface{}{
-							"software_id": " registry://mail ",
+							"software_id":    " registry://mail ",
+							"instance_claim": " workplaceFqdn ",
 						},
 					},
 				},
@@ -407,6 +409,7 @@ func TestGetOIDCAppTokenExchange(t *testing.T) {
 		require.Contains(t, cfg.Apps, "twake-mail-web")
 		assert.Equal(t, "twake-mail-web", cfg.Apps["twake-mail-web"].Audience)
 		assert.Equal(t, "registry://mail", cfg.Apps["twake-mail-web"].SoftwareID)
+		assert.Equal(t, "workplaceFqdn", cfg.Apps["twake-mail-web"].InstanceClaim)
 	})
 
 	t.Run("disabled when missing", func(t *testing.T) {

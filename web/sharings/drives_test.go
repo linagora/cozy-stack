@@ -459,6 +459,89 @@ func findSharingMemberByEmail(t *testing.T, inst *instance.Instance, sharingID, 
 	return sharing.Member{}
 }
 
+func findSharingMemberByName(t *testing.T, inst *instance.Instance, sharingID, name string) sharing.Member {
+	t.Helper()
+
+	s, err := sharing.FindSharing(inst, sharingID)
+	require.NoError(t, err)
+
+	for _, member := range s.Members {
+		if member.Name == name {
+			return member
+		}
+	}
+
+	require.FailNowf(t, "member not found", "name %s not found in sharing %s", name, sharingID)
+	return sharing.Member{}
+}
+
+func sharingInvitationRecipientNames(t *testing.T, inst *instance.Instance, sharingID string) []string {
+	t.Helper()
+
+	req := couchdb.AllDocsRequest{}
+	var jobs []job.Job
+	require.NoError(t, couchdb.GetAllDocs(inst, consts.Jobs, &req, &jobs))
+
+	expectedPath := "/sharings/" + sharingID + "/discovery"
+	var names []string
+	for _, j := range jobs {
+		if j.WorkerType != "sendmail" {
+			continue
+		}
+
+		var msg map[string]interface{}
+		require.NoError(t, json.Unmarshal(j.Message, &msg))
+		if msg["template_name"] != "sharing_request" {
+			continue
+		}
+		values, ok := msg["template_values"].(map[string]interface{})
+		require.True(t, ok)
+		link, ok := values["SharingLink"].(string)
+		require.True(t, ok)
+		u, err := url.Parse(link)
+		require.NoError(t, err)
+		if u.Path != expectedPath {
+			continue
+		}
+		require.NotEmpty(t, u.Query().Get("state"))
+		name, ok := msg["recipient_name"].(string)
+		require.True(t, ok)
+		names = append(names, name)
+	}
+	return names
+}
+
+func findSharingMemberIndexByEmail(t *testing.T, inst *instance.Instance, sharingID, email string) int {
+	t.Helper()
+
+	s, err := sharing.FindSharing(inst, sharingID)
+	require.NoError(t, err)
+
+	for i, member := range s.Members {
+		if member.Email == email {
+			return i
+		}
+	}
+
+	require.FailNowf(t, "member not found", "email %s not found in sharing %s", email, sharingID)
+	return -1
+}
+
+func requireOwnerMemberState(
+	t *testing.T,
+	owner *instance.Instance,
+	sharingID string,
+	email string,
+	status string,
+	readOnly bool,
+) {
+	t.Helper()
+
+	member := findSharingMemberByEmail(t, owner, sharingID, email)
+	require.Equal(t, status, member.Status)
+	require.Equal(t, readOnly, member.ReadOnly)
+}
+
 type driveAutoAcceptEnv struct {
 	ownerInstance     *instance.Instance
 	recipientInstance *instance.Instance
@@ -802,6 +885,20 @@ func assertSharedDriveRedirectLocation(t *testing.T, location, sharingID string)
 			filePrefix,
 		)
 	}
+}
+
+func assertInvalidSharingUnavailableErrorPage(t *testing.T, body *httpexpect.String) {
+	t.Helper()
+
+	body.Contains("This item is no longer available")
+	body.Contains("The file or folder was deleted or your access was removed.")
+	body.Contains("Contact the owner for more information.")
+	body.NotContains("unexpected error")
+	body.NotContains("Sorry, an unexpected error occurred.")
+	body.NotContains("Unqualified error")
+	body.NotContains("sharing was not found or has been revoked")
+	body.NotContains(`"error":`)
+	body.NotContains(`{"error"`)
 }
 
 func submitSharingAuthorize(
@@ -1889,6 +1986,81 @@ func TestDriveAutoAcceptTrusted(t *testing.T) {
 	assertSharedDriveRedirectLocation(t, location, sharingID)
 }
 
+func TestRevokedSharedDriveInvitationAuthorizeShowsErrorPage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	eOwner, eRecipient, _ := env.createClients(t)
+	sharingID := createDirectRecipientDriveSharing(
+		t,
+		env.acme,
+		eOwner,
+		env.acmeToken,
+		"Betty revoked",
+		"betty@example.net",
+		env.tsB.URL,
+		"Revoked invitation drive",
+		"Revoked invitation drive",
+	)
+
+	recipientSharing := waitForSharingOnRecipient(t, env.betty, sharingID)
+	require.NotEmpty(t, recipientSharing.Credentials)
+	state := recipientSharing.Credentials[0].State
+	require.NotEmpty(t, state)
+
+	csrfToken := loginSharingRecipient(t, eRecipient)
+	eOwner.DELETE("/sharings/"+sharingID+"/recipients/1").
+		WithHeader("Authorization", "Bearer "+env.acmeToken).
+		Expect().Status(http.StatusNoContent)
+
+	require.Eventually(t, func() bool {
+		revokedSharing, err := sharing.FindSharing(env.betty, sharingID)
+		return err == nil &&
+			len(revokedSharing.Credentials) == 0 &&
+			len(revokedSharing.Members) > 1 &&
+			revokedSharing.Members[1].Status == sharing.MemberStatusRevoked
+	}, 5*time.Second, 100*time.Millisecond, "recipient sharing should be marked as revoked")
+
+	FakeOwnerInstanceForSharing(t, env.betty, env.tsA.URL, sharingID)
+	body := eRecipient.GET("/auth/authorize/sharing").
+		WithQuery("sharing_id", sharingID).
+		WithQuery("state", state).
+		Expect().
+		Status(http.StatusBadRequest).
+		HasContentType("text/html", "utf-8").
+		Body()
+	assertInvalidSharingUnavailableErrorPage(t, body)
+
+	body = eRecipient.POST("/auth/authorize/sharing").
+		WithFormField("sharing_id", sharingID).
+		WithFormField("state", state).
+		WithFormField("csrf_token", csrfToken).
+		Expect().
+		Status(http.StatusBadRequest).
+		HasContentType("text/html", "utf-8").
+		Body()
+	assertInvalidSharingUnavailableErrorPage(t, body)
+}
+
+func TestInvalidSharingDiscoveryShowsErrorPage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	eOwner, _, _ := env.createClients(t)
+
+	body := eOwner.GET("/sharings/missing-sharing/discovery").
+		WithQuery("state", "missing-state").
+		Expect().
+		Status(http.StatusBadRequest).
+		HasContentType("text/html", "utf-8").
+		Body()
+	assertInvalidSharingUnavailableErrorPage(t, body)
+}
+
 func TestSendAnswerIsIdempotentAfterStaleConflict(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
@@ -2120,6 +2292,266 @@ func TestSharedDriveDelegatedRecipientAddition(t *testing.T) {
 		require.True(t, added.ReadOnly)
 	})
 
+	t.Run("AlreadyActiveRecipientIsIgnoredInMixedBatch", func(t *testing.T) {
+		sharingID := createAcceptedSharedDriveForRecipient(
+			t,
+			env,
+			RecipientInfo{Name: "Betty", Email: "betty@example.net", ReadOnly: false},
+			env.betty,
+			env.tsB.URL,
+		)
+		charlie := createContact(t, env.betty, "Charlie Mixed", "charlie-mixed@example.net")
+		duplicate := createContact(t, env.betty, "Betty Duplicate", "betty@example.net")
+		erin := createContact(t, env.betty, "Erin Mixed", "erin-mixed@example.net")
+
+		eBetty.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(makeAddRecipientsPayload(t, sharingID, "recipients", charlie.ID(), duplicate.ID(), erin.ID())).
+			Expect().Status(http.StatusOK)
+
+		s, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		require.Len(t, s.Members, 4)
+		require.Equal(t, sharing.MemberStatusReady, findSharingMemberByEmail(t, env.acme, sharingID, "betty@example.net").Status)
+		findSharingMemberByEmail(t, env.acme, sharingID, "charlie-mixed@example.net")
+		findSharingMemberByEmail(t, env.acme, sharingID, "erin-mixed@example.net")
+
+		bettyCount := 0
+		for _, member := range s.Members {
+			if member.Email == "betty@example.net" {
+				bettyCount++
+			}
+		}
+		require.Equal(t, 1, bettyCount)
+		require.ElementsMatch(t, []string{"Charlie Mixed", "Erin Mixed"}, sharingInvitationRecipientNames(t, env.betty, sharingID))
+	})
+
+	t.Run("CredentialsArePersistedBeforeCozyAutoAccept", func(t *testing.T) {
+		sharingID := createAcceptedSharedDriveForRecipient(
+			t,
+			env,
+			RecipientInfo{Name: "Betty Auto Accept", Email: "betty@example.net", ReadOnly: false},
+			env.betty,
+			env.tsB.URL,
+		)
+		eOwner, eBetty, _ := env.createClients(t)
+
+		ownerSharing, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		require.NotEmpty(t, ownerSharing.Rules)
+		require.NotEmpty(t, ownerSharing.Rules[0].Values)
+		fileID := createFile(t, eOwner, ownerSharing.Rules[0].Values[0], "auto-accept.txt", env.acmeToken)
+
+		render, _ := statik.NewDirRenderer("../../assets")
+		autoAcceptResult := make(chan error, 1)
+		var invitee *instance.Instance
+		invitee, inviteeToken, inviteeServer := newDriveRecipientTestServer(
+			t,
+			testify(t, "delegated_auto_accept_invitee"),
+			"invitee-auto-accept@example.net",
+			"Invitee Auto Accept",
+			render,
+			map[string]func(*echo.Group){
+				"/sharings": func(g *echo.Group) {
+					g.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+						return func(c echo.Context) error {
+							if err := next(c); err != nil {
+								return err
+							}
+							if c.Request().Method != http.MethodPut ||
+								c.QueryParam("shortcut") != "true" ||
+								c.Param("sharing-id") != sharingID {
+								return nil
+							}
+
+							recipientSharing, err := sharing.FindSharing(invitee, sharingID)
+							if err == nil && (len(recipientSharing.Members) == 0 || len(recipientSharing.Credentials) == 0) {
+								err = sharing.ErrInvalidSharing
+							}
+							if err == nil {
+								recipientSharing.Members[0].Instance = env.tsA.URL
+								err = couchdb.UpdateDoc(invitee, recipientSharing)
+							}
+							if err == nil {
+								err = sharing.HandleAutoAccept(invitee, &sharing.AutoAcceptMsg{
+									SharingID: sharingID,
+									State:     recipientSharing.Credentials[0].State,
+								})
+							}
+							select {
+							case autoAcceptResult <- err:
+							default:
+							}
+							return nil
+						}
+					})
+					sharings.Routes(g)
+				},
+			},
+		)
+
+		inviteeContact := createContactWithCozy(
+			t,
+			env.betty,
+			"Invitee Auto Accept",
+			"invitee-auto-accept@example.net",
+			inviteeServer.URL,
+		)
+		duplicate := createContactWithCozy(
+			t,
+			env.betty,
+			"Betty Duplicate",
+			"betty@example.net",
+			env.tsB.URL,
+		)
+
+		eBetty.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(makeAddRecipientsPayload(t, sharingID, "recipients", inviteeContact.ID(), duplicate.ID())).
+			Expect().Status(http.StatusOK)
+
+		select {
+		case err := <-autoAcceptResult:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "auto-accept did not run during the shortcut request")
+		}
+
+		require.Eventually(t, func() bool {
+			s, err := sharing.FindSharing(env.acme, sharingID)
+			if err != nil {
+				return false
+			}
+			for _, member := range s.Members {
+				if member.Email == "invitee-auto-accept@example.net" {
+					return member.Status == sharing.MemberStatusReady
+				}
+			}
+			return false
+		}, 5*time.Second, 50*time.Millisecond, "owner should see the auto-accepted recipient as ready")
+
+		require.Eventually(t, func() bool {
+			s, err := sharing.FindSharing(invitee, sharingID)
+			return err == nil && s.Active
+		}, 5*time.Second, 50*time.Millisecond, "invitee sharing should be active")
+
+		require.Eventually(t, func() bool {
+			req, err := http.NewRequestWithContext(
+				context.Background(),
+				http.MethodGet,
+				inviteeServer.URL+"/sharings/drives/"+sharingID+"/"+fileID,
+				nil,
+			)
+			if err != nil {
+				return false
+			}
+			req.Header.Set("Authorization", "Bearer "+inviteeToken)
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return false
+			}
+			_ = res.Body.Close()
+			return res.StatusCode == http.StatusOK
+		}, 10*time.Second, 100*time.Millisecond, "auto-accepted recipient should access shared files")
+	})
+
+	t.Run("GroupMemberWithoutAddressIsSynchronizedWithoutInvitation", func(t *testing.T) {
+		sharingID := createAcceptedSharedDriveForRecipient(
+			t,
+			env,
+			RecipientInfo{Name: "Betty", Email: "betty@example.net", ReadOnly: false},
+			env.betty,
+			env.tsB.URL,
+		)
+		group := createGroupOnInstance(t, env.betty, "No address group")
+		groupMember := contact.New()
+		groupMember.M["fullname"] = "No Address"
+		groupMember.M["relationships"] = map[string]interface{}{
+			"groups": map[string]interface{}{
+				"data": []interface{}{
+					map[string]interface{}{
+						"_id":   group.ID(),
+						"_type": consts.Groups,
+					},
+				},
+			},
+		}
+		require.NoError(t, couchdb.CreateDoc(env.betty, groupMember))
+
+		eBetty.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(mustJSON(t, map[string]interface{}{
+				"data": map[string]interface{}{
+					"type": consts.Sharings,
+					"id":   sharingID,
+					"relationships": map[string]interface{}{
+						"recipients": map[string]interface{}{
+							"data": []map[string]interface{}{
+								{"id": group.ID(), "type": consts.Groups},
+							},
+						},
+					},
+				},
+			})).
+			Expect().Status(http.StatusOK)
+
+		for _, inst := range []*instance.Instance{env.acme, env.betty} {
+			member := findSharingMemberByName(t, inst, sharingID, "No Address")
+			require.Equal(t, sharing.MemberStatusMailNotSent, member.Status)
+			require.True(t, member.OnlyInGroups)
+			require.Empty(t, member.Email)
+			require.Empty(t, member.Instance)
+		}
+		require.Empty(t, sharingInvitationRecipientNames(t, env.betty, sharingID))
+	})
+
+	t.Run("GroupColorIsPropagated", func(t *testing.T) {
+		sharingID := createAcceptedSharedDriveForRecipient(
+			t,
+			env,
+			RecipientInfo{Name: "Betty", Email: "betty@example.net", ReadOnly: false},
+			env.betty,
+			env.tsB.URL,
+		)
+		group := createGroupOnInstance(t, env.betty, "Marketing")
+		group.M["color"] = "#3367D6"
+		require.NoError(t, couchdb.UpdateDoc(env.betty, group))
+		createContactInGroupWithCozy(
+			t,
+			env.betty,
+			group,
+			"Charlie Group",
+			"charlie-group@example.net",
+			"",
+		)
+
+		eBetty.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(mustJSON(t, map[string]interface{}{
+				"data": map[string]interface{}{
+					"type": consts.Sharings,
+					"id":   sharingID,
+					"relationships": map[string]interface{}{
+						"recipients": map[string]interface{}{
+							"data": []map[string]interface{}{
+								{"id": group.ID(), "type": consts.Groups},
+							},
+						},
+					},
+				},
+			})).
+			Expect().Status(http.StatusOK)
+
+		ownerSharing, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		require.NotEmpty(t, ownerSharing.Groups)
+		require.Equal(t, "#3367D6", ownerSharing.Groups[len(ownerSharing.Groups)-1].Color)
+	})
+
 	t.Run("ReadOnlyRecipientCanInviteReadOnly", func(t *testing.T) {
 		sharingID := createAcceptedSharedDriveForRecipient(
 			t,
@@ -2224,6 +2656,48 @@ func TestSharedDriveDelegatedRecipientRemoval(t *testing.T) {
 		betty := findSharingMemberByEmail(t, env.acme, sharingID, "betty@example.net")
 		require.Equal(t, sharing.MemberStatusReady, betty.Status)
 	})
+}
+
+func TestSharedDriveDelegatedPendingRecipientManagement(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	_, eBetty, _ := env.createClients(t)
+
+	sharingID, _, _ := createSharedDrive(
+		t,
+		DriveCreationMethodLegacy,
+		env.acme,
+		env.acmeToken,
+		env.tsA.URL,
+		"Delegated Pending Recipient Management Drive",
+		"Drive for delegated pending recipient management tests",
+		[]RecipientInfo{
+			{Name: "Betty", Email: "betty@example.net", ReadOnly: false},
+			{Name: "Charlie", Email: "charlie@example.net", ReadOnly: false},
+		},
+	)
+	acceptSharedDriveForBetty(t, env.acme, env.betty, env.tsA.URL, env.tsB.URL, sharingID)
+
+	charlieIndex := findSharingMemberIndexByEmail(t, env.acme, sharingID, "charlie@example.net")
+	requireOwnerMemberState(t, env.acme, sharingID, "charlie@example.net", sharing.MemberStatusPendingInvitation, false)
+
+	eBetty.POST(fmt.Sprintf("/sharings/%s/recipients/%d/readonly", sharingID, charlieIndex)).
+		WithHeader("Authorization", "Bearer "+env.bettyToken).
+		Expect().Status(http.StatusNoContent)
+	requireOwnerMemberState(t, env.acme, sharingID, "charlie@example.net", sharing.MemberStatusPendingInvitation, true)
+
+	eBetty.DELETE(fmt.Sprintf("/sharings/%s/recipients/%d/readonly", sharingID, charlieIndex)).
+		WithHeader("Authorization", "Bearer "+env.bettyToken).
+		Expect().Status(http.StatusNoContent)
+	requireOwnerMemberState(t, env.acme, sharingID, "charlie@example.net", sharing.MemberStatusPendingInvitation, false)
+
+	eBetty.DELETE(fmt.Sprintf("/sharings/%s/recipients/%d", sharingID, charlieIndex)).
+		WithHeader("Authorization", "Bearer "+env.bettyToken).
+		Expect().Status(http.StatusNoContent)
+	requireOwnerMemberState(t, env.acme, sharingID, "charlie@example.net", sharing.MemberStatusRevoked, false)
 }
 
 func TestSharedDriveAccess(t *testing.T) {
@@ -4104,6 +4578,27 @@ func TestSharedDriveNotes(t *testing.T) {
 		}
 	})
 
+	t.Run("OpenFileWithEditorFromSharedDrive", func(t *testing.T) {
+		eA, eB, _ := env.createClients(t)
+
+		fileID := createFileWithMime(t, eA, env.meetingsDirID, "drawing.excalidraw", env.acmeToken, "application/json")
+
+		obj := eB.GET("/sharings/drives/"+env.firstSharingID+"/editor/"+fileID+"/open").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		data := obj.Value("data").Object()
+		data.ValueEqual("type", consts.Files)
+		data.ValueEqual("id", fileID)
+
+		attrs := data.Value("attributes").Object()
+		attrs.ValueEqual("file_id", fileID)
+		attrs.Value("instance").String().NotEmpty()
+		attrs.Value("sharecode").String().NotEmpty()
+	})
+
 	t.Run("CreateNoteWithoutAuth", func(t *testing.T) {
 		_, eB, _ := env.createClients(t)
 
@@ -4738,6 +5233,37 @@ func TestSharedDriveRecipientSelfRevocation(t *testing.T) {
 			status := obj.Path("$.data.attributes.members[1].status").String().Raw()
 			return status == "revoked"
 		}, 5*time.Second, 100*time.Millisecond, "Betty's status should be revoked on owner's side")
+	})
+
+	t.Run("OwnerCanAddBettyAgain", func(t *testing.T) {
+		eA.GET("/files/"+env.firstRootDirID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			Expect().Status(http.StatusOK)
+
+		bettyContact, err := contact.FindByEmail(env.acme, "betty@example.net")
+		require.NoError(t, err)
+
+		eA.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes(makeAddRecipientsPayload(t, sharingID, "recipients", bettyContact.ID())).
+			Expect().Status(http.StatusOK)
+
+		ownerSharing, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+
+		bettyCount := 0
+		for index, member := range ownerSharing.Members {
+			if member.Email != "betty@example.net" {
+				continue
+			}
+			bettyCount++
+			require.Equal(t, 1, index)
+			require.Equal(t, sharing.MemberStatusPendingInvitation, member.Status)
+			require.False(t, member.ReadOnly)
+		}
+		require.Equal(t, 1, bettyCount)
+		require.NotEmpty(t, ownerSharing.Credentials[0].State)
 	})
 }
 

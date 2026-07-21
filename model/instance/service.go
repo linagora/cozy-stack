@@ -15,6 +15,8 @@ type InstanceService struct {
 	logger logger.Logger
 }
 
+const orgInstanceListPageSize = 1000
+
 func NewService(logger logger.Logger) *InstanceService {
 	return &InstanceService{
 		logger: logger,
@@ -55,16 +57,43 @@ func (s *InstanceService) Get(domain string) (*Instance, error) {
 }
 
 func (s *InstanceService) ListByOrgDomain(orgDomain string) ([]*Instance, error) {
+	return s.listByOrgField("by-orgdomain", "org_domain", orgDomain)
+}
+
+func (s *InstanceService) ListByOrgID(orgID string) ([]*Instance, error) {
+	return s.listByOrgField("by-orgid", "org_id", orgID)
+}
+
+func (s *InstanceService) listByOrgField(indexName, fieldName, value string) ([]*Instance, error) {
 	var docs []*Instance
-	req := &couchdb.FindRequest{
-		UseIndex: "by-orgdomain",
-		Selector: mango.Equal("org_domain", orgDomain),
+	var bookmark string
+	for {
+		var page []*Instance
+		req := &couchdb.FindRequest{
+			UseIndex: indexName,
+			Selector: mango.Equal(fieldName, value),
+			Limit:    orgInstanceListPageSize,
+			Bookmark: bookmark,
+		}
+		res, err := couchdb.FindDocsRaw(prefixer.GlobalPrefixer, consts.Instances, req, &page)
+		if err != nil {
+			return nil, err
+		}
+		for _, inst := range page {
+			if inst != nil {
+				docs = append(docs, inst)
+			}
+		}
+
+		nextBookmark := ""
+		if res != nil {
+			nextBookmark = res.Bookmark
+		}
+		if len(page) < orgInstanceListPageSize || nextBookmark == "" || nextBookmark == bookmark {
+			return docs, nil
+		}
+		bookmark = nextBookmark
 	}
-	err := couchdb.FindDocs(prefixer.GlobalPrefixer, consts.Instances, req, &docs)
-	if err != nil {
-		return nil, err
-	}
-	return docs, nil
 }
 
 // Update saves the changes in CouchDB.

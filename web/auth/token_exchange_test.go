@@ -47,6 +47,7 @@ func TestTokenExchangeAssertManifestTrusted(t *testing.T) {
 	}
 
 	assert.NoError(t, tokenExchangeAssertManifestTrusted(mk("registry://mail"), "mail"))
+	assert.NoError(t, tokenExchangeAssertManifestTrusted(mk("registry://mail/stable"), "mail"))
 
 	err := tokenExchangeAssertManifestTrusted(mk(""), "mail")
 	assert.EqualError(t, err, "code=400, message=mail is not a registry application")
@@ -55,5 +56,8 @@ func TestTokenExchangeAssertManifestTrusted(t *testing.T) {
 	assert.EqualError(t, err, "code=400, message=mail is not a registry application")
 
 	err = tokenExchangeAssertManifestTrusted(mk("registry://contacts"), "mail")
+	assert.EqualError(t, err, "code=400, message=mail is not the installed application")
+
+	err = tokenExchangeAssertManifestTrusted(mk("registry://mailbox/stable"), "mail")
 	assert.EqualError(t, err, "code=400, message=mail is not the installed application")
 }

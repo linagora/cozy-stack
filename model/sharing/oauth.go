@@ -108,6 +108,7 @@ func (m *Member) CreateSharingRequest(inst *instance.Instance, s *Sharing, c *Cr
 			Active:        false,
 			Owner:         false,
 			Open:          s.Open,
+			AccessMode:    s.AccessMode,
 			Description:   s.Description,
 			AppSlug:       s.AppSlug,
 			PreviewPath:   s.PreviewPath,

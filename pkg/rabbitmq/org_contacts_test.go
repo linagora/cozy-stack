@@ -3,12 +3,12 @@ package rabbitmq_test
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
@@ -34,10 +34,10 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 		preexisting := createContact(t, bob, "alice@example.com", "https://manual.example", false, "Existing Alice")
 
 		err := rabbitmq.SyncCreatedOrgContact(testCtx(t), target, rabbitmq.UserCreatedMessage{
-			InternalEmail:      "alice@example.com",
-			Mobile:             "+33123456789",
-			WorkplaceFqdn:      target.Domain,
-			OrganizationDomain: strings.ToUpper(orgDomain) + ".",
+			InternalEmail:  "alice@example.com",
+			Mobile:         "+33123456789",
+			WorkplaceFqdn:  target.Domain,
+			OrganizationID: orgID,
 		})
 		require.NoError(t, err)
 
@@ -101,7 +101,35 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 		require.True(t, targetCarolContacts[0].IsTrusted())
 	})
 
-	t.Run("SkipsExistingExternalContact", func(t *testing.T) {
+	t.Run("CreatesExternalContactsWithOrganizationDomainOnly", func(t *testing.T) {
+		config.UseTestFile(t)
+		testutils.NeedCouchdb(t)
+
+		suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+		orgDomain := "sync-created-domain-" + suffix + ".example"
+		orgID := "org-sync-created-domain-" + suffix
+		target := createInstanceInOrg(t, "sync-created-domain-alice-"+suffix+".local", orgDomain, orgID, "alice@example.com", "Alice")
+		bob := createInstanceInOrg(t, "sync-created-domain-bob-"+suffix+".local", orgDomain, orgID, "bob@example.com", "Bob")
+		targetURL := target.PageURL("", nil)
+
+		err := rabbitmq.SyncCreatedOrgContact(testCtx(t), target, rabbitmq.UserCreatedMessage{
+			InternalEmail:      "alice@example.com",
+			WorkplaceFqdn:      target.Domain,
+			OrganizationDomain: orgDomain,
+		})
+		require.NoError(t, err)
+
+		bobContacts, err := contact.FindAllByEmail(bob, "alice@example.com")
+		require.NoError(t, err)
+		require.Len(t, bobContacts, 1)
+		require.True(t, bobContacts[0].IsExternal())
+		require.True(t, bobContacts[0].IsTrusted())
+		require.Equal(t, "Alice", bobContacts[0].PrimaryName())
+		require.Equal(t, targetURL, bobContacts[0].PrimaryCozyURL())
+		require.True(t, orgdirectory.IsManagedDirectoryDoc(&bobContacts[0].JSONDoc))
+	})
+
+	t.Run("AdoptsExistingExternalContact", func(t *testing.T) {
 		config.UseTestFile(t)
 		testutils.NeedCouchdb(t)
 
@@ -116,10 +144,10 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 		existing := createContact(t, bob, "alice@example.com", "https://old.example", true, "Old Alice")
 
 		err := rabbitmq.SyncCreatedOrgContact(testCtx(t), target, rabbitmq.UserCreatedMessage{
-			InternalEmail:      "alice@example.com",
-			Mobile:             "+33123456789",
-			WorkplaceFqdn:      target.Domain,
-			OrganizationDomain: orgDomain,
+			InternalEmail:  "alice@example.com",
+			Mobile:         "+33123456789",
+			WorkplaceFqdn:  target.Domain,
+			OrganizationID: orgID,
 		})
 		require.NoError(t, err)
 
@@ -128,9 +156,10 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 		require.Len(t, bobContacts, 1)
 		require.Equal(t, existing.ID(), bobContacts[0].ID())
 		require.True(t, bobContacts[0].IsExternal())
-		require.Equal(t, "Old Alice", bobContacts[0].PrimaryName())
-		require.Equal(t, "https://old.example", bobContacts[0].PrimaryCozyURL())
-		require.False(t, bobContacts[0].IsTrusted())
+		require.Equal(t, "Alice", bobContacts[0].PrimaryName())
+		require.Equal(t, targetURL, bobContacts[0].PrimaryCozyURL())
+		require.True(t, bobContacts[0].IsTrusted())
+		require.True(t, orgdirectory.IsManagedDirectoryDoc(&bobContacts[0].JSONDoc))
 
 		carolContacts, err := contact.FindAllByEmail(carol, "alice@example.com")
 		require.NoError(t, err)
@@ -154,12 +183,12 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 		createContact(t, bob, "alice@example.com", "https://old-b.example", true, "Alice External B")
 
 		err := rabbitmq.SyncCreatedOrgContact(testCtx(t), target, rabbitmq.UserCreatedMessage{
-			InternalEmail:      "alice@example.com",
-			WorkplaceFqdn:      target.Domain,
-			OrganizationDomain: orgDomain,
+			InternalEmail:  "alice@example.com",
+			WorkplaceFqdn:  target.Domain,
+			OrganizationID: orgID,
 		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "multiple external contacts found for email alice@example.com")
+		require.Contains(t, err.Error(), "multiple managed contacts found for email alice@example.com")
 	})
 
 	t.Run("ContinuesAfterInstanceError", func(t *testing.T) {
@@ -177,12 +206,12 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 		createContact(t, bob, "alice@example.com", "https://old-b.example", true, "Alice External B")
 
 		err := rabbitmq.SyncCreatedOrgContact(testCtx(t), target, rabbitmq.UserCreatedMessage{
-			InternalEmail:      "alice@example.com",
-			WorkplaceFqdn:      target.Domain,
-			OrganizationDomain: orgDomain,
+			InternalEmail:  "alice@example.com",
+			WorkplaceFqdn:  target.Domain,
+			OrganizationID: orgID,
 		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "multiple external contacts found for email alice@example.com")
+		require.Contains(t, err.Error(), "multiple managed contacts found for email alice@example.com")
 
 		carolContacts, err := contact.FindAllByEmail(carol, "alice@example.com")
 		require.NoError(t, err)
@@ -202,8 +231,8 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 		target := createInstanceInOrg(t, "sync-created-missing-email-"+suffix+".local", orgDomain, orgID, "alice@example.com", "Alice")
 
 		err := rabbitmq.SyncCreatedOrgContact(testCtx(t), target, rabbitmq.UserCreatedMessage{
-			WorkplaceFqdn:      target.Domain,
-			OrganizationDomain: orgDomain,
+			WorkplaceFqdn:  target.Domain,
+			OrganizationID: orgID,
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "missing internalEmail")
@@ -220,15 +249,15 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 		clearInstancePublicName(t, target)
 
 		err := rabbitmq.SyncCreatedOrgContact(testCtx(t), target, rabbitmq.UserCreatedMessage{
-			InternalEmail:      "alice@example.com",
-			WorkplaceFqdn:      target.Domain,
-			OrganizationDomain: orgDomain,
+			InternalEmail:  "alice@example.com",
+			WorkplaceFqdn:  target.Domain,
+			OrganizationID: orgID,
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "missing public_name in settings")
 	})
 
-	t.Run("MissingOrganizationDomain", func(t *testing.T) {
+	t.Run("MissingOrganizationIDAndDomain", func(t *testing.T) {
 		config.UseTestFile(t)
 		testutils.NeedCouchdb(t)
 
@@ -242,7 +271,7 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 			WorkplaceFqdn: target.Domain,
 		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "missing organization domain")
+		require.Contains(t, err.Error(), "missing organizationId or organization domain")
 	})
 
 	t.Run("OrganizationHasNoInstances", func(t *testing.T) {
@@ -255,9 +284,9 @@ func TestSyncCreatedOrgContact(t *testing.T) {
 		target := createInstanceInOrg(t, "sync-created-zero-"+suffix+".local", orgDomain, orgID, "alice@example.com", "Alice")
 
 		err := rabbitmq.SyncCreatedOrgContact(testCtx(t), target, rabbitmq.UserCreatedMessage{
-			InternalEmail:      "alice@example.com",
-			WorkplaceFqdn:      target.Domain,
-			OrganizationDomain: "missing-sync-created-" + suffix + ".example",
+			InternalEmail:  "alice@example.com",
+			WorkplaceFqdn:  target.Domain,
+			OrganizationID: "missing-sync-created-" + suffix,
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "organization has no instances")
@@ -407,7 +436,7 @@ func TestSyncDeletedOrgContact(t *testing.T) {
 			InternalEmail: "alice@example.com",
 		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "missing organization domain")
+		require.Contains(t, err.Error(), "missing organizationId or organization domain")
 	})
 
 	t.Run("OrganizationHasNoInstances", func(t *testing.T) {

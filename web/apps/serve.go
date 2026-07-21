@@ -132,9 +132,16 @@ func handleIntent(c echo.Context, i *instance.Instance, slug, intentID string) {
 	if len(parts) < 2 || parts[0] != consts.Apps {
 		return
 	}
-	from := i.SubDomain(parts[1]).String()
+	from := app.ResolveClientURL(i, parts[1])
 	if !config.GetConfig().CSPDisabled {
 		middlewares.AppendCSPRule(c, "frame-ancestors", from)
+		// When the client app is hosted on a non-cozy domain (via its
+		// client_url_flag), it can itself be framed by its cozy subdomain
+		// parent. frame-ancestors must list every ancestor in the iframe
+		// chain, so also allow the cozy subdomain.
+		if defaultFrom := app.DefaultClientURL(i, parts[1]); defaultFrom != from {
+			middlewares.AppendCSPRule(c, "frame-ancestors", defaultFrom)
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 )
@@ -223,10 +224,22 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 		log.Infof("user.created: successfully updated passphrase for instance: %s (PasswordDefined: %v)", inst.Domain, inst.PasswordDefined)
 	}
 
-	if msg.OrganizationDomain != "" {
-		if err := SyncCreatedOrgContact(ctx, inst, msg); err != nil {
+	if strings.TrimSpace(msg.OrganizationID) != "" || strings.TrimSpace(msg.OrganizationDomain) != "" {
+		scope, err := orgdirectory.ResolveOrganizationInstances(msg.OrganizationID, msg.OrganizationDomain)
+		if err != nil {
+			err = fmt.Errorf("user.created: %w", err)
+			log.Errorf("user.created: failed to resolve organization instances for %s: %v", msg.WorkplaceFqdn, err)
+			return err
+		}
+		if err := syncCreatedOrgContact(ctx, inst, msg, scope); err != nil {
 			log.Errorf("user.created: failed to sync organization contacts for %s: %v", msg.WorkplaceFqdn, err)
 			return err
+		}
+		if scope.OrganizationID != "" {
+			if err := orgdirectory.CopyOrgDirectoryFromOrgInstance(ctx, inst, scope.OrganizationID); err != nil {
+				log.Errorf("user.created: failed to copy organization directory for %s: %v", msg.WorkplaceFqdn, err)
+				return err
+			}
 		}
 	}
 
@@ -274,9 +287,6 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 	if msg.InternalEmail == "" {
 		return fmt.Errorf("user.deleted: missing internalEmail")
 	}
-	if msg.Domain == "" {
-		return fmt.Errorf("user.deleted: missing organization domain")
-	}
 
 	log.Infof("user.deleted: processing message - UserID: %s, InternalEmail: %s, WorkplaceFqdn: %s, Domain: %s, OrganizationID: %s, Reason: %s",
 		msg.UserID, msg.InternalEmail, msg.WorkplaceFqdn, msg.Domain, msg.OrganizationID, msg.Reason)
@@ -287,6 +297,56 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 	}
 
 	return nil
+}
+
+// B2BGroupLifecycleHandler handles B2B group lifecycle and membership events.
+type B2BGroupLifecycleHandler struct{}
+
+// NewB2BGroupLifecycleHandler creates a new B2B group lifecycle handler.
+func NewB2BGroupLifecycleHandler() *B2BGroupLifecycleHandler {
+	return &B2BGroupLifecycleHandler{}
+}
+
+// Handle processes B2B group lifecycle messages.
+func (h *B2BGroupLifecycleHandler) Handle(ctx context.Context, d amqp.Delivery) error {
+	log.Infof("b2b.group: received message: %s", d.RoutingKey)
+	log.Debugf("b2b.group: message details - MessageId: %s, ContentType: %s, Body size: %d bytes",
+		d.MessageId, d.ContentType, len(d.Body))
+
+	switch d.RoutingKey {
+	case RoutingKeyB2BGroupCreated:
+		var msg orgdirectory.GroupCreatedMessage
+		if err := json.Unmarshal(d.Body, &msg); err != nil {
+			return fmt.Errorf("b2b.group.created: failed to unmarshal message: %w", err)
+		}
+		return orgdirectory.SyncGroupCreated(ctx, msg)
+	case RoutingKeyB2BGroupUpdated:
+		var msg orgdirectory.GroupUpdatedMessage
+		if err := json.Unmarshal(d.Body, &msg); err != nil {
+			return fmt.Errorf("b2b.group.updated: failed to unmarshal message: %w", err)
+		}
+		return orgdirectory.SyncGroupUpdated(ctx, msg)
+	case RoutingKeyB2BGroupDeleted:
+		var msg orgdirectory.GroupDeletedMessage
+		if err := json.Unmarshal(d.Body, &msg); err != nil {
+			return fmt.Errorf("b2b.group.deleted: failed to unmarshal message: %w", err)
+		}
+		return orgdirectory.SyncGroupDeleted(ctx, msg)
+	case RoutingKeyB2BGroupMemberAdded:
+		var msg orgdirectory.GroupMembersMessage
+		if err := json.Unmarshal(d.Body, &msg); err != nil {
+			return fmt.Errorf("b2b.group.member.added: failed to unmarshal message: %w", err)
+		}
+		return orgdirectory.SyncGroupMembersAdded(ctx, msg)
+	case RoutingKeyB2BGroupMemberRemoved:
+		var msg orgdirectory.GroupMembersMessage
+		if err := json.Unmarshal(d.Body, &msg); err != nil {
+			return fmt.Errorf("b2b.group.member.removed: failed to unmarshal message: %w", err)
+		}
+		return orgdirectory.SyncGroupMembersRemoved(ctx, msg)
+	default:
+		return fmt.Errorf("b2b.group: unsupported routing key %s", d.RoutingKey)
+	}
 }
 
 // UserPhoneUpdatedHandler handles user phone update messages.

@@ -197,6 +197,7 @@ authentication:
       app_token_exchange:
         twake-mail-web:
           software_id: registry://mail
+          instance_claim: workplaceFqdn
 
 # Public OIDC context name - references the authentication context to use for public Twake accounts
 public_oidc_context: twake_public

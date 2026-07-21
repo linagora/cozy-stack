@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	clientrequest "github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/bitwarden/settings"
 	"github.com/cozy/cozy-stack/model/feature"
@@ -539,7 +540,7 @@ func (a *AuthorizeHTTPHandler) authorizeSharingForm(c echo.Context) error {
 
 	s, err := sharing.FindSharing(instance, params.sharingID)
 	if err != nil || s.Owner || len(s.Members) < 2 || (s.Active && !s.Drive) {
-		return renderError(c, http.StatusUnauthorized, "Error Invalid sharing")
+		return renderInvalidAuthorizeSharing(c)
 	}
 
 	if s.Drive && s.Active {
@@ -550,7 +551,7 @@ func (a *AuthorizeHTTPHandler) authorizeSharingForm(c echo.Context) error {
 
 	if s.Drive || strings.ToLower(c.QueryParam("shortcut")) == "true" {
 		if err := s.AddShortcut(instance, params.state); err != nil {
-			return err
+			return handleAuthorizeSharingError(c, err)
 		}
 
 		if s.Drive && !isMemberReady(s, params.state) {
@@ -558,7 +559,7 @@ func (a *AuthorizeHTTPHandler) authorizeSharingForm(c echo.Context) error {
 				return renderError(c, http.StatusBadRequest, "Error No state parameter")
 			}
 			if err := s.SendAnswer(instance, params.state); err != nil && !errors.Is(err, sharing.ErrAlreadyAccepted) {
-				return err
+				return handleAuthorizeSharingError(c, err)
 			}
 		}
 		u := instance.SubDomain(consts.DriveSlug)
@@ -616,6 +617,40 @@ func isMemberReady(s *sharing.Sharing, state string) bool {
 	return false
 }
 
+func renderInvalidAuthorizeSharing(c echo.Context) error {
+	return renderErrorWithTitle(c, http.StatusBadRequest, "Error Invalid sharing Title", "Error Invalid sharing")
+}
+
+func handleAuthorizeSharingError(c echo.Context, err error) error {
+	if isInvalidAuthorizeSharingError(err) {
+		return renderInvalidAuthorizeSharing(c)
+	}
+	return err
+}
+
+func isInvalidAuthorizeSharingError(err error) bool {
+	if errors.Is(err, sharing.ErrInvalidSharing) ||
+		errors.Is(err, sharing.ErrMemberNotFound) {
+		return true
+	}
+
+	var requestErr *clientrequest.Error
+	if !errors.As(err, &requestErr) {
+		return false
+	}
+	switch requestErr.Status {
+	case http.StatusText(http.StatusBadRequest),
+		http.StatusText(http.StatusUnauthorized),
+		http.StatusText(http.StatusForbidden),
+		http.StatusText(http.StatusNotFound),
+		http.StatusText(http.StatusConflict),
+		http.StatusText(http.StatusGone):
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *AuthorizeHTTPHandler) authorizeSharing(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
 	params := authorizeSharingParams{
@@ -634,15 +669,15 @@ func (a *AuthorizeHTTPHandler) authorizeSharing(c echo.Context) error {
 
 	s, err := sharing.FindSharing(instance, params.sharingID)
 	if err != nil {
-		return err
+		return renderInvalidAuthorizeSharing(c)
 	}
 	if s.Owner || len(s.Members) < 2 {
-		return sharing.ErrInvalidSharing
+		return renderInvalidAuthorizeSharing(c)
 	}
 
 	if !s.Active {
 		if err = s.SendAnswer(instance, params.state); err != nil {
-			return err
+			return handleAuthorizeSharingError(c, err)
 		}
 	}
 	redirect := s.RedirectAfterAuthorizeURL(instance)

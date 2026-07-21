@@ -2,6 +2,7 @@ package rabbitmq
 
 const (
 	ExchangeAuth      = "auth"
+	ExchangeB2B       = "b2b"
 	ExchangeMigration = "migration"
 )
 
@@ -13,12 +14,18 @@ const (
 	QueueUser2FAUpdated            = "stack.user.2fa.updated"
 	QueueUserRecoveryEmailUpdated  = "stack.user.recovery-email.updated"
 	QueueB2BUserDeleted            = "stack.b2b.user.deleted"
+	QueueB2BGroupLifecycle         = "stack.b2b.group.lifecycle"
 	QueueAppCommands               = "stack.app.commands.queue"
 )
 
 const (
 	RoutingKeyUserPasswordUpdated         = "user.password.updated"
 	RoutingKeyB2BUserDeleted              = "domain.user.deleted"
+	RoutingKeyB2BGroupCreated             = "b2b.group.created"
+	RoutingKeyB2BGroupUpdated             = "b2b.group.updated"
+	RoutingKeyB2BGroupDeleted             = "b2b.group.deleted"
+	RoutingKeyB2BGroupMemberAdded         = "b2b.group.member.added"
+	RoutingKeyB2BGroupMemberRemoved       = "b2b.group.member.removed"
 	RoutingKeyUserDeletionRequested       = "user.deletion.requested"
 	RoutingKeyNextcloudMigrationRequested = "nextcloud.migration.requested"
 	RoutingKeyNextcloudMigrationCanceled  = "nextcloud.migration.canceled"

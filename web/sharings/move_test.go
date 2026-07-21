@@ -14,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web"
+	"github.com/cozy/cozy-stack/web/editor"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/cozy/cozy-stack/web/notes"
 	"github.com/cozy/cozy-stack/web/permissions"
@@ -77,6 +78,7 @@ func setupSharedDrivesEnvWithOwnerOptions(t *testing.T, ownerOptions *lifecycle.
 		ownerOptions,
 		render,
 		map[string]func(*echo.Group){
+			"/editor":      editor.Routes,
 			"/notes":       notes.Routes,
 			"/permissions": permissions.Routes,
 		},

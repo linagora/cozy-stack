@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/feature"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/notification"
@@ -93,10 +94,11 @@ type WebappManifest struct {
 		Err              string    `json:"error"`
 
 		// Just readers
-		Name       string `json:"name"`
-		NamePrefix string `json:"name_prefix"`
-		Icon       string `json:"icon"`
-		Editor     string `json:"editor"`
+		Name          string `json:"name"`
+		NamePrefix    string `json:"name_prefix"`
+		Icon          string `json:"icon"`
+		Editor        string `json:"editor"`
+		ClientURLFlag string `json:"client_url_flag"`
 
 		// Fields with complex types
 		Permissions   permission.Set `json:"permissions"`
@@ -194,6 +196,44 @@ func (m *WebappManifest) Icon() string { return m.val.Icon }
 
 // Editor returns the webapp editor.
 func (m *WebappManifest) Editor() string { return m.val.Editor }
+
+// ClientURLFlag returns the name of the feature flag whose value is the
+// client URL to use for postMessage in intents, when the app is not hosted
+// on a cozy subdomain.
+func (m *WebappManifest) ClientURLFlag() string { return m.val.ClientURLFlag }
+
+// ResolveClientURL returns the client URL for an app slug: the value of the
+// feature flag referenced by the app's "client_url_flag" manifest key when present
+// and valid, falling back to the cozy subdomain otherwise. It is used for
+// postMessage targetOrigin in intents and for CSP frame-ancestors.
+func ResolveClientURL(ins *instance.Instance, slug string) string {
+	manifest, err := GetWebappBySlug(ins, slug)
+	if err != nil {
+		return DefaultClientURL(ins, slug)
+	}
+	flagKey := manifest.ClientURLFlag()
+	if flagKey == "" {
+		return DefaultClientURL(ins, slug)
+	}
+	flags, err := feature.GetFlags(ins)
+	if err != nil {
+		return DefaultClientURL(ins, slug)
+	}
+	flagValue, ok := flags.M[flagKey].(string)
+	if !ok {
+		return DefaultClientURL(ins, slug)
+	}
+	if _, err := url.ParseRequestURI(flagValue); err != nil {
+		return DefaultClientURL(ins, slug)
+	}
+	return flagValue
+}
+
+func DefaultClientURL(ins *instance.Instance, slug string) string {
+	u := ins.SubDomain(slug)
+	u.Path = ""
+	return u.String()
+}
 
 // NamePrefix returns the webapp name prefix.
 func (m *WebappManifest) NamePrefix() string { return m.val.NamePrefix }

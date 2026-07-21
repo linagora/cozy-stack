@@ -426,6 +426,19 @@ func (i *Instance) SettingsContext() (map[string]interface{}, bool) {
 	return settings, true
 }
 
+// HasSignup returns true when the instance's context is connected to the
+// external signup (SaaS) application, i.e. when a signup_url is configured for
+// the context. In that case the user profile (email, phone, recovery email) is
+// managed by the signup flow, so the stack must not let those attributes be
+// changed through its own settings endpoints.
+func (i *Instance) HasSignup() bool {
+	if ctxSettings, ok := i.SettingsContext(); ok {
+		signupURL, _ := ctxSettings["signup_url"].(string)
+		return signupURL != ""
+	}
+	return false
+}
+
 // SupportEmailAddress returns the email address that can be used to contact
 // the support.
 func (i *Instance) SupportEmailAddress() string {

@@ -407,6 +407,8 @@ authentication:
           # Must be a Cozy linked application software_id. The local OAuth
           # scope is derived from this linked app manifest.
           software_id: registry://mail
+          # Optional OIDC claim containing the target Cozy instance domain.
+          instance_claim: workplaceFqdn
 
 notifications:
   # Activate development APIs (iOS only)
@@ -479,6 +481,13 @@ contexts:
     # Indicates if debug related features should be enabled in front
     # applications.
     debug: false
+    # URL of the external signup (SaaS) application managing this context. When
+    # set, phone and recovery_email become read-only through PUT /settings/instance
+    # and the POST /settings/email flow is disabled, since the signup app owns the
+    # user profile. The email is always protected from PUT /settings/instance
+    # regardless of this setting (it must go through POST /settings/email or the
+    # CLI).
+    signup_url: https://signup.example.org
     # Redirect to a specific route of Cozy-Home after the onboarding
     # Format: appslug/#/path/to/route
     onboarded_redirection: home/#/discovery/?intro
@@ -710,6 +719,21 @@ rabbitmq:
           delivery_limit: 5
           bindings:
             - domain.user.deleted
+        - name: stack.b2b.group.lifecycle
+          declare: true
+          declare_dlx: true
+          declare_dlq: true
+          dlx_name: stack.b2b.dlx
+          dlq_name: stack.dead.letter.b2b.group.lifecycle
+          dl_routing_key: b2b.group.dead
+          prefetch: 8
+          delivery_limit: 5
+          bindings:
+            - b2b.group.created
+            - b2b.group.updated
+            - b2b.group.deleted
+            - b2b.group.member.added
+            - b2b.group.member.removed
         - name: stack.app.commands.queue
           declare: true
           declare_dlx: true

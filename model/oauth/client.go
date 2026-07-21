@@ -923,7 +923,8 @@ func GetLinkedAppSlug(softwareID string) string {
 	if !IsLinkedApp(softwareID) {
 		return ""
 	}
-	return strings.TrimPrefix(softwareID, "registry://")
+	slug, _, _ := strings.Cut(strings.TrimPrefix(softwareID, "registry://"), "/")
+	return slug
 }
 
 // BuildLinkedAppScope returns a formatted scope for a linked app

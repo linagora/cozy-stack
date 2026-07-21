@@ -54,6 +54,7 @@ authentication:
       app_token_exchange:
         twake-mail-web:
           software_id: registry://mail
+          instance_claim: workplaceFqdn
 ```
 
 Let's see what it means:
@@ -93,7 +94,9 @@ And in the `oidc` section, we have:
 - `app_token_exchange` maps an OIDC token audience to a trusted Cozy linked
   app. The `software_id` must use the `registry://<slug>` format. The stack
   derives the Cozy OAuth scope from the linked app manifest, so the OIDC
-  provider does not need to expose `registry://...` as an OIDC scope.
+  provider does not need to expose `registry://...` as an OIDC scope. When
+  `instance_claim` is set, the claim must contain the target Cozy instance
+  domain and is used instead of the default OIDC instance mapping.
 - Token exchange requires a `sid` claim so the created OAuth client can be
   revoked by OIDC backchannel logout.
 

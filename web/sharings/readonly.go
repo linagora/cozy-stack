@@ -22,7 +22,7 @@ func AddReadOnly(c echo.Context) error {
 	_, err = checkCreatePermissions(c, s)
 	if err != nil {
 		// It can be a delegated call from a member on an open sharing to the owner
-		if err = hasSharingWritePermissions(c); err != nil {
+		if err = authorizeDelegatedReadOnlyChange(c, s); err != nil {
 			return err
 		}
 	}
@@ -76,7 +76,7 @@ func RemoveReadOnly(c echo.Context) error {
 	_, err = checkCreatePermissions(c, s)
 	if err != nil {
 		// It can be a delegated call from a member on an open sharing to the owner
-		if err = hasSharingWritePermissions(c); err != nil {
+		if err = authorizeDelegatedReadOnlyChange(c, s); err != nil {
 			return err
 		}
 	}
@@ -98,6 +98,28 @@ func RemoveReadOnly(c echo.Context) error {
 		}
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func authorizeDelegatedReadOnlyChange(c echo.Context, s *sharing.Sharing) error {
+	if err := hasSharingWritePermissions(c); err != nil {
+		return err
+	}
+
+	if !s.Drive {
+		return nil
+	}
+
+	// A read-only drive member can temporarily hold io.cozy.sharings:ALL to
+	// finish the downgrade protocol, but that scope must not let them promote
+	// themselves or another member to editor.
+	member, err := requestMember(c, s)
+	if err != nil {
+		return wrapErrors(err)
+	}
+	if member.ReadOnly {
+		return echo.NewHTTPError(http.StatusForbidden)
+	}
+	return nil
 }
 
 // UpgradeToReadWrite is used to receive the credentials for pushing updates on

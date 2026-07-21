@@ -324,7 +324,9 @@ func TestSettings(t *testing.T) {
 	t.Run("PatchWithBadRevAndChanges", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, tsURL)
 
-		// We are defining a random rev, but make changes in the instance values
+		// We are defining a random rev, but make changes in the instance values.
+		// email is guarded, so the change has to be on an editable settings-doc
+		// field (tz) to still trigger the conflict.
 		rev := "6-2d9b7ef014d10549c2b4e206672d3e44"
 
 		e.PUT("/settings/instance").
@@ -340,7 +342,7 @@ func TestSettings(t *testing.T) {
             "rev": "%s"
           },
           "attributes": {
-            "tz": "Europe/London",
+            "tz": "Asia/Tokyo",
             "email": "alice@example.com",
             "locale": "en"
           }
@@ -626,13 +628,29 @@ func TestSettings(t *testing.T) {
 		instanceRev = meta.Value("rev").String().NotEmpty().Raw()
 
 		attrs := data.Value("attributes").Object()
-		attrs.HasValue("email", "alice@example.org")
+		attrs.HasValue("email", "alice@example.com") // email is guarded: not changeable via PUT
 		attrs.HasValue("tz", "Europe/London")
 		attrs.HasValue("locale", "en")
 		attrs.HasValue("password_defined", true)
 		attrs.HasValue("legal_notice_url", "https://testmanager.cozycloud.cc/tos/12345.pdf")
 		attrs.HasValue("org_domain", "test-org.example.com")
 		attrs.HasValue("org_id", "test-org-id-456")
+	})
+
+	t.Run("GetInstanceDegradesWhenLegalNoticeFails", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, tsURL)
+		svc.On("GetLegalNoticeUrl", testInstance).
+			Return("", fmt.Errorf("cloudery is down")).Once()
+
+		obj := e.GET("/settings/instance").
+			WithCookie(sessCookie, "connected").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		attrs := obj.Value("data").Object().Value("attributes").Object()
+		attrs.NotContainsKey("legal_notice_url")
 	})
 
 	t.Run("UpdateInstance", func(t *testing.T) {
@@ -669,7 +687,7 @@ func TestSettings(t *testing.T) {
 		instanceRev = meta.Value("rev").String().NotEmpty().NotEqual(instanceRev).Raw()
 
 		attrs := data.Value("attributes").Object()
-		attrs.HasValue("email", "alice@example.net")
+		attrs.HasValue("email", "alice@example.com") // email is guarded: not changeable via PUT
 		attrs.HasValue("tz", "Europe/Paris")
 		attrs.HasValue("locale", "fr")
 	})
@@ -695,7 +713,7 @@ func TestSettings(t *testing.T) {
 		meta.HasValue("rev", instanceRev)
 
 		attrs := data.Value("attributes").Object()
-		attrs.HasValue("email", "alice@example.net")
+		attrs.HasValue("email", "alice@example.com") // email is guarded: not changeable via PUT
 		attrs.HasValue("tz", "Europe/Paris")
 		attrs.HasValue("locale", "fr")
 	})
@@ -898,7 +916,8 @@ func TestSettings(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.Equal(t, "Antarctica/McMurdo", doc.M["tz"].(string))
-		assert.Equal(t, "alice@expat.eu", doc.M["email"].(string))
+		// email is guarded: the value in the request body is ignored.
+		assert.Equal(t, "alice@example.com", doc.M["email"].(string))
 	})
 
 	t.Run("PatchInstanceAddParam", func(t *testing.T) {
@@ -969,8 +988,94 @@ func TestSettings(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotEqual(t, doc1.Rev(), doc2.Rev())
 		assert.Equal(t, "Europe/Berlin", doc2.M["tz"].(string))
-		_, ok := doc2.M["email"]
-		assert.False(t, ok)
+		// email is guarded: it cannot be removed through a partial update.
+		assert.Equal(t, "alice@example.com", doc2.M["email"].(string))
+	})
+
+	t.Run("UpdateInstanceGuardsEmailButNotPhoneWithoutSignup", func(t *testing.T) {
+		// Without signup, email is still guarded (it must go through the verified
+		// POST /settings/email flow), but phone stays editable.
+		doc, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		e := testutils.CreateTestClient(t, tsURL)
+		obj := e.PUT("/settings/instance").
+			WithCookie(sessCookie, "connected").
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithHeader("Accept", "application/vnd.api+json").
+			WithHeader("Authorization", "Bearer "+token).
+			WithBytes([]byte(fmt.Sprintf(`{
+        "data": {
+          "type": "io.cozy.settings",
+          "id": "io.cozy.settings.instance",
+          "meta": {"rev": "%s"},
+          "attributes": {
+            "email": "attacker@evil.example",
+            "phone": "+33123456789",
+            "tz": "Indian/Mauritius"
+          }
+        }
+      }`, doc.Rev()))).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		attrs := obj.Value("data").Object().Value("attributes").Object()
+		attrs.HasValue("email", "alice@example.com") // guarded
+		attrs.HasValue("phone", "+33123456789")      // editable without signup
+		attrs.HasValue("tz", "Indian/Mauritius")
+	})
+
+	t.Run("UpdateInstanceGuardsPhoneAndRecoveryWhenSignup", func(t *testing.T) {
+		// With signup, phone and recovery_email are also owned by the signup
+		// flow, so they are locked too (phone keeps the value set just above).
+		conf.Contexts["test-context"] = map[string]interface{}{"signup_url": "https://signup.example.org"}
+		defer delete(conf.Contexts, "test-context")
+
+		doc, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		e := testutils.CreateTestClient(t, tsURL)
+		obj := e.PUT("/settings/instance").
+			WithCookie(sessCookie, "connected").
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithHeader("Accept", "application/vnd.api+json").
+			WithHeader("Authorization", "Bearer "+token).
+			WithBytes([]byte(fmt.Sprintf(`{
+        "data": {
+          "type": "io.cozy.settings",
+          "id": "io.cozy.settings.instance",
+          "meta": {"rev": "%s"},
+          "attributes": {
+            "email": "attacker@evil.example",
+            "phone": "+10000000000",
+            "recovery_email": "attacker-recovery@evil.example",
+            "tz": "Pacific/Auckland"
+          }
+        }
+      }`, doc.Rev()))).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		attrs := obj.Value("data").Object().Value("attributes").Object()
+		attrs.HasValue("email", "alice@example.com") // guarded
+		attrs.HasValue("phone", "+33123456789")      // guarded on signup: not changed
+		attrs.NotContainsKey("recovery_email")       // guarded on signup: not set
+		attrs.HasValue("tz", "Pacific/Auckland")
+	})
+
+	t.Run("PostEmailBlockedWhenSignupEnabled", func(t *testing.T) {
+		// The dedicated email-change flow is also disabled on signup-managed
+		// contexts.
+		conf.Contexts["test-context"] = map[string]interface{}{"signup_url": "https://signup.example.org"}
+		defer delete(conf.Contexts, "test-context")
+
+		e := testutils.CreateTestClient(t, tsURL)
+		e.POST("/settings/email").
+			WithCookie(sessCookie, "connected").
+			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Content-Type", "application/json").
+			WithBytes([]byte(`{"passphrase": "MyPassphrase", "email": "new@example.com"}`)).
+			Expect().Status(403)
 	})
 
 	t.Run("FeatureFlags", func(t *testing.T) {

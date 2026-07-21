@@ -1056,6 +1056,18 @@ Identical to [`GET /notes/:file-id/open`](notes.md#get-notesidopen).
 Returns the parameters to open an office document. Identical to
 [`GET /office/:file-id/open`](office.md#get-officeidopen).
 
+## Editors
+
+### GET /sharings/drives/:id/editor/:file-id/open
+
+Return the parameters to open a file from a shared drive with an editor.
+Identical to [`GET /editor/:file-id/open`](files.md#get-editorfile-idopen), but
+scoped to the shared drive.
+
+Recipients are resolved through the shared-drive owner instance, so the returned
+`instance`, `file_id`, and `sharecode` are the values to use for opening the
+file on that owner instance.
+
 ## Shortcuts
 
 ### GET /sharings/drives/:id/shortcuts/:file-id

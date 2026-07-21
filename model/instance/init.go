@@ -39,6 +39,14 @@ func ListByOrgDomain(orgDomain string) ([]*Instance, error) {
 	return service.ListByOrgDomain(orgDomain)
 }
 
+// ListByOrgID finds instances of a given organization from the organization
+// identifier by using CouchDB.
+//
+// Deprecated: Use [InstanceService.ListByOrgID] instead.
+func ListByOrgID(orgID string) ([]*Instance, error) {
+	return service.ListByOrgID(orgID)
+}
+
 // Update saves the changes in CouchDB.
 //
 // Deprecated: Use [InstanceService.Update] instead.

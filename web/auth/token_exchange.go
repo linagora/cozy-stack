@@ -315,10 +315,38 @@ func validateTokenExchangeAppToken(inst *instance.Instance, conf *oidcprovider.C
 	if !ok {
 		return nil, errors.New("invalid token audience")
 	}
-	if err := oidcprovider.CheckClaimsForInstance(conf, inst, claims); err != nil {
+	if err := tokenExchangeCheckAppInstance(conf, inst, claims, *appConfig); err != nil {
 		return nil, err
 	}
 	return appConfig, nil
+}
+
+func tokenExchangeCheckAppInstance(conf *oidcprovider.Config, inst *instance.Instance, claims jwt.MapClaims, appConfig config.OIDCAppTokenExchangeAppConfig) error {
+	if appConfig.InstanceClaim == "" {
+		return oidcprovider.CheckClaimsForInstance(conf, inst, claims)
+	}
+
+	rawDomain, ok := tokenExchangeClaimString(claims, appConfig.InstanceClaim)
+	if !ok || rawDomain == "" {
+		inst.Logger().WithNamespace("oidc").
+			Warnf("Cannot extract instance claim %s", appConfig.InstanceClaim)
+		return oidcprovider.ErrInstanceAuthenticationFailed
+	}
+
+	domain := utils.NormalizeDomain(rawDomain)
+	if domain == "" {
+		inst.Logger().WithNamespace("oidc").
+			Warnf("Cannot extract domain from instance claim %s", appConfig.InstanceClaim)
+		return oidcprovider.ErrInstanceAuthenticationFailed
+	}
+
+	expectedDomain := utils.NormalizeDomain(inst.Domain)
+	if domain != expectedDomain {
+		inst.Logger().WithNamespace("oidc").
+			Errorf("Invalid domains: %s != %s", domain, inst.Domain)
+		return &oidcprovider.InstanceMismatchError{ExpectedDomain: inst.Domain, ActualDomain: domain}
+	}
+	return nil
 }
 
 func createTokenExchangeOAuthClient(c echo.Context, inst *instance.Instance, params tokenExchangeOAuthClientParams) (*oauth.Client, error) {

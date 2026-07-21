@@ -8,18 +8,29 @@ import (
 
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
-	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/utils"
 )
 
 // SyncCreatedOrgContact syncs a newly created B2B user as an external contact
 // into every other instance of the organization.
 func SyncCreatedOrgContact(ctx context.Context, target *instance.Instance, msg UserCreatedMessage) error {
+	scope, err := orgdirectory.ResolveOrganizationInstances(msg.OrganizationID, msg.OrganizationDomain)
+	if err != nil {
+		return fmt.Errorf("user.created: %w", err)
+	}
+	return syncCreatedOrgContact(ctx, target, msg, scope)
+}
+
+func syncCreatedOrgContact(ctx context.Context, target *instance.Instance, msg UserCreatedMessage, scope orgdirectory.OrganizationInstances) error {
 	email := strings.TrimSpace(msg.InternalEmail)
 	if email == "" {
 		return fmt.Errorf("user.created: missing internalEmail for organization contact sync")
 	}
+	if scope.OrganizationID == "" {
+		return fmt.Errorf("user.created: missing organizationId")
+	}
+
 	name, err := target.SettingsPublicName()
 	if err != nil {
 		return fmt.Errorf("user.created: resolve contact name for %s: %w", target.Domain, err)
@@ -29,52 +40,36 @@ func SyncCreatedOrgContact(ctx context.Context, target *instance.Instance, msg U
 		return fmt.Errorf("user.created: missing public_name in settings for %s", target.Domain)
 	}
 	targetURL := target.PageURL("", nil)
-
-	instances, err := listOrgContactInstances("user.created", msg.OrganizationDomain)
-	if err != nil {
-		return err
-	}
+	workplaceFQDN := strings.TrimSpace(msg.WorkplaceFqdn)
 
 	var lastErr error
-	for _, inst := range instances {
+	for _, inst := range scope.Instances {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if inst.HasDomain(msg.WorkplaceFqdn) {
+		if inst.HasDomain(workplaceFQDN) {
 			log.Debugf("user.created: creating contacts for own instance %s for organization contact %s", inst.Domain, targetURL)
-			if err := syncExistingOrgContactsToCreatedUser(ctx, target, instances, msg.WorkplaceFqdn); err != nil {
+			if err := syncExistingOrgContactsToCreatedUser(ctx, target, scope.Instances, workplaceFQDN, scope.OrganizationID); err != nil {
 				log.Errorf("%v", err)
 				lastErr = err
 			}
 			continue
 		}
 
-		existing, err := findExternalOrgContactByEmail(inst, email)
-		if err != nil {
-			wrappedErr := fmt.Errorf("user.created: find external contact for %s in %s: %w", email, inst.Domain, err)
-			log.Errorf("%v", wrappedErr)
-			lastErr = wrappedErr
-			continue
-		}
-		if existing != nil {
-			log.Infof("user.created: external contact for %s already exists in %s, skipping", email, inst.Domain)
-			continue
-		}
-
-		if _, err := contact.Create(inst, contact.CreateOptions{
-			Email:             email,
-			Name:              name,
-			CozyURL:           targetURL,
-			Phone:             msg.Mobile,
-			External:          true,
-			TrustedForSharing: true,
+		if _, err := orgdirectory.UpsertManagedContact(inst, orgdirectory.ContactPatch{
+			OrganizationID: scope.OrganizationID,
+			Email:          email,
+			Name:           name,
+			CozyURL:        targetURL,
+			Phone:          strings.TrimSpace(msg.Mobile),
+			WorkplaceFQDN:  workplaceFQDN,
 		}); err != nil {
-			wrappedErr := fmt.Errorf("user.created: create contact for %s in %s: %w", email, inst.Domain, err)
+			wrappedErr := fmt.Errorf("user.created: sync contact for %s in %s: %w", email, inst.Domain, err)
 			log.Errorf("%v", wrappedErr)
 			lastErr = wrappedErr
 			continue
 		}
-		log.Infof("user.created: created organization contact for %s in %s", email, inst.Domain)
+		log.Infof("user.created: synced organization contact for %s in %s", email, inst.Domain)
 	}
 
 	return lastErr
@@ -91,13 +86,13 @@ func SyncDeletedOrgContact(ctx context.Context, msg UserDeletedMessage) error {
 		return fmt.Errorf("user.deleted: missing internalEmail")
 	}
 
-	instances, err := listOrgContactInstances("user.deleted", msg.Domain)
+	scope, err := orgdirectory.ResolveOrganizationInstances(msg.OrganizationID, msg.Domain)
 	if err != nil {
-		return err
+		return fmt.Errorf("user.deleted: %w", err)
 	}
 
 	var lastErr error
-	for _, inst := range instances {
+	for _, inst := range scope.Instances {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -129,24 +124,7 @@ func SyncDeletedOrgContact(ctx context.Context, msg UserDeletedMessage) error {
 	return lastErr
 }
 
-func listOrgContactInstances(eventName, orgDomain string) ([]*instance.Instance, error) {
-	orgDomain = utils.NormalizeDomain(orgDomain)
-	if orgDomain == "" {
-		return nil, fmt.Errorf("%s: missing organization domain", eventName)
-	}
-
-	list, err := lifecycle.ListOrgInstances(orgDomain)
-	if err != nil {
-		return nil, fmt.Errorf("%s: list organization instances by domain %s: %w", eventName, orgDomain, err)
-	}
-	if len(list) == 0 {
-		log.Infof("%s: no instances found for organization domain %s", eventName, orgDomain)
-		return nil, fmt.Errorf("%s: organization has no instances", eventName)
-	}
-	return list, nil
-}
-
-func syncExistingOrgContactsToCreatedUser(ctx context.Context, target *instance.Instance, instances []*instance.Instance, workplaceFqdn string) error {
+func syncExistingOrgContactsToCreatedUser(ctx context.Context, target *instance.Instance, instances []*instance.Instance, workplaceFqdn, organizationID string) error {
 	var lastErr error
 	for _, inst := range instances {
 		if err := ctx.Err(); err != nil {
@@ -156,7 +134,7 @@ func syncExistingOrgContactsToCreatedUser(ctx context.Context, target *instance.
 			continue
 		}
 
-		opts, err := externalOrgContactFromInstance(inst)
+		input, err := externalOrgContactFromInstance(inst, organizationID)
 		if err != nil {
 			wrappedErr := fmt.Errorf("user.created: build existing user contact for %s: %w", inst.Domain, err)
 			log.Errorf("%v", wrappedErr)
@@ -164,56 +142,44 @@ func syncExistingOrgContactsToCreatedUser(ctx context.Context, target *instance.
 			continue
 		}
 
-		existing, err := findExternalOrgContactByEmail(target, opts.Email)
-		if err != nil {
-			wrappedErr := fmt.Errorf("user.created: find external contact for %s in %s: %w", opts.Email, target.Domain, err)
+		if _, err := orgdirectory.UpsertManagedContact(target, input); err != nil {
+			wrappedErr := fmt.Errorf("user.created: sync contact for %s in %s: %w", input.Email, target.Domain, err)
 			log.Errorf("%v", wrappedErr)
 			lastErr = wrappedErr
 			continue
 		}
-		if existing != nil {
-			log.Infof("user.created: external contact for %s already exists in %s, skipping", opts.Email, target.Domain)
-			continue
-		}
-
-		if _, err := contact.Create(target, opts); err != nil {
-			wrappedErr := fmt.Errorf("user.created: create contact for %s in %s: %w", opts.Email, target.Domain, err)
-			log.Errorf("%v", wrappedErr)
-			lastErr = wrappedErr
-			continue
-		}
-		log.Infof("user.created: created organization contact for %s in %s", opts.Email, target.Domain)
+		log.Infof("user.created: synced organization contact for %s in %s", input.Email, target.Domain)
 	}
 	return lastErr
 }
 
-func externalOrgContactFromInstance(inst *instance.Instance) (contact.CreateOptions, error) {
+func externalOrgContactFromInstance(inst *instance.Instance, organizationID string) (orgdirectory.ContactPatch, error) {
 	settings, err := inst.SettingsDocument()
 	if err != nil {
-		return contact.CreateOptions{}, err
+		return orgdirectory.ContactPatch{}, err
 	}
 
 	email, _ := settings.M["email"].(string)
 	email = strings.TrimSpace(email)
 	if email == "" {
-		return contact.CreateOptions{}, fmt.Errorf("missing email in settings")
+		return orgdirectory.ContactPatch{}, fmt.Errorf("missing email in settings")
 	}
 
 	name, _ := settings.M["public_name"].(string)
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return contact.CreateOptions{}, fmt.Errorf("missing public_name in settings")
+		return orgdirectory.ContactPatch{}, fmt.Errorf("missing public_name in settings")
 	}
 
 	phone, _ := settings.M["phone"].(string)
 
-	return contact.CreateOptions{
-		Email:             email,
-		Name:              name,
-		CozyURL:           inst.PageURL("", nil),
-		Phone:             phone,
-		External:          true,
-		TrustedForSharing: true,
+	return orgdirectory.ContactPatch{
+		OrganizationID: organizationID,
+		Email:          email,
+		Name:           name,
+		CozyURL:        inst.PageURL("", nil),
+		Phone:          strings.TrimSpace(phone),
+		WorkplaceFQDN:  strings.TrimSpace(inst.Domain),
 	}, nil
 }
 

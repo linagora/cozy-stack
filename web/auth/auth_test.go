@@ -2134,14 +2134,15 @@ func TestTokenExchange(t *testing.T) {
 
 	privateKey, kid, jwksURL := newTokenExchangeSigningKey(t)
 	const (
-		contextName        = "token-exchange-test"
-		clientID           = "cozy-twake-int"
-		appTokenAudience   = "twake-mail-web"
-		appTokenAppSlug    = "mail"
-		appTokenSoftwareID = "registry://mail"
-		issuer             = "https://sign-up.example.com/"
+		contextName           = "token-exchange-test"
+		clientID              = "cozy-twake-int"
+		appTokenAudience      = "twake-mail-web"
+		appTokenAppSlug       = "mail"
+		appTokenSoftwareID    = "registry://mail"
+		appTokenClientURLFlag = "twake_mail_url"
+		issuer                = "https://sign-up.example.com/"
 	)
-	appManifest := makeTokenExchangeAppManifest(appTokenAppSlug)
+	appManifest := makeTokenExchangeAppManifest(appTokenAppSlug, appTokenClientURLFlag)
 	appRegistry := newTokenExchangeRegistry(t, appTokenAppSlug, appManifest)
 	appRegistryURL, err := url.Parse(appRegistry.URL)
 	require.NoError(t, err)
@@ -2207,6 +2208,19 @@ func TestTokenExchange(t *testing.T) {
 	require.NoError(t, dynamic.InitDynamicAssetFS(config.FsURL().String()), "Could not init dynamic FS")
 
 	e := testutils.CreateTestClient(t, ts.URL)
+	withAppTokenInstanceClaim := func(t *testing.T, claim string) {
+		appExchange := oidcConfig["app_token_exchange"].(map[string]interface{})
+		appConfig := appExchange[appTokenAudience].(map[string]interface{})
+		previous, hadPrevious := appConfig["instance_claim"]
+		appConfig["instance_claim"] = claim
+		t.Cleanup(func() {
+			if hadPrevious {
+				appConfig["instance_claim"] = previous
+				return
+			}
+			delete(appConfig, "instance_claim")
+		})
+	}
 
 	t.Run("RequiresMandatoryParameters", func(t *testing.T) {
 		e.POST("/auth/token_exchange").
@@ -2280,6 +2294,58 @@ func TestTokenExchange(t *testing.T) {
 		resp.Header("Access-Control-Allow-Methods").Equal(http.MethodPost)
 		resp.Header("Access-Control-Allow-Headers").Equal("content-type")
 		resp.Header("Access-Control-Allow-Credentials").Equal("true")
+	})
+
+	t.Run("AllowsAppClientURLFlagOrigin", func(t *testing.T) {
+		const twakeMailURL = "https://mail.stg.lin-saas.com"
+		testutils.WithFlag(t, testInstance, appTokenClientURLFlag, twakeMailURL)
+
+		resp := e.OPTIONS("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Origin", twakeMailURL).
+			WithHeader("Access-Control-Request-Headers", "content-type").
+			Expect().
+			Status(http.StatusNoContent)
+
+		resp.Header("Access-Control-Allow-Origin").Equal(twakeMailURL)
+		resp.Header("Access-Control-Allow-Methods").Equal(http.MethodPost)
+		resp.Header("Access-Control-Allow-Headers").Equal("content-type")
+		resp.Header("Access-Control-Allow-Credentials").Equal("true")
+	})
+
+	t.Run("RejectsAppClientURLFlagOriginWhenFlagInvalid", func(t *testing.T) {
+		const twakeMailURL = "https://mail.stg.lin-saas.com"
+		testutils.WithFlag(t, testInstance, appTokenClientURLFlag, twakeMailURL)
+
+		e.OPTIONS("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Origin", "https://chat.stg.lin-saas.com").
+			WithHeader("Access-Control-Request-Headers", "content-type").
+			Expect().
+			Status(http.StatusForbidden).
+			Header("Access-Control-Allow-Origin").Empty()
+	})
+
+	t.Run("RejectsAppClientURLFlagOriginWhenFlagUnset", func(t *testing.T) {
+		e.OPTIONS("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Origin", "https://mail.stg.lin-saas.com").
+			WithHeader("Access-Control-Request-Headers", "content-type").
+			Expect().
+			Status(http.StatusForbidden).
+			Header("Access-Control-Allow-Origin").Empty()
+	})
+
+	t.Run("RejectsAppClientURLFlagOriginWhenFlagNotAnUrl", func(t *testing.T) {
+		testutils.WithFlag(t, testInstance, appTokenClientURLFlag, "not-a-url")
+
+		e.OPTIONS("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Origin", "https://mail.stg.lin-saas.com").
+			WithHeader("Access-Control-Request-Headers", "content-type").
+			Expect().
+			Status(http.StatusForbidden).
+			Header("Access-Control-Allow-Origin").Empty()
 	})
 
 	t.Run("RejectsAdminPanelPublicDomainSuffixOriginFromDifferentOrg", func(t *testing.T) {
@@ -2447,6 +2513,114 @@ func TestTokenExchange(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, boundClients, 1)
 		require.Equal(t, clientIDValue, boundClients[0].OAuthClientID)
+	})
+
+	t.Run("ExchangesAppTokenFromClientURLFlagOrigin", func(t *testing.T) {
+		const (
+			sid          = "mail-app-sid-client-url-flag"
+			twakeMailURL = "https://mail.stg.lin-saas.com"
+		)
+		testutils.WithFlag(t, testInstance, appTokenClientURLFlag, twakeMailURL)
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss": issuer,
+			"aud": []string{appTokenAudience},
+			"sub": "mail-user",
+			"sid": sid,
+			"iat": time.Now().Unix(),
+			"exp": time.Now().Add(time.Hour).Unix(),
+		})
+
+		resp := e.POST("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Origin", twakeMailURL).
+			WithJSON(map[string]string{
+				"id_token":      idToken,
+				"exchange_type": "app",
+			}).
+			Expect().
+			Status(http.StatusOK)
+		resp.Header("Access-Control-Allow-Origin").Equal(twakeMailURL)
+		obj := resp.JSON().Object()
+
+		clientIDValue := obj.Value("client_id").String().Raw()
+		accessToken := obj.Value("access_token").String().Raw()
+		refreshToken := obj.Value("refresh_token").String().Raw()
+		scope := oauth.BuildLinkedAppScope(appTokenAppSlug)
+
+		obj.ValueEqual("token_type", "bearer")
+		obj.ValueEqual("scope", scope)
+		assertValidToken(t, testInstance, accessToken, consts.AccessTokenAudience, clientIDValue, scope)
+		assertValidToken(t, testInstance, refreshToken, consts.RefreshTokenAudience, clientIDValue, scope)
+
+		client, err := oauth.FindClient(testInstance, clientIDValue)
+		require.NoError(t, err)
+		require.Equal(t, appTokenSoftwareID, client.SoftwareID)
+		require.Equal(t, sid, client.OIDCSessionID)
+		require.Equal(t, []string{"https://mail." + testInstance.Domain}, client.RedirectURIs)
+	})
+
+	t.Run("ExchangesAppTokenWithInstanceClaim", func(t *testing.T) {
+		withAppTokenInstanceClaim(t, " workplaceFqdn ")
+		const sid = "mail-app-sid-instance-claim"
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss":           issuer,
+			"aud":           []string{appTokenAudience},
+			"sub":           "mail-user@on.cozy.lin-saas.com",
+			"sid":           sid,
+			"iat":           time.Now().Unix(),
+			"exp":           time.Now().Add(time.Hour).Unix(),
+			"workplaceFqdn": testInstance.Domain,
+		})
+
+		resp := e.POST("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Origin", "https://mail."+testInstance.Domain).
+			WithJSON(map[string]string{
+				"id_token":      idToken,
+				"exchange_type": "app",
+			}).
+			Expect().
+			Status(http.StatusOK)
+		obj := resp.JSON().Object()
+		clientIDValue := obj.Value("client_id").String().Raw()
+		scope := oauth.BuildLinkedAppScope(appTokenAppSlug)
+
+		obj.ValueEqual("token_type", "bearer")
+		obj.ValueEqual("scope", scope)
+		client, err := oauth.FindClient(testInstance, clientIDValue)
+		require.NoError(t, err)
+		require.Equal(t, appTokenSoftwareID, client.SoftwareID)
+		require.Equal(t, sid, client.OIDCSessionID)
+		require.Equal(t, []string{"https://mail." + testInstance.Domain}, client.RedirectURIs)
+	})
+
+	t.Run("RejectsAppTokenWithInstanceClaimMismatch", func(t *testing.T) {
+		withAppTokenInstanceClaim(t, "workplaceFqdn")
+		actualDomain := "other." + testInstance.Domain
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss":           issuer,
+			"aud":           []string{appTokenAudience},
+			"sub":           "mail-user@on.cozy.lin-saas.com",
+			"sid":           "mail-app-sid-instance-claim-mismatch",
+			"iat":           time.Now().Unix(),
+			"exp":           time.Now().Add(time.Hour).Unix(),
+			"workplaceFqdn": actualDomain,
+		})
+
+		e.POST("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Origin", "https://mail."+testInstance.Domain).
+			WithJSON(map[string]string{
+				"id_token":      idToken,
+				"exchange_type": "app",
+			}).
+			Expect().
+			Status(http.StatusBadRequest).
+			JSON().Object().
+			ValueEqual("error", "OIDC Domain Mismatch "+testInstance.Domain+" "+actualDomain)
 	})
 
 	t.Run("RejectsAppTokenWithoutExchangeTypeAsAdmin", func(t *testing.T) {
@@ -2934,7 +3108,11 @@ func makeTokenExchangeOIDCConfig(issuer, clientID, jwksURL string) map[string]in
 	}
 }
 
-func makeTokenExchangeAppManifest(slug string) []byte {
+func makeTokenExchangeAppManifest(slug, clientURLFlag string) []byte {
+	var flagField string
+	if clientURLFlag != "" {
+		flagField = fmt.Sprintf(`, "client_url_flag": %q`, clientURLFlag)
+	}
 	return []byte(fmt.Sprintf(`{
   "name": "Mail",
   "name_prefix": "Twake",
@@ -2955,8 +3133,8 @@ func makeTokenExchangeAppManifest(slug string) []byte {
       "type": "io.cozy.contacts",
       "verbs": ["GET"]
     }
-  }
-}`, slug, slug))
+  }%s
+}`, slug, slug, flagField))
 }
 
 func installTokenExchangeWebapp(t *testing.T, inst *instance.Instance, manifestJSON []byte) {

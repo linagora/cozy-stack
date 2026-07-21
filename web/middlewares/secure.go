@@ -307,20 +307,25 @@ func (b cspBuilder) makeCSPHeader(header, cspAllowList string, sources []CSPSour
 			}
 		}
 	}
-	// Add matrix.{org_domain} to frame-src directive if present (for iframes).
-	// OrgDomain is validated to contain only safe characters before being injected into the header.
-	if header == "frame-src" && b.instance != nil && isSafeDomain(b.instance.OrgDomain) {
-		headers = append(headers, "matrix."+b.instance.OrgDomain)
+	// Add org related domains to frame-src directive if present (for iframes).
+	// OrgDomain is validated to contain only safe characters before being
+	// injected into the header.
+	if header == "frame-src" && b.instance != nil {
+		if isSafeDomain(b.instance.OrgDomain) {
+			headers = append(headers, "matrix."+b.instance.OrgDomain)
+		}
 	}
-	// Add api-login-{org_id}.{domain without prefix} to connect-src directive if present.
-	// OrgID, OrgDomain, and domain are all validated before being injected into the header.
+	// Add org related domains to connect-src directive if present.
+	// OrgID, OrgDomain, and domain are all validated before being injected
+	// into the header.
 	if header == "connect-src" && b.instance != nil && isSafeDomain(b.instance.OrgID) {
 		_, domain, found := strings.Cut(b.instance.Domain, ".")
 		if found && isSafeDomain(domain) {
 			orgDomain := b.instance.OrgID + "." + domain
-			headers = append(headers, "api-login-"+orgDomain)
 			headers = append(headers, orgDomain)
 			headers = append(headers, "wss://"+orgDomain)
+			headers = append(headers, "chat-"+b.instance.OrgID+".tc-apps."+domain)
+			headers = append(headers, "api-login-"+b.instance.OrgID+".tc-apps."+domain)
 		}
 		if isSafeDomain(b.instance.OrgDomain) {
 			orgAltDomain := b.instance.OrgID + "." + b.instance.OrgDomain

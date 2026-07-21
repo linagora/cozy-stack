@@ -25,6 +25,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/intent"
 	"github.com/cozy/cozy-stack/model/oauth"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/session"
 	"github.com/cozy/cozy-stack/model/stack"
 	"github.com/cozy/cozy-stack/pkg/assets"
@@ -32,6 +33,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/assets/model"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/filetype"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web"
@@ -280,8 +282,69 @@ func TestApps(t *testing.T) {
 			Header(echo.HeaderContentSecurityPolicy)
 		csp.Contains("script-src")
 		csp.Contains("'wasm-unsafe-eval'")
+		csp.Contains("connect-src blob:")
 		csp.Contains("worker-src 'self' blob:;")
-		csp.Contains("frame-ancestors 'self' https://test-app.cozywithapps.example.net/;")
+		csp.Contains("frame-ancestors 'self' https://test-app.cozywithapps.example.net;")
+	})
+
+	t.Run("ServeWithAnIntentsClientURL", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		clientURLApp := &couchdb.JSONDoc{
+			Type: consts.Apps,
+			M: map[string]interface{}{
+				"_id":             consts.Apps + "/clienturl-app",
+				"name":            "ClientURLApp",
+				"slug":            "clienturl-app",
+				"source":          "git://github.com/cozy/clienturl.git",
+				"state":           apps.Ready,
+				"client_url_flag": "clienturl_csp_flag",
+				"routes": apps.Routes{
+					"/foo": apps.Route{
+						Folder: "/",
+						Index:  "index.html",
+						Public: false,
+					},
+				},
+				"permissions": permission.Set{},
+				"version":     "1.0.0",
+			},
+		}
+		require.NoError(t, couchdb.CreateNamedDoc(testInstance, clientURLApp))
+		t.Cleanup(func() { _ = couchdb.DeleteDoc(testInstance, clientURLApp) })
+
+		testInstance.FeatureFlags = map[string]interface{}{
+			"clienturl_csp_flag": "https://external.example.com",
+		}
+		require.NoError(t, instance.Update(testInstance))
+		t.Cleanup(func() {
+			testInstance.FeatureFlags = nil
+			_ = instance.Update(testInstance)
+		})
+
+		intent := &intent.Intent{
+			Action: "PICK",
+			Type:   "io.cozy.foos",
+			Client: "io.cozy.apps/clienturl-app",
+		}
+		err := intent.Save(testInstance)
+		require.NoError(t, err)
+		err = intent.FillServices(testInstance)
+		require.NoError(t, err)
+		require.Len(t, intent.Services, 1)
+		err = intent.Save(testInstance)
+		require.NoError(t, err)
+
+		u, err := url.Parse(intent.Services[0].Href)
+		require.NoError(t, err)
+
+		csp := e.GET(u.Path).
+			WithHost(slug+"."+testInstance.Domain).
+			WithQueryString(u.RawQuery).
+			WithCookie("cozysessid", cozysessID).
+			Expect().Status(200).
+			Header(echo.HeaderContentSecurityPolicy)
+		csp.Contains("frame-ancestors 'self' https://external.example.com https://clienturl-app.cozywithapps.example.net;")
 	})
 
 	t.Run("FaviconWithContext", func(t *testing.T) {

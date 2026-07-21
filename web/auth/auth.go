@@ -13,6 +13,7 @@ import (
 	"github.com/cozy/cozy-stack/model/bitwarden/settings"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/session"
 	csettings "github.com/cozy/cozy-stack/model/settings"
 	build "github.com/cozy/cozy-stack/pkg/config"
@@ -41,18 +42,24 @@ func wantsJSON(c echo.Context) bool {
 }
 
 func renderError(c echo.Context, code int, msg string) error {
-	instance := middlewares.GetInstance(c)
-	return c.Render(code, "error.html", echo.Map{
-		"Domain":         instance.ContextualDomain(),
-		"ContextName":    instance.ContextName,
-		"Locale":         instance.Locale,
-		"Title":          instance.TemplateTitle(),
-		"Favicon":        middlewares.Favicon(instance),
+	return renderErrorWithTitle(c, code, "", msg)
+}
+
+func renderErrorWithTitle(c echo.Context, code int, title, msg string) error {
+	i := middlewares.GetInstance(c)
+	data := echo.Map{
+		"Domain":         i.ContextualDomain(),
+		"ContextName":    i.ContextName,
+		"Locale":         i.Locale,
+		"Title":          i.TemplateTitle(),
+		"Favicon":        middlewares.Favicon(i),
 		"Illustration":   "/images/generic-error.svg",
+		"ErrorTitle":     title,
 		"Error":          msg,
-		"SupportEmail":   instance.SupportEmailAddress(),
-		"SupportPageURL": instance.SupportPageURL(),
-	})
+		"SupportEmail":   i.SupportEmailAddress(),
+		"SupportPageURL": i.SupportPageURL(),
+	}
+	return c.Render(code, "error.html", data)
 }
 
 // Home is the handler for /
@@ -528,7 +535,9 @@ func tokenExchangeCORS(c echo.Context) bool {
 	return true
 }
 
-// Allow CORS from *.org_domain, and from the owner's SaaS admin panel.
+// Allow CORS from *.org_domain, from Cozy app subdomains of the instance, from
+// org-wide app domains resolved via client_url_flag, and from the owner's SaaS
+// admin panel.
 func tokenExchangeOriginAllowed(origin string, inst *instance.Instance) bool {
 	if inst == nil {
 		return false
@@ -542,6 +551,9 @@ func tokenExchangeOriginAllowed(origin string, inst *instance.Instance) bool {
 		return true
 	}
 	if tokenExchangeAppOriginAllowed(origin, originHost, inst) {
+		return true
+	}
+	if tokenExchangeAppClientURLOriginAllowed(origin, inst) {
 		return true
 	}
 
@@ -569,6 +581,39 @@ func tokenExchangeAppOriginAllowed(origin, originHost string, inst *instance.Ins
 	return appSlug != "" &&
 		inst.HasDomain(instanceHost) &&
 		tokenExchangeAppSlugAllowed(inst.ContextName, appSlug)
+}
+
+func tokenExchangeAppClientURLOriginAllowed(origin string, inst *instance.Instance) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return false
+	}
+
+	appExchangeConfig, err := config.GetOIDCAppTokenExchange(inst.ContextName)
+	if err != nil || !appExchangeConfig.Enabled {
+		return false
+	}
+	for _, appConfig := range appExchangeConfig.Apps {
+		slug := oauth.GetLinkedAppSlug(appConfig.SoftwareID)
+		if slug == "" {
+			continue
+		}
+		clientURL := app.ResolveClientURL(inst, slug)
+		if clientURL == "" {
+			continue
+		}
+		parsed, err := url.Parse(clientURL)
+		if err != nil || parsed.Host == "" {
+			continue
+		}
+		if u.Scheme == parsed.Scheme && u.Host == parsed.Host {
+			return true
+		}
+	}
+	return false
 }
 
 func tokenExchangeAdminPanelOriginAllowed(origin, originHost string, inst *instance.Instance) bool {

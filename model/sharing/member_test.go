@@ -2,19 +2,75 @@ package sharing
 
 import (
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/cozy/cozy-stack/client/auth"
+	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
+	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/tests/testutils"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestShouldRetryDelegatedRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		response *http.Response
+		expected bool
+	}{
+		{name: "missing response"},
+		{name: "unauthorized", response: &http.Response{StatusCode: http.StatusUnauthorized}, expected: true},
+		{name: "forbidden", response: &http.Response{StatusCode: http.StatusForbidden}, expected: true},
+		{name: "moved", response: &http.Response{StatusCode: http.StatusGone}, expected: true},
+		{name: "bad request", response: &http.Response{StatusCode: http.StatusBadRequest}},
+		{name: "conflict", response: &http.Response{StatusCode: http.StatusConflict}},
+		{name: "not found", response: &http.Response{StatusCode: http.StatusNotFound}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, shouldRetryDelegatedRequest(tt.response))
+		})
+	}
+}
+
+func TestPreserveDelegatedResponseError(t *testing.T) {
+	t.Run("prefers the response returned after token refresh", func(t *testing.T) {
+		preRefreshRes := &http.Response{StatusCode: http.StatusUnauthorized}
+		preRefreshErr := &request.Error{Detail: `{"errors":[{"status":"401","title":"Unauthorized"}]}`}
+		res := &http.Response{StatusCode: http.StatusConflict}
+		err := &request.Error{Detail: `{"errors":[{"status":"409","title":"Conflict","detail":"already active"}]}`}
+
+		got := preserveDelegatedResponseError(res, err, preRefreshRes, preRefreshErr)
+
+		var apiErr *jsonapi.Error
+		require.ErrorAs(t, got, &apiErr)
+		require.Equal(t, http.StatusConflict, apiErr.Status)
+		require.Equal(t, "already active", apiErr.Detail)
+	})
+
+	t.Run("falls back to the pre-refresh response when refresh fails", func(t *testing.T) {
+		preRefreshRes := &http.Response{StatusCode: http.StatusForbidden}
+		preRefreshErr := &request.Error{Detail: `{"errors":[{"status":"403","title":"Forbidden","detail":"read only"}]}`}
+		refreshErr := fmt.Errorf("refresh failed")
+
+		got := preserveDelegatedResponseError(nil, refreshErr, preRefreshRes, preRefreshErr)
+
+		var apiErr *jsonapi.Error
+		require.ErrorAs(t, got, &apiErr)
+		require.Equal(t, http.StatusForbidden, apiErr.Status)
+		require.Equal(t, "read only", apiErr.Detail)
+	})
+}
 
 func TestReadOnlyFlagRejectsBrokenRecipientCredentials(t *testing.T) {
 	cases := []struct {
@@ -129,6 +185,81 @@ func TestDelegateReadOnlyFlagRejectsBrokenOwnerCredentials(t *testing.T) {
 				require.ErrorIs(t, run(tc.sharing(), tc.index), tc.wantErr)
 			})
 		}
+	}
+}
+
+func TestReadOnlyFlagUpdatesPendingRecipientLocally(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	require.NoError(t, couchdb.ResetDB(inst, consts.Sharings))
+
+	cases := []struct {
+		name     string
+		status   string
+		readOnly bool
+		update   func(*Sharing) error
+		want     bool
+	}{
+		{
+			name:   "add pending invitation",
+			status: MemberStatusPendingInvitation,
+			update: func(s *Sharing) error {
+				return s.AddReadOnlyFlag(inst, 1)
+			},
+			want: true,
+		},
+		{
+			name:     "remove pending invitation",
+			status:   MemberStatusPendingInvitation,
+			readOnly: true,
+			update: func(s *Sharing) error {
+				return s.RemoveReadOnlyFlag(inst, 1)
+			},
+		},
+		{
+			name:   "add seen invitation",
+			status: MemberStatusSeen,
+			update: func(s *Sharing) error {
+				return s.AddReadOnlyFlag(inst, 1)
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Sharing{
+				SID:   "sharing-" + strings.ReplaceAll(tc.name, " ", "-"),
+				Owner: true,
+				Members: []Member{
+					{Status: MemberStatusOwner, Instance: "https://owner.example.test"},
+					{
+						Status:   tc.status,
+						Email:    "recipient@example.test",
+						Instance: "https://recipient.example.test",
+						ReadOnly: tc.readOnly,
+					},
+				},
+				Credentials: []Credentials{{State: "state"}},
+			}
+			require.NoError(t, couchdb.CreateNamedDoc(inst, s))
+
+			err := tc.update(s)
+
+			require.NoError(t, err)
+			require.Equal(t, tc.want, s.Members[1].ReadOnly)
+			stored, err := FindSharing(inst, s.SID)
+			require.NoError(t, err)
+			require.Equal(t, tc.status, stored.Members[1].Status)
+			require.Equal(t, tc.want, stored.Members[1].ReadOnly)
+			require.Nil(t, stored.Credentials[0].AccessToken)
+		})
 	}
 }
 
@@ -385,4 +516,68 @@ func TestGetInteractCodeConcurrentCalls(t *testing.T) {
 	require.NoError(t, couchdb.FindDocs(inst, consts.Permissions, &req, &perms))
 	require.Len(t, perms, 1)
 	require.Equal(t, permission.ShareInteractPermissionID(sharingID), perms[0].ID())
+}
+
+func TestMemberFor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+
+	t.Run("Owner", func(t *testing.T) {
+		s := &Sharing{
+			Owner: true,
+			Members: []Member{
+				{Status: MemberStatusOwner, Name: "Alice", Email: "alice@cozy.tools"},
+			},
+		}
+		m := s.MemberFor(inst)
+		if assert.NotNil(t, m) {
+			assert.Equal(t, MemberStatusOwner, m.Status)
+		}
+	})
+
+	t.Run("OwnerNoMembers", func(t *testing.T) {
+		s := &Sharing{Owner: true}
+		assert.Nil(t, s.MemberFor(inst))
+	})
+
+	t.Run("RecipientByDomain", func(t *testing.T) {
+		s := &Sharing{
+			Owner: false,
+			Members: []Member{
+				{Status: MemberStatusOwner, Instance: "https://owner.cozy.tools"},
+				{Status: MemberStatusReady, Instance: "https://" + inst.Domain, ReadOnly: true},
+			},
+		}
+		m := s.MemberFor(inst)
+		if assert.NotNil(t, m) {
+			assert.True(t, m.ReadOnly)
+		}
+	})
+
+	t.Run("NotAMember", func(t *testing.T) {
+		s := &Sharing{
+			Owner: false,
+			Members: []Member{
+				{Status: MemberStatusOwner, Instance: "https://owner.cozy.tools"},
+				{Status: MemberStatusReady, Instance: "https://charlie.cozy.tools"},
+			},
+		}
+		assert.Nil(t, s.MemberFor(inst))
+	})
+
+	t.Run("RevokedMemberSkipped", func(t *testing.T) {
+		s := &Sharing{
+			Owner: false,
+			Members: []Member{
+				{Status: MemberStatusOwner, Instance: "https://owner.cozy.tools"},
+				{Status: MemberStatusRevoked, Instance: "https://" + inst.Domain, ReadOnly: false},
+			},
+		}
+		assert.Nil(t, s.MemberFor(inst))
+	})
 }

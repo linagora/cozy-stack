@@ -234,6 +234,7 @@ func Redirect(c echo.Context) error {
 	stateID := c.QueryParam("state")
 	state := getStorage().Find(stateID)
 	if state == nil {
+		logOIDCSessionExpired(c, "oidc_redirect", "state_not_found", nil, stateID)
 		return renderError(c, nil, http.StatusNotFound, "Sorry, the session has expired.")
 	}
 
@@ -368,6 +369,7 @@ func Login(c echo.Context) error {
 		if err = auth.LoginRateExceeded(inst); err != nil {
 			inst.Logger().WithNamespace("oidc").Warn(err.Error())
 		}
+		logOIDCSessionExpired(c, "oidc_login", "rate_limited", inst, stateID)
 		return renderError(c, nil, http.StatusNotFound, "Sorry, the session has expired.")
 	}
 
@@ -387,6 +389,7 @@ func Login(c echo.Context) error {
 		}
 		if token == "" {
 			if state == nil {
+				logOIDCSessionExpired(c, "oidc_login", "state_not_found", inst, stateID)
 				return renderError(c, nil, http.StatusNotFound, "Sorry, the session has expired.")
 			}
 			code := c.QueryParam("code")
@@ -1358,6 +1361,37 @@ func checkIDToken(conf *Config, inst *instance.Instance, idToken string) error {
 	}
 
 	return nil
+}
+
+func logOIDCSessionExpired(c echo.Context, route, reason string, inst *instance.Instance, stateID string) {
+	log := logger.WithNamespace("oidc")
+	if inst != nil {
+		log = inst.Logger().WithNamespace("oidc")
+	}
+	sessionState := c.QueryParam("session_state")
+	log.Warnf(
+		"OIDC session expired error rendered: route=%s reason=%s state_present=%t state_len=%d state_storage=%s code_present=%t access_token_present=%t id_token_present=%t session_state_present=%t session_state_len=%d iss_present=%t redirect_present=%t confirm_present=%t",
+		route,
+		reason,
+		stateID != "",
+		len(stateID),
+		oidcStateStorageKind(),
+		c.QueryParam("code") != "",
+		c.QueryParam("access_token") != "",
+		c.QueryParam("id_token") != "",
+		sessionState != "",
+		len(sessionState),
+		c.QueryParam("iss") != "",
+		c.QueryParam("redirect") != "",
+		c.QueryParam("confirm_state") != "",
+	)
+}
+
+func oidcStateStorageKind() string {
+	if config.GetConfig().OauthStateStorage == nil {
+		return "memory"
+	}
+	return "redis"
 }
 
 func renderError(c echo.Context, inst *instance.Instance, code int, msg string, extras ...map[string]interface{}) error {

@@ -97,40 +97,46 @@ func (s *Sharing) updateMemberStatusesWithRetry(inst *instance.Instance) error {
 		if err == nil || !couchdb.IsConflictError(err) || attempt >= maxRetries {
 			return err
 		}
-		s, err = FindSharing(inst, s.SID)
+		latest, err := FindSharing(inst, s.SID)
 		if err != nil {
 			return err
 		}
 		for i, status := range desiredStatuses {
-			if i >= len(s.Members) {
+			if i >= len(latest.Members) {
 				continue
 			}
-			if s.Members[i].Status == MemberStatusReady {
+			if latest.Members[i].Status == MemberStatusReady {
 				continue
 			}
-			s.Members[i].Status = status
+			latest.Members[i].Status = status
 		}
+		// Keep the caller-owned sharing synchronized with the document used by
+		// the next retry.
+		*s = *latest
 	}
 }
 
 // SendInvitationsToMembers sends mails from a recipient (open_sharing) to
 // their contacts to invite them
-func (s *Sharing) SendInvitationsToMembers(inst *instance.Instance, members []Member, states map[string]string) error {
+func (s *Sharing) SendInvitationsToMembers(
+	inst *instance.Instance,
+	members []Member,
+	invitationStates map[string]string,
+) error {
 	sharer, desc := s.getSharerAndDescription(inst)
 
 	keys := make([]string, 0, len(members))
 	for _, m := range members {
-		key := m.Email
-		if key == "" {
-			key = m.Instance
+		state, ok := delegatedInvitationState(m, invitationStates)
+		if !ok {
+			continue
 		}
+
+		key := invitationStateKey(m)
 		// If an instance URL is available, the owner's Cozy has already
 		// created a shortcut, so we don't need to send an invitation.
 		if m.Instance == "" {
-			if m.Email == "" {
-				return ErrInvitationNotSent
-			}
-			link := m.InvitationLink(inst, s, states[key], nil)
+			link := m.InvitationLink(inst, s, state, nil)
 			if err := m.SendMail(inst, s, sharer, desc, link); err != nil {
 				inst.Logger().WithNamespace("sharing").
 					Errorf("Can't send email for %#v: %s", m.Email, err)
@@ -173,6 +179,24 @@ func (s *Sharing) SendInvitationsToMembers(inst *instance.Instance, members []Me
 			return err
 		}
 	}
+}
+
+// invitationStateKey matches the owner response key: the Cozy instance URL is
+// preferred when available, with the email address as a fallback.
+func invitationStateKey(m Member) string {
+	if m.Instance != "" {
+		return m.Instance
+	}
+	return m.Email
+}
+
+func delegatedInvitationState(m Member, invitationStates map[string]string) (string, bool) {
+	key := invitationStateKey(m)
+	if key == "" {
+		return "", false
+	}
+	state, ok := invitationStates[key]
+	return state, ok && state != ""
 }
 
 func (s *Sharing) getSharerAndDescription(inst *instance.Instance) (string, string) {

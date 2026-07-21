@@ -153,6 +153,7 @@ Content-Type: application/vnd.api+json
         {
           "id": "51bbc980acb0013cb5f618c04daba326",
           "name": "G. people",
+          "color": "#22AA55",
           "addedBy": 0
         }
       ],
@@ -928,6 +929,8 @@ HTTP/1.1 204 No Content
 This route allows the sharer to add new recipients (and groups of recipients)
 to a sharing. It can also be used by a recipient when the sharing has
 `open_sharing` set to true if the recipient doesn't have the `read_only` flag.
+Adding a recipient who is already active is idempotent: that recipient is
+ignored, while the other recipients from the same request are still processed.
 
 #### Request
 
@@ -1052,7 +1055,9 @@ recipient invitations. Data for direct recipients should contain an email
 address but if it is not known, an instance URL can also be provided. For
 shared drives, each delegated recipient or group can also carry a `read_only`
 flag, and the owner applies the drive-specific reshare rules when processing
-the request.
+the request. The owner persists the complete member and credential batch before
+sending shortcuts, so immediate auto-acceptance can safely resolve the
+invitation state.
 
 #### Request
 

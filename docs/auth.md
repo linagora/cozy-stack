@@ -1076,10 +1076,11 @@ For admin exchanges, the `id_token` must also:
 
 For user app exchanges, the `id_token` audience must be present in the
 `oidc.app_token_exchange` stack configuration. The token must also match the
-target Cozy instance using the existing OIDC instance mapping (`sub` to
-`oidc_id` when `allow_custom_instance` is true, otherwise
-`userinfo_instance_field` with prefix/suffix). The returned scope is derived
-from the configured linked app manifest, for example
+target Cozy instance. When the matched app exchange entry sets `instance_claim`,
+that claim must contain the target instance domain. Otherwise the existing OIDC
+instance mapping is used (`sub` to `oidc_id` when `allow_custom_instance` is
+true, otherwise `userinfo_instance_field` with prefix/suffix). The returned
+scope is derived from the configured linked app manifest, for example
 `@io.cozy.apps/mail`; caller-provided scopes are rejected.
 
 The request body is JSON:

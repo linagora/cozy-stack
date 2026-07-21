@@ -87,6 +87,21 @@ func TestDriveURLHelpers(t *testing.T) {
 	})
 }
 
+func TestNonNilFileDocs(t *testing.T) {
+	noteFile := &vfs.FileDoc{
+		DocID: "note-file",
+		Mime:  consts.NoteMimeType,
+	}
+	textFile := &vfs.FileDoc{
+		DocID: "text-file",
+		Mime:  "text/plain",
+	}
+
+	docs := nonNilFileDocs([]*vfs.FileDoc{nil, noteFile, textFile})
+
+	assert.Equal(t, []*vfs.FileDoc{noteFile, textFile}, docs)
+}
+
 func TestFiles(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")

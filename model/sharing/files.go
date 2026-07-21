@@ -828,7 +828,7 @@ func (s *Sharing) GetNotes(inst *instance.Instance) ([]*vfs.FileDoc, error) {
 					return nil, fmt.Errorf("failed to fetch notes shared by themselves: %w", err)
 				}
 
-				return notes, nil
+				return nonNilFileDocs(notes), nil
 			} else {
 				return nil, nil
 			}
@@ -861,6 +861,16 @@ func (s *Sharing) GetNotes(inst *instance.Instance) ([]*vfs.FileDoc, error) {
 	return nil, nil
 }
 
+func nonNilFileDocs(files []*vfs.FileDoc) []*vfs.FileDoc {
+	docs := files[:0]
+	for _, file := range files {
+		if file != nil {
+			docs = append(docs, file)
+		}
+	}
+	return docs
+}
+
 func (s *Sharing) FixRevokedNotes(inst *instance.Instance) error {
 	docs, err := s.GetNotes(inst)
 	if err != nil {
@@ -869,6 +879,9 @@ func (s *Sharing) FixRevokedNotes(inst *instance.Instance) error {
 
 	var errm error
 	for _, doc := range docs {
+		if doc == nil {
+			continue
+		}
 		// If the note came from another cozy via a sharing that is now revoked, we
 		// may need to recreate the trigger.
 		if err := note.SetupTrigger(inst, doc.ID()); err != nil {

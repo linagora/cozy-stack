@@ -113,7 +113,7 @@ type info struct {
 
 func extractInfo(name string) info {
 	initials := strings.ToUpper(getInitials(name))
-	colorHash := getInitialsColorHash(name)
+	colorHash := getInitialsColorHash(initials)
 	color := getColorFromHash(colorHash)
 	return info{initials: initials, colorHash: colorHash, color: color}
 }
@@ -139,8 +139,8 @@ func getInitials(name string) string {
 
 func getInitialsColorHash(name string) int {
 	sum := 0
-	for i := 0; i < len(name); i++ {
-		sum += int(name[i])
+	for _, r := range name {
+		sum += int(r)
 	}
 	return sum
 }

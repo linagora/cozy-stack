@@ -1069,6 +1069,61 @@ parameter in the query-string (1 is the first page).
 GET /files/download?Path=/Documents/hello.txt&Dl=1 HTTP/1.1
 ```
 
+### GET /editor/:file-id/open
+
+Return the parameters to build the URL where a file can be opened by an editor
+application. This route is generic for files stored as `io.cozy.files`; it does
+not require a dedicated editor doctype.
+
+The caller must have `GET` access to the file. Share-by-link, share-preview,
+and share-interact tokens are also supported when the token gives access to the
+file or to a shared directory that contains it.
+
+If the file is part of a sharing, the response can point to another instance
+where collaborative edition should happen. In that case, the JSON:API `id`
+remains the file id known by the caller, while `file_id` is the id to use on the
+instance returned in the response.
+
+#### Query-String
+
+| Parameter   | Description |
+| ----------- | ----------- |
+| SharingID   | Identifier of the Cozy-to-Cozy sharing, used when the stack forwards an open request |
+| MemberIndex | Index of the sharing member, used when the stack forwards an open request |
+| ReadOnly    | Set to `true` when the returned sharecode must only grant read access |
+
+#### Request
+
+```http
+GET /editor/32e07d806f9b0139c541543d7eb8149c/open HTTP/1.1
+Host: bob.cozy.example
+Accept: application/vnd.api+json
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/vnd.api+json
+```
+
+```json
+{
+  "data": {
+    "type": "io.cozy.files",
+    "id": "32e07d806f9b0139c541543d7eb8149c",
+    "attributes": {
+      "file_id": "b05e7c306f9c0139c542543d7eb8149c",
+      "subdomain": "flat",
+      "protocol": "https",
+      "instance": "alice.cozy.example",
+      "sharecode": "543d7eb8149c",
+      "public_name": "Bob"
+    }
+  }
+}
+```
+
 ### GET /files/:file-id/thumbnails/:secret/:format
 
 Get a thumbnail of a file (for an image & pdf only). `:format` can be `tiny` (96x96)

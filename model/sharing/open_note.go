@@ -1,7 +1,6 @@
 package sharing
 
 import (
-	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/note"
 	"github.com/cozy/cozy-stack/model/settings"
@@ -59,12 +58,15 @@ func OpenNote(inst *instance.Instance, fileID string) (*NoteOpener, error) {
 // GetResult looks if the note can be opened locally or not, which code can be
 // used in case of a shared note, and other parameters.. and returns the information.
 func (o *NoteOpener) GetResult(memberIndex int, readOnly bool) (jsonapi.Object, error) {
+	prepared, err := o.PrepareOpenFileRequest(memberIndex, readOnly)
+	if err != nil {
+		return nil, err
+	}
 	var result *apiNoteURL
-	var err error
-	if o.ShouldOpenLocally() {
-		result, err = o.openLocalNote(memberIndex, readOnly)
+	if prepared.Opts == nil {
+		result, err = o.openLocalNote(prepared.MemberIndex, prepared.ReadOnly)
 	} else {
-		result, err = o.openSharedNote()
+		result, err = o.openSharedNote(prepared)
 	}
 	if err != nil {
 		return nil, err
@@ -86,11 +88,10 @@ func (o *NoteOpener) openLocalNote(memberIndex int, readOnly bool) (*apiNoteURL,
 	// continue to work.
 	_ = note.SetupTrigger(o.Inst, o.File.ID())
 
-	code, err := o.GetSharecode(memberIndex, readOnly)
+	params, err := o.OpenLocalFileForMember(memberIndex, readOnly)
 	if err != nil {
 		return nil, err
 	}
-	params := o.OpenLocalFile(code)
 	doc := apiNoteURL{
 		NoteID:    params.FileID,
 		Protocol:  params.Protocol,
@@ -101,25 +102,14 @@ func (o *NoteOpener) openLocalNote(memberIndex int, readOnly bool) (*apiNoteURL,
 	return &doc, nil
 }
 
-func (o *NoteOpener) openSharedNote() (*apiNoteURL, error) {
-	prepared, err := o.PrepareRequestForSharedFile()
-	if err != nil {
-		return nil, err
-	}
-	if prepared.Opts == nil {
-		return o.openLocalNote(prepared.MemberIndex, prepared.ReadOnly)
-	}
-
-	prepared.Opts.Path = "/notes/" + prepared.XoredID + "/open"
-	res, err := request.Req(prepared.Opts)
-	if res != nil && res.StatusCode/100 == 4 {
-		res, err = RefreshToken(o.Inst, res, err, o.Sharing, prepared.Creator,
-			prepared.Creds, prepared.Opts, nil)
+func (o *NoteOpener) openSharedNote(prepared *PreparedRequest) (*apiNoteURL, error) {
+	res, err := o.RequestSharedFile(prepared, "/notes/"+prepared.XoredID+"/open")
+	if res != nil {
+		defer res.Body.Close()
 	}
 	if err != nil {
 		return nil, ErrInternalServerError
 	}
-	defer res.Body.Close()
 	var doc apiNoteURL
 	if _, err := jsonapi.Bind(res.Body, &doc); err != nil {
 		return nil, err

@@ -123,6 +123,21 @@ rabbitmq:
           delivery_limit: 5
           bindings:
             - domain.user.deleted
+        - name: stack.b2b.group.lifecycle
+          declare: true
+          declare_dlx: true
+          declare_dlq: true
+          dlx_name: stack.b2b.dlx
+          dlq_name: stack.dead.letter.b2b.group.lifecycle
+          dl_routing_key: b2b.group.dead
+          prefetch: 8
+          delivery_limit: 5
+          bindings:
+            - b2b.group.created
+            - b2b.group.updated
+            - b2b.group.deleted
+            - b2b.group.member.added
+            - b2b.group.member.removed
         - name: stack.app.commands.queue
           declare: true
           declare_dlx: true
@@ -312,6 +327,29 @@ Example payload for `b2b/domain.user.deleted`:
 
 The delete handler removes the single matching contact found by `internalEmail`
 when `metadata.external` is true. 
+
+Example payload for `b2b.group.created`:
+
+```json
+{
+  "timestamp": "2026-06-16T10:30:00.000Z",
+  "organizationId": "org123",
+  "id": "engineering",
+  "name": "engineering",
+  "description": "Engineering team",
+  "color": "#3366FF",
+  "createdAt": "2026-06-16T10:30:00.000Z",
+  "members": []
+}
+```
+
+The Stack consumes `b2b.group.created`, `b2b.group.updated`,
+`b2b.group.deleted`, `b2b.group.member.added`, and
+`b2b.group.member.removed` from one lifecycle queue. Groups are replicated as
+managed `io.cozy.contacts.groups` documents in every instance with the matching
+`org_id`. Group membership is stored on managed external contacts via
+`relationships.groups.data`; existing generated-ID external contacts are reused
+by matching email or Cozy URL.
 
 Example payload for `user.phone.updated`:
 

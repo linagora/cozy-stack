@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -294,6 +296,8 @@ func TestSharings(t *testing.T) {
 
 		group := createGroup(t, aliceInstance, "friends")
 		require.NotNil(t, group)
+		group.M["color"] = "#22AA55"
+		require.NoError(t, couchdb.UpdateDoc(aliceInstance, group))
 		fionaContact := addContactToGroup(t, aliceInstance, group, "Fiona")
 		require.NotNil(t, fionaContact)
 		gabyContact := addContactToGroup(t, aliceInstance, group, "Gaby")
@@ -359,6 +363,7 @@ func TestSharings(t *testing.T) {
 		g := groups.Value(0).Object()
 		g.HasValue("id", group.ID())
 		g.HasValue("name", "friends")
+		g.HasValue("color", "#22AA55")
 		g.HasValue("addedBy", 0)
 	})
 
@@ -1610,6 +1615,83 @@ func TestRevokeRecipientDelegationRejectsNonDriveSharing(t *testing.T) {
 	stored, err := sharing.FindSharing(inst, s.SID)
 	require.NoError(t, err)
 	require.Equal(t, sharing.MemberStatusReady, stored.Members[2].Status)
+}
+
+func TestReadOnlyRecipientCannotPromoteSelfToEditor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	build.BuildMode = build.ModeDev
+	testutils.NeedCouchdb(t)
+
+	setup := testutils.NewSetup(t, t.Name()+"_owner")
+	inst := setup.GetTestInstance(&lifecycle.Options{
+		Email:      "owner@example.net",
+		PublicName: "Owner",
+	})
+	ts := setup.GetTestServerMultipleRoutes(map[string]func(*echo.Group){
+		"/sharings": sharings.Routes,
+	})
+	ts.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
+	t.Cleanup(ts.Close)
+
+	var recipientNotified atomic.Bool
+	recipientTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recipientNotified.Store(true)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(recipientTS.Close)
+
+	sharingID := "readonly-recipient-promote-self"
+	recipient := sharing.Member{
+		Status:   sharing.MemberStatusReady,
+		Email:    "recipient@example.net",
+		Instance: recipientTS.URL,
+		ReadOnly: true,
+	}
+	cli, err := sharing.CreateOAuthClient(inst, &recipient)
+	require.NoError(t, err)
+	access, err := sharing.CreateAccessToken(inst, cli, sharingID, permission.ALL)
+	require.NoError(t, err)
+
+	s := &sharing.Sharing{
+		SID:    sharingID,
+		Active: true,
+		Owner:  true,
+		Drive:  true,
+		Rules: []sharing.Rule{{
+			Title:   "Shared drive",
+			DocType: consts.Files,
+			Values:  []string{"shared-drive-root"},
+		}},
+		Members: []sharing.Member{
+			{
+				Status:     sharing.MemberStatusOwner,
+				PublicName: "Owner",
+				Email:      "owner@example.net",
+				Instance:   "https://owner.example",
+			},
+			recipient,
+		},
+		Credentials: []sharing.Credentials{{
+			AccessToken:     access,
+			InboundClientID: cli.ClientID,
+			XorKey:          sharing.MakeXorKey(),
+		}},
+	}
+	require.NoError(t, couchdb.CreateNamedDocWithDB(inst, s))
+
+	e := httpexpect.Default(t, ts.URL)
+	e.DELETE("/sharings/"+sharingID+"/recipients/1/readonly").
+		WithHeader("Authorization", "Bearer "+access.AccessToken).
+		Expect().Status(http.StatusForbidden)
+
+	stored, err := sharing.FindSharing(inst, sharingID)
+	require.NoError(t, err)
+	require.True(t, stored.Members[1].ReadOnly)
+	require.False(t, recipientNotified.Load(), "recipient should not receive upgrade credentials")
 }
 
 // createSharingAndGetState creates a sharing and returns its ID and state

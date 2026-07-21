@@ -30,6 +30,7 @@ filename for this file: `manifest.webapp`.
 | icon                            | an icon for the home                                                                                                                  |
 | screenshots                     | an array of path to the screenshots of the application                                                                                |
 | category                        | the category of the application                                                                                                       |
+| client_url_flag                 | the name of the feature flag whose value is the client URL to use for intents when the app is not hosted on a cozy subdomain          |
 | short_description               | a short description of the application                                                                                                |
 | long_description                | a long description of the application                                                                                                 |
 | source                          | where the files of the app can be downloaded                                                                                          |

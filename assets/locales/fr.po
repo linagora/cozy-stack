@@ -628,9 +628,13 @@ msgstr ""
 "Le lien permettant de confirmer votre adresse e-mail est tronqué ou a "
 "expiré."
 
+msgid "Error Invalid sharing Title"
+msgstr "Cet élément n'est plus disponible"
+
 msgid "Error Invalid sharing"
 msgstr ""
-"Il semblerait que le partage n'ait pu être trouvé ou qu'il ait été révoqué"
+"Le fichier ou dossier a été supprimé ou votre accès a été retiré.\n"
+"Contactez le propriétaire pour plus d'informations."
 
 msgid "Error Sharing already accepted Title"
 msgstr "Vous avez déjà accepté ce partage"

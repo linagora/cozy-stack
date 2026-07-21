@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/realtime"
@@ -13,6 +14,80 @@ import (
 
 func TestShareGroupTrigger(t *testing.T) {
 	trigger := &ShareGroupTrigger{}
+
+	t.Run("The group name or color changes", func(t *testing.T) {
+		group := &couchdb.JSONDoc{
+			Type: consts.Groups,
+			M: map[string]interface{}{
+				"_id":  "id-friends",
+				"_rev": "1-abcdef",
+				"name": "Friends",
+			},
+		}
+
+		unrelatedUpdate := group.Clone().(*couchdb.JSONDoc)
+		unrelatedUpdate.M["description"] = "Friends from school"
+		unrelatedUpdate.M["_rev"] = "2-abcdef"
+		msg := trigger.match(&realtime.Event{
+			Doc:    unrelatedUpdate,
+			OldDoc: group,
+			Verb:   realtime.EventUpdate,
+		})
+		require.Nil(t, msg)
+
+		colored := unrelatedUpdate.Clone().(*couchdb.JSONDoc)
+		colored.M["color"] = "#22AA55"
+		colored.M["_rev"] = "3-abcdef"
+		msg = trigger.match(&realtime.Event{
+			Doc:    colored,
+			OldDoc: unrelatedUpdate,
+			Verb:   realtime.EventUpdate,
+		})
+		require.NotNil(t, msg)
+		require.Same(t, colored, msg.RenamedGroup)
+
+		withoutColor := colored.Clone().(*couchdb.JSONDoc)
+		delete(withoutColor.M, "color")
+		withoutColor.M["_rev"] = "4-abcdef"
+		msg = trigger.match(&realtime.Event{
+			Doc:    withoutColor,
+			OldDoc: colored,
+			Verb:   realtime.EventUpdate,
+		})
+		require.NotNil(t, msg)
+
+		renamed := withoutColor.Clone().(*couchdb.JSONDoc)
+		renamed.M["name"] = "Best friends"
+		renamed.M["_rev"] = "5-abcdef"
+		msg = trigger.match(&realtime.Event{
+			Doc:    renamed,
+			OldDoc: withoutColor,
+			Verb:   realtime.EventUpdate,
+		})
+		require.NotNil(t, msg)
+	})
+
+	t.Run("The RabbitMQ group update has a typed old document", func(t *testing.T) {
+		oldGroup := contact.NewGroup()
+		oldGroup.SetID("id-marketing")
+		oldGroup.SetRev("1-abcdef")
+		oldGroup.Type = consts.Groups
+		oldGroup.M["name"] = "Marketing"
+		oldGroup.M["color"] = "#3367D6"
+
+		updated := oldGroup.JSONDoc.Clone().(*couchdb.JSONDoc)
+		updated.SetRev("2-abcdef")
+		updated.M["color"] = "#A142F4"
+
+		msg := trigger.match(&realtime.Event{
+			Doc:    updated,
+			OldDoc: oldGroup,
+			Verb:   realtime.EventUpdate,
+		})
+
+		require.NotNil(t, msg)
+		require.Same(t, updated, msg.RenamedGroup)
+	})
 
 	t.Run("The contact becomes invitable", func(t *testing.T) {
 		justName := &couchdb.JSONDoc{

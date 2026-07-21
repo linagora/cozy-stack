@@ -334,7 +334,12 @@ func (s *Sharing) DelegateAddContactsAndGroups(inst *instance.Instance, groupIDs
 		if err != nil {
 			return err
 		}
-		g := Group{ID: groupID, Name: group.Name(), ReadOnly: readOnly}
+		g := Group{
+			ID:       groupID,
+			Name:     group.Name(),
+			Color:    group.Color(),
+			ReadOnly: readOnly,
+		}
 		api.groups = append(api.groups, g)
 
 		contacts, err := group.GetAllContacts(inst)
@@ -389,15 +394,12 @@ func (s *Sharing) SendDelegated(inst *instance.Instance, api *APIDelegateAddCont
 		ParseError: ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	originalRes, originalErr := res, err
-	if res != nil && res.StatusCode/100 == 4 {
+	preRefreshRes, preRefreshErr := res, err
+	if shouldRetryDelegatedRequest(res) {
 		res, err = RefreshToken(inst, res, err, s, &s.Members[0], c, opts, body)
 	}
 	if err != nil {
-		if originalRes != nil && originalRes.StatusCode == http.StatusForbidden {
-			return preserveDelegatedRequestError(originalRes.StatusCode, originalErr)
-		}
-		return err
+		return preserveDelegatedResponseError(res, err, preRefreshRes, preRefreshErr)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -450,6 +452,35 @@ func (s *Sharing) SendDelegated(inst *instance.Instance, api *APIDelegateAddCont
 		}
 	}
 	return s.SendInvitationsToMembers(inst, api.members, states)
+}
+
+// shouldRetryDelegatedRequest restricts replay to authentication and instance
+// relocation responses. Retrying other client errors can duplicate invitations.
+func shouldRetryDelegatedRequest(res *http.Response) bool {
+	if res == nil {
+		return false
+	}
+	switch res.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusGone:
+		return true
+	default:
+		return false
+	}
+}
+
+func preserveDelegatedResponseError(
+	res *http.Response,
+	err error,
+	preRefreshRes *http.Response,
+	preRefreshErr error,
+) error {
+	if res != nil && res.StatusCode/100 == 4 {
+		return preserveDelegatedRequestError(res.StatusCode, err)
+	}
+	if preRefreshRes != nil && preRefreshRes.StatusCode/100 == 4 {
+		return preserveDelegatedRequestError(preRefreshRes.StatusCode, preRefreshErr)
+	}
+	return err
 }
 
 func preserveDelegatedRequestError(status int, err error) error {
@@ -596,6 +627,41 @@ func (s *Sharing) FindMemberByState(state string) (*Member, error) {
 		}
 	}
 	return nil, ErrMemberNotFound
+}
+
+// MemberFor returns the member of the sharing that corresponds to the given
+// instance (the owner entry on the owner's Cozy, the matching recipient
+// entry on a recipient's Cozy), or nil if the instance is not a member.
+// Revoked members are not returned.
+func (s *Sharing) MemberFor(inst *instance.Instance) *Member {
+	if s.Owner {
+		if len(s.Members) == 0 {
+			return nil
+		}
+		return &s.Members[0]
+	}
+	currDomain := inst.Domain
+	if i := strings.IndexByte(currDomain, ':'); i >= 0 {
+		currDomain = currDomain[:i]
+	}
+	currEmail, _ := inst.SettingsEMail()
+	for i := range s.Members {
+		m := &s.Members[i]
+		if m.Status == MemberStatusRevoked {
+			continue
+		}
+		memberHost := m.InstanceHost()
+		if memberHost == "" {
+			continue
+		}
+		if memberHost == inst.Domain || memberHost == currDomain {
+			return m
+		}
+		if currEmail != "" && m.Email == currEmail {
+			return m
+		}
+	}
+	return nil
 }
 
 // FindMemberBySharecode returns the member that is linked to the sharing by
@@ -760,6 +826,15 @@ func (s *Sharing) recipientTarget(index int) (*Member, *Credentials, *url.URL, e
 	return m, c, u, nil
 }
 
+func (s *Sharing) shouldUpdateReadOnlyFlagWithoutRecipientSync(index int) bool {
+	switch s.Members[index].Status {
+	case MemberStatusMailNotSent, MemberStatusPendingInvitation, MemberStatusSeen:
+		return true
+	default:
+		return false
+	}
+}
+
 // ownerTarget returns what a recipient needs to call back to the owner:
 // the owner member, the credentials to authenticate with, and the owner's URL.
 func (s *Sharing) ownerTarget(index int) (*Member, *Credentials, *url.URL, error) {
@@ -793,6 +868,10 @@ func (s *Sharing) AddReadOnlyFlag(inst *instance.Instance, index int) error {
 	}
 	if s.Members[index].ReadOnly {
 		return nil
+	}
+	if s.shouldUpdateReadOnlyFlagWithoutRecipientSync(index) {
+		s.Members[index].ReadOnly = true
+		return couchdb.UpdateDoc(inst, s)
 	}
 	m, c, u, err := s.recipientTarget(index)
 	if err != nil {
@@ -946,6 +1025,10 @@ func (s *Sharing) RemoveReadOnlyFlag(inst *instance.Instance, index int) error {
 	if !s.Members[index].ReadOnly {
 		return nil
 	}
+	if s.shouldUpdateReadOnlyFlagWithoutRecipientSync(index) {
+		s.Members[index].ReadOnly = false
+		return couchdb.UpdateDoc(inst, s)
+	}
 	m, c, u, err := s.recipientTarget(index)
 	if err != nil {
 		return err
@@ -1086,13 +1169,13 @@ func (s *Sharing) DelegateRevokeRecipient(inst *instance.Instance, index int) er
 		ParseError: ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	originalRes, originalErr := res, err
+	preRefreshRes, preRefreshErr := res, err
 	if res != nil && res.StatusCode/100 == 4 {
 		res, err = RefreshToken(inst, res, err, s, &s.Members[0], c, opts, nil)
 	}
 	if err != nil {
-		if originalRes != nil && originalRes.StatusCode == http.StatusForbidden {
-			return preserveDelegatedRequestError(originalRes.StatusCode, originalErr)
+		if preRefreshRes != nil && preRefreshRes.StatusCode == http.StatusForbidden {
+			return preserveDelegatedRequestError(preRefreshRes.StatusCode, preRefreshErr)
 		}
 		return err
 	}

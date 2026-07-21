@@ -26,6 +26,14 @@ var c = &oauth.Client{
 	CouchID: "my-client-id",
 }
 
+func TestGetLinkedAppSlug(t *testing.T) {
+	assert.Equal(t, "mail", oauth.GetLinkedAppSlug("registry://mail"))
+	assert.Equal(t, "mail", oauth.GetLinkedAppSlug("registry://mail/stable"))
+	assert.Equal(t, "mail", oauth.GetLinkedAppSlug("registry://mail/dev/latest"))
+	assert.Empty(t, oauth.GetLinkedAppSlug("github.com/cozy/mail"))
+	assert.Empty(t, oauth.GetLinkedAppSlug("registry://"))
+}
+
 func TestClient(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")

@@ -85,8 +85,9 @@ func TestSecure(t *testing.T) {
 		rec5 := httptest.NewRecorder()
 		c5 := e5.NewContext(req5, rec5)
 		h5 := Secure(&SecureConfig{
-			CSPScriptSrc: []CSPSource{CSPWasmUnsafeEval},
-			CSPWorkerSrc: []CSPSource{CSPSrcSelf, CSPSrcBlob},
+			CSPScriptSrc:  []CSPSource{CSPWasmUnsafeEval},
+			CSPConnectSrc: []CSPSource{CSPSrcBlob},
+			CSPWorkerSrc:  []CSPSource{CSPSrcSelf, CSPSrcBlob},
 		})(echo.NotFoundHandler)
 		_ = h5(c5)
 
@@ -94,7 +95,7 @@ func TestSecure(t *testing.T) {
 		assert.Equal(t, "script-src 'self';frame-src *;", rec2.Header().Get(echo.HeaderContentSecurityPolicy))
 		assert.Equal(t, "script-src https://*.cozy.local;frame-src *;connect-src https://cozy.local 'self';", rec3.Header().Get(echo.HeaderContentSecurityPolicy))
 		assert.Equal(t, "script-src 'self';frame-src * https://example.net;connect-src https://example.com;", rec4.Header().Get(echo.HeaderContentSecurityPolicy))
-		assert.Equal(t, "script-src 'wasm-unsafe-eval';worker-src 'self' blob:;", rec5.Header().Get(echo.HeaderContentSecurityPolicy))
+		assert.Equal(t, "script-src 'wasm-unsafe-eval';connect-src blob:;worker-src 'self' blob:;", rec5.Header().Get(echo.HeaderContentSecurityPolicy))
 	})
 
 	t.Run("AppendCSPRule", func(t *testing.T) {
@@ -152,6 +153,10 @@ func TestSecure(t *testing.T) {
 		_ = h(c)
 
 		csp := rec.Header().Get(echo.HeaderContentSecurityPolicy)
+
+		// No OrgID set: Twake Chat multi-tenant domains must NOT be present.
+		assert.NotContains(t, csp, "tc-apps",
+			"CSP should NOT contain tc-apps domains when OrgID is empty. Full CSP: %s", csp)
 
 		// Verify that matrix.example.com appears only once (in frame-src)
 		count := strings.Count(csp, "matrix.example.com")
@@ -232,9 +237,10 @@ func TestSecure(t *testing.T) {
 
 		csp := rec.Header().Get(echo.HeaderContentSecurityPolicy)
 
-		apiLoginDomain := "api-login-myorg123.cozy.example.com"
 		orgInstanceDomain := "myorg123.cozy.example.com"
 		orgInstanceWSDomain := "wss://myorg123.cozy.example.com"
+		chatDomain := "chat-myorg123.tc-apps.cozy.example.com"
+		apiLoginDomain := "api-login-myorg123.tc-apps.cozy.example.com"
 
 		// Verify that connect-src contains the api-login domain
 		connectSrcIndex := strings.Index(csp, "connect-src ")
@@ -246,12 +252,14 @@ func TestSecure(t *testing.T) {
 			"connect-src should end with semicolon")
 
 		connectSrcContent := csp[connectSrcIndex : connectSrcIndex+connectSrcEnd]
-		assert.Contains(t, connectSrcContent, apiLoginDomain,
-			"connect-src should contain %s. Found: %s", apiLoginDomain, connectSrcContent)
 		assert.Contains(t, connectSrcContent, orgInstanceDomain,
 			"connect-src should contain %s. Found: %s", orgInstanceDomain, connectSrcContent)
 		assert.Contains(t, connectSrcContent, orgInstanceWSDomain,
 			"connect-src should contain %s. Found: %s", orgInstanceWSDomain, connectSrcContent)
+		assert.Contains(t, connectSrcContent, chatDomain,
+			"connect-src should contain %s. Found: %s", chatDomain, connectSrcContent)
+		assert.Contains(t, connectSrcContent, apiLoginDomain,
+			"connect-src should contain %s. Found: %s", apiLoginDomain, connectSrcContent)
 
 		// Verify that other directives do NOT contain the api-login domain
 		otherDirectives := []string{
@@ -275,6 +283,8 @@ func TestSecure(t *testing.T) {
 				directiveEnd := strings.Index(csp[directiveIndex:], ";")
 				if directiveEnd != -1 {
 					directiveContent := csp[directiveIndex : directiveIndex+directiveEnd]
+					assert.NotContains(t, directiveContent, chatDomain,
+						"Directive %s should NOT contain %s. Found: %s", directivePattern, chatDomain, directiveContent)
 					assert.NotContains(t, directiveContent, apiLoginDomain,
 						"Directive %s should NOT contain %s. Found: %s", directivePattern, apiLoginDomain, directiveContent)
 					assert.NotContains(t, directiveContent, orgInstanceDomain,
@@ -297,6 +307,8 @@ func TestSecure(t *testing.T) {
 		imgSrcContent := csp[imgSrcIndex : imgSrcIndex+imgSrcEnd]
 		assert.Contains(t, imgSrcContent, orgInstanceDomain,
 			"img-src should contain %s. Found: %s", orgInstanceDomain, imgSrcContent)
+		assert.NotContains(t, imgSrcContent, chatDomain,
+			"img-src should NOT contain %s. Found: %s", chatDomain, imgSrcContent)
 		assert.NotContains(t, imgSrcContent, apiLoginDomain,
 			"img-src should NOT contain %s. Found: %s", apiLoginDomain, imgSrcContent)
 		assert.NotContains(t, imgSrcContent, orgInstanceWSDomain,
@@ -335,6 +347,8 @@ func TestSecure(t *testing.T) {
 		csp := rec.Header().Get(echo.HeaderContentSecurityPolicy)
 		expectedDomain := "myorg123.example.com"
 		expectedWSDomain := "wss://myorg123.example.com"
+		chatDomain := "chat-myorg123.tc-apps.cozy.example.com"
+		apiLoginDomain := "api-login-myorg123.tc-apps.cozy.example.com"
 
 		count := strings.Count(csp, expectedDomain)
 		assert.Equal(t, 3, count,
@@ -354,6 +368,10 @@ func TestSecure(t *testing.T) {
 			"connect-src should contain %s. Found: %s", expectedDomain, connectSrcContent)
 		assert.Contains(t, connectSrcContent, expectedWSDomain,
 			"connect-src should contain %s. Found: %s", expectedWSDomain, connectSrcContent)
+		assert.Contains(t, connectSrcContent, chatDomain,
+			"connect-src should contain %s. Found: %s", chatDomain, connectSrcContent)
+		assert.Contains(t, connectSrcContent, apiLoginDomain,
+			"connect-src should contain %s. Found: %s", apiLoginDomain, connectSrcContent)
 
 		// Verify that img-src also contains the org domain
 		imgSrcIndex := strings.Index(csp, "img-src ")

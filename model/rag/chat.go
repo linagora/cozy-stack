@@ -383,9 +383,34 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	if err != nil {
 		return err
 	}
-	res, err := CallRAGQuery(inst, body, "v1/chat/completions", echo.MIMEApplicationJSON)
+	res, err := CallRAGQuery(inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 	if err != nil {
 		return err
+	}
+	if res.StatusCode == http.StatusNotFound {
+		res.Body.Close()
+		checkRes, err := CallRAGQuery(inst, http.MethodGet, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
+		if err != nil {
+			return err
+		}
+		checkRes.Body.Close()
+		if checkRes.StatusCode == http.StatusNotFound {
+			logger.Warnf("RAG partition not found, attempting creation")
+			partRes, partErr := CallRAGQuery(inst, http.MethodPost, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
+			if partErr != nil {
+				logger.Warnf("Failed to create RAG partition: %s", partErr)
+			} else {
+				partRes.Body.Close()
+				// 409 is treated as success since the partition is already created
+				if (partRes.StatusCode < 200 || partRes.StatusCode >= 300) && partRes.StatusCode != http.StatusConflict {
+					logger.Warnf("Failed to create RAG partition, status: %d", partRes.StatusCode)
+				}
+			}
+			res, err = CallRAGQuery(inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	defer res.Body.Close()
 	msg := chat.Messages[len(chat.Messages)-1]
@@ -561,7 +586,7 @@ func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.R
 	return completion, sources, nil
 }
 
-func CallRAGQuery(inst *instance.Instance, payload []byte, path string, contentType string) (*http.Response, error) {
+func CallRAGQuery(inst *instance.Instance, method string, payload []byte, path string, contentType string) (*http.Response, error) {
 	ragServer := inst.RAGServer()
 	if ragServer.URL == "" {
 		return nil, errors.New("no RAG server configured")
@@ -572,7 +597,11 @@ func CallRAGQuery(inst *instance.Instance, payload []byte, path string, contentT
 	}
 
 	u.Path = path
-	req, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewReader(payload))
+	var body io.Reader
+	if payload != nil {
+		body = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequest(method, u.String(), body)
 	if err != nil {
 		return nil, err
 	}

@@ -999,7 +999,7 @@ func TestUserDeletedHandlerValidation(t *testing.T) {
 			Body:       body,
 		})
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "missing organization domain")
+		require.Contains(t, err.Error(), "missing organizationId or organization domain")
 	})
 }
 

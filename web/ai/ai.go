@@ -45,7 +45,7 @@ func callAI(c echo.Context, path string) (*http.Response, error) {
 	}
 	contentType := c.Request().Header.Get("Content-Type")
 	// TODO: handle streaming response
-	res, err := rag.CallRAGQuery(inst, body, path, contentType)
+	res, err := rag.CallRAGQuery(inst, http.MethodPost, body, path, contentType)
 	if err != nil {
 		return nil, err
 	}
