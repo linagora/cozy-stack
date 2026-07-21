@@ -148,6 +148,34 @@ func (a *chatAssistant) SetID(id string)    { a.DocID = id }
 func (a *chatAssistant) SetRev(rev string)  { a.DocRev = rev }
 func (a *chatAssistant) Clone() couchdb.Doc { c := *a; return &c }
 
+// knowledgeBaseDirID returns the Drive folder scoping the assistant's
+// retrieval, or "" when the assistant has no knowledge base. Only a single
+// folder per assistant is supported: extra io.cozy.files entries are ignored,
+// with a warning so the truncation is at least visible in the logs.
+func (a *chatAssistant) knowledgeBaseDirID(logger logger.Logger) string {
+	if a == nil {
+		return ""
+	}
+	dirID := ""
+	for _, entry := range a.KnowledgeBase {
+		if entry.Doctype != consts.Files || entry.DirID == "" {
+			continue
+		}
+		if dirID == "" {
+			dirID = entry.DirID
+		} else if entry.DirID != dirID {
+			logger.Warnf("assistant %s: multiple knowledge base folders are not supported, ignoring %s", a.DocID, entry.DirID)
+		}
+	}
+	return dirID
+}
+
+// ErrAssistantNotFound is returned when a conversation references an
+// assistant that is gone (deleted, or never created). The query must fail:
+// answering anyway would silently widen a possibly folder-scoped
+// conversation to whole-instance retrieval.
+var ErrAssistantNotFound = errors.New("assistant not found")
+
 func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, error) {
 	var chat ChatConversation
 	err := couchdb.GetDoc(inst, consts.ChatConversations, payload.ChatConversationID, &chat)
@@ -289,10 +317,11 @@ func getSources(event map[string]interface{}) ([]Source, error) {
 }
 
 // assistantForChat loads the assistant bound to the conversation. It returns
-// (nil, nil) when the conversation has no assistant or the assistant was
-// deleted. An error means the caller could not determine how the
-// conversation is configured (e.g. a transient CouchDB error) and MUST NOT
-// proceed as if it were unscoped.
+// (nil, nil) only when the conversation has no assistant at all. An error
+// means either the referenced assistant is gone (ErrAssistantNotFound) or
+// its configuration could not be read (e.g. a transient CouchDB error); in
+// both cases the caller MUST NOT proceed as if the conversation were
+// unscoped.
 func assistantForChat(inst *instance.Instance, chat *ChatConversation) (*chatAssistant, error) {
 	rel, ok := chat.Rels["assistant"]
 	if !ok {
@@ -305,15 +334,13 @@ func assistantForChat(inst *instance.Instance, chat *ChatConversation) (*chatAss
 	}
 	var assistant chatAssistant
 	if err := couchdb.GetDoc(inst, consts.ChatAssistants, assistantID, &assistant); err != nil {
-		// A missing document — or a missing assistants database, which is a
-		// reachable state since the database is only created when a first
-		// assistant doc is saved and Chat() does not check that the
-		// client-supplied assistant id exists — means no knowledge-base
-		// configuration can exist: treat the conversation as unscoped rather
-		// than failing it. Other errors (e.g. a transient CouchDB failure)
-		// keep failing closed: the assistant may exist and be folder-scoped.
+		// The conversation references an assistant that cannot be found
+		// (deleted, or never existed). It may have been scoped to a
+		// knowledge base: degrading to unscoped retrieval would silently
+		// widen it to the whole instance, so surface an explicit error and
+		// let the client deal with the dangling reference.
 		if couchdb.IsNotFoundError(err) {
-			return nil, nil
+			return nil, ErrAssistantNotFound
 		}
 		return nil, err
 	}
@@ -411,7 +438,7 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	if override := buildLLMOverride(inst, assistant); override != nil {
 		metadata["llm_override"] = override
 	}
-	if dirID := knowledgeBaseDirID(assistant, logger); dirID != "" {
+	if dirID := assistant.knowledgeBaseDirID(logger); dirID != "" {
 		if err := ensureWorkspace(inst, logger, dirID); err != nil {
 			logger.Warnf("cannot ensure RAG workspace %s: %s", dirID, err)
 			// A folder-scoped assistant must never answer from the whole

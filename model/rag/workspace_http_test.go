@@ -228,6 +228,38 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 		assert.ElementsMatch(t, [][]string{{"file1"}, {"image1"}, {"file2"}}, singleIDBodies)
 	})
 
+	t.Run("backfill 403 is an ensure failure and rolls the workspace back", func(t *testing.T) {
+		// A 4xx other than 404 (e.g. an auth or permission problem) is
+		// systemic: succeeding would leave a silently incomplete workspace.
+		server, rec := newRAGTestServer(t, func(w http.ResponseWriter, req *http.Request) {
+			switch {
+			case req.Method == http.MethodGet && req.URL.Path == "/partition/dom/workspaces/folder1":
+				w.WriteHeader(http.StatusNotFound)
+			case req.Method == http.MethodPost && req.URL.Path == "/partition/dom":
+				w.WriteHeader(http.StatusCreated)
+			case req.Method == http.MethodPost && req.URL.Path == "/partition/dom/workspaces":
+				w.WriteHeader(http.StatusCreated)
+			case req.Method == http.MethodPost && req.URL.Path == "/partition/dom/workspaces/folder1/files":
+				w.WriteHeader(http.StatusForbidden)
+			case req.Method == http.MethodDelete && req.URL.Path == "/partition/dom/workspaces/folder1":
+				w.WriteHeader(http.StatusOK)
+			default:
+				t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			}
+		})
+
+		resolve := func() (string, []string, error) { return "My folder", []string{"file1"}, nil }
+		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, testLogger())
+		require.Error(t, err)
+		var deletes int
+		for _, rr := range rec.all() {
+			if rr.Method == http.MethodDelete && rr.Path == "/partition/dom/workspaces/folder1" {
+				deletes++
+			}
+		}
+		assert.Equal(t, 1, deletes)
+	})
+
 	t.Run("backfill 404 with a vanished workspace is an ensure failure", func(t *testing.T) {
 		// A chunk 404 normally means "some file id is not indexed" and is
 		// retried per id. But when the workspace itself is gone (e.g. deleted

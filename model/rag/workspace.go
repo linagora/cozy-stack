@@ -22,28 +22,6 @@ import (
 // single workspace membership backfill request.
 const workspaceBackfillChunkSize = 500
 
-// knowledgeBaseDirID returns the Drive folder scoping the assistant's
-// retrieval, or "" when the assistant has no knowledge base. Only a single
-// folder per assistant is supported: extra io.cozy.files entries are ignored,
-// with a warning so the truncation is at least visible in the logs.
-func knowledgeBaseDirID(assistant *chatAssistant, logger logger.Logger) string {
-	if assistant == nil {
-		return ""
-	}
-	dirID := ""
-	for _, entry := range assistant.KnowledgeBase {
-		if entry.Doctype != consts.Files || entry.DirID == "" {
-			continue
-		}
-		if dirID == "" {
-			dirID = entry.DirID
-		} else if entry.DirID != dirID {
-			logger.Warnf("assistant %s: multiple knowledge base folders are not supported, ignoring %s", assistant.DocID, entry.DirID)
-		}
-	}
-	return dirID
-}
-
 // kbContext carries, for one rag-index batch, the knowledge-base folders
 // declared by assistants. Only folders that already exist as workspaces in
 // openRAG are kept (uploads may only reference existing workspaces). It is
@@ -100,7 +78,7 @@ func loadKBContext(inst *instance.Instance, logger logger.Logger) *kbContext {
 		if err := json.Unmarshal(doc, &assistant); err != nil {
 			return err
 		}
-		dirID := knowledgeBaseDirID(&assistant, logger)
+		dirID := assistant.knowledgeBaseDirID(logger)
 		if dirID == "" {
 			return nil
 		}
@@ -287,12 +265,24 @@ func reconcileMembershipHTTP(server config.RAGServer, domain, fileID string, des
 // folder subtree when needed. An error means the query MUST NOT proceed
 // unscoped.
 func ensureWorkspace(inst *instance.Instance, logger logger.Logger, dirID string) error {
-	// Serialize the concurrent queries racing on the same folder (the
-	// rag-query worker runs several jobs in parallel): without this, two
-	// first-time chats could both create and backfill the workspace, and the
-	// rollback of a failed backfill could delete the workspace the other
-	// query just successfully ensured.
-	mu := config.Lock().ReadWrite(inst, "rag-workspace/"+dirID)
+	// Steady state: the workspace exists for every message but the first
+	// one. Check it outside any lock so the common path stays lock-free.
+	exists, err := workspaceExists(inst.RAGServer(), inst.Domain, dirID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	// Creation path: serialize the concurrent queries racing on the same
+	// folder (the rag-query worker runs several jobs in parallel): without
+	// this, two first-time chats could both create and backfill the
+	// workspace, and the rollback of a failed backfill could delete the
+	// workspace the other query just successfully ensured. The backfill of
+	// a large folder can outlive a plain lock's TTL, hence LongOperation,
+	// which keeps refreshing it. ensureWorkspaceHTTP re-checks existence
+	// under the lock, so the loser of the race is a no-op.
+	mu := config.Lock().LongOperation(inst, "rag-workspace/"+dirID)
 	if err := mu.Lock(); err != nil {
 		return err
 	}
@@ -415,22 +405,23 @@ func postWorkspaceFiles(server config.RAGServer, domain, workspaceID string, ids
 // openRAG's endpoint is all-or-nothing: ANY unknown file id in the chunk
 // yields a 404 and adds NONE of the chunk's ids, even the ones that are
 // indexed. When that happens, the chunk's ids are retried one by one so the
-// indexable files are still attached; per-id failures are expected for
+// indexable files are still attached; a per-id 404 is expected for
 // non-indexed files (e.g. an image skipped by the indexer's class flags) and
-// are only logged, not treated as an ensure failure. A 5xx status (chunked
-// or per-id) means the indexer itself failed and is still an ensure failure
-// so the query does not proceed unscoped.
+// only logged. Any other non-2xx status (chunked or per-id) is systemic and
+// is an ensure failure, so the query does not proceed with a silently
+// incomplete workspace.
 func backfillChunk(server config.RAGServer, domain, dirID string, ids []string, logger logger.Logger) error {
 	status, err := postWorkspaceFiles(server, domain, dirID, ids)
 	if err != nil {
 		return err
 	}
 	if status != http.StatusNotFound {
-		if status >= 500 {
-			return fmt.Errorf("workspace backfill status code: %d", status)
-		}
+		// Only a 404 can be a benign per-file condition. Anything else
+		// non-2xx (401/403 auth or permission problems, 5xx failures…) is
+		// systemic: fail the ensure rather than leave a silently incomplete
+		// workspace behind.
 		if status >= 300 {
-			logger.Warnf("workspace backfill chunk rejected (status %d)", status)
+			return fmt.Errorf("workspace backfill status code: %d", status)
 		}
 		return nil
 	}
@@ -454,12 +445,10 @@ func backfillChunk(server config.RAGServer, domain, dirID string, ids []string, 
 			return err
 		}
 		switch {
-		case idStatus >= 500:
-			return fmt.Errorf("workspace backfill status code: %d", idStatus)
 		case idStatus == http.StatusNotFound:
 			logger.Debugf("workspace backfill skipped file %s (not indexed)", id)
 		case idStatus >= 300:
-			logger.Infof("workspace backfill rejected file %s (status %d)", id, idStatus)
+			return fmt.Errorf("workspace backfill status code: %d", idStatus)
 		}
 	}
 	return nil
