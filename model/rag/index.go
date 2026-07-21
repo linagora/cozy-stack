@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/cozy/cozy-stack/model/feature"
 	"github.com/cozy/cozy-stack/model/instance"
@@ -55,9 +56,13 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 		return nil
 	}
 
+	// Lazily loaded on first use, so batches that never reconcile workspace
+	// membership (e.g. deletions only) skip the CouchDB and openRAG queries.
+	kb := sync.OnceValue(func() *kbContext { return loadKBContext(inst, logger) })
+
 	var errj error
 	for _, change := range feed.Results {
-		if err := callRAGIndexer(inst, msg.Doctype, change); err != nil {
+		if err := callRAGIndexer(inst, msg.Doctype, change, kb, logger); err != nil {
 			logger.Warnf("Index error: %s", err)
 			errj = errors.Join(errj, err)
 		}
@@ -71,7 +76,7 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 	return errj
 }
 
-func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Change) error {
+func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Change, kb func() *kbContext, logger logger.Logger) error {
 	if strings.HasPrefix(change.DocID, "_design/") {
 		return nil
 	}
@@ -100,6 +105,16 @@ func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Chan
 		}
 	}
 	if change.Doc.Get("type") == consts.DirType {
+		// A directory move or rename rewrites the path of the directory and
+		// of all its descendant directories, but never touches the file docs
+		// they contain: those files may have silently entered or left a
+		// knowledge-base folder. Every descendant directory shows up in this
+		// same changes feed, so reconciling the direct file children of each
+		// changed directory covers the whole moved subtree.
+		dirPath, _ := change.Doc.Get("path").(string)
+		if dirPath != "" && !strings.HasPrefix(dirPath, vfs.TrashDirName) {
+			reconcileDirChildren(inst, logger, kb(), change.DocID, dirPath)
+		}
 		return nil
 	}
 
@@ -111,15 +126,9 @@ func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Chan
 	if err != nil {
 		return err
 	}
-	u.Path = fmt.Sprintf("/indexer/partition/%s/file/%s", inst.Domain, change.DocID)
 	if change.Deleted || change.Doc.Get("trashed") == true {
 		// Doc deletion
-		req, err := http.NewRequest(http.MethodDelete, u.String(), nil)
-		if err != nil {
-			return err
-		}
-		req.Header.Add(echo.HeaderAuthorization, "Bearer "+ragServer.APIKey)
-		res, err := http.DefaultClient.Do(req)
+		res, err := CallRAGQuery(inst, http.MethodDelete, nil, fmt.Sprintf("/indexer/partition/%s/file/%s", inst.Domain, url.PathEscape(change.DocID)), echo.MIMEApplicationJSON)
 		if err != nil {
 			return err
 		}
@@ -129,13 +138,7 @@ func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Chan
 		}
 	} else {
 		md5sum := fmt.Sprintf("%x", change.Doc.Get("md5sum"))
-		u.Path = fmt.Sprintf("/partition/%s/file/%s", inst.Domain, change.DocID)
-		req, err := http.NewRequest(http.MethodGet, u.String(), nil)
-		if err != nil {
-			return err
-		}
-		req.Header.Add(echo.HeaderAuthorization, "Bearer "+ragServer.APIKey)
-		res, err := http.DefaultClient.Do(req)
+		res, err := CallRAGQuery(inst, http.MethodGet, nil, fmt.Sprintf("/partition/%s/file/%s", inst.Domain, url.PathEscape(change.DocID)), echo.MIMEApplicationJSON)
 		if err != nil {
 			return err
 		}
@@ -167,13 +170,14 @@ func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Chan
 		default:
 			return fmt.Errorf("GET status code: %d", res.StatusCode)
 		}
+		dirID, _ := change.Doc.Get("dir_id").(string)
 		if !needIndexation {
-			// TODO we should patch the metadata in the vector db when a
-			// file has been moved/renamed.
+			// The content did not change but the file may have been
+			// moved/renamed: keep the knowledge-base workspaces in sync.
+			reconcileMembership(inst, logger, kb(), change.DocID, dirID)
 			return nil
 		}
 
-		dirID, _ := change.Doc.Get("dir_id").(string)
 		name, _ := change.Doc.Get("name").(string)
 		mime, _ := change.Doc.Get("mime").(string)
 		metadataRaw, ok := change.Doc.Get("metadata").(map[string]interface{})
@@ -228,6 +232,22 @@ func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Chan
 		}.Encode()
 		u.Path = fmt.Sprintf("/indexer/partition/%s/file/%s", inst.Domain, change.DocID)
 
+		// The streaming goroutine below needs the workspace membership, but
+		// kbContext is not safe for concurrent use: resolve it here, on the
+		// indexing loop, before the goroutine starts.
+		var workspaceIDsJSON string
+		attachUnknown := false
+		if kbc := kb(); !kbc.empty() {
+			if desired, ok := kbc.desiredFor(inst, dirID); !ok {
+				logger.Warnf("cannot resolve parent path for file %s (dir %s): skipping workspace attach", change.DocID, dirID)
+				attachUnknown = true
+			} else if len(desired) > 0 {
+				if wsJSON, err := json.Marshal(desired); err == nil {
+					workspaceIDsJSON = string(wsJSON)
+				}
+			}
+		}
+
 		// Create pipe and writer for file streaming
 		pr, pw := io.Pipe()
 		writer := multipart.NewWriter(pw)
@@ -258,10 +278,17 @@ func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Chan
 				_ = pw.CloseWithError(err)
 				return
 			}
+			if workspaceIDsJSON != "" {
+				if err := writer.WriteField("workspace_ids", workspaceIDsJSON); err != nil {
+					_ = pw.CloseWithError(err)
+					return
+				}
+			}
 			defer pw.Close()
 			defer writer.Close()
 		}()
 
+		var req *http.Request
 		if isNewFile {
 			req, err = http.NewRequest(http.MethodPost, u.String(), pr)
 		} else {
@@ -274,7 +301,7 @@ func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Chan
 		req.Header.Add(echo.HeaderAuthorization, "Bearer "+ragServer.APIKey)
 		req.Header.Add("Content-Type", writer.FormDataContentType())
 
-		res, err = http.DefaultClient.Do(req)
+		res, err = ragHTTPClient.Do(req)
 		if err != nil {
 			return err
 		}
@@ -287,6 +314,16 @@ func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Chan
 
 		if res.StatusCode >= 500 {
 			return fmt.Errorf("Status code: %d", res.StatusCode)
+		}
+
+		if (!isNewFile || attachUnknown) && res.StatusCode < 300 {
+			// For an existing file, the content changed but it may also have
+			// been moved/renamed at the same time: keep the knowledge-base
+			// workspaces in sync after a successful re-upload. For a new file
+			// whose membership could not be resolved before the upload
+			// (attachUnknown), this is the only chance to attach it: retry
+			// now that the transient path-resolution error may have cleared.
+			reconcileMembership(inst, logger, kb(), change.DocID, dirID)
 		}
 	}
 	return nil
@@ -354,21 +391,10 @@ func pushJob(inst *instance.Instance, doctype string) error {
 }
 
 func CleanInstance(inst *instance.Instance) error {
-	ragServer := inst.RAGServer()
-	if ragServer.URL == "" {
+	if inst.RAGServer().URL == "" {
 		return nil
 	}
-	u, err := url.Parse(ragServer.URL)
-	if err != nil {
-		return err
-	}
-	u.Path = fmt.Sprintf("/instances/%s", inst.Domain)
-	req, err := http.NewRequest(http.MethodDelete, u.String(), nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Add(echo.HeaderAuthorization, "Bearer "+ragServer.APIKey)
-	res, err := http.DefaultClient.Do(req)
+	res, err := CallRAGQuery(inst, http.MethodDelete, nil, fmt.Sprintf("/instances/%s", inst.Domain), echo.MIMEApplicationJSON)
 	if err != nil {
 		return err
 	}
