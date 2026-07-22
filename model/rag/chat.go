@@ -556,7 +556,7 @@ func publishError(inst *instance.Instance, msgID string, err error) {
 		},
 	}
 	doc.SetID(msgID)
-	go realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
+	realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
 }
 
 func publishDone(inst *instance.Instance, msgID string) {
@@ -579,6 +579,9 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 
 	// Realtime messages are sent to the client during the response stream
 	// When the stream is finished, the whole answer is saved in the CouchDB document
+	// The publish calls must stay synchronous: publishing from goroutines lets
+	// events reach the realtime hub out of order, and a `done` overtaking the
+	// last deltas makes clients render a truncated answer.
 	err := foreachSSE(body, func(event map[string]interface{}) {
 		// See https://platform.openai.com/docs/api-reference/chat-streaming/streaming#chat-streaming
 		if event["object"] == "chat.completion.chunk" {
@@ -589,14 +592,14 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 			choice := choices[0].(map[string]interface{}) // Only one choice is possible for now
 
 			if reason, ok := choice["finish_reason"].(string); ok && reason != "" {
-				go publishDone(inst, msg.ID)
+				publishDone(inst, msg.ID)
 			} else if delta, ok := choice["delta"].(map[string]interface{}); ok {
 				// The content is progressively reveived through a delta stream
 				content, ok := delta["content"].(string)
 				if !ok {
 					return
 				}
-				go publishDelta(inst, msg.ID, content, position)
+				publishDelta(inst, msg.ID, content, position)
 				completion += content
 				position++
 
@@ -607,7 +610,7 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 						return
 					}
 					if sources != nil {
-						go publishSources(inst, msg.ID, sources)
+						publishSources(inst, msg.ID, sources)
 					}
 				}
 			}
@@ -666,6 +669,9 @@ var ragHTTPClient = &http.Client{
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 5 * time.Minute,
+		// A custom Transport opts out of automatic HTTP/2, which can cause
+		// a feeling of buffered blocks of text for the user because of HTTP/1.1
+		ForceAttemptHTTP2: true,
 	},
 }
 
