@@ -71,13 +71,13 @@ func TestShareGroupTrigger(t *testing.T) {
 		oldGroup := contact.NewGroup()
 		oldGroup.SetID("id-marketing")
 		oldGroup.SetRev("1-abcdef")
-		oldGroup.Type = consts.Groups
 		oldGroup.M["name"] = "Marketing"
 		oldGroup.M["color"] = "#3367D6"
 
 		updated := oldGroup.JSONDoc.Clone().(*couchdb.JSONDoc)
 		updated.SetRev("2-abcdef")
 		updated.M["color"] = "#A142F4"
+		require.Empty(t, updated.DocType())
 
 		msg := trigger.match(&realtime.Event{
 			Doc:    updated,
@@ -87,6 +87,66 @@ func TestShareGroupTrigger(t *testing.T) {
 
 		require.NotNil(t, msg)
 		require.Same(t, updated, msg.RenamedGroup)
+	})
+
+	t.Run("The RabbitMQ contact update has a typed old document", func(t *testing.T) {
+		oldDoc := contactDocWithGroups("contact-bob", "id-friends")
+		oldDoc.Type = ""
+		oldContact := &contact.Contact{JSONDoc: *oldDoc}
+		updated := oldContact.Clone().(*couchdb.JSONDoc)
+		updated.M["relationships"] = contactDocWithGroups(
+			"contact-bob", "id-friends", "id-football",
+		).M["relationships"]
+		updated.SetRev("2-abcdef")
+		require.Empty(t, updated.DocType())
+
+		msg := trigger.match(&realtime.Event{
+			Doc:    updated,
+			OldDoc: oldContact,
+			Verb:   realtime.EventUpdate,
+		})
+
+		require.NotNil(t, msg)
+		assert.Equal(t, "contact-bob", msg.ContactID)
+		assert.Equal(t, []string{"id-football"}, msg.GroupsAdded)
+		assert.Empty(t, msg.GroupsRemoved)
+
+		oldContact = &contact.Contact{JSONDoc: *updated}
+		removed := oldContact.Clone().(*couchdb.JSONDoc)
+		removed.M["relationships"] = contactDocWithGroups(
+			"contact-bob", "id-friends",
+		).M["relationships"]
+		removed.SetRev("3-abcdef")
+		msg = trigger.match(&realtime.Event{
+			Doc:    removed,
+			OldDoc: oldContact,
+			Verb:   realtime.EventUpdate,
+		})
+
+		require.NotNil(t, msg)
+		assert.Empty(t, msg.GroupsAdded)
+		assert.Equal(t, []string{"id-football"}, msg.GroupsRemoved)
+	})
+
+	t.Run("The RabbitMQ contact becomes invitable with a typed old document", func(t *testing.T) {
+		oldDoc := contactDocWithGroups("contact-charlie", "id-friends")
+		oldContact := &contact.Contact{JSONDoc: *oldDoc}
+		updated := oldDoc.Clone().(*couchdb.JSONDoc)
+		updated.SetRev("2-abcdef")
+		updated.M["email"] = []interface{}{
+			map[string]interface{}{"address": "charlie@example.net"},
+		}
+
+		msg := trigger.match(&realtime.Event{
+			Doc:    updated,
+			OldDoc: oldContact,
+			Verb:   realtime.EventUpdate,
+		})
+
+		require.NotNil(t, msg)
+		assert.Empty(t, msg.GroupsAdded)
+		assert.Empty(t, msg.GroupsRemoved)
+		assert.True(t, msg.BecomeInvitable)
 	})
 
 	t.Run("The contact becomes invitable", func(t *testing.T) {
@@ -255,4 +315,27 @@ func TestShareGroupTrigger(t *testing.T) {
 		assert.EqualValues(t, msg.GroupsRemoved, []string{"id-friends"})
 		assert.False(t, msg.BecomeInvitable)
 	})
+}
+
+func contactDocWithGroups(id string, groupIDs ...string) *couchdb.JSONDoc {
+	refs := make([]interface{}, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		refs = append(refs, map[string]interface{}{
+			"_id":   groupID,
+			"_type": consts.Groups,
+		})
+	}
+	return &couchdb.JSONDoc{
+		Type: consts.Contacts,
+		M: map[string]interface{}{
+			"_id":      id,
+			"_rev":     "1-abcdef",
+			"fullname": "Contact " + id,
+			"relationships": map[string]interface{}{
+				"groups": map[string]interface{}{
+					"data": refs,
+				},
+			},
+		},
+	}
 }

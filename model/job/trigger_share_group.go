@@ -51,7 +51,11 @@ func (t *ShareGroupTrigger) match(e *realtime.Event) *ShareGroupMessage {
 	if e.Verb == realtime.EventNotify {
 		return nil
 	}
-	switch e.Doc.DocType() {
+	docType := e.Doc.DocType()
+	if docType == "" && e.OldDoc != nil {
+		docType = e.OldDoc.DocType()
+	}
+	switch docType {
 	case consts.Groups:
 		return t.matchGroup(e)
 	case consts.Contacts:
@@ -109,7 +113,7 @@ func (t *ShareGroupTrigger) matchContact(e *realtime.Event) *ShareGroupMessage {
 
 	var oldgroups []string
 	invitable := false
-	olddoc, ok := e.OldDoc.(*couchdb.JSONDoc)
+	olddoc, ok := contactJSONDoc(e.OldDoc)
 	if ok {
 		oldContact := &contact.Contact{JSONDoc: *olddoc}
 		oldgroups = oldContact.GroupIDs()
@@ -133,6 +137,21 @@ func (t *ShareGroupTrigger) matchContact(e *realtime.Event) *ShareGroupMessage {
 		msg.DeletedDoc = olddoc
 	}
 	return msg
+}
+
+// contactJSONDoc returns the generic document embedded in each supported
+// contact event representation. couchdb.UpdateDoc keeps the old document in
+// the caller's concrete type (*contact.Contact), while RTEvent clones the new
+// document through JSONDoc.Clone and publishes it as *couchdb.JSONDoc.
+func contactJSONDoc(doc realtime.Doc) (*couchdb.JSONDoc, bool) {
+	switch doc := doc.(type) {
+	case *couchdb.JSONDoc:
+		return doc, true
+	case *contact.Contact:
+		return &doc.JSONDoc, true
+	default:
+		return nil, false
+	}
 }
 
 func diffGroupIDs(as, bs []string) []string {
