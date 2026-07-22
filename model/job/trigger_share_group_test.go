@@ -89,6 +89,27 @@ func TestShareGroupTrigger(t *testing.T) {
 		require.Same(t, updated, msg.RenamedGroup)
 	})
 
+	t.Run("The group is deleted", func(t *testing.T) {
+		group := contact.NewGroup()
+		group.SetID("id-marketing")
+		group.SetRev("1-abcdef")
+		group.M["name"] = "Marketing"
+
+		deleted := group.JSONDoc.Clone().(*couchdb.JSONDoc)
+		deleted.Type = ""
+		deleted.SetRev("2-abcdef")
+		deleted.M["_deleted"] = true
+
+		msg := trigger.match(&realtime.Event{
+			Doc:    deleted,
+			OldDoc: group,
+			Verb:   realtime.EventDelete,
+		})
+
+		require.NotNil(t, msg)
+		assert.Equal(t, "id-marketing", msg.DeletedGroupID)
+	})
+
 	t.Run("The RabbitMQ contact update has a typed old document", func(t *testing.T) {
 		oldDoc := contactDocWithGroups("contact-bob", "id-friends")
 		oldDoc.Type = ""

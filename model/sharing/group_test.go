@@ -438,6 +438,32 @@ func TestGroups(t *testing.T) {
 		assert.True(t, stored.Groups[0].Revoked)
 		assert.False(t, stored.Groups[1].Revoked)
 	})
+
+	t.Run("DeleteGroupRevokesMatchingSharingGroup", func(t *testing.T) {
+		team := createGroup(t, inst, "Deleted Drive Group")
+		otherTeam := createGroup(t, inst, "Active Drive Group")
+		_ = createContactInGroups(t, inst, "DeletedGroupAlice", []string{team.ID()})
+		s := createDriveSharingForGroupTest(t, inst, "Deleted sharing group")
+		s.OrgDrive = true
+		sid := s.SID
+		require.NoError(t, s.AddGroup(inst, team.ID(), false))
+		require.NoError(t, s.AddGroup(inst, otherTeam.ID(), false))
+		require.NoError(t, couchdb.UpdateDoc(inst, s))
+
+		require.NoError(t, UpdateGroups(inst, job.ShareGroupMessage{
+			DeletedGroupID: team.ID(),
+		}))
+
+		stored := &Sharing{}
+		require.NoError(t, couchdb.GetDoc(inst, consts.Sharings, sid, stored))
+		assert.True(t, stored.Active)
+		require.Len(t, stored.Members, 2)
+		assert.Equal(t, MemberStatusRevoked, stored.Members[1].Status)
+		assert.Empty(t, stored.Members[1].Groups)
+		require.Len(t, stored.Groups, 2)
+		assert.True(t, stored.Groups[0].Revoked)
+		assert.False(t, stored.Groups[1].Revoked)
+	})
 }
 
 func createDriveSharingForGroupTest(t *testing.T, inst *instance.Instance, description string) *Sharing {

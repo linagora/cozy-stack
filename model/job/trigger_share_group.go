@@ -21,6 +21,7 @@ type ShareGroupMessage struct {
 	GroupsRemoved   []string         `json:"removed,omitempty"`
 	BecomeInvitable bool             `json:"invitable,omitempty"`
 	DeletedDoc      *couchdb.JSONDoc `json:"deleted_doc,omitempty"`
+	DeletedGroupID  string           `json:"deleted_group_id,omitempty"`
 	RenamedGroup    *couchdb.JSONDoc `json:"renamed_group,omitempty"`
 }
 
@@ -65,6 +66,19 @@ func (t *ShareGroupTrigger) match(e *realtime.Event) *ShareGroupMessage {
 }
 
 func (t *ShareGroupTrigger) matchGroup(e *realtime.Event) *ShareGroupMessage {
+	if e.Verb == realtime.EventDelete {
+		olddoc, ok := groupJSONDoc(e.OldDoc)
+		if !ok {
+			t.log.WithFields(logger.Fields{
+				"domain":   e.Domain,
+				"doc_type": e.Doc.DocType(),
+				"doc_id":   e.Doc.ID(),
+				"verb":     e.Verb,
+			}).Warnf("trigger share-group: unsupported old group document type %T", e.OldDoc)
+			return nil
+		}
+		return &ShareGroupMessage{DeletedGroupID: olddoc.ID()}
+	}
 	if e.Verb != realtime.EventUpdate {
 		return nil
 	}
@@ -210,6 +224,8 @@ func (t *ShareGroupTrigger) pushJob(e *realtime.Event, msg *ShareGroupMessage) {
 	})
 	if msg.RenamedGroup != nil {
 		log = log.WithField("group_id", msg.RenamedGroup.ID())
+	} else if msg.DeletedGroupID != "" {
+		log = log.WithField("group_id", msg.DeletedGroupID)
 	}
 	m, err := NewMessage(msg)
 	if err != nil {

@@ -132,6 +132,9 @@ func UpdateGroups(inst *instance.Instance, msg job.ShareGroupMessage) error {
 	if msg.RenamedGroup != nil {
 		return updateGroupMetadata(inst, msg.RenamedGroup)
 	}
+	if msg.DeletedGroupID != "" {
+		return revokeDeletedGroup(inst, msg.DeletedGroupID)
+	}
 
 	var c *contact.Contact
 	if msg.DeletedDoc != nil {
@@ -189,6 +192,29 @@ func UpdateGroups(inst *instance.Instance, msg job.ShareGroupMessage) error {
 		}
 	}
 
+	return errm
+}
+
+func revokeDeletedGroup(inst *instance.Instance, groupID string) error {
+	sharings, err := FindActive(inst)
+	if err != nil {
+		return err
+	}
+
+	var errm error
+	for _, s := range sharings {
+		if !s.Owner {
+			continue
+		}
+		for idx, group := range s.Groups {
+			if group.ID != groupID || group.Revoked {
+				continue
+			}
+			if err := s.RevokeGroup(inst, idx); err != nil {
+				errm = multierror.Append(errm, err)
+			}
+		}
+	}
 	return errm
 }
 
