@@ -90,19 +90,9 @@ func (s *Sharing) RevokeGroup(inst *instance.Instance, index int) error {
 		if !inGroup {
 			continue
 		}
-		if len(m.Groups) == 1 {
-			s.Members[i].Groups = nil
-		} else {
-			var groups []int
-			for _, idx := range m.Groups {
-				if idx != index {
-					groups = append(groups, idx)
-				}
-			}
-			s.Members[i].Groups = groups
-		}
+		removeGroupFromMember(&s.Members[i], index)
 		if m.OnlyInGroups && len(s.Members[i].Groups) == 0 {
-			if err := s.RevokeRecipient(inst, i); err != nil {
+			if err := s.revokeRecipientAfterRemovingGroup(inst, i, index); err != nil {
 				errm = multierror.Append(errm, err)
 			}
 		}
@@ -304,6 +294,16 @@ func addGroupToMember(member *Member, groupIndex int) bool {
 	return true
 }
 
+func removeGroupFromMember(member *Member, groupIndex int) {
+	var groups []int
+	for _, index := range member.Groups {
+		if index != groupIndex {
+			groups = append(groups, index)
+		}
+	}
+	member.Groups = groups
+}
+
 func (s *Sharing) contactIsMemberOfGroup(groupIndex int, c *contact.Contact) bool {
 	var email string
 	if addr, err := c.ToMailAddress(); err == nil {
@@ -354,16 +354,10 @@ func (s *Sharing) RemoveMemberFromGroup(inst *instance.Instance, groupIndex int,
 			continue
 		}
 
-		var groups []int
-		for _, idx := range m.Groups {
-			if idx != groupIndex {
-				groups = append(groups, idx)
-			}
-		}
-		s.Members[i].Groups = groups
+		removeGroupFromMember(&s.Members[i], groupIndex)
 
 		if m.OnlyInGroups && len(s.Members[i].Groups) == 0 {
-			return s.RevokeRecipient(inst, i)
+			return s.revokeRecipientAfterRemovingGroup(inst, i, groupIndex)
 		} else {
 			return couchdb.UpdateDoc(inst, s)
 		}
@@ -425,16 +419,10 @@ func (s *Sharing) SendRemoveMemberFromGroup(inst *instance.Instance, groupIndex,
 }
 
 func (s *Sharing) DelegatedRemoveMemberFromGroup(inst *instance.Instance, groupIndex, memberIndex int) error {
-	var groups []int
-	for _, idx := range s.Members[memberIndex].Groups {
-		if idx != groupIndex {
-			groups = append(groups, idx)
-		}
-	}
-	s.Members[memberIndex].Groups = groups
+	removeGroupFromMember(&s.Members[memberIndex], groupIndex)
 
 	if s.Members[memberIndex].OnlyInGroups && len(s.Members[memberIndex].Groups) == 0 {
-		return s.RevokeRecipient(inst, memberIndex)
+		return s.revokeRecipientAfterRemovingGroup(inst, memberIndex, groupIndex)
 	} else {
 		return couchdb.UpdateDoc(inst, s)
 	}

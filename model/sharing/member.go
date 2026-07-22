@@ -1188,6 +1188,10 @@ func (s *Sharing) DelegateRevokeRecipient(inst *instance.Instance, index int) er
 
 // RevokeMember revoke the access granted to a member and contact it
 func (s *Sharing) RevokeMember(inst *instance.Instance, index int) error {
+	return s.revokeMember(inst, index, nil)
+}
+
+func (s *Sharing) revokeMember(inst *instance.Instance, index int, removedGroupIndex *int) error {
 	m := &s.Members[index]
 
 	// skip if member is already revoked
@@ -1220,6 +1224,9 @@ func (s *Sharing) RevokeMember(inst *instance.Instance, index int) error {
 	// operation several times.
 	leftRetries := 3
 	for {
+		if removedGroupIndex != nil {
+			removeGroupFromMember(m, *removedGroupIndex)
+		}
 		m.Status = MemberStatusRevoked
 		// Do not remove the credentials from the array to preserve the members /
 		// credentials order, just empty them

@@ -758,10 +758,18 @@ func (s *Sharing) RemoveInteractPermissionsForAMember(inst *instance.Instance, m
 // sharing has still at least one active member, we keep it as is. Else, we
 // disable the sharing.
 func (s *Sharing) RevokeRecipient(inst *instance.Instance, index int) error {
+	return s.revokeRecipient(inst, index, nil)
+}
+
+func (s *Sharing) revokeRecipientAfterRemovingGroup(inst *instance.Instance, index, groupIndex int) error {
+	return s.revokeRecipient(inst, index, &groupIndex)
+}
+
+func (s *Sharing) revokeRecipient(inst *instance.Instance, index int, removedGroupIndex *int) error {
 	if !s.Owner {
 		return ErrInvalidSharing
 	}
-	if err := s.RevokeMember(inst, index); err != nil {
+	if err := s.revokeMember(inst, index, removedGroupIndex); err != nil {
 		return err
 	}
 	m := &s.Members[index]

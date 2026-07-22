@@ -360,6 +360,33 @@ func TestGroups(t *testing.T) {
 		assert.False(t, s.Groups[0].Revoked)
 	})
 
+	t.Run("RemoveMemberFromGroupPreservesRemovalAfterConflict", func(t *testing.T) {
+		team := createGroup(t, inst, "Conflicting Drive Team")
+		otherTeam := createGroup(t, inst, "Remaining Drive Team")
+		alice := createContactInGroups(t, inst, "ConflictAlice", []string{team.ID()})
+
+		s := createDriveSharingForGroupTest(t, inst, "Conflicting group removal")
+		s.OrgDrive = true
+		sid := s.SID
+		require.NoError(t, s.AddGroup(inst, team.ID(), false))
+		require.NoError(t, s.AddGroup(inst, otherTeam.ID(), false))
+		require.NoError(t, couchdb.UpdateDoc(inst, s))
+
+		concurrent := &Sharing{}
+		require.NoError(t, couchdb.GetDoc(inst, consts.Sharings, sid, concurrent))
+		concurrent.Description = "Updated concurrently"
+		require.NoError(t, couchdb.UpdateDoc(inst, concurrent))
+
+		require.NoError(t, s.RemoveMemberFromGroup(inst, 0, alice))
+
+		stored := &Sharing{}
+		require.NoError(t, couchdb.GetDoc(inst, consts.Sharings, sid, stored))
+		require.Len(t, stored.Members, 2)
+		assert.Equal(t, MemberStatusRevoked, stored.Members[1].Status)
+		assert.Empty(t, stored.Members[1].Groups)
+		assert.Equal(t, "Updated concurrently", stored.Description)
+	})
+
 	t.Run("RevokeLastDriveGroupDeletesSharing", func(t *testing.T) {
 		team := createGroup(t, inst, "Drive Group")
 		_ = createContactInGroups(t, inst, "DriveGroupAlice", []string{team.ID()})
