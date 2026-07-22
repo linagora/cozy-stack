@@ -33,6 +33,22 @@ type testDoc struct {
 	FieldB  int    `json:"fieldB,omitempty"`
 }
 
+type testJSONDoc struct {
+	JSONDoc
+}
+
+func (t *testJSONDoc) DocType() string {
+	return TestDoctype
+}
+
+func TestCloneDocPreservesDocType(t *testing.T) {
+	doc := &testJSONDoc{JSONDoc: JSONDoc{M: map[string]interface{}{}}}
+
+	cloned := cloneDoc(doc)
+
+	assert.Equal(t, TestDoctype, cloned.DocType())
+}
+
 func TestCouchdb(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a couchdb is required for this test: test skipped due to the use of --short flag")
@@ -113,7 +129,9 @@ func TestCouchdb(t *testing.T) {
 		// Delete it
 		err = DeleteDoc(TestPrefix, updated)
 		assert.NoError(t, err)
-		assertGotEvent(t, realtime.EventDelete, doc.ID())
+		evt = assertGotEvent(t, realtime.EventDelete, doc.ID())
+		assert.Equal(t, TestDoctype, evt.Doc.DocType())
+		assert.Equal(t, TestDoctype, evt.OldDoc.DocType())
 
 		fetched3 := &testDoc{}
 		err = GetDoc(TestPrefix, docType, id, fetched3)
@@ -122,6 +140,20 @@ func TestCouchdb(t *testing.T) {
 		if assert.True(t, iscoucherr) {
 			assert.Equal(t, coucherr.Reason, "deleted")
 		}
+	})
+
+	t.Run("DeleteDoc preserves an embedded JSONDoc type", func(t *testing.T) {
+		doc := &testJSONDoc{JSONDoc: JSONDoc{M: map[string]interface{}{
+			"_id":  "embedded-json-doc",
+			"test": "value",
+		}}}
+		require.NoError(t, CreateNamedDoc(TestPrefix, doc))
+		assertGotEvent(t, realtime.EventCreate, doc.ID())
+
+		require.NoError(t, DeleteDoc(TestPrefix, doc))
+		evt := assertGotEvent(t, realtime.EventDelete, doc.ID())
+		assert.Equal(t, TestDoctype, evt.Doc.DocType())
+		assert.Equal(t, TestDoctype, evt.OldDoc.DocType())
 	})
 
 	t.Run("GetAllDocs", func(t *testing.T) {

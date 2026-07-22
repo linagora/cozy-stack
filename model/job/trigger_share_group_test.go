@@ -90,13 +90,16 @@ func TestShareGroupTrigger(t *testing.T) {
 	})
 
 	t.Run("The group is deleted", func(t *testing.T) {
-		group := contact.NewGroup()
-		group.SetID("id-marketing")
-		group.SetRev("1-abcdef")
-		group.M["name"] = "Marketing"
+		group := &couchdb.JSONDoc{
+			Type: consts.Groups,
+			M: map[string]interface{}{
+				"_id":  "id-marketing",
+				"_rev": "1-abcdef",
+				"name": "Marketing",
+			},
+		}
 
-		deleted := group.JSONDoc.Clone().(*couchdb.JSONDoc)
-		deleted.Type = ""
+		deleted := group.Clone().(*couchdb.JSONDoc)
 		deleted.SetRev("2-abcdef")
 		deleted.M["_deleted"] = true
 

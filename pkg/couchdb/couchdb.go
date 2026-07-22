@@ -48,8 +48,16 @@ func RTEvent(db prefixer.Prefixer, verb string, doc, oldDoc Doc) {
 		logger.WithDomain(db.DomainName()).WithNamespace("couchdb").
 			Errorf("error in hooks on %s %s %v\n", verb, doc.DocType(), err)
 	}
-	docClone := doc.Clone()
+	docClone := cloneDoc(doc)
 	go realtime.GetHub().Publish(db, verb, docClone, oldDoc)
+}
+
+func cloneDoc(doc Doc) Doc {
+	cloned := doc.Clone()
+	if jsonDoc, ok := cloned.(*JSONDoc); ok {
+		jsonDoc.Type = doc.DocType()
+	}
+	return cloned
 }
 
 // JSONDoc is a map representing a simple json object that implements
@@ -528,7 +536,7 @@ func DeleteDoc(db prefixer.Prefixer, doc Doc) error {
 	if id == "" {
 		return fmt.Errorf("Missing ID for DeleteDoc")
 	}
-	old := doc.Clone()
+	old := cloneDoc(doc)
 
 	// XXX Specific log for the deletion of an account, to help monitor this
 	// metric.
