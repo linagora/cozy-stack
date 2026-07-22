@@ -70,10 +70,22 @@ func (t *ShareGroupTrigger) matchGroup(e *realtime.Event) *ShareGroupMessage {
 	}
 	newdoc, ok := groupJSONDoc(e.Doc)
 	if !ok {
+		t.log.WithFields(logger.Fields{
+			"domain":   e.Domain,
+			"doc_type": e.Doc.DocType(),
+			"doc_id":   e.Doc.ID(),
+			"verb":     e.Verb,
+		}).Warnf("trigger share-group: unsupported group document type %T", e.Doc)
 		return nil
 	}
 	olddoc, ok := groupJSONDoc(e.OldDoc)
 	if !ok {
+		t.log.WithFields(logger.Fields{
+			"domain":   e.Domain,
+			"doc_type": e.Doc.DocType(),
+			"doc_id":   e.Doc.ID(),
+			"verb":     e.Verb,
+		}).Warnf("trigger share-group: unsupported old group document type %T", e.OldDoc)
 		return nil
 	}
 	newGroup := &contact.Group{JSONDoc: *newdoc}
@@ -187,7 +199,18 @@ func contactIsNowInvitable(oldContact, newContact *contact.Contact) bool {
 }
 
 func (t *ShareGroupTrigger) pushJob(e *realtime.Event, msg *ShareGroupMessage) {
-	log := t.log.WithField("domain", e.Domain)
+	log := t.log.WithFields(logger.Fields{
+		"contact_id":           msg.ContactID,
+		"domain":               e.Domain,
+		"groups_added":         msg.GroupsAdded,
+		"groups_added_count":   len(msg.GroupsAdded),
+		"groups_removed":       msg.GroupsRemoved,
+		"groups_removed_count": len(msg.GroupsRemoved),
+		"verb":                 e.Verb,
+	})
+	if msg.RenamedGroup != nil {
+		log = log.WithField("group_id", msg.RenamedGroup.ID())
+	}
 	m, err := NewMessage(msg)
 	if err != nil {
 		log.Infof("trigger share-group: cannot serialize message: %s", err)
@@ -197,7 +220,7 @@ func (t *ShareGroupTrigger) pushJob(e *realtime.Event, msg *ShareGroupMessage) {
 		WorkerType: "share-group",
 		Message:    m,
 	}
-	log.Infof("trigger share-group: Pushing new job for contact %s", msg.ContactID)
+	log.Info("trigger share-group: Pushing new job")
 	if _, err := t.broker.PushJob(e, req); err != nil {
 		log.Errorf("trigger share-group: Could not schedule a new job: %s", err.Error())
 	}

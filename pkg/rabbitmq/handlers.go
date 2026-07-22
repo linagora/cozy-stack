@@ -16,6 +16,7 @@ import (
 	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/crypto"
+	"github.com/cozy/cozy-stack/pkg/logger"
 )
 
 const DefaultDomain = "twake.app"
@@ -319,34 +320,48 @@ func (h *B2BGroupLifecycleHandler) Handle(ctx context.Context, d amqp.Delivery) 
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.created: failed to unmarshal message: %w", err)
 		}
+		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, len(msg.Members))
 		return orgdirectory.SyncGroupCreated(ctx, msg)
 	case RoutingKeyB2BGroupUpdated:
 		var msg orgdirectory.GroupUpdatedMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.updated: failed to unmarshal message: %w", err)
 		}
+		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, 0)
 		return orgdirectory.SyncGroupUpdated(ctx, msg)
 	case RoutingKeyB2BGroupDeleted:
 		var msg orgdirectory.GroupDeletedMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.deleted: failed to unmarshal message: %w", err)
 		}
+		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, 0)
 		return orgdirectory.SyncGroupDeleted(ctx, msg)
 	case RoutingKeyB2BGroupMemberAdded:
 		var msg orgdirectory.GroupMembersMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.member.added: failed to unmarshal message: %w", err)
 		}
+		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, len(msg.Members))
 		return orgdirectory.SyncGroupMembersAdded(ctx, msg)
 	case RoutingKeyB2BGroupMemberRemoved:
 		var msg orgdirectory.GroupMembersMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.member.removed: failed to unmarshal message: %w", err)
 		}
+		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, len(msg.Members))
 		return orgdirectory.SyncGroupMembersRemoved(ctx, msg)
 	default:
 		return fmt.Errorf("b2b.group: unsupported routing key %s", d.RoutingKey)
 	}
+}
+
+func logB2BGroupMessage(routingKey, organizationID, groupID string, memberCount int) {
+	log.WithFields(logger.Fields{
+		"group_id":        groupID,
+		"member_count":    memberCount,
+		"organization_id": organizationID,
+		"routing_key":     routingKey,
+	}).Info("b2b.group: processing message")
 }
 
 // UserPhoneUpdatedHandler handles user phone update messages.
