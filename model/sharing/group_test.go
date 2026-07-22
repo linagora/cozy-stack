@@ -249,6 +249,18 @@ func TestGroups(t *testing.T) {
 		assert.True(t, s.Members[3].OnlyInGroups)
 		assert.Equal(t, s.Members[3].Groups, []int{1})
 
+		// Replaying the same group addition must not duplicate the group index,
+		// rotate credentials, resend invitations, or update the sharing.
+		revAfterFirstAddition := s.Rev()
+		credentialsAfterFirstAddition := append([]Credentials(nil), s.Credentials...)
+		require.NoError(t, UpdateGroups(inst, msg1))
+
+		s = &Sharing{}
+		require.NoError(t, couchdb.GetDoc(inst, consts.Sharings, sid, s))
+		require.Equal(t, revAfterFirstAddition, s.Rev())
+		require.Equal(t, credentialsAfterFirstAddition, s.Credentials)
+		assert.Equal(t, []int{0, 1}, s.Members[2].Groups)
+
 		// Charlie is removed of the football group
 		msg2 := job.ShareGroupMessage{
 			ContactID:     charlie.ID(),

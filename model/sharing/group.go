@@ -58,11 +58,7 @@ func (s *Sharing) AddGroup(inst *instance.Instance, groupID string, readOnly boo
 		if err != nil {
 			return err
 		}
-		pos := sort.SearchInts(s.Members[idx].Groups, groupIndex)
-		if pos == len(s.Members[idx].Groups) || s.Members[idx].Groups[pos] != groupIndex {
-			s.Members[idx].Groups = append(s.Members[idx].Groups, groupIndex)
-			sort.Ints(s.Members[idx].Groups)
-		}
+		addGroupToMember(&s.Members[idx], groupIndex)
 	}
 
 	g := Group{
@@ -226,6 +222,9 @@ func updateGroupMetadata(inst *instance.Instance, doc *couchdb.JSONDoc) error {
 
 // AddMemberToGroup adds a contact to a sharing via a group (on the owner).
 func (s *Sharing) AddMemberToGroup(inst *instance.Instance, groupIndex int, contact *contact.Contact) error {
+	if s.contactIsMemberOfGroup(groupIndex, contact) {
+		return nil
+	}
 	readOnly := s.Groups[groupIndex].ReadOnly
 	m := buildMemberFromContact(contact, readOnly)
 	m.OnlyInGroups = true
@@ -233,8 +232,7 @@ func (s *Sharing) AddMemberToGroup(inst *instance.Instance, groupIndex int, cont
 	if err != nil {
 		return err
 	}
-	s.Members[idx].Groups = append(s.Members[idx].Groups, groupIndex)
-	sort.Ints(s.Members[idx].Groups)
+	addGroupToMember(&s.Members[idx], groupIndex)
 
 	// We can ignore the error as we will try again to save the sharing
 	// after sending the invitation.
@@ -255,6 +253,9 @@ func (s *Sharing) AddMemberToGroup(inst *instance.Instance, groupIndex int, cont
 
 // DelegateAddMemberToGroup adds a contact to a sharing via a group (on a recipient).
 func (s *Sharing) DelegateAddMemberToGroup(inst *instance.Instance, groupIndex int, contact *contact.Contact) error {
+	if s.contactIsMemberOfGroup(groupIndex, contact) {
+		return nil
+	}
 	readOnly := s.Groups[groupIndex].ReadOnly
 	m := buildMemberFromContact(contact, readOnly)
 	m.OnlyInGroups = true
@@ -264,6 +265,44 @@ func (s *Sharing) DelegateAddMemberToGroup(inst *instance.Instance, groupIndex i
 		members: []Member{m},
 	}
 	return s.SendDelegated(inst, api)
+}
+
+func addGroupToMember(member *Member, groupIndex int) bool {
+	for _, index := range member.Groups {
+		if index == groupIndex {
+			return false
+		}
+	}
+	member.Groups = append(member.Groups, groupIndex)
+	sort.Ints(member.Groups)
+	return true
+}
+
+func (s *Sharing) contactIsMemberOfGroup(groupIndex int, c *contact.Contact) bool {
+	var email string
+	if addr, err := c.ToMailAddress(); err == nil {
+		email = addr.Email
+	}
+	cozyURL := c.PrimaryCozyURL()
+
+	for i, member := range s.Members {
+		if i == 0 {
+			continue
+		}
+		matches := email != "" && member.Email == email
+		if email == "" && cozyURL != "" {
+			matches = member.Instance == cozyURL
+		}
+		if !matches {
+			continue
+		}
+		for _, index := range member.Groups {
+			if index == groupIndex {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // RemoveMemberFromGroup removes a member of a group.
