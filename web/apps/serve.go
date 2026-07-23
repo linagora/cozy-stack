@@ -181,7 +181,9 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 				}
 			}
 			redirect := req.URL
-			redirect.RawQuery = ""
+			q := redirect.Query()
+			q.Del("session_code")
+			redirect.RawQuery = q.Encode()
 			return c.Redirect(http.StatusSeeOther, redirect.String())
 		}
 	}

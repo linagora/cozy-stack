@@ -1068,7 +1068,7 @@ func AccessToken(c echo.Context) error {
 	}
 	if out.Scope == "*" {
 		if !client.Flagship {
-			return auth.ReturnSessionCode(c, http.StatusAccepted, inst)
+			return auth.ReturnSessionCode(c, http.StatusAccepted, inst, "password")
 		}
 	}
 

@@ -7,9 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/oauth"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -23,9 +25,13 @@ import (
 // app.
 func CreateSessionCode(c echo.Context) error {
 	inst := middlewares.GetInstance(c)
+	var source string
 	switch canCreateSessionCode(c, inst) {
 	case allowedToCreateSessionCode:
-		// OK
+		source = "flagship"
+		if s, ok := c.Get("session_code_source").(string); ok {
+			source = s
+		}
 	case need2FAToCreateSessionCode:
 		twoFactorToken, err := lifecycle.SendTwoFactorPasscode(inst)
 		if err != nil {
@@ -41,10 +47,10 @@ func CreateSessionCode(c echo.Context) error {
 		})
 	}
 
-	return ReturnSessionCode(c, http.StatusCreated, inst)
+	return ReturnSessionCode(c, http.StatusCreated, inst, source)
 }
 
-func ReturnSessionCode(c echo.Context, statusCode int, inst *instance.Instance) error {
+func ReturnSessionCode(c echo.Context, statusCode int, inst *instance.Instance, source string) error {
 	code, err := inst.CreateSessionCode()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
@@ -61,6 +67,7 @@ func ReturnSessionCode(c echo.Context, statusCode int, inst *instance.Instance) 
 		ip = strings.Split(req.RemoteAddr, ":")[0]
 	}
 	inst.Logger().WithField("nspace", "loginaudit").
+		WithField("source", source).
 		Infof("New session_code created from %s at %s", ip, time.Now())
 
 	return c.JSON(statusCode, echo.Map{
@@ -87,6 +94,11 @@ func canCreateSessionCode(c echo.Context, inst *instance.Instance) canCreateSess
 		return allowedToCreateSessionCode
 	}
 
+	if isAppTokenExchangeToken(c, inst) {
+		c.Set("session_code_source", "app_token_exchange")
+		return allowedToCreateSessionCode
+	}
+
 	var args sessionCodeParameters
 	if err := c.Bind(&args); err != nil {
 		return cannotCreateSessionCode
@@ -102,6 +114,48 @@ func canCreateSessionCode(c echo.Context, inst *instance.Instance) canCreateSess
 		}
 	}
 	return allowedToCreateSessionCode
+}
+
+func isAppTokenExchangeToken(c echo.Context, inst *instance.Instance) bool {
+	rawClaims := c.Get("claims")
+	if rawClaims == nil {
+		return false
+	}
+	claims, ok := rawClaims.(permission.Claims)
+	if !ok {
+		return false
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != consts.AccessTokenAudience {
+		return false
+	}
+	clientID := claims.Subject
+	if clientID == "" {
+		return false
+	}
+
+	client, err := oauth.FindClient(inst, clientID)
+	if err != nil {
+		return false
+	}
+
+	appExchangeConfig, err := config.GetOIDCAppTokenExchange(inst.ContextName)
+	if err != nil || !appExchangeConfig.Enabled || len(appExchangeConfig.Apps) == 0 {
+		return false
+	}
+
+	for _, appConfig := range appExchangeConfig.Apps {
+		if appConfig.SoftwareID == client.SoftwareID {
+			slug := oauth.GetLinkedAppSlug(client.SoftwareID)
+			if slug == "" {
+				return false
+			}
+			if _, err := app.GetWebappBySlug(inst, slug); err != nil {
+				return false
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func postChallenge(c echo.Context) error {
@@ -237,7 +291,7 @@ func loginFlagship(c echo.Context) error {
 	}
 
 	if !client.Flagship {
-		return ReturnSessionCode(c, http.StatusAccepted, inst)
+		return ReturnSessionCode(c, http.StatusAccepted, inst, "password")
 	}
 
 	if client.Pending {

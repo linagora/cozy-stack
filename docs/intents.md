@@ -445,6 +445,65 @@ Content-Type: application/vnd.api+json
 }
 ```
 
+## Mobile + WebView flow
+
+When the client app is a native mobile app and the service app must be loaded in a
+WebView, the browser-shared cookie is not available. The mobile app can authenticate
+the WebView by reusing the existing `session_code` mechanism.
+
+### Flow
+
+```
+Mobile app                cozy-stack                WebView (service app)
+----------  --------------  ----------------------   ----------------------
+[token_exchange]  ──POST /auth/token_exchange──────▶
+                   ◀── app-scoped access_token ────
+[create intent]    ──POST /intents  (Bearer app token)────▶
+                   ◀── intent doc: id + service href ────
+[mint session_code]──POST /auth/session_code (Bearer app token)──▶
+                   ◀── {"session_code": "<code>"} ────
+[open WebView]     ── load https://<service>.<inst>/?intent=<id>&session_code=<code> ────▶
+                                                    ServeAppFile:
+                                                    1. CheckAndClearSessionCode → ok
+                                                    2. SetCookieForNewSession(NormalRun)
+                                                    3. redirect to ?intent=<id> (code stripped)
+                                                    4. on reload: serve app with cozyData.token
+                   ◀── index.html with cozyData.token = <app token> ────
+                                                    cozy-client in WebView uses app token
+                                                    for all API calls (scoped to service slug)
+```
+
+### Prerequisites
+
+- The instance must have OIDC configured with `allow_app_token_exchange: true` and
+  at least one entry under `app_token_exchange` in the context configuration.
+- The caller app must be a linked app listed in that configuration.
+- The service app must be installed on the instance.
+
+### API calls
+
+1. **Token exchange** — `POST /auth/token_exchange` with `exchange_type: "app"` and
+   a valid OIDC `id_token`. Returns an OAuth access token scoped to the linked app.
+2. **Create intent** — `POST /intents` with the app-scoped token. Returns the intent
+   document including the service app's href with `?intent=<id>`.
+3. **Mint session_code** — `POST /auth/session_code` with the same app-scoped token
+   as Bearer. Returns `{"session_code": "<code>"}`.
+4. **Open WebView** — load `https://<serviceSlug>.<instance>/...?intent=<id>&session_code=<code>`.
+   The stack consumes the code, creates a session cookie, and redirects (code
+   stripped). The WebView now has a full user session for the instance domain.
+
+### Security
+
+- The `session_code` is single-use (atomic delete in Redis on read) with a 7-day TTL.
+- The cookie is a `NormalRun` session (browser-session, 30-day max age) cleared
+  when the WebView is destroyed.
+- The service page only receives a service-app-scoped token via `BuildAppToken`;
+  the underlying cookie grants a full user session, but the page code never
+  accesses it directly.
+- Only tokens minted by `token_exchange` for a currently configured linked app
+  can mint session codes. Revoking the app from `app_token_exchange` immediately
+  prevents new session code minting.
+
 ## Annexes
 
 ### Use Cases
