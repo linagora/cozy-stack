@@ -60,6 +60,47 @@ func TestOrganizationMember(t *testing.T) {
 		assert.Equal(t, "alice", m.UserID)
 	})
 
+	t.Run("an entry with a key has the precedence over a keyless entry", func(t *testing.T) {
+		migrated := &Organization{
+			Members: map[string]OrgMember{
+				"alice.mycozy.cloud": {
+					UserID: "alice",
+					OrgKey: "alice-key",
+					Status: OrgMemberConfirmed,
+				},
+				"alice.twake.app": {
+					UserID: "alice",
+					Status: OrgMemberAccepted,
+				},
+			},
+		}
+		inst := &instance.Instance{
+			Domain:    "alice.twake.app",
+			OldDomain: "alice.mycozy.cloud",
+		}
+		m := migrated.Member(inst)
+		assert.Equal(t, "alice-key", m.OrgKey)
+		assert.Equal(t, OrgMemberConfirmed, m.Status)
+	})
+
+	t.Run("the keyless entry is returned when no entry has a key", func(t *testing.T) {
+		pending := &Organization{
+			Members: map[string]OrgMember{
+				"alice.twake.app": {
+					UserID: "alice",
+					Status: OrgMemberAccepted,
+				},
+			},
+		}
+		inst := &instance.Instance{
+			Domain:    "alice.twake.app",
+			OldDomain: "alice.mycozy.cloud",
+		}
+		m := pending.Member(inst)
+		assert.Equal(t, "alice", m.UserID)
+		assert.Equal(t, OrgMemberAccepted, m.Status)
+	})
+
 	t.Run("a zero value is returned for a non member", func(t *testing.T) {
 		inst := &instance.Instance{
 			Domain:    "charlie.twake.app",
