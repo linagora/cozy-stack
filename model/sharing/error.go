@@ -73,6 +73,10 @@ var (
 	ErrNotADirectory = errors.New("Provided ID is not a directory")
 	// ErrFileAlreadyShared is used when the file already has an existing sharing
 	ErrFileAlreadyShared = errors.New("File already has an existing sharing")
+	// ErrParentReadOnly is used when the selected folder or file is inside a
+	// shared ancestor on which the current instance has only read-only (or no
+	// write) access.
+	ErrParentReadOnly = errors.New("Parent folder is shared without write access")
 	// ErrNotAFile is used when the provided file_id is not a file
 	ErrNotAFile = errors.New("Provided ID is not a file")
 	// ErrFileInTrash is used when trying to share a trashed file

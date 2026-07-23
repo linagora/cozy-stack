@@ -592,6 +592,11 @@ func CreateDrive(inst *instance.Instance, rootID, description, appSlug string) (
 		s.Description = rootName
 	}
 
+	// All drives are additive by default (EffectiveAccessMode returns
+	// additive when empty, but set it explicitly so the intent is visible
+	// and the field is testable in API responses).
+	s.AccessMode = AccessModeAdditive
+
 	// Initialize as owner
 	if err := s.BeOwner(inst, appSlug); err != nil {
 		return nil, err

@@ -16,6 +16,7 @@ import (
 	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/note"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -423,10 +424,7 @@ func ValidateDriveRoot(inst *instance.Instance, rootID string) (*vfs.DirDoc, *vf
 		if err := checkRootForSharing(dir.ReferencedBy, ErrFolderAlreadyShared); err != nil {
 			return nil, nil, err
 		}
-		if err := checkParentsForSharing(fs, path.Dir(dir.Fullpath), ErrFolderAlreadyShared); err != nil {
-			return nil, nil, err
-		}
-		if err := checkDescendantsForSharing(fs, dir); err != nil {
+		if err := checkEffectiveParentAccess(inst, rootID); err != nil {
 			return nil, nil, err
 		}
 		return dir, nil, nil
@@ -437,65 +435,39 @@ func ValidateDriveRoot(inst *instance.Instance, rootID string) (*vfs.DirDoc, *vf
 	if err := checkRootForSharing(file.ReferencedBy, ErrFileAlreadyShared); err != nil {
 		return nil, nil, err
 	}
-	filePath, err := file.Path(fs)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := checkParentsForSharing(fs, path.Dir(filePath), ErrFileAlreadyShared); err != nil {
+	if err := checkEffectiveParentAccess(inst, rootID); err != nil {
 		return nil, nil, err
 	}
 	return nil, file, nil
+}
+
+// checkEffectiveParentAccess resolves the effective access on the selected
+// root via the AccessResolver. When an applicable additive ancestor scope
+// exists (the root lives inside a shared ancestor where the current instance
+// is a member), write/share is required on it; otherwise the root is rejected
+// with ErrParentReadOnly. When no applicable scope applies (no shared
+// ancestor, or the instance is not a member of any such scope), the root is
+// allowed.
+//
+// ponytail: ancestor-only gate. Drives are not replicated, so a read-only
+// recipient has no local copy of the shared root to nest under a new drive;
+// only a classic replicated sharing can sit under a new drive's tree. Add a
+// descendant pass (ChildSharedRootsUnder) if that becomes a problem.
+func checkEffectiveParentAccess(inst *instance.Instance, rootID string) error {
+	ea, err := NewAccessResolver(inst).Resolve(rootID)
+	if err != nil {
+		return err
+	}
+	if len(ea.SourceSharingIDs) > 0 && !ea.Can(permission.POST) {
+		return ErrParentReadOnly
+	}
+	return nil
 }
 
 func checkRootForSharing(refs []couchdb.DocReference, alreadySharedErr error) error {
 	for _, ref := range refs {
 		if ref.Type == consts.Sharings {
 			return alreadySharedErr
-		}
-	}
-	return nil
-}
-
-func checkParentsForSharing(fs vfs.VFS, currentPath string, alreadySharedErr error) error {
-	for currentPath != "/" && currentPath != "." && currentPath != "" {
-		parentDir, err := fs.DirByPath(currentPath)
-		if err != nil {
-			break
-		}
-		if err := checkRootForSharing(parentDir.ReferencedBy, alreadySharedErr); err != nil {
-			return err
-		}
-		currentPath = path.Dir(currentPath)
-	}
-	return nil
-}
-
-// checkDescendantsForSharing recursively checks if any descendant directory
-// has an existing sharing reference.
-func checkDescendantsForSharing(fs vfs.VFS, dir *vfs.DirDoc) error {
-	iter := fs.DirIterator(dir, nil)
-	for {
-		child, _, err := iter.Next()
-		if err == vfs.ErrIteratorDone {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if child == nil {
-			continue
-		}
-
-		// Check if this child directory has a sharing reference
-		for _, ref := range child.ReferencedBy {
-			if ref.Type == consts.Sharings {
-				return ErrFolderAlreadyShared
-			}
-		}
-
-		// Recursively check subdirectories
-		if err := checkDescendantsForSharing(fs, child); err != nil {
-			return err
 		}
 	}
 	return nil
