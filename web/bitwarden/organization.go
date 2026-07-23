@@ -86,7 +86,7 @@ type organizationResponse struct {
 }
 
 func newOrganizationResponse(inst *instance.Instance, org *bitwarden.Organization) *organizationResponse {
-	m := org.Members[inst.Domain]
+	m := org.Member(inst)
 	typ := 2 // User
 	if m.Owner {
 		typ = 0 // Owner
@@ -138,7 +138,7 @@ type collectionResponse struct {
 }
 
 func newCollectionResponse(inst *instance.Instance, org *bitwarden.Organization, coll *bitwarden.Collection) *collectionResponse {
-	m := org.Members[inst.Domain]
+	m := org.Member(inst)
 
 	return &collectionResponse{
 		ID:             coll.ID(),
@@ -309,7 +309,7 @@ func DeleteOrganization(c echo.Context) error {
 		})
 	}
 
-	if m := org.Members[inst.Domain]; !m.Owner {
+	if m := org.Member(inst); !m.Owner {
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": "only the Owner can call this endpoint",
 		})
@@ -426,7 +426,7 @@ func ConfirmUser(c echo.Context) error {
 			"error": err.Error(),
 		})
 	}
-	if m := org.Members[inst.Domain]; !m.Owner {
+	if m := org.Member(inst); !m.Owner {
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": "only the Owner can call this endpoint",
 		})

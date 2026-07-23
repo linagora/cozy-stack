@@ -83,6 +83,29 @@ func (o *Organization) Clone() couchdb.Doc {
 	return &cloned
 }
 
+// Member returns the entry of the given instance in the members of this
+// organization. The members are keyed by the instances domains, and an
+// instance that has been migrated to a new domain still has its entry stored
+// under its former domain: the old domain and the domain aliases are used as
+// fallbacks so that such an instance keeps its access to the organization. It
+// returns a zero value when the instance is not a member.
+func (o *Organization) Member(inst *instance.Instance) OrgMember {
+	if m, ok := o.Members[inst.Domain]; ok {
+		return m
+	}
+	if inst.OldDomain != "" {
+		if m, ok := o.Members[inst.OldDomain]; ok {
+			return m
+		}
+	}
+	for _, alias := range inst.DomainAliases {
+		if m, ok := o.Members[alias]; ok {
+			return m
+		}
+	}
+	return OrgMember{}
+}
+
 // FindCiphers returns the ciphers for this organization.
 func (o *Organization) FindCiphers(inst *instance.Instance) ([]*Cipher, error) {
 	var ciphers []*Cipher
