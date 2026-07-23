@@ -1487,12 +1487,12 @@ func (s *Sharing) SaveBitwarden(inst *instance.Instance, m *Member, bw *APIBitwa
 	if orgKey == "" && bw.UserID != "" {
 		// The member can have been migrated to a new domain: its entry is
 		// still stored under its former domain. The user keeps the same RSA
-		// key pair, so the organization key can be reused, and the stale
-		// entry is removed to avoid keeping a keyless duplicate.
+		// key pair, so the organization key can be reused. The entry of the
+		// former domain is left as is, and Organization.Member gives the
+		// precedence to the entry that has the key.
 		for former, member := range org.Members {
 			if former != domain && member.UserID == bw.UserID {
 				orgKey = member.OrgKey
-				delete(org.Members, former)
 				break
 			}
 		}
