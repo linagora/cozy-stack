@@ -10,6 +10,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBuildRequest_MatrixIDFromEmail(t *testing.T) {
+	inst := &instance.Instance{Domain: "alicewonderland.stg.lin-saas.com"}
+
+	t.Run("email localpart preserves dots and drives the matrix id", func(t *testing.T) {
+		settings := &couchdb.JSONDoc{M: map[string]interface{}{
+			"email": "al.ice.wonder.land@stg.lin-saas.com",
+		}}
+		req := buildRequest(inst, settings)
+		require.Equal(t, "@al.ice.wonder.land:stg.lin-saas.com", req.Payload.MatrixID)
+	})
+
+	t.Run("email localpart is lowercased", func(t *testing.T) {
+		settings := &couchdb.JSONDoc{M: map[string]interface{}{
+			"email": "Al.Ice@stg.lin-saas.com",
+		}}
+		req := buildRequest(inst, settings)
+		require.Equal(t, "@al.ice:stg.lin-saas.com", req.Payload.MatrixID)
+	})
+
+	t.Run("falls back to the domain slug when no email is present", func(t *testing.T) {
+		settings := &couchdb.JSONDoc{M: map[string]interface{}{}}
+		req := buildRequest(inst, settings)
+		require.Equal(t, "@alicewonderland:stg.lin-saas.com", req.Payload.MatrixID)
+	})
+
+	t.Run("single-label domain yields no matrix id", func(t *testing.T) {
+		local := &instance.Instance{Domain: "localhost"}
+		settings := &couchdb.JSONDoc{M: map[string]interface{}{
+			"email": "al.ice@example.org",
+		}}
+		req := buildRequest(local, settings)
+		require.Empty(t, req.Payload.MatrixID)
+	})
+}
+
 func TestUpdateCommonSettings_VersionMismatchReturnsTypedError(t *testing.T) {
 	// Initialize test configuration
 	config.UseTestFile(t)
