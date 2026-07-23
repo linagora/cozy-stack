@@ -156,6 +156,10 @@ func Copier(appsType consts.AppType, inst *instance.Instance) appfs.Copier {
 		return appfs.NewAferoCopier(baseFS)
 	case config.SchemeSwift, config.SchemeSwiftSecure:
 		return appfs.NewSwiftCopier(config.GetSwiftConnection(), appsType)
+	case config.SchemeS3:
+		client := config.GetS3Client()
+		bucket := appfs.S3AppsBucket(config.GetS3BucketPrefix(), appsType)
+		return appfs.NewS3Copier(client, bucket)
 	default:
 		panic(fmt.Sprintf("instance: unknown storage provider %s", fsURL.Scheme))
 	}
@@ -175,6 +179,10 @@ func AppsFileServer(i *instance.Instance) appfs.FileServer {
 		return appfs.NewAferoFileServer(baseFS, nil)
 	case config.SchemeSwift, config.SchemeSwiftSecure:
 		return appfs.NewSwiftFileServer(config.GetSwiftConnection(), consts.WebappType)
+	case config.SchemeS3:
+		client := config.GetS3Client()
+		bucket := appfs.S3AppsBucket(config.GetS3BucketPrefix(), consts.WebappType)
+		return appfs.NewS3FileServer(client, bucket)
 	default:
 		panic(fmt.Sprintf("instance: unknown storage provider %s", fsURL.Scheme))
 	}
@@ -194,6 +202,10 @@ func KonnectorsFileServer(i *instance.Instance) appfs.FileServer {
 		return appfs.NewAferoFileServer(baseFS, nil)
 	case config.SchemeSwift, config.SchemeSwiftSecure:
 		return appfs.NewSwiftFileServer(config.GetSwiftConnection(), consts.KonnectorType)
+	case config.SchemeS3:
+		client := config.GetS3Client()
+		bucket := appfs.S3AppsBucket(config.GetS3BucketPrefix(), consts.KonnectorType)
+		return appfs.NewS3FileServer(client, bucket)
 	default:
 		panic(fmt.Sprintf("instance: unknown storage provider %s", fsURL.Scheme))
 	}

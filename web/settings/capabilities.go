@@ -43,6 +43,8 @@ func NewCapabilities(inst *instance.Instance) jsonapi.Object {
 	switch config.FsURL().Scheme {
 	case config.SchemeSwift, config.SchemeSwiftSecure:
 		versioning = inst.SwiftLayout >= 2
+	case config.SchemeS3:
+		versioning = true
 	}
 	flat := config.GetConfig().Subdomains == config.FlatSubdomains
 
