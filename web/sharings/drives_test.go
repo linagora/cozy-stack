@@ -3468,7 +3468,7 @@ func TestOrgDriveFlag(t *testing.T) {
 		return err == nil && recipientOrgDrive
 	}, 10*time.Second, 200*time.Millisecond, "recipient sharing should preserve org_drive")
 
-	eOwner.DELETE("/sharings/"+sharingID+"/recipients").
+	eOwner.DELETE("/sharings/"+sharingID+"/recipients/1").
 		WithHeader("Authorization", "Bearer "+env.acmeToken).
 		Expect().Status(http.StatusNoContent)
 
@@ -3477,11 +3477,55 @@ func TestOrgDriveFlag(t *testing.T) {
 		if err := couchdb.GetDoc(env.acme, consts.Sharings, sharingID, &revoked); err != nil {
 			return false
 		}
-		return revoked.OrgDrive && !revoked.Active
-	}, 5*time.Second, 100*time.Millisecond, "owner org-drive sharing should be kept inactive after revocation")
+		return revoked.OrgDrive && revoked.Active
+	}, 5*time.Second, 100*time.Millisecond, "owner org-drive sharing should remain active after revoking its last recipient")
 	require.Len(t, revoked.Members, 2)
 	assert.Equal(t, sharing.MemberStatusRevoked, revoked.Members[1].Status)
-	requireNoDirSharingReference(t, env.acme, folderID, sharingID)
+
+	listObj := eOwner.GET("/sharings/drives").
+		WithHeader("Authorization", "Bearer "+env.acmeToken).
+		Expect().Status(http.StatusOK).
+		JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+		Object()
+	found := false
+	for _, item := range listObj.Path("$.data").Array().Iter() {
+		if item.Object().Value("id").String().Raw() == sharingID {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "empty org drive should remain listed for its owner")
+
+	dir, err := env.acme.VFS().DirByID(folderID)
+	require.NoError(t, err)
+	require.Contains(t, dir.ReferencedBy, couchdb.DocReference{
+		ID:   sharingID,
+		Type: consts.Sharings,
+	})
+
+	eOwner.POST("/sharings/"+sharingID+"/recipients").
+		WithHeader("Authorization", "Bearer "+env.acmeToken).
+		WithHeader("Content-Type", jsonAPIContentType).
+		WithBytes(makeAddRecipientsPayload(t, sharingID, "recipients", recipientContact.ID())).
+		Expect().Status(http.StatusOK)
+
+	readded, err := sharing.FindSharing(env.acme, sharingID)
+	require.NoError(t, err)
+	require.Len(t, readded.Credentials, 1)
+	require.NotEmpty(t, readded.Credentials[0].State)
+
+	eRecipient := newSharingExpect(t, env.tsB.URL)
+	csrfToken := loginSharingRecipient(t, eRecipient)
+	authorizeLink := eOwner.GET("/sharings/"+sharingID+"/discovery").
+		WithQuery("state", readded.Credentials[0].State).
+		WithRedirectPolicy(httpexpect.DontFollowRedirects).
+		Expect().Status(http.StatusFound).
+		Header("Location").NotEmpty().Raw()
+	FakeOwnerInstanceForSharing(t, env.betty, env.tsA.URL, sharingID)
+	submitSharingAuthorize(t, eRecipient, authorizeLink, sharingID, csrfToken)
+
+	waitForDriveSharingReadyOnOwner(t, eOwner, env.acmeToken, sharingID)
+	waitForDriveSharingActiveOnRecipient(t, env.betty, sharingID)
 }
 
 func TestSharedDriveTrashAttribution(t *testing.T) {

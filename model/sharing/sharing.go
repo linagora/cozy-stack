@@ -754,9 +754,8 @@ func (s *Sharing) RemoveInteractPermissionsForAMember(inst *instance.Instance, m
 	return nil
 }
 
-// RevokeRecipient revoke only one recipient on the sharer. After that, if the
-// sharing has still at least one active member, we keep it as is. Else, we
-// disable the sharing.
+// RevokeRecipient revokes one recipient on the sharer. Empty org drives remain
+// active, while other sharings are disabled when no active recipients remain.
 func (s *Sharing) RevokeRecipient(inst *instance.Instance, index int) error {
 	return s.revokeRecipient(inst, index, nil)
 }
@@ -963,10 +962,10 @@ func (s *Sharing) RevokeRecipientByNotification(inst *instance.Instance, m *Memb
 	return s.NoMoreRecipient(inst)
 }
 
-// NoMoreRecipient cleans up the sharing if there is no more active recipient
+// NoMoreRecipient keeps empty org drives active and cleans up other sharings.
 func (s *Sharing) NoMoreRecipient(inst *instance.Instance) error {
 	if s.Drive {
-		if s.hasRemainingRecipients() {
+		if s.hasRemainingRecipients() || s.OrgDrive {
 			return couchdb.UpdateDoc(inst, s)
 		}
 		if err := s.RemoveTriggers(inst); err != nil {
