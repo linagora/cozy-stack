@@ -23,6 +23,30 @@ func Chat(c echo.Context) error {
 	}
 	payload.ChatConversationID = c.Param("id")
 	inst := middlewares.GetInstance(c)
+	for _, id := range payload.AttachmentIDs {
+		fileDoc, err := inst.VFS().FileByID(id)
+		if err != nil {
+			return middlewares.ErrForbidden
+		}
+		if err := middlewares.Allow(c, permission.GET, fileDoc); err != nil {
+			return middlewares.ErrForbidden
+		}
+	}
+	if payload.AssistantID != "" {
+		dirID, err := rag.AssistantKnowledgeBaseDirID(inst, payload.AssistantID)
+		if err != nil {
+			return jsonapi.InternalServerError(err)
+		}
+		if dirID != "" {
+			dirDoc, err := inst.VFS().DirByID(dirID)
+			if err != nil {
+				return middlewares.ErrForbidden
+			}
+			if err := middlewares.Allow(c, permission.GET, dirDoc); err != nil {
+				return middlewares.ErrForbidden
+			}
+		}
+	}
 	chat, err := rag.Chat(inst, payload)
 	if err != nil {
 		return jsonapi.InternalServerError(err)

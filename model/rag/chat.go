@@ -55,6 +55,7 @@ type ChatMessage struct {
 const (
 	UserRole      = "user"
 	AssistantRole = "assistant"
+	SystemRole    = "system"
 	Temperature   = 0.3   // LLM parameter - Sampling temperature, lower is more deterministic, higher is more creative.
 	TopP          = 1     // LLM parameter - Alternative to temperature, take the tokens with the top p probability.
 	LogProbs      = false // LLM parameter - Whether to return log probabilities of the output tokens.
@@ -120,6 +121,7 @@ type chatAssistant struct {
 	DocRev        string                 `json:"_rev,omitempty"`
 	Relationships chatAssistantRelations `json:"relationships,omitempty"`
 	KnowledgeBase []knowledgeBaseEntry   `json:"knowledgeBase,omitempty"`
+	Prompt        string                 `json:"prompt,omitempty"`
 }
 
 type knowledgeBaseEntry struct {
@@ -170,6 +172,23 @@ func (a *chatAssistant) knowledgeBaseDirID(logger logger.Logger) string {
 	return dirID
 }
 
+// AssistantKnowledgeBaseDirID returns the Drive folder scoping the given
+// assistant's retrieval, or "" if the assistant has no knowledge base
+// folder or cannot be found. It is exported so the HTTP layer can check the
+// caller's permission on that specific folder before letting a conversation
+// reference it, without exposing the unexported chatAssistant type.
+func AssistantKnowledgeBaseDirID(inst *instance.Instance, assistantID string) (string, error) {
+	var assistant chatAssistant
+	if err := couchdb.GetDoc(inst, consts.ChatAssistants, assistantID, &assistant); err != nil {
+		if couchdb.IsNotFoundError(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	log := logger.WithDomain(inst.Domain).WithNamespace("ai")
+	return assistant.knowledgeBaseDirID(log), nil
+}
+
 // ErrAssistantNotFound is returned when a conversation references an
 // assistant that is gone (deleted, or never created). The query must fail:
 // answering anyway would silently widen a possibly folder-scoped
@@ -196,6 +215,16 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 						Type: consts.ChatAssistants,
 					},
 				},
+			}
+			var assistant chatAssistant
+			if err := couchdb.GetDoc(inst, consts.ChatAssistants, payload.AssistantID, &assistant); err == nil && assistant.Prompt != "" {
+				promptID, _ := uuid.NewV7()
+				chat.Messages = append(chat.Messages, ChatMessage{
+					ID:        promptID.String(),
+					Role:      SystemRole,
+					Content:   assistant.Prompt,
+					CreatedAt: time.Now().UTC(),
+				})
 			}
 		}
 	} else if err != nil {

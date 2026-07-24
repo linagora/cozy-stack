@@ -173,7 +173,10 @@ Content-Type: application/json
 - `stream` enables streaming the response via SSE deltas (defaults to `true`).
 - `websearch` enables web search for the query (defaults to `false`).
 - `assistantID` (optional) associates the conversation with an `io.cozy.ai.chat.assistants`
-  document. When set, the response includes a `relationships` block.
+  document. When set, the response includes a `relationships` block. If the assistant has a
+  non-empty `prompt` field, a `role: "system"` message carrying that prompt is prepended to
+  `messages` when the conversation is created (before the user's own message). Clients should
+  not render `system` messages as regular conversation turns.
 - `attachmentIDs` (optional) array of ids, specifying which documents should be leveraged by the RAG.
   
 
