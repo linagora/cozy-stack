@@ -468,3 +468,103 @@ func createTree(t *testing.T, fs vfs.VFS, tree H, dirID string) *vfs.DirDoc {
 	}
 	return dirdoc
 }
+
+// TestValidateDriveRoot_ReadOnlyRecipientParent covers the new additive gate:
+// when the current instance is a read-only recipient of an active parent
+// sharing, creating a child sharing on a sub-folder is rejected with
+// ErrParentReadOnly.
+func TestValidateDriveRoot_ReadOnlyRecipientParent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	tree := H{"parent/": H{"child/": H{}}}
+	parent := createTree(t, fs, tree, consts.RootDirID)
+	child, err := fs.DirByPath(parent.Fullpath + "/child")
+	require.NoError(t, err)
+
+	// Active additive sharing on the parent, local instance is read-only recipient.
+	createActiveRecipientSharing(t, inst, parent.ID(), true)
+
+	_, _, err = ValidateDriveRoot(inst, child.ID())
+	assert.ErrorIs(t, err, ErrParentReadOnly)
+}
+
+// TestValidateDriveRoot_ReadOnlyRecipientParentFile is the file-root variant:
+// a file inside a read-only shared parent cannot be shared as a child.
+func TestValidateDriveRoot_ReadOnlyRecipientParentFile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	tree := H{"parent/": H{"nested.txt": H{}}}
+	parent := createTree(t, fs, tree, consts.RootDirID)
+	file, err := fs.FileByPath(parent.Fullpath + "/nested.txt")
+	require.NoError(t, err)
+
+	createActiveRecipientSharing(t, inst, parent.ID(), true)
+
+	_, _, err = ValidateDriveRoot(inst, file.ID())
+	assert.ErrorIs(t, err, ErrParentReadOnly)
+}
+
+// TestValidateDriveRoot_WriteRecipientParentAllowed is the positive
+// counterpart: a write recipient of the parent can create the child sharing.
+func TestValidateDriveRoot_WriteRecipientParentAllowed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	tree := H{"parent/": H{"child/": H{}}}
+	parent := createTree(t, fs, tree, consts.RootDirID)
+	child, err := fs.DirByPath(parent.Fullpath + "/child")
+	require.NoError(t, err)
+
+	// Active additive sharing on the parent, local instance is read-write recipient.
+	createActiveRecipientSharing(t, inst, parent.ID(), false)
+
+	dir, file, err := ValidateDriveRoot(inst, child.ID())
+	require.NoError(t, err)
+	require.NotNil(t, dir)
+	require.Nil(t, file)
+}
+
+// TestValidateDriveRoot_NestedOwnerAllowed confirms the owner of a parent
+// sharing can create a child sharing (owner is read-write on its own sharing).
+func TestValidateDriveRoot_NestedOwnerAllowed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	tree := H{"parent/": H{"child/": H{}}}
+	parent := createTree(t, fs, tree, consts.RootDirID)
+	child, err := fs.DirByPath(parent.Fullpath + "/child")
+	require.NoError(t, err)
+
+	// Owner sharing on the parent (active).
+	createActiveDirSharing(t, inst, parent.ID())
+
+	dir, _, err := ValidateDriveRoot(inst, child.ID())
+	require.NoError(t, err)
+	require.NotNil(t, dir)
+}

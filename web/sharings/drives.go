@@ -167,6 +167,8 @@ func wrapDriveRootErrors(err error) error {
 		return jsonapi.NotFound(err)
 	case sharing.ErrFolderAlreadyShared, sharing.ErrFileAlreadyShared:
 		return jsonapi.Conflict(err)
+	case sharing.ErrParentReadOnly:
+		return jsonapi.Forbidden(err)
 	case sharing.ErrSystemFolder, sharing.ErrFileInTrash:
 		return jsonapi.BadRequest(err)
 	default:

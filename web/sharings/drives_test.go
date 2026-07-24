@@ -1776,7 +1776,7 @@ func TestCreateDriveFromFolder(t *testing.T) {
 			Contains("already has an existing sharing")
 	})
 
-	t.Run("FailOnFolderInsideSharing", func(t *testing.T) {
+	t.Run("SucceedOnFolderInsideSharing", func(t *testing.T) {
 		// Create a parent directory and share it
 		parentID := createRootDirectory(t, eOwner, "ParentShared", ownerAppToken)
 
@@ -1804,8 +1804,8 @@ func TestCreateDriveFromFolder(t *testing.T) {
 			}`, consts.Sharings, parentID, recipientContact.ID(), recipientContact.DocType()))).
 			Expect().Status(201)
 
-		// Try to share the child folder (should fail because it's inside a shared folder)
-		resp := eOwner.POST("/sharings/drives").
+		// Share the child folder as an additive nested sharing
+		obj := eOwner.POST("/sharings/drives").
 			WithHeader("Authorization", "Bearer "+ownerAppToken).
 			WithHeader("Content-Type", "application/vnd.api+json").
 			WithBytes([]byte(fmt.Sprintf(`{
@@ -1816,12 +1816,32 @@ func TestCreateDriveFromFolder(t *testing.T) {
 					}
 				}
 			}`, consts.Sharings, childID))).
-			Expect().Status(409)
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
 
-		// Verify error message
-		resp.JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
-			Object().Path("$.errors[0].detail").String().
-			Contains("already has an existing sharing")
+		data := obj.Value("data").Object()
+		data.Value("id").String().NotEmpty()
+		attrs := data.Value("attributes").Object()
+		attrs.Value("drive").Boolean().IsTrue()
+		// The child sharing is created as an additive sharing
+		attrs.Value("access_mode").String().IsEqual("additive")
+
+		// No inherited parent members: only the owner
+		attrs.Value("members").Array().Length().IsEqual(1)
+
+		// referenced_by is added to the child folder root
+		dir, _, err := ownerInstance.VFS().DirOrFileByID(childID)
+		require.NoError(t, err)
+		require.NotNil(t, dir)
+		var hasSharingRef bool
+		for _, ref := range dir.ReferencedBy {
+			if ref.Type == consts.Sharings {
+				hasSharingRef = true
+				break
+			}
+		}
+		require.True(t, hasSharingRef, "child folder root must be referenced by the new sharing")
 	})
 
 	t.Run("FailOnAlreadySharedFile", func(t *testing.T) {
@@ -1858,7 +1878,7 @@ func TestCreateDriveFromFolder(t *testing.T) {
 			Contains("already has an existing sharing")
 	})
 
-	t.Run("FailOnFileInsideSharedFolder", func(t *testing.T) {
+	t.Run("SucceedOnFileInsideSharedFolder", func(t *testing.T) {
 		parentID := createRootDirectory(t, eOwner, "ParentSharedForFile", ownerAppToken)
 		fileID := createFile(t, eOwner, parentID, "NestedDriveFile.txt", ownerAppToken)
 
@@ -1882,7 +1902,7 @@ func TestCreateDriveFromFolder(t *testing.T) {
 			}`, consts.Sharings, parentID, recipientContact.ID(), recipientContact.DocType()))).
 			Expect().Status(201)
 
-		resp := eOwner.POST("/sharings/drives").
+		obj := eOwner.POST("/sharings/drives").
 			WithHeader("Authorization", "Bearer "+ownerAppToken).
 			WithHeader("Content-Type", "application/vnd.api+json").
 			WithBytes([]byte(fmt.Sprintf(`{
@@ -1893,14 +1913,31 @@ func TestCreateDriveFromFolder(t *testing.T) {
 					}
 				}
 			}`, consts.Sharings, fileID))).
-			Expect().Status(409)
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
 
-		resp.JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
-			Object().Path("$.errors[0].detail").String().
-			Contains("already has an existing sharing")
+		attrs := obj.Value("data").Object().Value("attributes").Object()
+		attrs.Value("drive").Boolean().IsTrue()
+		attrs.Value("access_mode").String().IsEqual("additive")
+		// No inherited parent members: only the owner
+		attrs.Value("members").Array().Length().IsEqual(1)
+
+		// referenced_by is added to the file root
+		_, file, err := ownerInstance.VFS().DirOrFileByID(fileID)
+		require.NoError(t, err)
+		require.NotNil(t, file)
+		var hasSharingRef bool
+		for _, ref := range file.ReferencedBy {
+			if ref.Type == consts.Sharings {
+				hasSharingRef = true
+				break
+			}
+		}
+		require.True(t, hasSharingRef, "file root must be referenced by the new sharing")
 	})
 
-	t.Run("FailOnFolderContainingSharedChild", func(t *testing.T) {
+	t.Run("SucceedOnFolderContainingSharedChild", func(t *testing.T) {
 		// Create a parent directory
 		parentID := createRootDirectory(t, eOwner, "ParentWithSharedChild", ownerAppToken)
 
@@ -1928,8 +1965,8 @@ func TestCreateDriveFromFolder(t *testing.T) {
 			}`, consts.Sharings, childID, recipientContact.ID(), recipientContact.DocType()))).
 			Expect().Status(201)
 
-		// Try to share the parent folder (should fail because it contains a shared folder)
-		resp := eOwner.POST("/sharings/drives").
+		// Share the parent folder as an additive nested sharing
+		obj := eOwner.POST("/sharings/drives").
 			WithHeader("Authorization", "Bearer "+ownerAppToken).
 			WithHeader("Content-Type", "application/vnd.api+json").
 			WithBytes([]byte(fmt.Sprintf(`{
@@ -1940,12 +1977,128 @@ func TestCreateDriveFromFolder(t *testing.T) {
 					}
 				}
 			}`, consts.Sharings, parentID))).
-			Expect().Status(409)
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
 
-		// Verify error message
+		attrs := obj.Value("data").Object().Value("attributes").Object()
+		attrs.Value("drive").Boolean().IsTrue()
+		attrs.Value("access_mode").String().IsEqual("additive")
+		// No inherited child members: only the owner
+		attrs.Value("members").Array().Length().IsEqual(1)
+
+		// The pre-existing child sharing's referenced_by on the child folder
+		// remains intact.
+		dir, _, err := ownerInstance.VFS().DirOrFileByID(childID)
+		require.NoError(t, err)
+		require.NotNil(t, dir)
+		var hasSharingRef bool
+		for _, ref := range dir.ReferencedBy {
+			if ref.Type == consts.Sharings {
+				hasSharingRef = true
+				break
+			}
+		}
+		require.True(t, hasSharingRef, "child folder must keep its sharing reference")
+	})
+
+	// In the two FailOn*ReadOnlyShared subtests, the local instance is the
+	// read-only *recipient* of the parent sharing; the sharing's owner is a
+	// fictional external instance (Alice) that never serves requests. The
+	// aliases below name that role explicitly.
+	// TODO: when the shared sub-folder features land, switch these tests to
+	// the multi-instance env of drives_permissions_test.go (real recipient
+	// instance, real invitation flow).
+	eRecipient := eOwner
+	recipientInstance := ownerInstance
+	recipientAppToken := ownerAppToken
+
+	// makeReadOnlyParentSharing builds an active additive sharing on parentID
+	// where the local instance is a read-only recipient (not the owner).
+	makeReadOnlyParentSharing := func(parentID string) {
+		t.Helper()
+		now := time.Now()
+		s := &sharing.Sharing{
+			Active:        true,
+			Owner:         false,
+			Drive:         true,
+			DriveRootType: sharing.DriveRootTypeDirectory,
+			AppSlug:       "test",
+			AccessMode:    sharing.AccessModeAdditive,
+			Members: []sharing.Member{
+				{
+					Status:   sharing.MemberStatusOwner,
+					Name:     "Alice",
+					Email:    "alice@cozy.tools",
+					Instance: "https://owner.cozy.tools",
+				},
+				{
+					Status:   sharing.MemberStatusReady,
+					Name:     recipientInstance.Domain,
+					Instance: "https://" + recipientInstance.Domain,
+					ReadOnly: true,
+				},
+			},
+			Rules: []sharing.Rule{
+				{
+					Title:   "test",
+					DocType: consts.Files,
+					Values:  []string{parentID},
+				},
+			},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		require.NoError(t, couchdb.CreateDoc(recipientInstance, s))
+		require.NoError(t, s.AddReferenceForSharing(recipientInstance, &s.Rules[0]))
+	}
+
+	t.Run("FailOnFolderInsideReadOnlyShared", func(t *testing.T) {
+		parentID := createRootDirectory(t, eRecipient, "ReadOnlySharedParent", recipientAppToken)
+		childID := createDirectory(t, eRecipient, parentID, "ChildFolder", recipientAppToken)
+
+		makeReadOnlyParentSharing(parentID)
+
+		resp := eRecipient.POST("/sharings/drives").
+			WithHeader("Authorization", "Bearer "+recipientAppToken).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes([]byte(fmt.Sprintf(`{
+				"data": {
+					"type": "%s",
+					"attributes": {
+						"folder_id": "%s"
+					}
+				}
+			}`, consts.Sharings, childID))).
+			Expect().Status(403)
+
 		resp.JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
 			Object().Path("$.errors[0].detail").String().
-			Contains("already has an existing sharing")
+			Contains("without write access")
+	})
+
+	t.Run("FailOnFileInsideReadOnlyShared", func(t *testing.T) {
+		parentID := createRootDirectory(t, eRecipient, "ReadOnlySharedParentForFile", recipientAppToken)
+		fileID := createFile(t, eRecipient, parentID, "NestedFile.txt", recipientAppToken)
+
+		makeReadOnlyParentSharing(parentID)
+
+		resp := eRecipient.POST("/sharings/drives").
+			WithHeader("Authorization", "Bearer "+recipientAppToken).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes([]byte(fmt.Sprintf(`{
+				"data": {
+					"type": "%s",
+					"attributes": {
+						"folder_id": "%s"
+					}
+				}
+			}`, consts.Sharings, fileID))).
+			Expect().Status(403)
+
+		resp.JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.errors[0].detail").String().
+			Contains("without write access")
 	})
 }
 
