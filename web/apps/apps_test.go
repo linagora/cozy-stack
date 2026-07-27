@@ -456,15 +456,17 @@ func TestApps(t *testing.T) {
 			flagship.ClientID, "*", "", time.Now())
 		assert.NoError(t, err)
 
-		// Create the session code
-		code := e.POST("/auth/session_code").
-			WithHost(testInstance.Domain).
-			WithHeader("Authorization", "Bearer "+token).
-			Expect().Status(201).
-			JSON().Object().
-			Value("session_code").String().NotEmpty().Raw()
+		createSessionCode := func() string {
+			return e.POST("/auth/session_code").
+				WithHost(testInstance.Domain).
+				WithHeader("Authorization", "Bearer "+token).
+				Expect().Status(201).
+				JSON().Object().
+				Value("session_code").String().NotEmpty().Raw()
+		}
 
 		// Load a non-public page
+		code := createSessionCode()
 		e.GET("/foo/").
 			WithQuery("session_code", code).
 			WithHost(slug+"."+testInstance.Domain).
@@ -479,6 +481,20 @@ func TestApps(t *testing.T) {
 			WithRedirectPolicy(httpexpect.DontFollowRedirects).
 			Expect().Status(302).
 			Header("Location").Contains("/auth/login")
+
+		redirectCode := createSessionCode()
+		redirect := testutils.CreateTestClient(t, ts.URL).GET("/foo/").
+			WithQuery("intent", "intent-session-code-test").
+			WithQuery("session_code", redirectCode).
+			WithQuery("extra", "drop-me").
+			WithHost(slug + "." + testInstance.Domain).
+			WithRedirectPolicy(httpexpect.DontFollowRedirects).
+			Expect().Status(http.StatusSeeOther)
+
+		redirect.Cookie("cozysessid").Value().NotEmpty()
+		redirect.Header("Location").Contains("intent=intent-session-code-test")
+		redirect.Header("Location").NotContains("session_code")
+		redirect.Header("Location").NotContains("extra")
 	})
 
 	t.Run("ServeAppsWithJWTNotLogged", func(t *testing.T) {

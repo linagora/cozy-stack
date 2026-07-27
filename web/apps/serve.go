@@ -181,7 +181,7 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 				}
 			}
 			redirect := req.URL
-			redirect.RawQuery = ""
+			redirect.RawQuery = sessionCodeRedirectQuery(redirect.Query()).Encode()
 			return c.Redirect(http.StatusSeeOther, redirect.String())
 		}
 	}
@@ -358,6 +358,14 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 	res.WriteHeader(http.StatusOK)
 	_, err = io.Copy(res, generated)
 	return err
+}
+
+func sessionCodeRedirectQuery(query url.Values) url.Values {
+	redirectQuery := url.Values{}
+	if intentID := query.Get("intent"); intentID != "" {
+		redirectQuery.Set("intent", intentID)
+	}
+	return redirectQuery
 }
 
 func buildServeParams(
