@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/app"
@@ -14,13 +15,15 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
+	"github.com/cozy/cozy-stack/web/auth"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
 )
 
 type apiIntent struct {
-	doc *intent.Intent
-	ins *instance.Instance
+	doc         *intent.Intent
+	ins         *instance.Instance
+	sessionCode string
 }
 
 func (i *apiIntent) ID() string                             { return i.doc.ID() }
@@ -49,16 +52,19 @@ func (i *apiIntent) Links() *jsonapi.LinksList {
 // In the JSON-API, the client is the domain of the client-side app that
 // asked the intent (it is used for postMessage)
 func (i *apiIntent) MarshalJSON() ([]byte, error) {
-	was := i.doc.Client
-	parts := strings.SplitN(i.doc.Client, "/", 2)
+	output := i.doc.Clone().(*intent.Intent)
+	parts := strings.SplitN(output.Client, "/", 2)
 	if len(parts) < 2 {
-		i.doc.Client = ""
+		output.Client = ""
 	} else {
-		i.doc.Client = i.resolveClientURL(parts[1])
+		output.Client = i.resolveClientURL(parts[1])
 	}
-	res, err := json.Marshal(i.doc)
-	i.doc.Client = was
-	return res, err
+	if i.sessionCode != "" {
+		if err := addSessionCodeToServices(output.Services, i.sessionCode); err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(output)
 }
 
 func (i *apiIntent) resolveClientURL(slug string) string {
@@ -83,11 +89,11 @@ func RequestAppSourceID(pdoc *permission.Permission) string {
 }
 
 func createIntent(c echo.Context) error {
-	pdoc, err := middlewares.GetPermission(c)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusForbidden)
-	}
 	instance := middlewares.GetInstance(c)
+	grant, err := createIntentSessionCodeGrant(c, instance)
+	if err != nil {
+		return err
+	}
 	intent := &intent.Intent{}
 	if _, err = jsonapi.Bind(c.Request().Body, intent); err != nil {
 		return jsonapi.BadRequest(err)
@@ -98,7 +104,7 @@ func createIntent(c echo.Context) error {
 	if intent.Type == "" {
 		return jsonapi.InvalidParameter("type", errors.New("Type is missing"))
 	}
-	intent.Client = RequestAppSourceID(pdoc)
+	intent.Client = RequestAppSourceID(grant.Permission)
 	intent.SetID("")
 	intent.SetRev("")
 	intent.Services = nil
@@ -117,8 +123,53 @@ func createIntent(c echo.Context) error {
 	if err = intent.Save(instance); err != nil {
 		return wrapIntentsError(err)
 	}
-	api := &apiIntent{intent, instance}
+	sessionCode := ""
+	if grant.Source != "" && len(intent.Services) > 0 {
+		sessionCode, err = auth.MintSessionCode(c, instance, grant.Source)
+		if err != nil {
+			return jsonapi.InternalServerError(err)
+		}
+	}
+	api := &apiIntent{doc: intent, ins: instance, sessionCode: sessionCode}
 	return jsonapi.Data(c, http.StatusOK, api, nil)
+}
+
+func createIntentSessionCodeGrant(c echo.Context, inst *instance.Instance) (auth.SessionCodeGrant, error) {
+	if c.QueryParam("force_session_id") != "true" {
+		pdoc, err := middlewares.GetPermission(c)
+		if err != nil {
+			return auth.SessionCodeGrant{}, echo.NewHTTPError(http.StatusForbidden)
+		}
+		return auth.SessionCodeGrant{Permission: pdoc}, nil
+	}
+
+	grant, ok := auth.AuthorizeSessionCodeToken(c, inst)
+	if !ok {
+		return auth.SessionCodeGrant{}, echo.NewHTTPError(http.StatusForbidden)
+	}
+	return grant, nil
+}
+
+func addSessionCodeToServices(services []intent.Service, sessionCode string) error {
+	for idx := range services {
+		href, err := serviceHrefWithSessionCode(services[idx].Href, sessionCode)
+		if err != nil {
+			return err
+		}
+		services[idx].Href = href
+	}
+	return nil
+}
+
+func serviceHrefWithSessionCode(href, sessionCode string) (string, error) {
+	u, err := url.Parse(href)
+	if err != nil {
+		return "", err
+	}
+	query := u.Query()
+	query.Set("session_code", sessionCode)
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }
 
 func getIntent(c echo.Context) error {
@@ -141,7 +192,7 @@ func getIntent(c echo.Context) error {
 	if !allowed {
 		return echo.NewHTTPError(http.StatusForbidden)
 	}
-	api := &apiIntent{intent, instance}
+	api := &apiIntent{doc: intent, ins: instance}
 	return jsonapi.Data(c, http.StatusOK, api, nil)
 }
 

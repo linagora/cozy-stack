@@ -2,6 +2,7 @@ package intents
 
 import (
 	"encoding/json"
+	"net/url"
 	"testing"
 	"time"
 
@@ -13,10 +14,12 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/gavv/httpexpect/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
@@ -30,10 +33,30 @@ func TestIntents(t *testing.T) {
 	var intentID string
 
 	config.UseTestFile(t)
+	const (
+		contextName         = "intents-session-code-test"
+		linkedAppSlug       = "drive"
+		linkedAppSoftwareID = "registry://drive/stable"
+	)
+	conf := config.GetConfig()
+	if conf.Authentication == nil {
+		conf.Authentication = map[string]interface{}{}
+	}
+	conf.Authentication[contextName] = map[string]interface{}{
+		"oidc": map[string]interface{}{
+			"allow_app_token_exchange": true,
+			"app_token_exchange": map[string]interface{}{
+				"drive-web": map[string]interface{}{
+					"software_id": linkedAppSoftwareID,
+				},
+			},
+		},
+	}
 	testutils.NeedCouchdb(t)
 	setup := testutils.NewSetup(t, t.Name())
 	ins := setup.GetTestInstance(&lifecycle.Options{
-		Domain: "cozy.example.net",
+		Domain:      "cozy.example.net",
+		ContextName: contextName,
 	})
 	_, _ = setup.GetTestClient(consts.Settings)
 
@@ -102,6 +125,27 @@ func TestIntents(t *testing.T) {
 	ts.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
 	t.Cleanup(ts.Close)
 
+	createEligibleSessionCodeClient := func(t *testing.T, clientName string) *oauth.Client {
+		t.Helper()
+
+		oauthClient := &oauth.Client{
+			ClientName:   clientName,
+			RedirectURIs: []string{"https://foobar"},
+			SoftwareID:   linkedAppSoftwareID,
+		}
+		require.Nil(t, oauthClient.Create(ins, oauth.SoftwareIDPrevalidated))
+		return oauthClient
+	}
+	createEligibleSessionCodeToken := func(t *testing.T, clientName string) string {
+		t.Helper()
+
+		oauthClient := createEligibleSessionCodeClient(t, clientName)
+		tok, err := ins.MakeJWT(consts.AccessTokenAudience,
+			oauthClient.ClientID, oauth.BuildLinkedAppScope(linkedAppSlug), "", time.Now())
+		require.NoError(t, err)
+		return tok
+	}
+
 	t.Run("CreateIntent", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
@@ -124,6 +168,11 @@ func TestIntents(t *testing.T) {
 			Object()
 
 		intentID = checkIntentResult(obj, appPerms, true, "https://app.cozy.example.net")
+		href := firstServiceHref(t, obj)
+		u, err := url.Parse(href)
+		require.NoError(t, err)
+		require.Equal(t, intentID, u.Query().Get("intent"))
+		require.Empty(t, u.Query().Get("session_code"))
 	})
 
 	t.Run("NewAPIIntentMatchesGetEndpoint", func(t *testing.T) {
@@ -235,6 +284,85 @@ func TestIntents(t *testing.T) {
 		attrs.ValueEqual("client", "https://drive.cozy.example.net")
 	})
 
+	t.Run("CreateIntentWithForcedSessionCode", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		tok := createEligibleSessionCodeToken(t, "test-forced-session-linked-app")
+
+		obj := expectPickIntentCreated(newPickIntentRequest(e, tok).
+			WithQuery("force_session_id", "true"))
+
+		data := obj.Value("data").Object()
+		forcedIntentID := data.Value("id").String().NotEmpty().Raw()
+
+		href := firstServiceHref(t, obj)
+		u, err := url.Parse(href)
+		require.NoError(t, err)
+		require.Equal(t, forcedIntentID, u.Query().Get("intent"))
+		sessionCode := u.Query().Get("session_code")
+		require.NotEmpty(t, sessionCode)
+		require.True(t, ins.CheckAndClearSessionCode(sessionCode))
+
+		stored := &intent.Intent{}
+		require.NoError(t, couchdb.GetDoc(ins, consts.Intents, forcedIntentID, stored))
+		require.Len(t, stored.Services, 1)
+		require.NotContains(t, stored.Services[0].Href, "session_code")
+	})
+
+	t.Run("CreateIntentWithForcedSessionCodeRejectsInvalidRequest", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		tok := createEligibleSessionCodeToken(t, "test-forced-session-invalid-intent")
+
+		e.POST("/intents").
+			WithQuery("force_session_id", "true").
+			WithHeader("Authorization", "Bearer "+tok).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithHeader("Accept", "application/vnd.api+json").
+			WithBytes([]byte(`{
+        "data": {
+          "type": "io.cozy.settings",
+          "attributes": {
+            "type": "io.cozy.files",
+            "permissions": ["GET"]
+          }
+        }
+      }`)).
+			Expect().Status(422)
+	})
+
+	t.Run("CreateIntentWithForcedSessionCodeRejectsWebappToken", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		newPickIntentRequest(e, appToken).
+			WithQuery("force_session_id", "true").
+			Expect().Status(403)
+	})
+
+	t.Run("CreateIntentWithForcedSessionCodeRejectsForgedToken", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		oauthClient := createEligibleSessionCodeClient(t, "test-forged-session-linked-app")
+
+		claims := permission.Claims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Audience:  jwt.ClaimStrings{consts.AccessTokenAudience},
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+				IssuedAt:  jwt.NewNumericDate(time.Now()),
+				Issuer:    ins.Domain,
+				Subject:   oauthClient.ClientID,
+			},
+			Scope: oauth.BuildLinkedAppScope(linkedAppSlug),
+		}
+		token := jwt.NewWithClaims(crypto.SigningMethod, claims)
+		forgedAccessToken, err := token.SignedString([]byte("wrong-secret"))
+		require.NoError(t, err)
+
+		newPickIntentRequest(e, forgedAccessToken).
+			WithQuery("force_session_id", "true").
+			Expect().Status(403)
+	})
+
 	t.Run("CreateIntentWithClientURLMatchingFlag", func(t *testing.T) {
 		ins.FeatureFlags = map[string]interface{}{"custom_url_flag": "https://flag.example.com"}
 		e := testutils.CreateTestClient(t, ts.URL)
@@ -309,6 +437,40 @@ func TestIntents(t *testing.T) {
 
 		checkIntentResult(obj, customAppPerms, true, "https://custom.cozy.example.net")
 	})
+}
+
+const pickIntentPayload = `{
+  "data": {
+    "type": "io.cozy.settings",
+    "attributes": {
+      "action": "PICK",
+      "type": "io.cozy.files",
+      "permissions": ["GET"]
+    }
+  }
+}`
+
+func newPickIntentRequest(e *httpexpect.Expect, token string) *httpexpect.Request {
+	return e.POST("/intents").
+		WithHeader("Authorization", "Bearer "+token).
+		WithHeader("Content-Type", "application/vnd.api+json").
+		WithHeader("Accept", "application/vnd.api+json").
+		WithBytes([]byte(pickIntentPayload))
+}
+
+func expectPickIntentCreated(req *httpexpect.Request) *httpexpect.Object {
+	return req.Expect().Status(200).
+		JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+		Object()
+}
+
+func firstServiceHref(t *testing.T, obj *httpexpect.Object) string {
+	t.Helper()
+
+	attrs := obj.Value("data").Object().Value("attributes").Object()
+	services := attrs.Value("services").Array()
+	services.Length().Equal(1)
+	return services.First().Object().Value("href").String().NotEmpty().Raw()
 }
 
 func checkIntentResult(obj *httpexpect.Object, appPerms *permission.Permission, fromWeb bool, expectedClient string) string {

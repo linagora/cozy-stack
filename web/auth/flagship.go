@@ -30,6 +30,12 @@ const (
 	SessionCodeSourcePassword = "password"
 )
 
+// SessionCodeGrant authorizes a token caller to mint a session code.
+type SessionCodeGrant struct {
+	Permission *permission.Permission
+	Source     string
+}
+
 // CreateSessionCode is the handler for creating a session code by the flagship
 // app.
 func CreateSessionCode(c echo.Context) error {
@@ -55,11 +61,23 @@ func CreateSessionCode(c echo.Context) error {
 }
 
 func ReturnSessionCode(c echo.Context, statusCode int, inst *instance.Instance, source string) error {
-	code, err := inst.CreateSessionCode()
+	code, err := MintSessionCode(c, inst, source)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
 			"error": err,
 		})
+	}
+
+	return c.JSON(statusCode, echo.Map{
+		"session_code": code,
+	})
+}
+
+// MintSessionCode mints a session code and logs its audit source.
+func MintSessionCode(c echo.Context, inst *instance.Instance, source string) (string, error) {
+	code, err := inst.CreateSessionCode()
+	if err != nil {
+		return "", err
 	}
 
 	req := c.Request()
@@ -74,9 +92,7 @@ func ReturnSessionCode(c echo.Context, statusCode int, inst *instance.Instance, 
 		WithField("source", source).
 		Infof("New session_code created from %s at %s", ip, time.Now())
 
-	return c.JSON(statusCode, echo.Map{
-		"session_code": code,
-	})
+	return code, nil
 }
 
 type sessionCodeParameters struct {
@@ -94,14 +110,8 @@ const (
 )
 
 func canCreateSessionCode(c echo.Context, inst *instance.Instance) (canCreateSessionCodeResult, string) {
-	pdoc, err := middlewares.GetPermission(c)
-	if err == nil {
-		if pdoc.Permissions.IsMaximal() {
-			return allowedToCreateSessionCode, SessionCodeSourceFlagship
-		}
-		if claims, ok := c.Get("claims").(permission.Claims); ok && isAppTokenExchangeToken(inst, pdoc, claims) {
-			return allowedToCreateSessionCode, SessionCodeSourceAppTokenExchange
-		}
+	if grant, ok := AuthorizeSessionCodeToken(c, inst); ok {
+		return allowedToCreateSessionCode, grant.Source
 	}
 
 	var args sessionCodeParameters
@@ -119,6 +129,23 @@ func canCreateSessionCode(c echo.Context, inst *instance.Instance) (canCreateSes
 		}
 	}
 	return allowedToCreateSessionCode, SessionCodeSourcePassword
+}
+
+// AuthorizeSessionCodeToken returns a grant for token flows allowed to mint a
+// session code. It intentionally does not use the passphrase fallback accepted
+// by the /auth/session_code endpoint.
+func AuthorizeSessionCodeToken(c echo.Context, inst *instance.Instance) (SessionCodeGrant, bool) {
+	pdoc, err := middlewares.GetPermission(c)
+	if err != nil {
+		return SessionCodeGrant{}, false
+	}
+	if pdoc.Permissions.IsMaximal() {
+		return SessionCodeGrant{Permission: pdoc, Source: SessionCodeSourceFlagship}, true
+	}
+	if claims, ok := c.Get("claims").(permission.Claims); ok && isAppTokenExchangeToken(inst, pdoc, claims) {
+		return SessionCodeGrant{Permission: pdoc, Source: SessionCodeSourceAppTokenExchange}, true
+	}
+	return SessionCodeGrant{Permission: pdoc}, false
 }
 
 func isAppTokenExchangeToken(inst *instance.Instance, pdoc *permission.Permission, claims permission.Claims) bool {
