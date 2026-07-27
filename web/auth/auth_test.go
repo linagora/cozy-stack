@@ -3037,6 +3037,118 @@ func TestTokenExchange(t *testing.T) {
 			JSON().Object().
 			ValueEqual("error", `scope "io.cozy.unknown" is not allowed`)
 	})
+
+	// -----------------------------------------------------------------------
+	// Session code minting via app token exchange tokens
+	// -----------------------------------------------------------------------
+
+	t.Run("AppTokenMintsSessionCode", func(t *testing.T) {
+		const sid = "mail-app-sid-session-code-01"
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss": issuer,
+			"aud": []string{appTokenAudience},
+			"sub": "mail-user",
+			"sid": sid,
+			"iat": time.Now().Unix(),
+			"exp": time.Now().Add(time.Hour).Unix(),
+		})
+
+		resp := e.POST("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Origin", "https://mail."+testInstance.Domain).
+			WithJSON(map[string]string{
+				"id_token":      idToken,
+				"exchange_type": "app",
+			}).
+			Expect().
+			Status(http.StatusOK)
+
+		accessToken := resp.JSON().Object().Value("access_token").String().Raw()
+		require.NotEmpty(t, accessToken)
+
+		codeResp := e.POST("/auth/session_code").
+			WithHost(testInstance.Domain).
+			WithHeader("Authorization", "Bearer "+accessToken).
+			Expect().
+			Status(http.StatusCreated).
+			JSON().Object()
+
+		code := codeResp.Value("session_code").String().NotEmpty().Raw()
+		require.NotEmpty(t, code)
+		require.True(t, testInstance.CheckAndClearSessionCode(code))
+		require.False(t, testInstance.CheckAndClearSessionCode(code))
+	})
+
+	t.Run("ForgedAppTokenCannotMintSessionCode", func(t *testing.T) {
+		client := &oauth.Client{
+			RedirectURIs: []string{"https://attacker.example/callback"},
+			ClientName:   "forged-mail-client",
+			SoftwareID:   appTokenSoftwareID,
+		}
+		require.Nil(t, client.Create(testInstance, oauth.SoftwareIDPrevalidated))
+
+		claims := permission.Claims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Audience:  jwt.ClaimStrings{consts.AccessTokenAudience},
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+				IssuedAt:  jwt.NewNumericDate(time.Now()),
+				Issuer:    testInstance.Domain,
+				Subject:   client.ClientID,
+			},
+			Scope: oauth.BuildLinkedAppScope(appTokenAppSlug),
+		}
+		token := jwt.NewWithClaims(crypto.SigningMethod, claims)
+		forgedAccessToken, err := token.SignedString([]byte("wrong-secret"))
+		require.NoError(t, err)
+
+		e.POST("/auth/session_code").
+			WithHost(testInstance.Domain).
+			WithHeader("Authorization", "Bearer "+forgedAccessToken).
+			Expect().
+			Status(http.StatusUnauthorized)
+	})
+
+	t.Run("AdminTokenCannotMintSessionCode", func(t *testing.T) {
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss":        issuer,
+			"aud":        []string{clientID},
+			"sub":        "admin-user",
+			"sid":        "admin-sid-session-code-02",
+			"iat":        time.Now().Unix(),
+			"exp":        time.Now().Add(time.Hour).Unix(),
+			"org_id":     testInstance.OrgID,
+			"org_domain": testInstance.OrgDomain,
+			"org_role":   "owner",
+		})
+
+		resp := e.POST("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Origin", "https://admin.example.com").
+			WithJSON(map[string]string{
+				"id_token": idToken,
+				"scope":    "io.cozy.files",
+			}).
+			Expect().
+			Status(http.StatusOK)
+
+		accessToken := resp.JSON().Object().Value("access_token").String().Raw()
+		require.NotEmpty(t, accessToken)
+
+		e.POST("/auth/session_code").
+			WithHost(testInstance.Domain).
+			WithHeader("Authorization", "Bearer "+accessToken).
+			Expect().
+			Status(http.StatusUnauthorized)
+	})
+
+	t.Run("NoTokenCannotMintSessionCode", func(t *testing.T) {
+		e.POST("/auth/session_code").
+			WithHost(testInstance.Domain).
+			Expect().
+			Status(http.StatusUnauthorized)
+	})
 }
 
 func getLoginCSRFToken(e *httpexpect.Expect) string {

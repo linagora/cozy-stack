@@ -7,9 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/oauth"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -19,13 +21,23 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+const (
+	// SessionCodeSourceAppTokenExchange marks session codes minted from app token exchange access tokens.
+	SessionCodeSourceAppTokenExchange = "app_token_exchange"
+	// SessionCodeSourceFlagship marks session codes minted from flagship access tokens.
+	SessionCodeSourceFlagship = "flagship"
+	// SessionCodeSourcePassword marks session codes minted after a password or passphrase check.
+	SessionCodeSourcePassword = "password"
+)
+
 // CreateSessionCode is the handler for creating a session code by the flagship
 // app.
 func CreateSessionCode(c echo.Context) error {
 	inst := middlewares.GetInstance(c)
-	switch canCreateSessionCode(c, inst) {
+	result, source := canCreateSessionCode(c, inst)
+	switch result {
 	case allowedToCreateSessionCode:
-		// OK
+		return ReturnSessionCode(c, http.StatusCreated, inst, source)
 	case need2FAToCreateSessionCode:
 		twoFactorToken, err := lifecycle.SendTwoFactorPasscode(inst)
 		if err != nil {
@@ -40,11 +52,9 @@ func CreateSessionCode(c echo.Context) error {
 			"error": "Not authorized",
 		})
 	}
-
-	return ReturnSessionCode(c, http.StatusCreated, inst)
 }
 
-func ReturnSessionCode(c echo.Context, statusCode int, inst *instance.Instance) error {
+func ReturnSessionCode(c echo.Context, statusCode int, inst *instance.Instance, source string) error {
 	code, err := inst.CreateSessionCode()
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, echo.Map{
@@ -61,6 +71,7 @@ func ReturnSessionCode(c echo.Context, statusCode int, inst *instance.Instance) 
 		ip = strings.Split(req.RemoteAddr, ":")[0]
 	}
 	inst.Logger().WithField("nspace", "loginaudit").
+		WithField("source", source).
 		Infof("New session_code created from %s at %s", ip, time.Now())
 
 	return c.JSON(statusCode, echo.Map{
@@ -82,26 +93,63 @@ const (
 	need2FAToCreateSessionCode
 )
 
-func canCreateSessionCode(c echo.Context, inst *instance.Instance) canCreateSessionCodeResult {
-	if err := middlewares.AllowMaximal(c); err == nil {
-		return allowedToCreateSessionCode
+func canCreateSessionCode(c echo.Context, inst *instance.Instance) (canCreateSessionCodeResult, string) {
+	pdoc, err := middlewares.GetPermission(c)
+	if err == nil {
+		if pdoc.Permissions.IsMaximal() {
+			return allowedToCreateSessionCode, SessionCodeSourceFlagship
+		}
+		if claims, ok := c.Get("claims").(permission.Claims); ok && isAppTokenExchangeToken(inst, pdoc, claims) {
+			return allowedToCreateSessionCode, SessionCodeSourceAppTokenExchange
+		}
 	}
 
 	var args sessionCodeParameters
 	if err := c.Bind(&args); err != nil {
-		return cannotCreateSessionCode
+		return cannotCreateSessionCode, ""
 	}
 	if err := instance.CheckPassphrase(inst, []byte(args.Passphrase)); err != nil {
-		return cannotCreateSessionCode
+		return cannotCreateSessionCode, ""
 	}
 
 	if inst.HasAuthMode(instance.TwoFactorMail) {
 		token := []byte(args.TwoFactorToken)
 		if ok := inst.ValidateTwoFactorPasscode(token, args.TwoFactorCode); !ok {
-			return need2FAToCreateSessionCode
+			return need2FAToCreateSessionCode, ""
 		}
 	}
-	return allowedToCreateSessionCode
+	return allowedToCreateSessionCode, SessionCodeSourcePassword
+}
+
+func isAppTokenExchangeToken(inst *instance.Instance, pdoc *permission.Permission, claims permission.Claims) bool {
+	if pdoc.Type != permission.TypeOauth || pdoc.Client == nil {
+		return false
+	}
+	client, ok := pdoc.Client.(*oauth.Client)
+	if !ok {
+		return false
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != consts.AccessTokenAudience {
+		return false
+	}
+	if claims.Subject == "" || claims.Subject != pdoc.SourceID {
+		return false
+	}
+
+	slug := oauth.GetLinkedAppSlug(client.SoftwareID)
+	if slug == "" {
+		return false
+	}
+	if claims.Scope != oauth.BuildLinkedAppScope(slug) {
+		return false
+	}
+	if !tokenExchangeAppSlugAllowed(inst.ContextName, slug) {
+		return false
+	}
+	if _, err := app.GetWebappBySlug(inst, slug); err != nil {
+		return false
+	}
+	return true
 }
 
 func postChallenge(c echo.Context) error {
@@ -237,7 +285,7 @@ func loginFlagship(c echo.Context) error {
 	}
 
 	if !client.Flagship {
-		return ReturnSessionCode(c, http.StatusAccepted, inst)
+		return ReturnSessionCode(c, http.StatusAccepted, inst, SessionCodeSourcePassword)
 	}
 
 	if client.Pending {

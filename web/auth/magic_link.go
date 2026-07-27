@@ -195,7 +195,7 @@ func magicLinkFlagship(c echo.Context) error {
 	}
 
 	if !client.Flagship {
-		return ReturnSessionCode(c, http.StatusAccepted, inst)
+		return ReturnSessionCode(c, http.StatusAccepted, inst, SessionCodeSourcePassword)
 	}
 
 	if client.Pending {
