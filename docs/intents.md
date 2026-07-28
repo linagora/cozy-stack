@@ -269,6 +269,10 @@ communication channel between them. The communication will be done using the
 [window.postMessage](https://developer.mozilla.org/fr/docs/Web/API/Window/postMessage)
 API.
 
+It is documented with more details in
+[https://docs.cozy.io/en/cozy-interapp/](cozy-interapp documentation) but you can
+find the basic operation below.
+
 #### Service Initialization
 
 When the client receives the service URL from the stack, it starts to listen for
@@ -280,9 +284,9 @@ that points to the service's URL.
 At this point, the service app is opened on the route that it provided in the
 `href` part of it's manifest. This route now also contains the intent's id.
 
-The service queries the stack to find out information about the intent, passing
-along the intent id. In response, the stack sends the client's URL, the
-`action`, and the `type`. If the intent includes `permissions`, the stack sends
+The service get from the DOM or queries the stack to find out information about
+the intent, passing along the intent id. In response, the stack sends the client's
+URL, the `action`, and the `type`. If the intent includes `permissions`, the stack sends
 them too, as well as the client's permission id.
 
 It then starts to listen for messages coming from the client's URL. Eventually,
