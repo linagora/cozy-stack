@@ -333,14 +333,7 @@ func TestApps(t *testing.T) {
 		require.NoError(t, couchdb.CreateNamedDoc(testInstance, clientURLApp))
 		t.Cleanup(func() { _ = couchdb.DeleteDoc(testInstance, clientURLApp) })
 
-		testInstance.FeatureFlags = map[string]interface{}{
-			"clienturl_csp_flag": "https://external.example.com",
-		}
-		require.NoError(t, instance.Update(testInstance))
-		t.Cleanup(func() {
-			testInstance.FeatureFlags = nil
-			_ = instance.Update(testInstance)
-		})
+		testutils.WithFlag(t, testInstance, "clienturl_csp_flag", "https://external.example.com")
 
 		intent := &intent.Intent{
 			Action: "PICK",
