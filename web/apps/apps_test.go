@@ -360,6 +360,53 @@ func TestApps(t *testing.T) {
 		csp.Contains("frame-ancestors 'self' https://external.example.com https://clienturl-app.cozywithapps.example.net;")
 	})
 
+	t.Run("ServeDataProxyWithIntentAllowsContainerAppsFrame", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		require.NoError(t, setup.InstallMiniDataProxy(t))
+		containerApp := &couchdb.JSONDoc{
+			Type: consts.Apps,
+			M: map[string]interface{}{
+				"_id":             consts.Apps + "/container-app",
+				"name":            "ContainerApp",
+				"slug":            "container-app",
+				"source":          "git://github.com/cozy/containerapp.git",
+				"state":           apps.Ready,
+				"client_url_flag": "container_csp_flag",
+				"routes":          apps.Routes{},
+				"permissions":     permission.Set{},
+				"version":         "1.0.0",
+			},
+		}
+		require.NoError(t, couchdb.CreateNamedDoc(testInstance, containerApp))
+		t.Cleanup(func() { _ = couchdb.DeleteDoc(testInstance, containerApp) })
+
+		testutils.WithFlag(t, testInstance, "container_csp_flag", "https://external.example.com")
+
+		intent := &intent.Intent{
+			Action:   "PICK",
+			Type:     "io.cozy.foos",
+			Client:   "io.cozy.apps/container-app",
+			Services: []intent.Service{{Slug: consts.DataProxySlug, Href: "/"}},
+		}
+		require.NoError(t, intent.Save(testInstance))
+
+		csp := e.GET("/").
+			WithHost(consts.DataProxySlug + "." + testInstance.Domain).
+			WithQueryString("intent=" + intent.ID()).
+			Expect().Status(200).
+			Header(echo.HeaderContentSecurityPolicy)
+
+		csp.Contains("frame-ancestors 'self'")
+		// Cozy root (login page rule)
+		csp.Contains("https://cozywithapps.example.net/")
+		// All container apps and their external clients
+		csp.Contains("https://external.example.com")
+		csp.Contains("https://container-app.cozywithapps.example.net")
+		// Apps without a client_url_flag are not added
+		csp.NotContains("https://mini.cozywithapps.example.net")
+	})
+
 	t.Run("NoScriptTagBreakoutIntentData", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

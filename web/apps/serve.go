@@ -149,6 +149,33 @@ func handleIntent(c echo.Context, i *instance.Instance, slug, intentID string) *
 	return intent
 }
 
+// allowContainerAppsFrame adds to frame-ancestors the cozy subdomain and the
+// client URL (via its client_url_flag feature flag) of every installed app
+// that declares one. Dataproxy can be nested several iframes deep in an
+// intent flow (e.g. a container app framing its external client, which frames
+// the intent client, which frames dataproxy), and frame-ancestors must list
+// every ancestor in the chain.
+func allowContainerAppsFrame(c echo.Context, i *instance.Instance) {
+	if config.GetConfig().CSPDisabled {
+		return
+	}
+	manifests, _, err := app.ListWebappsWithPagination(i, 0, "")
+	if err != nil {
+		return
+	}
+	for _, manifest := range manifests {
+		if manifest.ClientURLFlag() == "" {
+			continue
+		}
+		from := app.ResolveClientURL(i, manifest.Slug())
+		defaultFrom := app.DefaultClientURL(i, manifest.Slug())
+		middlewares.AppendCSPRule(c, "frame-ancestors", from)
+		if defaultFrom != from {
+			middlewares.AppendCSPRule(c, "frame-ancestors", defaultFrom)
+		}
+	}
+}
+
 // ServeAppFile will serve the requested file using the specified application
 // manifest and appfs.FileServer context.
 //
@@ -271,6 +298,10 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 	var intentDoc *intent.Intent
 	if intentID := c.QueryParam("intent"); intentID != "" {
 		intentDoc = handleIntent(c, i, slug, intentID)
+
+		if intentDoc != nil && slug == consts.DataProxySlug {
+			allowContainerAppsFrame(c, i)
+		}
 	}
 
 	if route.Public && slug == consts.DataProxySlug {

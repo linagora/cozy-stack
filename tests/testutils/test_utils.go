@@ -397,6 +397,48 @@ func (c *TestSetup) InstallMiniApp() (string, error) {
 	return slug, err
 }
 
+func (c *TestSetup) InstallMiniDataProxy(t *testing.T) error {
+	slug := consts.DataProxySlug
+	instance := c.GetTestInstance()
+
+	version := "1.0.0"
+	manifest := &couchdb.JSONDoc{
+		Type: consts.Apps,
+		M: map[string]interface{}{
+			"_id":   consts.Apps + "/" + slug,
+			"name":  "DataProxy",
+			"slug":  slug,
+			"state": apps.Ready,
+			"routes": apps.Routes{
+				"/": apps.Route{
+					Folder: "/",
+					Index:  "index.html",
+					Public: true,
+				},
+			},
+			"permissions": permission.Set{},
+			"version":     version,
+		},
+	}
+
+	if err := couchdb.CreateNamedDoc(instance, manifest); err != nil {
+		return err
+	}
+	t.Cleanup(func() {
+		_ = permission.DestroyWebapp(instance, slug)
+		_ = couchdb.DeleteDoc(instance, manifest)
+	})
+	if _, err := permission.CreateWebappSet(instance, slug, permission.Set{}, version); err != nil {
+		return err
+	}
+
+	appdir := path.Join(vfs.WebappsDirName, slug, version)
+	if _, err := vfs.MkdirAll(instance.VFS(), appdir); err != nil {
+		return err
+	}
+	return createFile(instance, appdir, "index.html", "this is the dataproxy index")
+}
+
 func (c *TestSetup) InstallMiniKonnector() (string, error) {
 	slug := "mini"
 	instance := c.GetTestInstance()
