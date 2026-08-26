@@ -359,6 +359,30 @@ func assistantForChat(inst *instance.Instance, chat *ChatConversation) (*chatAss
 	return &assistant, nil
 }
 
+func llmModel(acc *account.Account) string {
+	if model, _ := acc.Data["model"].(string); model != "" {
+		return model
+	}
+	if acc.Basic != nil {
+		return acc.Basic.Login
+	}
+	return ""
+}
+
+func llmAPIKey(basic *account.BasicInfo) string {
+	if basic == nil {
+		return ""
+	}
+	if basic.EncryptedCredentials == "" {
+		return basic.Password
+	}
+	_, apiKey, err := account.DecryptCredentials(basic.EncryptedCredentials)
+	if err != nil {
+		return basic.Password
+	}
+	return apiKey
+}
+
 // buildLLMOverride returns the `metadata.llm_override` map forwarded to
 // OpenRAG when the conversation is bound to an assistant that uses an
 // external provider (OpenAI, Mistral, …). It returns nil to leave the
@@ -378,16 +402,7 @@ func buildLLMOverride(inst *instance.Instance, assistant *chatAssistant) map[str
 	if err := couchdb.GetDoc(inst, consts.Accounts, provider.ID, &acc); err != nil {
 		return nil
 	}
-	// The account's "login" field stores the LLM model name, e.g. "Mistral-Small-3.2-24B-Instruct-2506"
-	// While "password" stores the API key
-	var model, apiKey string
-	if acc.Basic != nil {
-		if acc.Basic.EncryptedCredentials != "" {
-			model, apiKey, _ = account.DecryptCredentials(acc.Basic.EncryptedCredentials)
-		} else {
-			model, apiKey = acc.Basic.Login, acc.Basic.Password
-		}
-	}
+	model, apiKey := llmModel(&acc), llmAPIKey(acc.Basic)
 	override := map[string]interface{}{}
 	if model != "" {
 		override["model"] = model
