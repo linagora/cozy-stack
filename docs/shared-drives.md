@@ -1035,6 +1035,15 @@ Identical call to [`GET /files/download/:file-id/:version-id`](files.md#get-file
 but over a shared drive. See there for request and response examples, the only
 difference is the URL.
 
+### DELETE /sharings/drives/:id/:file-id/:version-id
+
+Permanently deletes an old version of a file. The caller must have write access
+to the shared drive.
+
+Identical call to [`DELETE /files/:file-id/:version-id`](files.md#delete-filesfile-idversion-id)
+but over a shared drive. See there for request and response examples, the only
+difference is the URL.
+
 ## Notes
 
 ### POST /sharings/drives/:id/notes

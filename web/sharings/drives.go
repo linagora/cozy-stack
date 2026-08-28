@@ -299,6 +299,14 @@ func CopyVersionHandler(c echo.Context, inst *instance.Instance, s *sharing.Shar
 	return files.CopyVersionHandler(c)
 }
 
+// DeleteFileVersionMetadata handles DELETE requests on
+// /sharings/drives/:id/:file-id/:version-id.
+//
+// It can be used to delete an old version of a file.
+func DeleteFileVersionMetadata(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
+	return files.DeleteFileVersionMetadata(c)
+}
+
 // GetDirSize returns the size of a directory (the sum of the size of the files
 // in this directory, including those in subdirectories).
 func GetDirSize(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
@@ -1324,6 +1332,7 @@ func drivesRoutes(router *echo.Group) {
 	drive.HEAD("/download/:file-id/:version-id", proxy(ReadFileContentFromVersion, true))
 	drive.GET("/download/:file-id/:version-id", proxy(ReadFileContentFromVersion, true))
 	drive.POST("/:file-id/versions", proxy(CopyVersionHandler, true))
+	drive.DELETE("/:file-id/:version-id", proxy(DeleteFileVersionMetadata, true))
 
 	drive.GET("/_changes", proxy(ChangesFeed, true))
 

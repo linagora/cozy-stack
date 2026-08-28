@@ -3903,6 +3903,52 @@ func TestFileRootSharedDriveReadRoutes(t *testing.T) {
 	})
 }
 
+func TestSharedDriveFileVersionDeletion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	eA, eB, eD := env.createClients(t)
+
+	eB.PUT("/sharings/drives/"+env.firstSharingID+"/"+env.checklistID).
+		WithHeader("Authorization", "Bearer "+env.bettyToken).
+		WithHeader("Content-Type", "text/plain").
+		WithBytes([]byte("bar")).
+		Expect().Status(200)
+
+	versionID := eA.GET("/files/"+env.checklistID).
+		WithHeader("Authorization", "Bearer "+env.acmeToken).
+		Expect().Status(200).
+		JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+		Object().Path("$.data.relationships.old_versions.data[0].id").
+		String().NotEmpty().Raw()
+
+	acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, env.firstSharingID)
+
+	eD.DELETE("/sharings/drives/"+env.firstSharingID+"/"+versionID).
+		WithHeader("Authorization", "Bearer "+env.daveToken).
+		Expect().Status(403)
+
+	eB.GET("/sharings/drives/"+env.firstSharingID+"/download/"+versionID).
+		WithHeader("Authorization", "Bearer "+env.bettyToken).
+		Expect().Status(200).
+		Body().IsEqual("foo")
+
+	eB.DELETE("/sharings/drives/"+env.firstSharingID+"/"+versionID).
+		WithHeader("Authorization", "Bearer "+env.bettyToken).
+		Expect().Status(204)
+
+	eB.GET("/sharings/drives/"+env.firstSharingID+"/download/"+versionID).
+		WithHeader("Authorization", "Bearer "+env.bettyToken).
+		Expect().Status(404)
+
+	eB.GET("/sharings/drives/"+env.firstSharingID+"/download/"+env.checklistID).
+		WithHeader("Authorization", "Bearer "+env.bettyToken).
+		Expect().Status(200).
+		Body().IsEqual("bar")
+}
+
 func TestFileRootSharedDriveMutationRoutes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
