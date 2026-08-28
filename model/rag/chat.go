@@ -74,12 +74,7 @@ func (c *ChatConversation) Clone() couchdb.Doc {
 	cloned := *c
 	cloned.Messages = make([]ChatMessage, len(c.Messages))
 	copy(cloned.Messages, c.Messages)
-	if c.Rels != nil {
-		cloned.Rels = make(jsonapi.RelationshipMap, len(c.Rels))
-		for k, v := range c.Rels {
-			cloned.Rels[k] = v
-		}
-	}
+	cloned.Rels = c.Rels.Clone()
 	return &cloned
 }
 func (c *ChatConversation) Included() []jsonapi.Object             { return nil }
