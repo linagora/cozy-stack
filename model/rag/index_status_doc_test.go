@@ -52,3 +52,22 @@ func TestIndexStatusClone(t *testing.T) {
 	assert.Equal(t, at, *doc.LastSuccessDate)
 	assert.Contains(t, doc.Rels, "doc")
 }
+
+func TestIndexStatusCloneDecodedRelationship(t *testing.T) {
+	raw, err := json.Marshal(NewIndexStatus("a1b2c3"))
+	require.NoError(t, err)
+
+	var doc IndexStatus
+	require.NoError(t, json.Unmarshal(raw, &doc))
+
+	cloned := doc.Clone().(*IndexStatus)
+	clonedFile := cloned.Rels["file"]
+	clonedData, ok := clonedFile.Data.(map[string]interface{})
+	require.True(t, ok)
+	clonedData["_id"] = "d4e5f6"
+
+	originalFile := doc.Rels["file"]
+	originalData, ok := originalFile.Data.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "a1b2c3", originalData["_id"])
+}
