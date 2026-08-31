@@ -79,6 +79,11 @@ system-tests:
 	@scripts/system-test.sh
 .PHONY: system-tests
 
+## load-test: run the load-test harness smoke scenario
+load-test:
+	@$(MAKE) -C tests/load smoke
+.PHONY: load-test
+
 ## clean: clean the generated files and directories
 clean:
 	@rm -rf bin scripts/node_modules

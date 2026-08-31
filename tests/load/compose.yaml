@@ -1,0 +1,97 @@
+name: twake-drive-load
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    restart: "${RESTART_POLICY:-no}"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=14d
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-2GB}
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    expose:
+      - "9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/-/healthy || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - load-test
+
+  grafana:
+    image: grafana/grafana:13.2.0
+    restart: "${RESTART_POLICY:-no}"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_HTTP_PORT: "3000"
+    ports:
+      - "${GRAFANA_BIND_ADDRESS:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - load-test
+
+  mock:
+    image: nginx:1.29-alpine
+    restart: "${RESTART_POLICY:-no}"
+    volumes:
+      - ./mock/index.html:/usr/share/nginx/html/index.html:ro
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/ || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+    networks:
+      - load-test
+
+  k6:
+    image: grafana/k6:2.2.0
+    profiles:
+      - runner
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /scripts
+    environment:
+      BASE_URL: ${BASE_URL:-http://mock}
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: p(90),p(95),p(99),min,max,avg
+      K6_PROMETHEUS_RW_STALE_MARKERS: "false"
+    extra_hosts:
+      - "cozy.localhost:host-gateway"
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./scenarios:/scripts:ro
+      - ./results:/results
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      mock:
+        condition: service_healthy
+    networks:
+      - load-test
+
+networks:
+  load-test:
+
+volumes:
+  prometheus-data:
+  grafana-data:
