@@ -13,6 +13,8 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     expose:
       - "9090"
     healthcheck:
@@ -77,6 +79,10 @@ services:
       FILE_SIZE: ${FILE_SIZE:-1K}
       UPLOAD_VUS: ${UPLOAD_VUS:-1}
       ITERATIONS_PER_VU: ${ITERATIONS_PER_VU:-1}
+      CAPACITY_RUN_ID: ${CAPACITY_RUN_ID:-}
+      CAPACITY_PHASE: ${CAPACITY_PHASE:-}
+      MIN_SUCCESS_RATE: ${MIN_SUCCESS_RATE:-0.99}
+      P95_LIMIT_MS: ${P95_LIMIT_MS:-}
       MAX_DURATION: ${MAX_DURATION:-30m}
       UPLOAD_TIMEOUT: ${UPLOAD_TIMEOUT:-30m}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
@@ -87,6 +93,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./fixtures:/fixtures:ro
+      - ./lib:/lib:ro
       - ./scenarios:/scripts:ro
       - ./results:/results
     depends_on:

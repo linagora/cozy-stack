@@ -1,4 +1,6 @@
 SHELL := /bin/bash
+-include .env
+
 COMPOSE := docker compose
 SCENARIO ?= http.js
 BASE_URL ?= http://mock
@@ -9,13 +11,21 @@ ITERATIONS_PER_VU ?= 1
 MAX_DURATION ?= 30m
 UPLOAD_TIMEOUT ?= 30m
 TEST_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+CAPACITY_RUN_ID ?=
+CAPACITY_PHASE ?= single-run
+P95_LIMIT_MS ?=
+MAX_VUS ?=
+LATENCY_MULTIPLIER ?= 2
+MIN_SUCCESS_RATE ?= 0.99
+CONFIRMATION_ITERATIONS ?= 3
+FORCE_CAPACITY_RUN ?= 0
 HOST_UID ?= $(shell id -u)
 HOST_GID ?= $(shell id -g)
 
 export HOST_UID
 export HOST_GID
 
-.PHONY: help doctor config pull up fixtures upload-fixture smoke upload-smoke upload run status logs down dashboard-url
+.PHONY: help doctor config pull up fixtures upload-fixture smoke upload-smoke upload upload-capacity upload-capacity-all run status logs down dashboard-url
 
 help:
 	@echo "make up                                      Start dashboards and the local mock"
@@ -23,12 +33,15 @@ help:
 	@echo "make fixtures                                Generate every upload fixture"
 	@echo "make upload-smoke                            Run two concurrent 1K mock uploads"
 	@echo "make upload BASE_URL=https://... FILE_SIZE=1M VUS=10"
+	@echo "make upload-capacity BASE_URL=https://... FILE_SIZE=10M"
+	@echo "make upload-capacity-all BASE_URL=https://..."
 	@echo "make run BASE_URL=https://... VUS=10 DURATION=1m"
 	@echo "make status | make logs | make down"
 
 doctor:
 	@docker info >/dev/null
 	@$(COMPOSE) version
+	@jq --version >/dev/null
 
 config:
 	@$(COMPOSE) config --quiet
@@ -55,13 +68,21 @@ upload-smoke: VUS := 2
 upload-smoke: ITERATIONS_PER_VU := 1
 upload-smoke: upload-fixture up
 	@mkdir -p results
-	@$(COMPOSE) run --rm -e BASE_URL=http://mock -e COZY_ACCESS_TOKEN=mock-token -e FILE_SIZE="$(FILE_SIZE)" -e UPLOAD_VUS="$(VUS)" -e ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" -e TEST_ID="$(TEST_ID)" k6 run -o experimental-prometheus-rw --tag testid="$(TEST_ID)" --summary-export="/results/$(TEST_ID)-summary.json" /scripts/concurrent-uploads.js
+	@$(COMPOSE) run --rm -e BASE_URL=http://mock -e COZY_ACCESS_TOKEN=mock-token -e FILE_SIZE="$(FILE_SIZE)" -e UPLOAD_VUS="$(VUS)" -e ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" -e CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" -e CAPACITY_PHASE="smoke" -e MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" -e P95_LIMIT_MS="$(P95_LIMIT_MS)" -e TEST_ID="$(TEST_ID)" k6 run -o experimental-prometheus-rw --tag campaignid="$(or $(CAPACITY_RUN_ID),$(TEST_ID))" --tag concurrency="$(VUS)" --tag filesize="$(FILE_SIZE)" --tag phase="smoke" --tag testid="$(TEST_ID)" --summary-export="/results/$(TEST_ID)-summary.json" /scripts/concurrent-uploads.js
 	@echo "Upload smoke result: results/$(TEST_ID)-summary.json"
 
 upload: upload-fixture up
 	@mkdir -p results
-	@$(COMPOSE) run --rm -e BASE_URL="$(BASE_URL)" -e FILE_SIZE="$(FILE_SIZE)" -e UPLOAD_VUS="$(VUS)" -e ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" -e MAX_DURATION="$(MAX_DURATION)" -e UPLOAD_TIMEOUT="$(UPLOAD_TIMEOUT)" -e TEST_ID="$(TEST_ID)" k6 run -o experimental-prometheus-rw --tag testid="$(TEST_ID)" --summary-export="/results/$(TEST_ID)-summary.json" /scripts/concurrent-uploads.js
+	@$(COMPOSE) run --rm -e BASE_URL="$(BASE_URL)" $(if $(filter http://mock,$(BASE_URL)),-e COZY_ACCESS_TOKEN=mock-token,) -e FILE_SIZE="$(FILE_SIZE)" -e UPLOAD_VUS="$(VUS)" -e ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" -e CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" -e CAPACITY_PHASE="$(CAPACITY_PHASE)" -e MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" -e P95_LIMIT_MS="$(P95_LIMIT_MS)" -e MAX_DURATION="$(MAX_DURATION)" -e UPLOAD_TIMEOUT="$(UPLOAD_TIMEOUT)" -e TEST_ID="$(TEST_ID)" k6 run -o experimental-prometheus-rw --tag campaignid="$(or $(CAPACITY_RUN_ID),$(TEST_ID))" --tag concurrency="$(VUS)" --tag filesize="$(FILE_SIZE)" --tag phase="$(CAPACITY_PHASE)" --tag testid="$(TEST_ID)" --summary-export="/results/$(TEST_ID)-summary.json" /scripts/concurrent-uploads.js
 	@echo "Upload result: results/$(TEST_ID)-summary.json"
+
+upload-capacity:
+	@BASE_URL="$(BASE_URL)" FILE_SIZE="$(FILE_SIZE)" MAX_VUS="$(MAX_VUS)" LATENCY_MULTIPLIER="$(LATENCY_MULTIPLIER)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)" ./scripts/find-upload-capacity.sh
+
+upload-capacity-all:
+	@for size in 1K 100K 1M 10M 100M 1G; do \
+		$(MAKE) upload-capacity BASE_URL="$(BASE_URL)" FILE_SIZE="$$size" LATENCY_MULTIPLIER="$(LATENCY_MULTIPLIER)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)" || exit $$?; \
+	done
 
 run: up
 	@test -f "scenarios/$(SCENARIO)" || { echo "Unknown scenario: scenarios/$(SCENARIO)" >&2; exit 1; }
