@@ -1342,3 +1342,13 @@ msgstr "View File Details"
 
 msgid "Permissions io.cozy.ai.chat.assistants"
 msgstr "AI Assistant"
+
+msgid "Banners Quota Exceeded Text"
+msgstr "You have reached your storage limit."
+
+
+
+
+
+
+

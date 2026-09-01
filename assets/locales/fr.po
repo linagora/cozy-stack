@@ -1455,3 +1455,6 @@ msgstr "Fichier :"
 
 msgid "Mail Antivirus View Details Button"
 msgstr "Voir les détails du fichier"
+
+msgid "Banners Quota Exceeded Text"
+msgstr "Vous avez atteint la limite de votre espace de stockage."

@@ -1403,3 +1403,6 @@ msgstr "See on Twake Drive"
 
 msgid "Mail Sharing Folder Changed Intro"
 msgstr "Someone shared a folder with you:"
+
+msgid "Banners Quota Exceeded Text"
+msgstr "Вы достигли лимита хранилища."
