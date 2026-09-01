@@ -2,28 +2,12 @@ import http from 'k6/http'
 import { check } from 'k6'
 import exec from 'k6/execution'
 
+import {
+  randomizeUploadData,
+  uploadDataSize
+} from '../fixtures/upload-data.js'
+
 const ROOT_DIRECTORY_ID = 'io.cozy.files.root-dir'
-const FIXTURE_FILENAMES = {
-  '1K': '1k.bin',
-  '100K': '100k.bin',
-  '1M': '1m.bin',
-  '10M': '10m.bin',
-  '100M': '100m.bin',
-  '1G': '1g.bin'
-}
-const MUTATION_SIZE = 256
-
-const fileSize = __ENV.FILE_SIZE || '1K'
-const fixtureFilename = FIXTURE_FILENAMES[fileSize]
-
-if (!fixtureFilename) {
-  throw new Error(
-    `Unknown FILE_SIZE ${fileSize}. Expected one of: ${Object.keys(FIXTURE_FILENAMES).join(', ')}`
-  )
-}
-
-const fixture = open(`/fixtures/${fixtureFilename}`, 'b')
-const fixtureBytes = new Uint8Array(fixture)
 
 function getPositiveInteger(environmentName, fallback) {
   const value = Number(__ENV[environmentName] || fallback)
@@ -62,31 +46,8 @@ export function setup() {
   return null
 }
 
-function randomizeFixture(marker) {
-  const mutationLength = Math.min(MUTATION_SIZE, fixtureBytes.length)
-  const uniqueHeader = `twake-load:${marker}\n`
-  let state = 2166136261
-
-  for (let index = 0; index < marker.length; index += 1) {
-    state ^= marker.charCodeAt(index)
-    state = Math.imul(state, 16777619)
-  }
-
-  for (let index = 0; index < mutationLength; index += 1) {
-    state ^= state << 13
-    state ^= state >>> 17
-    state ^= state << 5
-    fixtureBytes[index] =
-      index < uniqueHeader.length
-        ? uniqueHeader.charCodeAt(index) & 0xff
-        : state & 0xff
-  }
-
-  return fixture
-}
-
 function makeUploadName(marker) {
-  return `load-${fileSize.toLowerCase()}-${marker}.bin`
+  return `load-${uploadDataSize.toLowerCase()}-${marker}.bin`
 }
 
 // k6 requires a default export for the virtual-user entry point.
@@ -100,7 +61,7 @@ export default function runConcurrentUploadsScenario() {
   ].join('-')
   const filename = makeUploadName(marker)
 
-  const uploadBody = randomizeFixture(marker)
+  const uploadBody = randomizeUploadData(marker)
 
   const response = http.post(
     `${__ENV.BASE_URL}/files/${ROOT_DIRECTORY_ID}?Type=file&Name=${encodeURIComponent(filename)}`,
@@ -112,7 +73,7 @@ export default function runConcurrentUploadsScenario() {
         'Content-Type': 'application/octet-stream'
       },
       tags: {
-        filesize: fileSize,
+        filesize: uploadDataSize,
         name: 'POST /files/:dir-id',
         operation: 'file-upload'
       },

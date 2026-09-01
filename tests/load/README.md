@@ -46,8 +46,15 @@ $ make run BASE_URL=http://cozy.localhost:8080 VUS=10 DURATION=1m
 
 The upload workload supports `1K`, `100K`, `1M`, `10M`, `100M`, and `1G`
 binary fixtures. Fixtures are generated from random data once and kept under
-the ignored `fixtures/` directory. A run generates only its selected size;
-use `make fixtures` to prepare the complete set in advance.
+the `fixtures/` directory, while generated binary files remain ignored. A run
+generates only its selected size; use `make fixtures` to prepare the complete
+set in advance.
+
+Fixture generation is a shell preparation step because k6 JavaScript reads
+files during its initialization context and keeps upload data in memory. The
+generator streams random bytes directly to disk, while
+`fixtures/upload-data.js` owns loading and per-upload mutation for reuse by
+multiple scenarios.
 
 Add an OAuth token with `io.cozy.files` permission to the ignored `.env`:
 
