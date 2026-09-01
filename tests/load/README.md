@@ -5,9 +5,9 @@ This directory contains the first infrastructure milestone for
 as an on-demand container, stores metrics in Prometheus, and provisions a
 Grafana dashboard.
 
-The current scenarios establish the hello-world baseline. Authentication,
-organization membership, sharing, and file workloads will be added as the
-capacity model is implemented.
+The harness includes the hello-world baseline and an authenticated concurrent
+file-upload workload. Organization membership, sharing, and other file
+workloads will be added as the capacity model is implemented.
 
 ## Prerequisites
 
@@ -27,6 +27,7 @@ Or run the harness directly:
 ```console
 $ cd tests/load
 $ make smoke
+$ make upload-smoke
 $ make dashboard-url
 ```
 
@@ -41,6 +42,48 @@ To exercise a Cozy stack running on the host, `cozy.localhost` and
 $ make run BASE_URL=http://cozy.localhost:8080 VUS=10 DURATION=1m
 ```
 
+## Concurrent uploads
+
+The upload workload supports `1K`, `100K`, `1M`, `10M`, `100M`, and `1G`
+binary fixtures. Fixtures are generated from random data once and kept under
+the ignored `fixtures/` directory. A run generates only its selected size;
+use `make fixtures` to prepare the complete set in advance.
+
+Add an OAuth token with `io.cozy.files` permission to the ignored `.env`:
+
+```dotenv
+COZY_ACCESS_TOKEN=replace-with-a-target-token
+```
+
+Run one upload per virtual user against a local stack:
+
+```console
+$ make upload BASE_URL=http://cozy.localhost:8080 FILE_SIZE=1M VUS=10
+```
+
+`VUS` is the requested upload concurrency. `ITERATIONS_PER_VU` defaults to
+one, which keeps the uploaded volume predictable. For example, this runs 50
+uploads in five waves of up to 10 concurrent requests:
+
+```console
+$ make upload BASE_URL=http://cozy.localhost:8080 FILE_SIZE=100K VUS=10 ITERATIONS_PER_VU=5
+```
+
+The scenario intentionally does not delete files during the measured run.
+Use a dedicated test instance and remove `load-*.bin` files after the run.
+
+Before each request, the scenario changes 256 bytes in the selected in-memory
+fixture. The mutation includes the test ID, VU, iteration, time, and a random
+value, so every uploaded file has distinct content without regenerating the
+whole fixture. The base fixture on disk remains unchanged.
+
+Run each size separately. According to the
+[k6 guidance for large tests](https://grafana.com/docs/k6/latest/testing-guides/running-large-tests/#file-upload-considerations),
+file uploads are copied for each VU and require significant memory. In
+particular, raise the `1G` concurrency gradually while monitoring the load
+generator's memory, CPU, and network utilization so the generator does not
+become the bottleneck.
+
 ## Commands
 
 ```console
@@ -49,6 +92,9 @@ $ make config
 $ make pull
 $ make up
 $ make smoke
+$ make fixtures
+$ make upload-smoke
+$ make upload BASE_URL=https://target.example FILE_SIZE=1M VUS=10
 $ make run BASE_URL=https://target.example VUS=10 DURATION=1m
 $ make status
 $ make logs

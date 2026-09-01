@@ -1,3 +1,4 @@
 .env
+fixtures/
 results/*
 !results/.gitkeep

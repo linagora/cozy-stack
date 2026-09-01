@@ -53,6 +53,7 @@ services:
     image: nginx:1.29-alpine
     restart: "${RESTART_POLICY:-no}"
     volumes:
+      - ./mock/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./mock/index.html:/usr/share/nginx/html/index.html:ro
     expose:
       - "80"
@@ -72,6 +73,12 @@ services:
     working_dir: /scripts
     environment:
       BASE_URL: ${BASE_URL:-http://mock}
+      COZY_ACCESS_TOKEN: ${COZY_ACCESS_TOKEN:-}
+      FILE_SIZE: ${FILE_SIZE:-1K}
+      UPLOAD_VUS: ${UPLOAD_VUS:-1}
+      ITERATIONS_PER_VU: ${ITERATIONS_PER_VU:-1}
+      MAX_DURATION: ${MAX_DURATION:-30m}
+      UPLOAD_TIMEOUT: ${UPLOAD_TIMEOUT:-30m}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
       K6_PROMETHEUS_RW_TREND_STATS: p(90),p(95),p(99),min,max,avg
       K6_PROMETHEUS_RW_STALE_MARKERS: "false"
@@ -79,6 +86,7 @@ services:
       - "cozy.localhost:host-gateway"
       - "host.docker.internal:host-gateway"
     volumes:
+      - ./fixtures:/fixtures:ro
       - ./scenarios:/scripts:ro
       - ./results:/results
     depends_on:
