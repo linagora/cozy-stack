@@ -24,6 +24,11 @@ var managerHTTPClient = &http.Client{Timeout: 30 * time.Second}
 // circular import issue).
 var AskReupload func(*instance.Instance) error
 
+// RefreshBanners is the function called when a change on the instance can make
+// its platform banners stale. A package variable is used to avoid a dependency
+// on the model/banner package (which would lead to circular import issue).
+var RefreshBanners func(domain string)
+
 // Patch updates the given instance with the specified options if necessary. It
 // can also update the settings document if provided in the options.
 func Patch(i *instance.Instance, opts *Options) error {
@@ -32,6 +37,8 @@ func Patch(i *instance.Instance, opts *Options) error {
 	if err != nil {
 		return err
 	}
+
+	needBannersRefresh := false
 
 	for {
 		var err error
@@ -47,6 +54,7 @@ func Patch(i *instance.Instance, opts *Options) error {
 
 		if opts.Locale != "" && opts.Locale != i.Locale {
 			i.Locale = opts.Locale
+			needBannersRefresh = true
 			needUpdate = true
 		}
 
@@ -120,6 +128,10 @@ func Patch(i *instance.Instance, opts *Options) error {
 			needUpdate = true
 		}
 
+		if opts.DiskQuota != 0 {
+			needBannersRefresh = true
+		}
+
 		if opts.DiskQuota > 0 && opts.DiskQuota != i.BytesDiskQuota {
 			needUpdate = true
 			needSharingReupload = opts.DiskQuota > i.BytesDiskQuota
@@ -187,6 +199,14 @@ func Patch(i *instance.Instance, opts *Options) error {
 			}()
 		}
 		break
+	}
+
+	// A downgrade changes the share of the quota the usage represents, and a
+	// language change leaves the banners in the previous one. Outside the loop
+	// because re-pushing an unchanged quota is how the Cloudery converges it,
+	// and that updates no document.
+	if needBannersRefresh && RefreshBanners != nil {
+		RefreshBanners(i.Domain)
 	}
 
 	// Update the settings doc

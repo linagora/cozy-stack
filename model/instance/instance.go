@@ -867,6 +867,18 @@ func (i *Instance) MovedError() *jsonapi.Error {
 	return &jerr
 }
 
+// HasBannersEnabled reports whether platform banners are materialized for this
+// instance. Off unless the context turns it on, so the rules can ship before
+// the clients that render them.
+func (i *Instance) HasBannersEnabled() bool {
+	if ctxSettings, ok := i.SettingsContext(); ok {
+		if enabled, ok := ctxSettings["enable_banners"].(bool); ok {
+			return enabled
+		}
+	}
+	return false
+}
+
 func (i *Instance) HasPremiumLinksEnabled() bool {
 	if ctxSettings, ok := i.SettingsContext(); ok {
 		if enabled, ok := ctxSettings["enable_premium_links"].(bool); ok {

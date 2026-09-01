@@ -751,26 +751,46 @@ func ExtractMimeAndClassFromFilename(name string) (mime, class string) {
 	return ExtractMimeAndClass(mimetype)
 }
 
-var cbDiskQuotaAlert func(domain string, exceeded bool)
+var cbDiskQuotaAlert []func(domain string, exceeded bool)
 
 // RegisterDiskQuotaAlertCallback allows to register a callback function called
-// when the instance reaches, a fall behind, 90% of its quota capacity.
+// when the instance reaches 90% of its quota capacity or fills it, and when it
+// falls back under 90%.
 func RegisterDiskQuotaAlertCallback(cb func(domain string, exceeded bool)) {
-	cbDiskQuotaAlert = cb
+	cbDiskQuotaAlert = append(cbDiskQuotaAlert, cb)
 }
 
 // PushDiskQuotaAlert can be used to notify when the VFS reaches, or fall
 // behind, its quota alert of 90% of its total capacity.
 func PushDiskQuotaAlert(fs VFS, exceeded bool) {
-	if cbDiskQuotaAlert != nil {
-		cbDiskQuotaAlert(fs.DomainName(), exceeded)
+	for _, cb := range cbDiskQuotaAlert {
+		cb(fs.DomainName(), exceeded)
 	}
+}
+
+var cbDiskUsageFreed []func(domain string, usageAfter int64)
+
+// RegisterDiskUsageFreedCallback allows to register a callback function called
+// whenever a destroy has freed space, whatever the quota. A subscriber that must
+// converge on the current state cannot use the alert callback above: it reports
+// only the downward crossing of 90%, from a usage read whose error is discarded,
+// so a transient failure loses the crossing silently. The usage is passed in
+// because this runs before the removal is indexed.
+func RegisterDiskUsageFreedCallback(cb func(domain string, usageAfter int64)) {
+	cbDiskUsageFreed = append(cbDiskUsageFreed, cb)
 }
 
 // DiskQuotaAfterDestroy is a helper function that can be used after files or
 // directories have be erased from the disk in order to register that the disk
 // quota alert has fall behind (or not).
 func DiskQuotaAfterDestroy(fs VFS, diskUsageBeforeWrite, destroyed int64) {
+	// Computed rather than read: the removal is not indexed yet.
+	if diskUsageBeforeWrite > 0 && destroyed > 0 {
+		for _, cb := range cbDiskUsageFreed {
+			cb(fs.DomainName(), diskUsageBeforeWrite-destroyed)
+		}
+	}
+
 	if diskUsageBeforeWrite <= 0 {
 		return
 	}
@@ -952,8 +972,14 @@ func CheckAvailableDiskSpace(fs VFS, doc *FileDoc) (newsize, maxsize, capsize in
 		if newsize > maxsize {
 			return 0, 0, 0, ErrFileTooBig
 		}
+		// capsize is the size at which this write crosses the next quota
+		// edge: the 90% alert while below it, the quota itself once past it.
+		// Without the second case nothing fires between 90% and full, and a
+		// write that fills the quota exactly is never noticed.
 		if quotaBytes := int64(9.0 / 10.0 * float64(diskQuota)); diskUsage <= quotaBytes {
 			capsize = quotaBytes - diskUsage
+		} else {
+			capsize = maxsize
 		}
 	}
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/cozy/cozy-stack/model/banner" // materializes io.cozy.banners on the quota alert
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/stack"
