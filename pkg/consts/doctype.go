@@ -16,6 +16,8 @@ const (
 	AppsOpenParameters = "io.cozy.apps.open"
 	// AppLogs doc type for logs sent by apps and konnectors
 	AppLogs = "io.cozy.apps.logs"
+	// Banners doc type for the platform messages displayed to the user
+	Banners = "io.cozy.banners"
 	// Konnectors doc type for konnector application manifests
 	Konnectors = "io.cozy.konnectors"
 	// KonnectorsMaintenance doc type for maintenance of konnectors.
