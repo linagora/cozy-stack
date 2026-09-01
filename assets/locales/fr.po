@@ -1458,3 +1458,15 @@ msgstr "Voir les détails du fichier"
 
 msgid "Banners Quota Exceeded Text"
 msgstr "Vous avez atteint la limite de votre espace de stockage."
+
+msgid "Banners Billing Restricted Title"
+msgstr "Votre espace de travail est temporairement restreint"
+
+msgid "Banners Billing Restricted Text"
+msgstr "Nous n'avons pas pu traiter votre paiement après plusieurs tentatives. Certaines fonctionnalités sont désormais limitées pour votre organisation et votre équipe peut ne plus pouvoir effectuer certaines actions.\n\nVos données restent intactes et en sécurité. L'accès complet sera rétabli dès la mise à jour de votre paiement."
+
+msgid "Banners Billing CTA Label"
+msgstr "Mettre à jour le moyen de paiement"
+
+msgid "Banners Billing Support Label"
+msgstr "Contacter le support"

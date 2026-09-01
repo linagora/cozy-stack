@@ -2,6 +2,7 @@ package rabbitmq
 
 const (
 	ExchangeAuth      = "auth"
+	ExchangeBilling   = "billing"
 	ExchangeB2B       = "b2b"
 	ExchangeMigration = "migration"
 )
@@ -16,6 +17,7 @@ const (
 	QueueB2BUserDeleted            = "stack.b2b.user.deleted"
 	QueueB2BGroupLifecycle         = "stack.b2b.group.lifecycle"
 	QueueAppCommands               = "stack.app.commands.queue"
+	QueueBillingLifecycle          = "stack.billing.lifecycle"
 )
 
 const (
@@ -29,7 +31,34 @@ const (
 	RoutingKeyUserDeletionRequested       = "user.deletion.requested"
 	RoutingKeyNextcloudMigrationRequested = "nextcloud.migration.requested"
 	RoutingKeyNextcloudMigrationCanceled  = "nextcloud.migration.canceled"
+	RoutingKeyPaymentFailed               = "payment.failed"
+	RoutingKeyPaymentRecovered            = "payment.recovered"
 )
+
+// BillingLifecycleMessage is published by the Cloudery when a payment event
+// changes what the user has to be told, not what they are allowed to do:
+// access control stays with the Cloudery.
+//
+// Exactly one of Domain and WorkplaceFqdn is set. Domain is a B2B
+// organization, and every instance under it gets the banner.
+type BillingLifecycleMessage struct {
+	Domain        string `json:"domain,omitempty"`
+	WorkplaceFqdn string `json:"workplaceFqdn,omitempty"`
+
+	// Status is the subscription status as Stripe reports it, verbatim, read
+	// back from the live subscription rather than from the event snapshot.
+	Status string `json:"status"`
+	// AttemptCount is the invoice attempt_count, passed through untouched. It
+	// returns to 1 when a new invoice opens.
+	AttemptCount int `json:"attemptCount,omitempty"`
+	// EventID is the Stripe event id, logged so a displayed banner can be
+	// traced back to what produced it.
+	EventID string `json:"eventId"`
+	// Timestamp is the Stripe event's own created time, in epoch seconds.
+	// Delivery is at-least-once and unordered, so this, not the arrival time,
+	// decides which event wins.
+	Timestamp int64 `json:"timestamp"`
+}
 
 // UserDeletionRequestedMessage is published when a user asks Twake to delete the account linked to the current cozy instance.
 type UserDeletionRequestedMessage struct {

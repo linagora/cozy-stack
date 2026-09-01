@@ -1406,3 +1406,15 @@ msgstr "Someone shared a folder with you:"
 
 msgid "Banners Quota Exceeded Text"
 msgstr "Вы достигли лимита хранилища."
+
+msgid "Banners Billing Restricted Title"
+msgstr "Ваше рабочее пространство временно ограничено"
+
+msgid "Banners Billing Restricted Text"
+msgstr "Нам не удалось обработать ваш платёж после нескольких попыток. Некоторые функции теперь ограничены для вашей организации, и ваша команда может не иметь возможности выполнять определённые действия.\n\nВаши данные в безопасности и не изменены. Полный доступ будет восстановлен сразу после обновления платежа."
+
+msgid "Banners Billing CTA Label"
+msgstr "Обновить способ оплаты"
+
+msgid "Banners Billing Support Label"
+msgstr "Связаться со службой поддержки"

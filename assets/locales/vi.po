@@ -1378,3 +1378,15 @@ msgstr "Someone shared a folder with you:"
 
 msgid "Banners Quota Exceeded Text"
 msgstr "Bạn đã đạt đến giới hạn dung lượng lưu trữ."
+
+msgid "Banners Billing Restricted Title"
+msgstr "Không gian làm việc của bạn tạm thời bị hạn chế"
+
+msgid "Banners Billing Restricted Text"
+msgstr "Chúng tôi không thể xử lý khoản thanh toán của bạn sau nhiều lần thử. Một số tính năng hiện bị hạn chế đối với tổ chức của bạn và nhóm của bạn có thể không thực hiện được một số thao tác.\n\nDữ liệu của bạn vẫn an toàn và không thay đổi. Quyền truy cập đầy đủ sẽ được khôi phục ngay khi khoản thanh toán của bạn được cập nhật."
+
+msgid "Banners Billing CTA Label"
+msgstr "Cập nhật phương thức thanh toán"
+
+msgid "Banners Billing Support Label"
+msgstr "Liên hệ bộ phận hỗ trợ"

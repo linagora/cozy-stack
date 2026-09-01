@@ -1347,8 +1347,16 @@ msgid "Banners Quota Exceeded Text"
 msgstr "You have reached your storage limit."
 
 
+msgid "Banners Billing Restricted Text"
+msgstr "We couldn't process your payment after several attempts. Some features are now limited for your organization and your team may not be able to perform certain actions.\n\nYour data remains safe and unchanged. Full access will be restored instantly once your payment is updated."
+
+msgid "Banners Billing CTA Label"
+msgstr "Update payment method"
 
 
 
+msgid "Banners Billing Restricted Title"
+msgstr "Your workspace is temporarily restricted"
 
-
+msgid "Banners Billing Support Label"
+msgstr "Contact support"
