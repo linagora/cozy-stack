@@ -12,8 +12,8 @@
       "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
       "id": 1,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"expr": "sum(k6_http_reqs_total{testid=~\"$testid\"})", "refId": "A"}],
-      "title": "Total requests",
+      "targets": [{"expr": "sum(k6_http_reqs_total{campaignid=~\"$campaignid\",testid=~\"$testid\",filesize=~\"$filesize\",concurrency=~\"$concurrency\",phase=~\"$phase\",operation=\"file-upload\"})", "refId": "A"}],
+      "title": "Total uploads",
       "type": "stat"
     },
     {
@@ -22,8 +22,8 @@
       "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
       "id": 2,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"expr": "avg(k6_http_req_failed_rate{testid=~\"$testid\"})", "refId": "A"}],
-      "title": "Request failure rate",
+      "targets": [{"expr": "avg(k6_upload_success_rate{campaignid=~\"$campaignid\",testid=~\"$testid\",filesize=~\"$filesize\",concurrency=~\"$concurrency\",phase=~\"$phase\",operation=\"file-upload\"})", "refId": "A"}],
+      "title": "Upload success rate",
       "type": "stat"
     },
     {
@@ -32,8 +32,8 @@
       "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
       "id": 3,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"expr": "avg(k6_http_req_duration_p95{testid=~\"$testid\"})", "refId": "A"}],
-      "title": "HTTP duration p95",
+      "targets": [{"expr": "avg(k6_http_req_duration_p95{campaignid=~\"$campaignid\",testid=~\"$testid\",filesize=~\"$filesize\",concurrency=~\"$concurrency\",phase=~\"$phase\",operation=\"file-upload\"})", "refId": "A"}],
+      "title": "Upload duration p95",
       "type": "stat"
     },
     {
@@ -42,7 +42,7 @@
       "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
       "id": 4,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"expr": "sum(k6_vus{testid=~\"$testid\"})", "refId": "A"}],
+      "targets": [{"expr": "sum(k6_vus{campaignid=~\"$campaignid\",testid=~\"$testid\",filesize=~\"$filesize\",concurrency=~\"$concurrency\",phase=~\"$phase\"})", "refId": "A"}],
       "title": "Virtual users",
       "type": "stat"
     },
@@ -52,8 +52,8 @@
       "gridPos": {"h": 9, "w": 12, "x": 0, "y": 5},
       "id": 5,
       "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
-      "targets": [{"expr": "sum(rate(k6_http_reqs_total{testid=~\"$testid\"}[$__rate_interval]))", "legendFormat": "requests/s", "refId": "A"}],
-      "title": "Request rate",
+      "targets": [{"expr": "sum by (concurrency) (rate(k6_http_reqs_total{campaignid=~\"$campaignid\",testid=~\"$testid\",filesize=~\"$filesize\",concurrency=~\"$concurrency\",phase=~\"$phase\",operation=\"file-upload\"}[$__rate_interval]))", "legendFormat": "{{concurrency}} VUs", "refId": "A"}],
+      "title": "Upload throughput by concurrency",
       "type": "timeseries"
     },
     {
@@ -63,11 +63,29 @@
       "id": 6,
       "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
       "targets": [
-        {"expr": "avg(k6_http_req_duration_p90{testid=~\"$testid\"})", "legendFormat": "p90", "refId": "A"},
-        {"expr": "avg(k6_http_req_duration_p95{testid=~\"$testid\"})", "legendFormat": "p95", "refId": "B"},
-        {"expr": "avg(k6_http_req_duration_p99{testid=~\"$testid\"})", "legendFormat": "p99", "refId": "C"}
+        {"expr": "avg by (concurrency) (k6_http_req_duration_p95{campaignid=~\"$campaignid\",testid=~\"$testid\",filesize=~\"$filesize\",concurrency=~\"$concurrency\",phase=~\"$phase\",operation=\"file-upload\"})", "legendFormat": "p95 at {{concurrency}} VUs", "refId": "A"}
       ],
-      "title": "HTTP request duration",
+      "title": "Upload p95 by concurrency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "id": 7,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "sum(rate(http_all_total_duration_count{job=\"cozy-stack-local\"}[$__rate_interval]))", "legendFormat": "stack requests/s", "refId": "A"}],
+      "title": "Local cozy-stack request rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "id": 8,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "avg(http_all_total_duration{job=\"cozy-stack-local\",quantile=\"0.99\"})", "legendFormat": "stack p99", "refId": "A"}],
+      "title": "Local cozy-stack HTTP p99",
       "type": "timeseries"
     }
   ],
@@ -79,13 +97,69 @@
       {
         "current": {},
         "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "definition": "label_values(k6_http_reqs_total, testid)",
+        "definition": "label_values(k6_http_reqs_total, campaignid)",
+        "includeAll": true,
+        "label": "Campaign",
+        "multi": true,
+        "name": "campaignid",
+        "options": [],
+        "query": {"query": "label_values(k6_http_reqs_total, campaignid)", "refId": "PrometheusVariableQueryEditor-CampaignVariableQuery"},
+        "refresh": 1,
+        "sort": 2,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "definition": "label_values(k6_http_reqs_total{campaignid=~\"$campaignid\"}, testid)",
         "includeAll": true,
         "label": "Test ID",
         "multi": true,
         "name": "testid",
         "options": [],
-        "query": {"query": "label_values(k6_http_reqs_total, testid)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+        "query": {"query": "label_values(k6_http_reqs_total{campaignid=~\"$campaignid\"}, testid)", "refId": "PrometheusVariableQueryEditor-TestVariableQuery"},
+        "refresh": 1,
+        "sort": 2,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "definition": "label_values(k6_http_reqs_total{campaignid=~\"$campaignid\"}, filesize)",
+        "includeAll": true,
+        "label": "File size",
+        "multi": true,
+        "name": "filesize",
+        "options": [],
+        "query": {"query": "label_values(k6_http_reqs_total{campaignid=~\"$campaignid\"}, filesize)", "refId": "PrometheusVariableQueryEditor-FileSizeVariableQuery"},
+        "refresh": 1,
+        "sort": 2,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "definition": "label_values(k6_http_reqs_total{campaignid=~\"$campaignid\"}, concurrency)",
+        "includeAll": true,
+        "label": "Concurrency",
+        "multi": true,
+        "name": "concurrency",
+        "options": [],
+        "query": {"query": "label_values(k6_http_reqs_total{campaignid=~\"$campaignid\"}, concurrency)", "refId": "PrometheusVariableQueryEditor-ConcurrencyVariableQuery"},
+        "refresh": 1,
+        "sort": 3,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "definition": "label_values(k6_http_reqs_total{campaignid=~\"$campaignid\"}, phase)",
+        "includeAll": true,
+        "label": "Phase",
+        "multi": true,
+        "name": "phase",
+        "options": [],
+        "query": {"query": "label_values(k6_http_reqs_total{campaignid=~\"$campaignid\"}, phase)", "refId": "PrometheusVariableQueryEditor-PhaseVariableQuery"},
         "refresh": 1,
         "sort": 2,
         "type": "query"
@@ -97,5 +171,5 @@
   "timezone": "browser",
   "title": "Twake Drive k6 Overview",
   "uid": "twake-drive-k6",
-  "version": 1
+  "version": 2
 }
