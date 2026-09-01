@@ -1,18 +1,24 @@
-const SUPPORTED_UPLOAD_SIZES = ['1K', '100K', '1M', '10M', '100M', '1G']
+import {
+  isUploadDataSize,
+  uploadDataSizes,
+  type UploadDataSize,
+} from './upload-sizes.ts'
+
 const MUTATION_SIZE = 256
+const configuredUploadDataSize = __ENV.FILE_SIZE || '1K'
 
-export const uploadDataSize = __ENV.FILE_SIZE || '1K'
-
-if (!SUPPORTED_UPLOAD_SIZES.includes(uploadDataSize)) {
+if (!isUploadDataSize(configuredUploadDataSize)) {
   throw new Error(
-    `Unknown FILE_SIZE ${uploadDataSize}. Expected one of: ${SUPPORTED_UPLOAD_SIZES.join(', ')}`
+    `Unknown FILE_SIZE ${configuredUploadDataSize}. Expected one of: ${uploadDataSizes.join(', ')}`,
   )
 }
+
+export const uploadDataSize: UploadDataSize = configuredUploadDataSize
 
 const uploadData = open(`/fixtures/${uploadDataSize.toLowerCase()}.bin`, 'b')
 const uploadDataBytes = new Uint8Array(uploadData)
 
-export function randomizeUploadData(marker) {
+export function randomizeUploadData(marker: string): ArrayBuffer {
   const mutationLength = Math.min(MUTATION_SIZE, uploadDataBytes.length)
   const uniqueHeader = `twake-load:${marker}\n`
   let state = 2166136261

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "types": ["k6"]
+  },
+  "include": ["fixtures/**/*.ts", "lib/**/*.ts", "scenarios/**/*.ts"],
+  "exclude": ["node_modules", "scripts"]
+}

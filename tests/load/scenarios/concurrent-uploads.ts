@@ -2,15 +2,19 @@ import { check } from 'k6'
 import exec from 'k6/execution'
 import { Rate } from 'k6/metrics'
 
-import { randomizeUploadData, uploadDataSize } from '../fixtures/upload-data.js'
+import type { Options } from 'k6/options'
+
+import { randomizeUploadData, uploadDataSize } from '../fixtures/upload-data.ts'
 import {
   fetchCreatedTestDirectory,
   fetchDestroyResponse,
   fetchTrashResponse,
   fetchUploadResponse,
-} from '../lib/cozy-files.js'
+  type RunTags,
+  type TestDirectory,
+} from '../lib/cozy-files.ts'
 
-function getPositiveInteger(environmentName, fallback) {
+function getPositiveInteger(environmentName: string, fallback: number): number {
   const value = Number(__ENV[environmentName] || fallback)
 
   if (!Number.isInteger(value) || value < 1) {
@@ -20,7 +24,7 @@ function getPositiveInteger(environmentName, fallback) {
   return value
 }
 
-function getSuccessRate() {
+function getSuccessRate(): number {
   const value = Number(__ENV.MIN_SUCCESS_RATE || 0.99)
 
   if (!Number.isFinite(value) || value <= 0 || value > 1) {
@@ -30,7 +34,7 @@ function getSuccessRate() {
   return value
 }
 
-function getOptionalP95Limit() {
+function getOptionalP95Limit(): number | null {
   if (!__ENV.P95_LIMIT_MS) {
     return null
   }
@@ -44,6 +48,16 @@ function getOptionalP95Limit() {
   return value
 }
 
+function getRequiredEnvironmentValue(environmentName: string): string {
+  const value = __ENV[environmentName]
+
+  if (!value) {
+    throw new Error(`${environmentName} is required`)
+  }
+
+  return value
+}
+
 const uploadVirtualUsers = getPositiveInteger('UPLOAD_VUS', 1)
 const uploadSuccessRate = getSuccessRate()
 const uploadP95Limit = getOptionalP95Limit()
@@ -51,7 +65,7 @@ const uploadSuccess = new Rate('upload_success')
 const cleanupSuccess = new Rate('cleanup_success')
 
 const uploadThresholdTags = '{operation:file-upload}'
-const thresholds = {
+const thresholds: NonNullable<Options['thresholds']> = {
   cleanup_success: ['rate==1'],
   dropped_iterations: ['count==0'],
   [`http_req_duration${uploadThresholdTags}`]: [
@@ -61,7 +75,7 @@ const thresholds = {
   [`upload_success${uploadThresholdTags}`]: [`rate>=${uploadSuccessRate}`],
 }
 
-export const options = {
+export const options: Options = {
   discardResponseBodies: true,
   scenarios: {
     concurrent_uploads: {
@@ -75,7 +89,7 @@ export const options = {
   thresholds,
 }
 
-function makeRunTags() {
+function makeRunTags(): RunTags {
   return {
     campaignid: __ENV.CAPACITY_RUN_ID || __ENV.TEST_ID || 'upload',
     concurrency: String(uploadVirtualUsers),
@@ -85,13 +99,9 @@ function makeRunTags() {
   }
 }
 
-export function setup() {
-  if (!__ENV.BASE_URL) {
-    throw new Error('BASE_URL is required')
-  }
-  if (!__ENV.COZY_ACCESS_TOKEN) {
-    throw new Error('COZY_ACCESS_TOKEN is required')
-  }
+export function setup(): TestDirectory {
+  const baseUrl = getRequiredEnvironmentValue('BASE_URL')
+  const accessToken = getRequiredEnvironmentValue('COZY_ACCESS_TOKEN')
 
   const directoryName = [
     'twake-load',
@@ -101,20 +111,24 @@ export function setup() {
   ].join('-')
 
   return fetchCreatedTestDirectory({
-    accessToken: __ENV.COZY_ACCESS_TOKEN,
-    baseUrl: __ENV.BASE_URL,
+    accessToken,
+    baseUrl,
     directoryName,
     tags: makeRunTags(),
     timeout: __ENV.UPLOAD_TIMEOUT || '30m',
   })
 }
 
-function makeUploadName(marker) {
+function makeUploadName(marker: string): string {
   return `load-${uploadDataSize.toLowerCase()}-${marker}.bin`
 }
 
 // k6 requires a default export for the virtual-user entry point.
-export default function runConcurrentUploadsScenario(testDirectory) {
+export default function runConcurrentUploadsScenario(
+  testDirectory: TestDirectory,
+): null {
+  const baseUrl = getRequiredEnvironmentValue('BASE_URL')
+  const accessToken = getRequiredEnvironmentValue('COZY_ACCESS_TOKEN')
   const marker = [
     exec.scenario.iterationInTest,
     exec.vu.idInTest,
@@ -123,12 +137,10 @@ export default function runConcurrentUploadsScenario(testDirectory) {
     __ENV.TEST_ID || 'upload',
   ].join('-')
   const filename = makeUploadName(marker)
-
   const uploadBody = randomizeUploadData(marker)
-
   const response = fetchUploadResponse({
-    accessToken: __ENV.COZY_ACCESS_TOKEN,
-    baseUrl: __ENV.BASE_URL,
+    accessToken,
+    baseUrl,
     body: uploadBody,
     directoryId: testDirectory.id,
     filename,
@@ -137,24 +149,26 @@ export default function runConcurrentUploadsScenario(testDirectory) {
   })
 
   const isUploadSuccessful = check(response, {
-    'upload status is 201': (result) => result.status === 201,
+    'upload status is 201': (result): boolean => result.status === 201,
   })
 
   uploadSuccess.add(isUploadSuccessful, {
     ...makeRunTags(),
     operation: 'file-upload',
   })
+
+  return null
 }
 
-export function teardown(testDirectory) {
-  if (!testDirectory?.id) {
+export function teardown(testDirectory: TestDirectory): null {
+  if (!testDirectory.id) {
     cleanupSuccess.add(false, makeRunTags())
     throw new Error('Cannot clean up load-test directory: setup returned no id')
   }
 
   const requestOptions = {
-    accessToken: __ENV.COZY_ACCESS_TOKEN,
-    baseUrl: __ENV.BASE_URL,
+    accessToken: getRequiredEnvironmentValue('COZY_ACCESS_TOKEN'),
+    baseUrl: getRequiredEnvironmentValue('BASE_URL'),
     directoryId: testDirectory.id,
     tags: makeRunTags(),
     timeout: __ENV.UPLOAD_TIMEOUT || '30m',
@@ -178,4 +192,6 @@ export function teardown(testDirectory) {
       `Could not permanently delete load-test directory ${testDirectory.id}: expected status 204, got ${destroyResponse.status}`,
     )
   }
+
+  return null
 }
