@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/pkg/i18n"
+	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,6 +76,60 @@ func TestEvaluateQuota(t *testing.T) {
 	})
 }
 
+func TestMerge(t *testing.T) {
+	dismissedAt := now.Add(-24 * time.Hour)
+
+	t.Run("keeps a dismissal when the occurrence is the same", func(t *testing.T) {
+		stored := &Banner{DocID: "abc", DocRev: "1-aaa", BannerID: "quota.almost-full", DismissedAt: &dismissedAt}
+		fresh := &Banner{BannerID: "quota.almost-full", Text: "updated wording"}
+
+		merged := Merge(fresh, stored)
+
+		assert.Equal(t, "abc", merged.DocID)
+		assert.Equal(t, "1-aaa", merged.DocRev)
+		require.NotNil(t, merged.DismissedAt)
+		assert.Equal(t, dismissedAt, *merged.DismissedAt)
+	})
+
+	t.Run("clears a dismissal when the occurrence changed", func(t *testing.T) {
+		stored := &Banner{DocID: "abc", BannerID: "quota.almost-full", DismissedAt: &dismissedAt}
+		fresh := &Banner{BannerID: "quota.exceeded"}
+
+		merged := Merge(fresh, stored)
+
+		assert.Nil(t, merged.DismissedAt, "a new occurrence has to be seen again")
+	})
+
+	t.Run("leaves a first materialization untouched", func(t *testing.T) {
+		fresh := &Banner{BannerID: "quota.exceeded"}
+		merged := Merge(fresh, nil)
+		assert.Empty(t, merged.DocID)
+		assert.Nil(t, merged.DismissedAt)
+	})
+}
+
+func TestChanged(t *testing.T) {
+	base := &Banner{BannerID: "quota.exceeded", Severity: SeverityError, Text: "full"}
+
+	t.Run("an identical evaluation does not rewrite the document", func(t *testing.T) {
+		same := *base
+		assert.False(t, changed(&same, base))
+	})
+
+	t.Run("new wording rewrites it", func(t *testing.T) {
+		other := *base
+		other.Text = "still full"
+		assert.True(t, changed(&other, base))
+	})
+
+	t.Run("a call to action appearing or disappearing rewrites it", func(t *testing.T) {
+		withCTA := *base
+		withCTA.CTA = &CTA{Label: "Upgrade", URL: "https://example.org"}
+		assert.True(t, changed(&withCTA, base))
+		assert.True(t, changed(base, &withCTA))
+	})
+}
+
 func TestEvaluateQuotaDocumentShape(t *testing.T) {
 	state := QuotaState{
 		Used: 9 * gigabyte, Quota: 10 * gigabyte, Locale: "fr",
@@ -124,6 +179,67 @@ func TestEvaluateQuotaDocumentShape(t *testing.T) {
 	})
 }
 
+func TestMergeCarriesTheWindowForward(t *testing.T) {
+	began := now.Add(-72 * time.Hour)
+
+	t.Run("the same occurrence keeps the moment it started", func(t *testing.T) {
+		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
+		fresh := &Banner{BannerID: BannerIDQuotaAlmostFull, StartsAt: &now}
+
+		merged := Merge(fresh, stored)
+
+		require.NotNil(t, merged.StartsAt)
+		assert.Equal(t, began, *merged.StartsAt)
+	})
+
+	t.Run("a new occurrence starts now", func(t *testing.T) {
+		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
+		fresh := &Banner{BannerID: BannerIDQuotaExceeded, StartsAt: &now}
+
+		merged := Merge(fresh, stored)
+
+		require.NotNil(t, merged.StartsAt)
+		assert.Equal(t, now, *merged.StartsAt)
+	})
+
+	t.Run("merging does not write through to the evaluated banner", func(t *testing.T) {
+		fresh := &Banner{BannerID: BannerIDQuotaExceeded, CTA: &CTA{Label: "Upgrade"}}
+		merged := Merge(fresh, nil)
+		stamp(merged, now)
+
+		assert.Nil(t, fresh.Metadata, "stamping the merged copy must not reach the caller's banner")
+		assert.NotSame(t, fresh.CTA, merged.CTA)
+	})
+}
+
+func TestChangedCoversEveryProducedField(t *testing.T) {
+	later := now.Add(24 * time.Hour)
+	base := &Banner{
+		BannerID: BannerIDQuotaExceeded, Category: CategoryQuota, Severity: SeverityError,
+		Surface: SurfaceBanner, Text: "full", Lang: "en", Priority: 100, StartsAt: &now,
+	}
+
+	t.Run("a moved validity window rewrites it", func(t *testing.T) {
+		other := *base
+		other.EndsAt = &later
+		assert.True(t, changed(&other, base))
+		assert.True(t, changed(base, &other))
+	})
+
+	t.Run("a different category rewrites it", func(t *testing.T) {
+		other := *base
+		other.Category = CategorySystem
+		assert.True(t, changed(&other, base))
+	})
+
+	t.Run("an equal window does not", func(t *testing.T) {
+		sameInstant := now.In(time.FixedZone("CEST", 2*60*60))
+		other := *base
+		other.StartsAt = &sameInstant
+		assert.False(t, changed(&other, base), "the same instant in another zone is not a change")
+	})
+}
+
 func TestEvaluateQuotaFillsEveryContractField(t *testing.T) {
 	b := EvaluateQuota(QuotaState{
 		Used: 9 * gigabyte, Quota: 10 * gigabyte, Locale: "fr",
@@ -146,4 +262,52 @@ func TestEvaluateQuotaFillsEveryContractField(t *testing.T) {
 	assert.Equal(t, TriggerUsageThreshold, b.Source.Trigger)
 	assert.Equal(t, now, b.Source.At)
 	assert.Nil(t, b.DismissedAt)
+}
+
+func TestStampRepairsAnAdoptedEnvelope(t *testing.T) {
+	t.Run("an application authored envelope is corrected, not trusted", func(t *testing.T) {
+		b := &Banner{BannerID: BannerIDQuotaExceeded, Metadata: &metadata.CozyMetadata{
+			CreatedByApp: "drive", DocTypeVersion: "7",
+		}}
+
+		stamp(b, now)
+
+		assert.Equal(t, stackAuthor, b.Metadata.CreatedByApp)
+		assert.Equal(t, DocTypeVersion, b.Metadata.DocTypeVersion)
+		assert.Equal(t, metadata.MetadataVersion, b.Metadata.MetadataVersion,
+			"the contract has metadataVersion on every banner")
+		assert.Equal(t, now, b.Metadata.CreatedAt, "a zero createdAt is not publishable")
+	})
+
+	t.Run("an envelope the stack has to repair is rewritten even when the wording matches", func(t *testing.T) {
+		stored := &Banner{
+			DocID: "abc", BannerID: BannerIDQuotaExceeded, Text: "full",
+			Metadata: &metadata.CozyMetadata{CreatedByApp: "drive", MetadataVersion: 1, DocTypeVersion: DocTypeVersion},
+		}
+		merged := Merge(&Banner{BannerID: BannerIDQuotaExceeded, Text: "full"}, stored)
+		stamp(merged, now)
+
+		assert.True(t, changed(merged, stored),
+			"a document clients drop as untrusted must not be left alone")
+	})
+}
+
+func TestAModalAlwaysHasAWayOut(t *testing.T) {
+	t.Run("a blocking dialog with no action becomes closable", func(t *testing.T) {
+		b := &Banner{Surface: SurfaceModal, Dismissible: false}
+		ensureEscapable(b)
+		assert.True(t, b.Dismissible, "a reload is not a way out, it brings the same banner back")
+	})
+
+	t.Run("a blocking dialog with an action is left alone", func(t *testing.T) {
+		b := &Banner{Surface: SurfaceModal, Dismissible: false, CTA: &CTA{Label: "Pay", URL: "https://x.example"}}
+		ensureEscapable(b)
+		assert.False(t, b.Dismissible, "the call to action is the way out")
+	})
+
+	t.Run("an inline banner is never forced open", func(t *testing.T) {
+		b := &Banner{Surface: SurfaceBanner, Dismissible: false}
+		ensureEscapable(b)
+		assert.False(t, b.Dismissible, "a banner does not cover the application")
+	})
 }
