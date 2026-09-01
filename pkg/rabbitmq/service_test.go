@@ -101,8 +101,11 @@ func TestRabbitMQService(t *testing.T) {
 		svc, err := rabbitmq.NewService(cfg)
 		require.NoError(t, err)
 
-		_, err = svc.StartManagers()
+		managers, err := svc.StartManagers()
 		require.NoError(t, err)
+		for _, manager := range managers {
+			require.NoError(t, manager.WaitReady(testCtx(t)))
+		}
 
 		slug, domain := inst.SlugAndDomain()
 
