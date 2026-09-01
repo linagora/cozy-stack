@@ -5,14 +5,16 @@ This directory contains the first infrastructure milestone for
 as an on-demand container, stores metrics in Prometheus, and provisions a
 Grafana dashboard.
 
-The harness includes the hello-world baseline and an authenticated concurrent
-file-upload workload. Organization membership, sharing, and other file
-workloads will be added as the capacity model is implemented.
+The harness includes the hello-world baseline, an authenticated concurrent
+file-upload workload, and an adaptive search for the maximum sustained upload
+concurrency of one Cozy instance. Organization membership, sharing, and other
+file workloads remain separate future scenarios.
 
 ## Prerequisites
 
 - Docker Engine with Docker Compose
 - GNU Make
+- `jq`
 
 ## Run locally
 
@@ -33,13 +35,39 @@ $ make dashboard-url
 
 Grafana defaults to <http://localhost:3000/> with the local credentials
 `admin` / `admin`. Copy `.env.example` to `.env` to change the credentials,
-published port, retention size, or restart policy. Do not commit `.env`.
+target URL, published port, retention size, or restart policy. Do not commit
+`.env`.
 
 To exercise a Cozy stack running on the host, `cozy.localhost` and
-`host.docker.internal` resolve to the Docker host from the k6 container:
+`host.docker.internal` resolve to the Docker host from the k6 container. The
+local stack's port 6060 metrics endpoint is also scraped when it is available.
+
+Start CouchDB, then run the stack and create its development instance:
 
 ```console
-$ make run BASE_URL=http://cozy.localhost:8080 VUS=10 DURATION=1m
+$ make run
+```
+
+In another terminal:
+
+```console
+$ make instance
+$ cozy-stack instances client-oauth cozy.localhost:8080 http://localhost/twake-load "Twake Drive load tests" twake-drive-load
+$ cozy-stack instances token-oauth cozy.localhost:8080 <client-id> io.cozy.files --expire 24h
+```
+
+Put the returned access token in the ignored `.env`:
+
+```dotenv
+BASE_URL=http://cozy.localhost:8080
+COZY_ACCESS_TOKEN=replace-with-the-local-token
+```
+
+The values from `.env` are loaded by both Make and Docker Compose, so the
+explicit URL is optional after this setup:
+
+```console
+$ make upload FILE_SIZE=1M VUS=10
 ```
 
 ## Concurrent uploads
@@ -56,12 +84,6 @@ generator streams random bytes directly to disk, while
 `fixtures/upload-data.js` owns loading and per-upload mutation for reuse by
 multiple scenarios.
 
-Add an OAuth token with `io.cozy.files` permission to the ignored `.env`:
-
-```dotenv
-COZY_ACCESS_TOKEN=replace-with-a-target-token
-```
-
 Run one upload per virtual user against a local stack:
 
 ```console
@@ -76,8 +98,11 @@ uploads in five waves of up to 10 concurrent requests:
 $ make upload BASE_URL=http://cozy.localhost:8080 FILE_SIZE=100K VUS=10 ITERATIONS_PER_VU=5
 ```
 
-The scenario intentionally does not delete files during the measured run.
-Use a dedicated test instance and remove `load-*.bin` files after the run.
+Each k6 point creates a uniquely named directory before starting its VUs. All
+VUs in that point share the same Cozy instance, OAuth token, and directory.
+After measurement, teardown moves the directory to the trash and permanently
+deletes it. A setup or cleanup failure is reported as an infrastructure
+failure rather than a capacity result.
 
 Before each request, the scenario changes 256 bytes in the selected in-memory
 fixture. The mutation includes the test ID, VU, iteration, time, and a random
@@ -86,10 +111,70 @@ whole fixture. The base fixture on disk remains unchanged.
 
 Run each size separately. According to the
 [k6 guidance for large tests](https://grafana.com/docs/k6/latest/testing-guides/running-large-tests/#file-upload-considerations),
-file uploads are copied for each VU and require significant memory. In
-particular, raise the `1G` concurrency gradually while monitoring the load
-generator's memory, CPU, and network utilization so the generator does not
-become the bottleneck.
+file uploads are copied for each VU and require significant memory. The
+capacity coordinator applies disk and Docker-memory guards before generating
+the selected fixture or starting k6.
+
+## Find upload capacity
+
+Run the adaptive search for one file size:
+
+```console
+$ make upload-capacity FILE_SIZE=10M
+```
+
+Or run all six sizes sequentially:
+
+```console
+$ make upload-capacity-all
+```
+
+For each size, the coordinator:
+
+1. Measures five uploads at 1 VU to establish the same-size p95 baseline.
+2. Tries burst levels 2, 4, 8, and so on, with one upload per VU.
+3. Retries a failing burst once and uses a third run when the first two
+   disagree.
+4. Binary-searches between the last passing and first failing levels.
+5. Confirms the best candidate with three uploads per VU, searching downward
+   again if sustained confirmation fails.
+
+A point passes only when upload success is at least 99%, no iterations are
+dropped, and upload p95 is at most twice the 1-VU baseline. Tune these public
+parameters when the test contract changes:
+
+```console
+$ make upload-capacity FILE_SIZE=10M MAX_VUS=16 LATENCY_MULTIPLIER=2 MIN_SUCCESS_RATE=0.99 CONFIRMATION_ITERATIONS=3
+```
+
+Default search caps keep the load-generator footprint bounded:
+
+| File size | Default `MAX_VUS` |
+| --- | ---: |
+| `1K` | 256 |
+| `100K` | 256 |
+| `1M` | 128 |
+| `10M` | 32 |
+| `100M` | 8 |
+| `1G` | 2 |
+
+Before a campaign, the coordinator estimates k6 memory as
+`1 GiB + 3 × file size × MAX_VUS`. It also accounts for the fixture and the
+largest confirmation directory, and refuses to leave less than 5 GiB free on
+the load-generator filesystem. `FORCE_CAPACITY_RUN=1` bypasses these guards;
+use it only after checking Docker memory and both load-generator and Cozy
+storage manually.
+
+The aggregate report is written to
+`results/<campaign>-upload-capacity.json`. It records every attempt, p95,
+success rate, dropped and completed iterations, cleanup result, and the k6
+summary path. An `exact` result has a measured failing level above it. A
+`lower_bound` result is displayed as `maximum >= MAX_VUS`, because the
+configured cap passed and no higher level was attempted.
+
+Grafana can filter k6 metrics by campaign, test ID, file size, concurrency,
+and phase. Its local cozy-stack panels remain empty when no stack is listening
+on `host.docker.internal:6060`.
 
 ## Commands
 
@@ -102,6 +187,8 @@ $ make smoke
 $ make fixtures
 $ make upload-smoke
 $ make upload BASE_URL=https://target.example FILE_SIZE=1M VUS=10
+$ make upload-capacity BASE_URL=https://target.example FILE_SIZE=10M
+$ make upload-capacity-all BASE_URL=https://target.example
 $ make run BASE_URL=https://target.example VUS=10 DURATION=1m
 $ make status
 $ make logs
@@ -109,8 +196,8 @@ $ make down
 ```
 
 `make down` preserves the Prometheus and Grafana volumes. Every run writes a
-JSON summary under `results/` and tags Prometheus metrics with a unique
-`testid`.
+JSON summary under `results/` and tags Prometheus metrics with campaign, test,
+file-size, concurrency, and phase identifiers.
 
 Set `SCENARIO` to run another script below `scenarios/`:
 
