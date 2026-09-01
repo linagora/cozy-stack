@@ -14,7 +14,7 @@ file workloads remain separate future scenarios.
 
 - Docker Engine with Docker Compose
 - GNU Make
-- `jq`
+- Node.js 22 or newer with npm
 
 ## Run locally
 
@@ -78,10 +78,10 @@ the `fixtures/` directory, while generated binary files remain ignored. A run
 generates only its selected size; use `make fixtures` to prepare the complete
 set in advance.
 
-Fixture generation is a shell preparation step because k6 JavaScript reads
-files during its initialization context and keeps upload data in memory. The
-generator streams random bytes directly to disk, while
-`fixtures/upload-data.js` owns loading and per-upload mutation for reuse by
+The TypeScript fixture generator runs through `tsx` and streams random bytes
+to disk with a bounded 1 MiB buffer. k6 loads the selected file during its
+initialization context and keeps upload data in memory, while
+`fixtures/upload-data.ts` owns loading and per-upload mutation for reuse by
 multiple scenarios.
 
 Run one upload per virtual user against a local stack:
@@ -150,13 +150,13 @@ $ make upload-capacity FILE_SIZE=10M MAX_VUS=16 LATENCY_MULTIPLIER=2 MIN_SUCCESS
 Default search caps keep the load-generator footprint bounded:
 
 | File size | Default `MAX_VUS` |
-| --- | ---: |
-| `1K` | 256 |
-| `100K` | 256 |
-| `1M` | 128 |
-| `10M` | 32 |
-| `100M` | 8 |
-| `1G` | 2 |
+| --------- | ----------------: |
+| `1K`      |               256 |
+| `100K`    |               256 |
+| `1M`      |               128 |
+| `10M`     |                32 |
+| `100M`    |                 8 |
+| `1G`      |                 2 |
 
 Before a campaign, the coordinator estimates k6 memory as
 `1 GiB + 3 × file size × MAX_VUS`. It also accounts for the fixture and the
@@ -179,6 +179,8 @@ on `host.docker.internal:6060`.
 ## Commands
 
 ```console
+$ make install
+$ make typecheck
 $ make doctor
 $ make config
 $ make pull
@@ -202,8 +204,13 @@ file-size, concurrency, and phase identifiers.
 Set `SCENARIO` to run another script below `scenarios/`:
 
 ```console
-$ make run SCENARIO=http.js BASE_URL=https://target.example
+$ make run SCENARIO=http.ts BASE_URL=https://target.example
 ```
+
+k6 2.2 runs the scenario `.ts` files directly. The fixture and capacity tools
+run through `tsx`. Separate strict TypeScript configurations keep k6 globals
+out of the Node tools and Node globals out of the k6 scenarios; `make
+typecheck` validates both environments without emitting build artifacts.
 
 ## Deployment
 
@@ -225,6 +232,7 @@ network.
 
 ## Components
 
+- Node.js 22 with TypeScript and `tsx` for local tooling
 - `grafana/k6:2.2.0`
 - `prom/prometheus:v3.14.0`
 - `grafana/grafana:13.2.0`
