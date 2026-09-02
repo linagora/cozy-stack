@@ -80,7 +80,8 @@ services:
       LOCAL_GROUP_ID: ${HOST_GID:-1000}
     ports:
       - "${COZY_STACK_BIND_ADDRESS:-127.0.0.1}:${COZY_STACK_PORT:-8080}:8080"
-      - "${COZY_STACK_BIND_ADDRESS:-127.0.0.1}:${COZY_STACK_ADMIN_PORT:-6060}:6060"
+    expose:
+      - "6060"
     volumes:
       - ./cozy/cozy.yaml:/cozy-config/cozy.yaml:ro
       - cozy-stack-config:/etc/cozy
