@@ -2,6 +2,7 @@ SHELL := /bin/bash
 -include .env
 
 COMPOSE := docker compose
+COZY_COMPOSE := $(COMPOSE) --profile cozy
 NODE_BIN := ./node_modules/.bin
 NODE_MODULES_MARKER := node_modules/.load-ready
 SCENARIO ?= http.ts
@@ -21,13 +22,17 @@ LATENCY_MULTIPLIER ?= 2
 MIN_SUCCESS_RATE ?= 0.99
 CONFIRMATION_ITERATIONS ?= 3
 FORCE_CAPACITY_RUN ?= 0
+COZY_INSTANCE_DOMAIN ?= load.localhost:8080
+COZY_BASE_URL ?= http://$(COZY_INSTANCE_DOMAIN)
+COZY_CLIENT_SOFTWARE_ID ?= twake-drive-load-local
+COZY_TOKEN_EXPIRATION ?= 24h
 HOST_UID ?= $(shell id -u)
 HOST_GID ?= $(shell id -g)
 
 export HOST_UID
 export HOST_GID
 
-.PHONY: help doctor install typecheck config pull up fixtures upload-fixture smoke upload-smoke upload upload-capacity upload-capacity-all run status logs down dashboard-url
+.PHONY: help doctor install typecheck config pull observability-up up cozy-up cozy-provision cozy-upload cozy-capacity cozy-capacity-all cozy-status cozy-logs cozy-down fixtures upload-fixture smoke upload-smoke upload upload-capacity upload-capacity-all run status logs down dashboard-url
 
 help:
 	@echo "make install                                 Install the load-harness Node tools"
@@ -36,6 +41,9 @@ help:
 	@echo "make smoke                                   Run the one-iteration local smoke test"
 	@echo "make fixtures                                Generate every upload fixture"
 	@echo "make upload-smoke                            Run two concurrent 1K mock uploads"
+	@echo "make cozy-up                                 Build and start the local Cozy services"
+	@echo "make cozy-upload FILE_SIZE=1K VUS=1          Provision and test the local Cozy stack"
+	@echo "make cozy-capacity FILE_SIZE=1K MAX_VUS=8    Measure the local Cozy stack"
 	@echo "make upload BASE_URL=https://... FILE_SIZE=1M VUS=10"
 	@echo "make upload-capacity BASE_URL=https://... FILE_SIZE=10M"
 	@echo "make upload-capacity-all BASE_URL=https://..."
@@ -63,8 +71,35 @@ config:
 pull:
 	@$(COMPOSE) --profile runner pull
 
-up:
-	@$(COMPOSE) up -d --remove-orphans prometheus grafana mock
+observability-up:
+	@$(COMPOSE) up -d --remove-orphans prometheus grafana
+
+up: observability-up
+	@$(COMPOSE) up -d --remove-orphans mock
+
+cozy-up:
+	@$(COZY_COMPOSE) up -d --build --wait couchdb redis rabbitmq cozy-stack
+
+cozy-provision: $(NODE_MODULES_MARKER) cozy-up
+	@COZY_INSTANCE_DOMAIN="$(COZY_INSTANCE_DOMAIN)" COZY_BASE_URL="$(COZY_BASE_URL)" COZY_CLIENT_SOFTWARE_ID="$(COZY_CLIENT_SOFTWARE_ID)" COZY_TOKEN_EXPIRATION="$(COZY_TOKEN_EXPIRATION)" $(NODE_BIN)/tsx scripts/provision-cozy-stack.ts
+
+cozy-upload: cozy-provision
+	@$(MAKE) upload BASE_URL="$(COZY_BASE_URL)" FILE_SIZE="$(FILE_SIZE)" VUS="$(VUS)" ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" TEST_ID="$(TEST_ID)"
+
+cozy-capacity: cozy-provision
+	@$(MAKE) upload-capacity BASE_URL="$(COZY_BASE_URL)" FILE_SIZE="$(FILE_SIZE)" MAX_VUS="$(MAX_VUS)" LATENCY_MULTIPLIER="$(LATENCY_MULTIPLIER)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)"
+
+cozy-capacity-all: cozy-provision
+	@$(MAKE) upload-capacity-all BASE_URL="$(COZY_BASE_URL)" LATENCY_MULTIPLIER="$(LATENCY_MULTIPLIER)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)"
+
+cozy-status:
+	@$(COZY_COMPOSE) ps
+
+cozy-logs:
+	@$(COZY_COMPOSE) logs --tail=200 couchdb redis rabbitmq cozy-stack
+
+cozy-down:
+	@$(COZY_COMPOSE) stop cozy-stack rabbitmq redis couchdb
 
 fixtures: $(NODE_MODULES_MARKER)
 	@$(NODE_BIN)/tsx scripts/generate-upload-fixtures.ts all
@@ -85,7 +120,7 @@ upload-smoke: upload-fixture up
 	@$(COMPOSE) run --rm -e BASE_URL=http://mock -e COZY_ACCESS_TOKEN=mock-token -e FILE_SIZE="$(FILE_SIZE)" -e UPLOAD_VUS="$(VUS)" -e ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" -e CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" -e CAPACITY_PHASE="smoke" -e MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" -e P95_LIMIT_MS="$(P95_LIMIT_MS)" -e TEST_ID="$(TEST_ID)" k6 run -o experimental-prometheus-rw --tag campaignid="$(or $(CAPACITY_RUN_ID),$(TEST_ID))" --tag concurrency="$(VUS)" --tag filesize="$(FILE_SIZE)" --tag phase="smoke" --tag testid="$(TEST_ID)" --summary-export="/results/$(TEST_ID)-summary.json" /scripts/concurrent-uploads.ts
 	@echo "Upload smoke result: results/$(TEST_ID)-summary.json"
 
-upload: upload-fixture up
+upload: upload-fixture observability-up
 	@mkdir -p results
 	@$(COMPOSE) run --rm -e BASE_URL="$(BASE_URL)" $(if $(filter http://mock,$(BASE_URL)),-e COZY_ACCESS_TOKEN=mock-token,) -e FILE_SIZE="$(FILE_SIZE)" -e UPLOAD_VUS="$(VUS)" -e ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" -e CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" -e CAPACITY_PHASE="$(CAPACITY_PHASE)" -e MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" -e P95_LIMIT_MS="$(P95_LIMIT_MS)" -e MAX_DURATION="$(MAX_DURATION)" -e UPLOAD_TIMEOUT="$(UPLOAD_TIMEOUT)" -e TEST_ID="$(TEST_ID)" k6 run -o experimental-prometheus-rw --tag campaignid="$(or $(CAPACITY_RUN_ID),$(TEST_ID))" --tag concurrency="$(VUS)" --tag filesize="$(FILE_SIZE)" --tag phase="$(CAPACITY_PHASE)" --tag testid="$(TEST_ID)" --summary-export="/results/$(TEST_ID)-summary.json" /scripts/concurrent-uploads.ts
 	@echo "Upload result: results/$(TEST_ID)-summary.json"

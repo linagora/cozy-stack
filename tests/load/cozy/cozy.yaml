@@ -1,0 +1,38 @@
+host: 0.0.0.0
+port: 8080
+subdomains: nested
+
+admin:
+  host: 0.0.0.0
+  port: 6060
+  secret_filename: /etc/cozy/cozy-admin-passphrase
+
+vault:
+  credentials_encryptor_key: /etc/cozy/vault.enc
+  credentials_decryptor_key: /etc/cozy/vault.dec
+
+couchdb:
+  url: http://cozy:cozy@couchdb:5984/
+
+fs:
+  url: file://localhost/var/lib/cozy/data
+
+redis:
+  addrs: redis:6379
+  databases:
+    jobs: 0
+    cache: 1
+    lock: 2
+    sessions: 3
+    downloads: 4
+    konnectors: 5
+    realtime: 6
+    log: 7
+    rate_limiting: 8
+
+rabbitmq:
+  enabled: true
+  nodes:
+    default:
+      enabled: true
+      url: amqp://cozy:cozy@rabbitmq:5672/
