@@ -215,9 +215,16 @@ summary path. An `exact` result has a measured failing level above it. A
 configured cap passed and no higher level was attempted.
 
 Grafana can filter k6 metrics by campaign, test ID, file size, concurrency,
-and phase. Its local cozy-stack panels use the bundled Compose target when that
-profile is running and the `host.docker.internal:6060` target for a stack
-started directly on the host.
+and phase. Use the Stack source selector to inspect either the bundled Compose
+target or a stack started directly on the host. The stack panels show scrape
+health, request rate, error rate, server latency, CPU, memory, goroutines, file
+descriptor usage, garbage collection, and upload-related worker queues.
+
+The stack HTTP metrics are labelled by method and status code, but not by
+route, file size, instance, or k6 campaign. During a controlled upload campaign,
+`POST` responses with status `201` are mostly file uploads, with one directory
+creation per test point. Use the shared dashboard time range to correlate stack
+and k6 metrics; use the k6 upload metrics for exact scenario attribution.
 
 ## Commands
 

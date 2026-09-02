@@ -74,8 +74,8 @@
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
       "id": 7,
       "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
-      "targets": [{"expr": "sum(rate(http_all_total_duration_count{job=\"cozy-stack-local\"}[$__rate_interval]))", "legendFormat": "stack requests/s", "refId": "A"}],
-      "title": "Local cozy-stack request rate",
+      "targets": [{"expr": "sum by (method, code) (rate(http_all_total_duration_count{job=\"$stackjob\"}[$__rate_interval]))", "legendFormat": "{{method}} {{code}}", "refId": "A"}],
+      "title": "Stack request rate",
       "type": "timeseries"
     },
     {
@@ -84,8 +84,94 @@
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
       "id": 8,
       "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
-      "targets": [{"expr": "avg(http_all_total_duration{job=\"cozy-stack-local\",quantile=\"0.99\"})", "legendFormat": "stack p99", "refId": "A"}],
-      "title": "Local cozy-stack HTTP p99",
+      "targets": [
+        {"expr": "http_all_total_duration{job=\"$stackjob\",quantile=\"0.99\"}", "legendFormat": "p99 {{method}} {{code}}", "refId": "A"},
+        {"expr": "sum by (method, code) (rate(http_all_total_duration_sum{job=\"$stackjob\"}[$__rate_interval])) / sum by (method, code) (rate(http_all_total_duration_count{job=\"$stackjob\"}[$__rate_interval]))", "legendFormat": "mean {{method}} {{code}}", "refId": "B"}
+      ],
+      "title": "Stack request duration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "Down"}, "1": {"color": "green", "text": "Up"}}, "type": "value"}], "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 0, "y": 22},
+      "id": 9,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "min(up{job=\"$stackjob\"})", "refId": "A"}],
+      "title": "Stack scrape health",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 4, "y": 22},
+      "id": 10,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(rate(http_all_total_duration_count{job=\"$stackjob\",code=~\"4..|5..\"}[$__rate_interval])) / sum(rate(http_all_total_duration_count{job=\"$stackjob\"}[$__rate_interval]))", "refId": "A"}],
+      "title": "Stack HTTP error rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 4, "x": 8, "y": 22},
+      "id": 11,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "rate(process_cpu_seconds_total{job=\"$stackjob\"}[$__rate_interval])", "refId": "A"}],
+      "title": "Stack CPU",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 22},
+      "id": 12,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [
+        {"expr": "process_resident_memory_bytes{job=\"$stackjob\"}", "legendFormat": "resident memory", "refId": "A"},
+        {"expr": "go_memstats_heap_alloc_bytes{job=\"$stackjob\"}", "legendFormat": "Go heap", "refId": "B"}
+      ],
+      "title": "Stack memory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 27},
+      "id": 13,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "go_goroutines{job=\"$stackjob\"}", "legendFormat": "goroutines", "refId": "A"}],
+      "title": "Stack goroutines",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 27},
+      "id": 14,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "process_open_fds{job=\"$stackjob\"} / process_max_fds{job=\"$stackjob\"}", "legendFormat": "open file descriptors", "refId": "A"}],
+      "title": "Stack file descriptor usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 27},
+      "id": 15,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "go_gc_duration_seconds{job=\"$stackjob\",quantile=\"1\"}", "legendFormat": "maximum GC pause", "refId": "A"}],
+      "title": "Stack GC pause",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 27},
+      "id": 16,
+      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "workers_queues_len{job=\"$stackjob\",worker_type=~\"antivirus|thumbnail|thumbnailck|trash-files\"}", "legendFormat": "{{worker_type}}", "refId": "A"}],
+      "title": "Upload-related worker queues",
       "type": "timeseries"
     }
   ],
@@ -94,6 +180,20 @@
   "tags": ["k6", "twake-drive", "load-test"],
   "templating": {
     "list": [
+      {
+        "current": {"selected": true, "text": "cozy-stack-compose", "value": "cozy-stack-compose"},
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "definition": "label_values(up{job=~\"cozy-stack-(compose|local)\"}, job)",
+        "includeAll": false,
+        "label": "Stack source",
+        "multi": false,
+        "name": "stackjob",
+        "options": [],
+        "query": {"query": "label_values(up{job=~\"cozy-stack-(compose|local)\"}, job)", "refId": "PrometheusVariableQueryEditor-StackVariableQuery"},
+        "refresh": 1,
+        "sort": 2,
+        "type": "query"
+      },
       {
         "current": {},
         "datasource": {"type": "prometheus", "uid": "prometheus"},
@@ -171,5 +271,5 @@
   "timezone": "browser",
   "title": "Twake Drive k6 Overview",
   "uid": "twake-drive-k6",
-  "version": 2
+  "version": 3
 }
