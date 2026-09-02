@@ -1,6 +1,107 @@
 name: twake-drive-load
 
 services:
+  couchdb:
+    image: couchdb:3.3.3
+    profiles:
+      - cozy
+    restart: "${RESTART_POLICY:-no}"
+    environment:
+      COUCHDB_USER: cozy
+      COUCHDB_PASSWORD: cozy
+    volumes:
+      - couchdb-data:/opt/couchdb/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://cozy:cozy@localhost:5984/_up >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - load-test
+
+  redis:
+    image: redis:7.2-alpine
+    profiles:
+      - cozy
+    restart: "${RESTART_POLICY:-no}"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - load-test
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    profiles:
+      - cozy
+    restart: "${RESTART_POLICY:-no}"
+    environment:
+      RABBITMQ_DEFAULT_USER: cozy
+      RABBITMQ_DEFAULT_PASS: cozy
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - load-test
+
+  cozy-stack:
+    image: twake-drive-load-cozy-stack:local
+    profiles:
+      - cozy
+    build:
+      context: ../..
+      dockerfile: scripts/docker/production/Dockerfile
+      args:
+        COZY_ENV: development
+    restart: "${RESTART_POLICY:-no}"
+    command:
+      - cozy-stack
+      - -c
+      - /cozy-config/cozy.yaml
+      - serve
+    environment:
+      COUCHDB_HOST: couchdb
+      COUCHDB_USER: cozy
+      COUCHDB_PASSWORD: cozy
+      COZY_ADMIN_PASSPHRASE: cozy
+      LOCAL_USER_ID: ${HOST_UID:-1000}
+      LOCAL_GROUP_ID: ${HOST_GID:-1000}
+    ports:
+      - "${COZY_STACK_BIND_ADDRESS:-127.0.0.1}:${COZY_STACK_PORT:-8080}:8080"
+      - "${COZY_STACK_BIND_ADDRESS:-127.0.0.1}:${COZY_STACK_ADMIN_PORT:-6060}:6060"
+    volumes:
+      - ./cozy/cozy.yaml:/cozy-config/cozy.yaml:ro
+      - cozy-stack-config:/etc/cozy
+      - cozy-stack-data:/var/lib/cozy/data
+    depends_on:
+      couchdb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "cozy-stack -c /cozy-config/cozy.yaml --host 127.0.0.1 status >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    networks:
+      load-test:
+        aliases:
+          - load.localhost
+
   prometheus:
     image: prom/prometheus:v3.14.0
     restart: "${RESTART_POLICY:-no}"
@@ -99,8 +200,6 @@ services:
     depends_on:
       prometheus:
         condition: service_healthy
-      mock:
-        condition: service_healthy
     networks:
       - load-test
 
@@ -108,5 +207,10 @@ networks:
   load-test:
 
 volumes:
+  couchdb-data:
+  redis-data:
+  rabbitmq-data:
+  cozy-stack-config:
+  cozy-stack-data:
   prometheus-data:
   grafana-data:
