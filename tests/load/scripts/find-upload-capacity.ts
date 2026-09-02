@@ -29,7 +29,7 @@ const harnessDirectory = resolve(scriptDirectory, '..')
 const resultsDirectory = join(harnessDirectory, 'results')
 
 type PointResult = 'passed' | 'failed' | 'infrastructure_failure'
-type ResultBound = 'exact' | 'lower_bound'
+export type ResultBound = 'exact' | 'lower_bound'
 type CampaignStatus = 'running' | 'completed' | 'infrastructure_failure'
 type CapacityPhase =
   | 'baseline'
@@ -655,6 +655,16 @@ function evaluateConfirmationLevel(
   )
 }
 
+export function getCapacityResultBound(
+  candidateVus: number,
+  configuredMaxVus: number,
+  firstFailingVus: number,
+): ResultBound {
+  return candidateVus === configuredMaxVus && firstFailingVus === 0
+    ? 'lower_bound'
+    : 'exact'
+}
+
 function finishReport(
   state: CampaignState,
   baselineP95Ms: number,
@@ -730,7 +740,6 @@ function runCapacitySearch(state: CampaignState): number {
   let lastPassingVus = 1
   let firstFailingVus = 0
   let currentVus = 2
-  let reachedConfiguredCap = false
 
   while (currentVus <= config.maxVus) {
     const burstOutcome = evaluateBurstLevel(state, currentVus, p95LimitMs)
@@ -746,7 +755,6 @@ function runCapacitySearch(state: CampaignState): number {
       lastPassingVus = currentVus
 
       if (currentVus === config.maxVus) {
-        reachedConfiguredCap = true
         break
       }
 
@@ -796,10 +804,11 @@ function runCapacitySearch(state: CampaignState): number {
   }
 
   if (confirmationOutcome.result === 'passed') {
-    const resultBound =
-      reachedConfiguredCap && candidateVus === config.maxVus
-        ? 'lower_bound'
-        : 'exact'
+    const resultBound = getCapacityResultBound(
+      candidateVus,
+      config.maxVus,
+      firstFailingVus,
+    )
 
     finishReport(state, baselineP95Ms, p95LimitMs, candidateVus, resultBound)
     return 0
@@ -879,4 +888,11 @@ function runCapacityCampaign(): number {
   }
 }
 
-process.exitCode = runCapacityCampaign()
+function isMainModule(): boolean {
+  const entryPath = process.argv[1]
+  return entryPath !== undefined && resolve(entryPath) === fileURLToPath(import.meta.url)
+}
+
+if (isMainModule()) {
+  process.exitCode = runCapacityCampaign()
+}
