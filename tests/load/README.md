@@ -61,8 +61,7 @@ network as k6, Prometheus, and Grafana:
 The stack is published at <http://load.localhost:8080>, but k6 reaches the
 `load.localhost` network alias directly. This keeps load traffic inside Docker
 instead of routing it through a host port. The stack admin and metrics endpoint
-is published on <http://localhost:6060> and Prometheus also scrapes it over the
-Compose network.
+stays private to the Compose network, where Prometheus scrapes it directly.
 
 `make cozy-provision` creates `load.localhost:8080` when needed, reuses its
 OAuth client, and generates a fresh 24-hour `io.cozy.files` token. It writes the
@@ -216,8 +215,9 @@ summary path. An `exact` result has a measured failing level above it. A
 configured cap passed and no higher level was attempted.
 
 Grafana can filter k6 metrics by campaign, test ID, file size, concurrency,
-and phase. Its local cozy-stack panels remain empty when no stack is listening
-on `host.docker.internal:6060`.
+and phase. Its local cozy-stack panels use the bundled Compose target when that
+profile is running and the `host.docker.internal:6060` target for a stack
+started directly on the host.
 
 ## Commands
 
