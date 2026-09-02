@@ -18,7 +18,7 @@ const environmentKeys = ['BASE_URL', 'COZY_ACCESS_TOKEN'] as const
 type EnvironmentKey = (typeof environmentKeys)[number]
 type EnvironmentUpdates = Record<EnvironmentKey, string>
 
-type CommandResult = {
+export type CommandResult = {
   status: number
   stderr: string
   stdout: string
@@ -65,19 +65,37 @@ function getStackCommandResult(arguments_: string[]): CommandResult {
   }
 }
 
+function getCommandFailureDetail(result: CommandResult): string {
+  return result.stderr.trim() || result.stdout.trim()
+}
+
+function throwStackCommandFailure(result: CommandResult): never {
+  const detail = getCommandFailureDetail(result)
+
+  throw new Error(
+    detail.length > 0
+      ? `cozy-stack command failed: ${detail}`
+      : 'cozy-stack command failed without an error message',
+  )
+}
+
 function getSuccessfulStackCommandOutput(arguments_: string[]): string {
   const result = getStackCommandResult(arguments_)
 
   if (result.status !== 0) {
-    const detail = result.stderr.trim() || result.stdout.trim()
-    throw new Error(
-      detail.length > 0
-        ? `cozy-stack command failed: ${detail}`
-        : 'cozy-stack command failed without an error message',
-    )
+    throwStackCommandFailure(result)
   }
 
   return result.stdout.trim()
+}
+
+export function isMissingInstanceResult(result: CommandResult): boolean {
+  return (
+    result.status !== 0 &&
+    getCommandFailureDetail(result).endsWith(
+      'Error: Not Found: Instance not found',
+    )
+  )
 }
 
 function ensureInstance(instanceDomain: string): 'created' | 'existing' {
@@ -89,6 +107,9 @@ function ensureInstance(instanceDomain: string): 'created' | 'existing' {
 
   if (showResult.status === 0) {
     return 'existing'
+  }
+  if (!isMissingInstanceResult(showResult)) {
+    throwStackCommandFailure(showResult)
   }
 
   getSuccessfulStackCommandOutput([
@@ -109,7 +130,7 @@ function ensureInstance(instanceDomain: string): 'created' | 'existing' {
   return 'created'
 }
 
-function getOAuthClientIdFromJson(output: string): string | null {
+export function getOAuthClientIdFromJson(output: string): string | null {
   try {
     const parsedOutput: unknown = JSON.parse(output)
 
@@ -117,11 +138,23 @@ function getOAuthClientIdFromJson(output: string): string | null {
       return null
     }
 
-    const clientId = parsedOutput.client_id
+    const clientId = parsedOutput.client_id ?? parsedOutput._id
     return typeof clientId === 'string' && clientId.length > 0 ? clientId : null
   } catch (_error: unknown) {
     return null
   }
+}
+
+export function isMissingOAuthClientResult(
+  result: CommandResult,
+  softwareId: string,
+): boolean {
+  return (
+    result.status !== 0 &&
+    getCommandFailureDetail(result).endsWith(
+      `Error: Unqualified error: Could not find client with software_id ${softwareId}`,
+    )
+  )
 }
 
 function ensureOAuthClient(instanceDomain: string, softwareId: string): string {
@@ -138,6 +171,12 @@ function ensureOAuthClient(instanceDomain: string, softwareId: string): string {
     if (existingClientId !== null) {
       return existingClientId
     }
+
+    throw new Error('cozy-stack returned an invalid OAuth client lookup')
+  }
+
+  if (!isMissingOAuthClientResult(findResult, softwareId)) {
+    throwStackCommandFailure(findResult)
   }
 
   const clientId = getSuccessfulStackCommandOutput([
@@ -276,4 +315,11 @@ function runCozyProvisioner(): number {
   }
 }
 
-process.exitCode = runCozyProvisioner()
+function isMainModule(): boolean {
+  const entryPath = process.argv[1]
+  return entryPath !== undefined && resolve(entryPath) === fileURLToPath(import.meta.url)
+}
+
+if (isMainModule()) {
+  process.exitCode = runCozyProvisioner()
+}
