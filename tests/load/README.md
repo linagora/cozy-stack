@@ -33,10 +33,53 @@ $ make upload-smoke
 $ make dashboard-url
 ```
 
+These smoke targets use the bundled nginx mock to validate the harness without
+starting a Cozy stack.
+
 Grafana defaults to <http://localhost:3000/> with the local credentials
 `admin` / `admin`. Copy `.env.example` to `.env` to change the credentials,
 target URL, published port, retention size, or restart policy. Do not commit
 `.env`.
+
+## Run against the bundled Cozy stack
+
+Build the current cozy-stack checkout, start its local dependencies, provision
+an instance and OAuth client, and run one real upload lifecycle:
+
+```console
+$ make cozy-upload FILE_SIZE=1K VUS=1
+```
+
+The opt-in `cozy` Compose profile starts these services on the same private
+network as k6, Prometheus, and Grafana:
+
+- cozy-stack built from the current repository checkout
+- CouchDB 3.3.3
+- Redis 7.2
+- RabbitMQ 3.13
+
+The stack is published at <http://load.localhost:8080>, but k6 reaches the
+`load.localhost` network alias directly. This keeps load traffic inside Docker
+instead of routing it through a host port. The stack admin and metrics endpoint
+is published on <http://localhost:6060> and Prometheus also scrapes it over the
+Compose network.
+
+`make cozy-provision` creates `load.localhost:8080` when needed, reuses its
+OAuth client, and generates a fresh 24-hour `io.cozy.files` token. It writes the
+target and token to the ignored local `.env` without printing the token.
+
+After the lifecycle check passes, run a bounded capacity search against the
+real stack:
+
+```console
+$ make cozy-capacity FILE_SIZE=1K MAX_VUS=8
+```
+
+Inspect the services with `make cozy-status` or `make cozy-logs`. Stop only the
+bundled Cozy services with `make cozy-down`; their named volumes and the
+Grafana and Prometheus services are preserved.
+
+## Run against a Cozy stack on the host
 
 To exercise a Cozy stack running on the host, `cozy.localhost` and
 `host.docker.internal` resolve to the Docker host from the k6 container. The
@@ -188,6 +231,13 @@ $ make up
 $ make smoke
 $ make fixtures
 $ make upload-smoke
+$ make cozy-up
+$ make cozy-provision
+$ make cozy-upload FILE_SIZE=1K VUS=1
+$ make cozy-capacity FILE_SIZE=1K MAX_VUS=8
+$ make cozy-status
+$ make cozy-logs
+$ make cozy-down
 $ make upload BASE_URL=https://target.example FILE_SIZE=1M VUS=10
 $ make upload-capacity BASE_URL=https://target.example FILE_SIZE=10M
 $ make upload-capacity-all BASE_URL=https://target.example
@@ -233,6 +283,8 @@ network.
 ## Components
 
 - Node.js 22 with TypeScript and `tsx` for local tooling
+- CouchDB 3.3.3, Redis 7.2, and RabbitMQ 3.13 in the optional `cozy` profile
+- cozy-stack built from the current checkout in development mode
 - `grafana/k6:2.2.0`
 - `prom/prometheus:v3.14.0`
 - `grafana/grafana:13.2.0`
