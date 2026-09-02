@@ -19,6 +19,7 @@ fs:
 
 redis:
   addrs: redis:6379
+  pool_size: 64
   databases:
     jobs: 0
     cache: 1
