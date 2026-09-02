@@ -3,6 +3,10 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["fixtures/upload-sizes.ts", "scripts/**/*.ts"],
+  "include": [
+    "fixtures/upload-sizes.ts",
+    "lib/upload-target.ts",
+    "scripts/**/*.ts"
+  ],
   "exclude": ["node_modules"]
 }

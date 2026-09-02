@@ -3,7 +3,11 @@ import http from 'k6/http'
 import type { JSONObject, JSONValue } from 'k6'
 import type { RequestBody, Response } from 'k6/http'
 
-const ROOT_DIRECTORY_ID = 'io.cozy.files.root-dir'
+import {
+  makeUploadTargetFileUrl,
+  makeUploadTargetTrashUrl,
+  type UploadTarget,
+} from './upload-target.ts'
 
 export type RunTags = Record<string, string>
 
@@ -16,6 +20,7 @@ type RequestContext = {
   accessToken: string
   baseUrl: string
   tags: RunTags
+  target: UploadTarget
   timeout: string
 }
 
@@ -30,10 +35,6 @@ type DirectoryRequest = RequestContext & {
 type UploadRequest = DirectoryRequest & {
   body: RequestBody
   filename: string
-}
-
-function makeFileUrl(baseUrl: string, fileId: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}/files/${encodeURIComponent(fileId)}`
 }
 
 function makeJsonApiHeaders(
@@ -70,10 +71,11 @@ export function fetchCreatedTestDirectory({
   baseUrl,
   directoryName,
   tags,
+  target,
   timeout,
 }: DirectoryCreationRequest): TestDirectory {
   const response = http.post(
-    `${makeFileUrl(baseUrl, ROOT_DIRECTORY_ID)}?Type=directory&Name=${encodeURIComponent(directoryName)}`,
+    `${makeUploadTargetFileUrl(baseUrl, target.rootDirectoryId, target)}?Type=directory&Name=${encodeURIComponent(directoryName)}`,
     null,
     {
       headers: makeJsonApiHeaders(accessToken, 'application/json'),
@@ -111,10 +113,11 @@ export function fetchUploadResponse({
   directoryId,
   filename,
   tags,
+  target,
   timeout,
 }: UploadRequest): Response {
   return http.post(
-    `${makeFileUrl(baseUrl, directoryId)}?Type=file&Name=${encodeURIComponent(filename)}`,
+    `${makeUploadTargetFileUrl(baseUrl, directoryId, target)}?Type=file&Name=${encodeURIComponent(filename)}`,
     body,
     {
       headers: makeJsonApiHeaders(accessToken, 'application/octet-stream'),
@@ -133,9 +136,10 @@ export function fetchTrashResponse({
   baseUrl,
   directoryId,
   tags,
+  target,
   timeout,
 }: DirectoryRequest): Response {
-  return http.del(makeFileUrl(baseUrl, directoryId), null, {
+  return http.del(makeUploadTargetFileUrl(baseUrl, directoryId, target), null, {
     headers: makeJsonApiHeaders(accessToken, 'application/json'),
     tags: {
       ...tags,
@@ -151,10 +155,11 @@ export function fetchDestroyResponse({
   baseUrl,
   directoryId,
   tags,
+  target,
   timeout,
 }: DirectoryRequest): Response {
   return http.del(
-    `${baseUrl.replace(/\/+$/, '')}/files/trash/${encodeURIComponent(directoryId)}`,
+    makeUploadTargetTrashUrl(baseUrl, directoryId, target),
     null,
     {
       headers: makeJsonApiHeaders(accessToken, 'application/json'),

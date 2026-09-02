@@ -6,9 +6,9 @@ as an on-demand container, stores metrics in Prometheus, and provisions a
 Grafana dashboard.
 
 The harness includes the hello-world baseline, an authenticated concurrent
-file-upload workload, and an adaptive search for the maximum sustained upload
-concurrency of one Cozy instance. Organization membership, sharing, and other
-file workloads remain separate future scenarios.
+file-upload workload for personal and shared drives, and an adaptive search for
+the maximum sustained upload concurrency of one Cozy instance. Organization
+membership and other file workloads remain separate future scenarios.
 
 ## Prerequisites
 
@@ -151,6 +151,31 @@ fixture. The mutation includes the test ID, VU, iteration, time, and a random
 value, so every uploaded file has distinct content without regenerating the
 whole fixture. The base fixture on disk remains unchanged.
 
+### Upload to a shared drive
+
+Point the scenario at an existing directory-root shared drive by passing its
+sharing ID and root directory ID. Read both identifiers from
+`GET /sharings/drives` on the instance being tested; the sharing ID is
+`data[].id` and the root ID is `data[].attributes.rules[0].values[0]`.
+
+```console
+$ make upload BASE_URL=https://member.example \
+    FILE_SIZE=100K VUS=10 \
+    UPLOAD_TARGET=shared-drive \
+    SHARED_DRIVE_ID=aae62886e79611ef8381fb83ff72e425 \
+    SHARED_DRIVE_ROOT_ID=357665ec-e79711ef94fbf3d08ccb3ff5
+```
+
+`BASE_URL` and `COZY_ACCESS_TOKEN` must identify the same owner or active
+recipient instance. The scenario creates its temporary directory inside the
+configured shared-drive root and performs upload, trash, and permanent-delete
+operations through `/sharings/drives/:id`. It leaves the shared drive itself in
+place.
+
+S3 remains an implementation detail of the target stack. To measure the S3
+backend, deploy an S3-enabled stack, configure its `fs.url`, and run this same
+HTTP scenario against it. S3 credentials do not belong on the load generator.
+
 Run each size separately. According to the
 [k6 guidance for large tests](https://grafana.com/docs/k6/latest/testing-guides/running-large-tests/#file-upload-considerations),
 file uploads are copied for each VU and require significant memory. The
@@ -173,21 +198,29 @@ $ make upload-capacity-all
 
 For each size, the coordinator:
 
-1. Measures five uploads at 1 VU to establish the same-size p95 baseline.
+1. Measures 50 uploads at 1 VU to establish the same-size p95 baseline.
 2. Tries burst levels 2, 4, 8, and so on, with one upload per VU.
 3. Retries a failing burst once and uses a third run when the first two
    disagree.
 4. Binary-searches between the last passing and first failing levels.
-5. Confirms the best candidate with three uploads per VU, searching downward
+5. Confirms the best candidate with 20 uploads per VU, searching downward
    again if sustained confirmation fails.
 
 A point passes only when upload success is at least 99%, no iterations are
-dropped, and upload p95 is at most twice the 1-VU baseline. Tune these public
-parameters when the test contract changes:
+dropped, and upload p95 is within the configured limit. By default the limit is
+twice the 1-VU baseline. For a repeatable load-environment contract, set an
+absolute `P95_LIMIT_MS`; it replaces the multiplier while the baseline remains
+in the report for comparison.
 
 ```console
-$ make upload-capacity FILE_SIZE=10M MAX_VUS=16 LATENCY_MULTIPLIER=2 MIN_SUCCESS_RATE=0.99 CONFIRMATION_ITERATIONS=3
+$ make upload-capacity FILE_SIZE=100K MAX_VUS=64 \
+    BASELINE_ITERATIONS=50 CONFIRMATION_ITERATIONS=20 \
+    P95_LIMIT_MS=2500 MIN_SUCCESS_RATE=0.99
 ```
+
+The baseline and confirmation counts are configurable because large fixtures
+can make those defaults intentionally expensive. Lower them only when the
+result is being used as a smoke check instead of a capacity measurement.
 
 Default search caps keep the load-generator footprint bounded:
 
@@ -202,10 +235,10 @@ Default search caps keep the load-generator footprint bounded:
 
 Before a campaign, the coordinator estimates k6 memory as
 `1 GiB + 3 × file size × MAX_VUS`. It also accounts for the fixture and the
-largest confirmation directory, and refuses to leave less than 5 GiB free on
-the load-generator filesystem. `FORCE_CAPACITY_RUN=1` bypasses these guards;
-use it only after checking Docker memory and both load-generator and Cozy
-storage manually.
+larger of the baseline or confirmation directory, and refuses to leave less
+than 5 GiB free on the load-generator filesystem. `FORCE_CAPACITY_RUN=1`
+bypasses these guards; use it only after checking Docker memory and both
+load-generator and Cozy storage manually.
 
 The aggregate report is written to
 `results/<campaign>-upload-capacity.json`. It records every attempt, p95,

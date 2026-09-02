@@ -20,8 +20,12 @@ import {
   uploadDataSizes,
   type UploadDataSize,
 } from '../fixtures/upload-sizes.ts'
+import {
+  getUploadTarget,
+  type UploadTarget,
+  type UploadTargetKind,
+} from '../lib/upload-target.ts'
 
-const BASELINE_ITERATIONS = 5
 const MINIMUM_FREE_DISK_BYTES = 5n * 1024n * 1024n * 1024n
 const ONE_GIBIBYTE = 1024n * 1024n * 1024n
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
@@ -31,6 +35,7 @@ const resultsDirectory = join(harnessDirectory, 'results')
 type PointResult = 'passed' | 'failed' | 'infrastructure_failure'
 export type ResultBound = 'exact' | 'lower_bound'
 type CampaignStatus = 'running' | 'completed' | 'infrastructure_failure'
+type P95LimitMode = 'absolute' | 'baseline_multiplier'
 type CapacityPhase =
   | 'baseline'
   | 'discovery'
@@ -39,9 +44,12 @@ type CapacityPhase =
   | 'confirmation'
 
 type CampaignCriteria = {
+  baseline_iterations: number
+  maximum_p95_ms: number | null
   minimum_success_rate: number
   maximum_dropped_iterations: number
-  p95_baseline_multiplier: number
+  p95_baseline_multiplier: number | null
+  p95_limit_mode: P95LimitMode
   confirmation_iterations_per_vu: number
 }
 
@@ -64,6 +72,7 @@ type CapacityAttempt = {
 type CapacityReport = {
   campaign_id: string
   target: string
+  upload_target: UploadTargetKind
   file_size: UploadDataSize
   file_size_bytes: number
   configured_max_vus: number
@@ -78,15 +87,18 @@ type CapacityReport = {
 }
 
 type CampaignConfig = {
+  baselineIterations: number
   baseUrl: string
   campaignId: string
   confirmationIterations: number
+  configuredP95LimitMs: number | null
   fileSize: UploadDataSize
   fileSizeBytes: number
   forceCapacityRun: boolean
   latencyMultiplier: number
   maxVus: number
   minimumSuccessRate: number
+  uploadTarget: UploadTarget
 }
 
 type CampaignState = {
@@ -229,6 +241,17 @@ function getPositiveNumber(environmentName: string, value: string): number {
   return parsedValue
 }
 
+function getOptionalPositiveNumber(
+  environmentName: string,
+  value: string | undefined,
+): number | null {
+  if (!value) {
+    return null
+  }
+
+  return getPositiveNumber(environmentName, value)
+}
+
 function getMinimumSuccessRate(value: string): number {
   const parsedValue = Number(value)
 
@@ -246,6 +269,14 @@ function makeDefaultCampaignId(): string {
     .replace(/\.\d{3}/, '')
 
   return `${timestamp}-upload-capacity-${process.pid}`
+}
+
+export function computeP95LimitMs(
+  baselineP95Ms: number,
+  latencyMultiplier: number,
+  configuredP95LimitMs: number | null,
+): number {
+  return configuredP95LimitMs ?? baselineP95Ms * latencyMultiplier
 }
 
 function getCampaignConfig(): CampaignConfig {
@@ -266,13 +297,21 @@ function getCampaignConfig(): CampaignConfig {
   )
   const confirmationIterations = getPositiveInteger(
     'CONFIRMATION_ITERATIONS',
-    process.env.CONFIRMATION_ITERATIONS || '3',
+    process.env.CONFIRMATION_ITERATIONS || '20',
   )
 
   return {
+    baselineIterations: getPositiveInteger(
+      'BASELINE_ITERATIONS',
+      process.env.BASELINE_ITERATIONS || '50',
+    ),
     baseUrl: process.env.BASE_URL || 'http://mock',
     campaignId: process.env.CAPACITY_RUN_ID || makeDefaultCampaignId(),
     confirmationIterations,
+    configuredP95LimitMs: getOptionalPositiveNumber(
+      'P95_LIMIT_MS',
+      process.env.P95_LIMIT_MS,
+    ),
     fileSize: configuredFileSize,
     fileSizeBytes: getUploadDataSizeBytes(configuredFileSize),
     forceCapacityRun: process.env.FORCE_CAPACITY_RUN === '1',
@@ -284,6 +323,7 @@ function getCampaignConfig(): CampaignConfig {
     minimumSuccessRate: getMinimumSuccessRate(
       process.env.MIN_SUCCESS_RATE || '0.99',
     ),
+    uploadTarget: getUploadTarget(process.env),
   }
 }
 
@@ -301,11 +341,15 @@ function ensureResourceCapacity(config: CampaignConfig): true {
     statSync(fixturePath).size === config.fileSizeBytes
       ? 0n
       : BigInt(config.fileSizeBytes)
+  const baselineBytes =
+    BigInt(config.fileSizeBytes) * BigInt(config.baselineIterations)
+  const confirmationBytes =
+    BigInt(config.fileSizeBytes) *
+    BigInt(config.maxVus) *
+    BigInt(config.confirmationIterations)
   const projectedDiskBytes =
     fixtureBytes +
-    BigInt(config.fileSizeBytes) *
-      BigInt(config.maxVus) *
-      BigInt(config.confirmationIterations)
+    (baselineBytes > confirmationBytes ? baselineBytes : confirmationBytes)
 
   if (
     !config.forceCapacityRun &&
@@ -352,13 +396,21 @@ function makeCapacityReport(config: CampaignConfig): CapacityReport {
   return {
     campaign_id: config.campaignId,
     target: config.baseUrl,
+    upload_target: config.uploadTarget.kind,
     file_size: config.fileSize,
     file_size_bytes: config.fileSizeBytes,
     configured_max_vus: config.maxVus,
     criteria: {
+      baseline_iterations: config.baselineIterations,
+      maximum_p95_ms: config.configuredP95LimitMs,
       minimum_success_rate: config.minimumSuccessRate,
       maximum_dropped_iterations: 0,
-      p95_baseline_multiplier: config.latencyMultiplier,
+      p95_baseline_multiplier:
+        config.configuredP95LimitMs === null ? config.latencyMultiplier : null,
+      p95_limit_mode:
+        config.configuredP95LimitMs === null
+          ? 'baseline_multiplier'
+          : 'absolute',
       confirmation_iterations_per_vu: config.confirmationIterations,
     },
     status: 'running',
@@ -453,22 +505,32 @@ function runCapacityPoint(
     `\nRunning ${phase} point: ${vus} VUs x ${iterationsPerVu} upload(s)\n`,
   )
 
+  const makeArguments = [
+    '-C',
+    harnessDirectory,
+    'upload',
+    `BASE_URL=${config.baseUrl}`,
+    `FILE_SIZE=${config.fileSize}`,
+    `VUS=${vus}`,
+    `ITERATIONS_PER_VU=${iterationsPerVu}`,
+    `CAPACITY_RUN_ID=${config.campaignId}`,
+    `CAPACITY_PHASE=${phase}`,
+    `MIN_SUCCESS_RATE=${config.minimumSuccessRate}`,
+    `P95_LIMIT_MS=${p95LimitMs ?? ''}`,
+    `TEST_ID=${testId}`,
+    `UPLOAD_TARGET=${config.uploadTarget.kind}`,
+  ]
+
+  if (config.uploadTarget.kind === 'shared-drive') {
+    makeArguments.push(
+      `SHARED_DRIVE_ID=${config.uploadTarget.driveId}`,
+      `SHARED_DRIVE_ROOT_ID=${config.uploadTarget.rootDirectoryId}`,
+    )
+  }
+
   const makeResult = spawnSync(
     'make',
-    [
-      '-C',
-      harnessDirectory,
-      'upload',
-      `BASE_URL=${config.baseUrl}`,
-      `FILE_SIZE=${config.fileSize}`,
-      `VUS=${vus}`,
-      `ITERATIONS_PER_VU=${iterationsPerVu}`,
-      `CAPACITY_RUN_ID=${config.campaignId}`,
-      `CAPACITY_PHASE=${phase}`,
-      `MIN_SUCCESS_RATE=${config.minimumSuccessRate}`,
-      `P95_LIMIT_MS=${p95LimitMs ?? ''}`,
-      `TEST_ID=${testId}`,
-    ],
+    makeArguments,
     { stdio: 'inherit' },
   )
   const runnerExitCode = makeResult.status ?? 2
@@ -553,7 +615,7 @@ function runCapacityPoint(
   } else if (metrics.successRate < config.minimumSuccessRate) {
     failureReason = 'upload success rate is below the minimum'
   } else if (p95LimitMs !== null && metrics.p95Ms > p95LimitMs) {
-    failureReason = 'upload p95 exceeds the baseline multiplier'
+    failureReason = 'upload p95 exceeds the configured limit'
   }
 
   if (failureReason.length > 0) {
@@ -715,7 +777,7 @@ function runCapacitySearch(state: CampaignState): number {
     state,
     'baseline',
     1,
-    BASELINE_ITERATIONS,
+    config.baselineIterations,
     null,
   )
 
@@ -730,7 +792,11 @@ function runCapacitySearch(state: CampaignState): number {
   }
 
   const baselineP95Ms = baselineOutcome.p95Ms
-  const p95LimitMs = baselineP95Ms * config.latencyMultiplier
+  const p95LimitMs = computeP95LimitMs(
+    baselineP95Ms,
+    config.latencyMultiplier,
+    config.configuredP95LimitMs,
+  )
 
   if (baselineOutcome.result === 'failed') {
     finishReport(state, baselineP95Ms, p95LimitMs, 0, 'exact')

@@ -13,6 +13,7 @@ import {
   type RunTags,
   type TestDirectory,
 } from '../lib/cozy-files.ts'
+import { getUploadTarget } from '../lib/upload-target.ts'
 
 function getPositiveInteger(environmentName: string, fallback: number): number {
   const value = Number(__ENV[environmentName] || fallback)
@@ -61,6 +62,7 @@ function getRequiredEnvironmentValue(environmentName: string): string {
 const uploadVirtualUsers = getPositiveInteger('UPLOAD_VUS', 1)
 const uploadSuccessRate = getSuccessRate()
 const uploadP95Limit = getOptionalP95Limit()
+const uploadTarget = getUploadTarget(__ENV)
 const uploadSuccess = new Rate('upload_success')
 const cleanupSuccess = new Rate('cleanup_success')
 
@@ -95,6 +97,7 @@ function makeRunTags(): RunTags {
     concurrency: String(uploadVirtualUsers),
     filesize: uploadDataSize,
     phase: __ENV.CAPACITY_PHASE || 'single-run',
+    target: uploadTarget.kind,
     testid: __ENV.TEST_ID || 'upload',
   }
 }
@@ -115,6 +118,7 @@ export function setup(): TestDirectory {
     baseUrl,
     directoryName,
     tags: makeRunTags(),
+    target: uploadTarget,
     timeout: __ENV.UPLOAD_TIMEOUT || '30m',
   })
 }
@@ -145,6 +149,7 @@ export default function runConcurrentUploadsScenario(
     directoryId: testDirectory.id,
     filename,
     tags: makeRunTags(),
+    target: uploadTarget,
     timeout: __ENV.UPLOAD_TIMEOUT || '30m',
   })
 
@@ -171,6 +176,7 @@ export function teardown(testDirectory: TestDirectory): null {
     baseUrl: getRequiredEnvironmentValue('BASE_URL'),
     directoryId: testDirectory.id,
     tags: makeRunTags(),
+    target: uploadTarget,
     timeout: __ENV.UPLOAD_TIMEOUT || '30m',
   }
   const trashResponse = fetchTrashResponse(requestOptions)
