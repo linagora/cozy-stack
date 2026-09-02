@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import {
   computeP95LimitMs,
   getCapacityResultBound,
+  isInterruptedCapacityPoint,
 } from './find-upload-capacity.ts'
 
 describe('getCapacityResultBound', (): void => {
@@ -27,5 +28,19 @@ describe('computeP95LimitMs', (): void => {
 
   it('uses the absolute limit when configured', (): void => {
     equal(computeP95LimitMs(25, 20, 2_000), 2_000)
+  })
+})
+
+describe('isInterruptedCapacityPoint', (): void => {
+  it('detects an aborted run with incomplete consistency checks', (): void => {
+    equal(isInterruptedCapacityPoint(2, 3, 4), true)
+  })
+
+  it('does not confuse a completed threshold failure with an abort', (): void => {
+    equal(isInterruptedCapacityPoint(2, 4, 4), false)
+  })
+
+  it('does not treat an incomplete successful process as an abort', (): void => {
+    equal(isInterruptedCapacityPoint(0, 3, 4), false)
   })
 })

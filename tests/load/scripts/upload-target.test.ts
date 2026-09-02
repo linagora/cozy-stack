@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import {
   getUploadTarget,
+  makeUploadTargetDownloadUrl,
   makeUploadTargetFileUrl,
   makeUploadTargetTrashUrl,
 } from '../lib/upload-target.ts'
@@ -66,6 +67,17 @@ describe('shared-drive URLs', (): void => {
     )
   })
 
+  it('builds a download route with encoded identifiers', (): void => {
+    equal(
+      makeUploadTargetDownloadUrl(
+        'https://load.example/',
+        'file/id',
+        target,
+      ),
+      'https://load.example/sharings/drives/drive%2Fid/download/file%2Fid',
+    )
+  })
+
   it('builds a trash route with encoded identifiers', (): void => {
     equal(
       makeUploadTargetTrashUrl('https://load.example/', 'file/id', target),
@@ -81,6 +93,17 @@ describe('personal-drive URLs', (): void => {
     equal(
       makeUploadTargetFileUrl('https://load.example/', 'file/id', target),
       'https://load.example/files/file%2Fid',
+    )
+  })
+
+  it('builds a download route', (): void => {
+    equal(
+      makeUploadTargetDownloadUrl(
+        'https://load.example/',
+        'file/id',
+        target,
+      ),
+      'https://load.example/files/download/file%2Fid',
     )
   })
 

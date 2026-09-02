@@ -5,7 +5,9 @@
   },
   "include": [
     "fixtures/upload-sizes.ts",
+    "lib/upload-consistency.ts",
     "lib/upload-target.ts",
+    "mock/**/*.ts",
     "scripts/**/*.ts"
   ],
   "exclude": ["node_modules"]

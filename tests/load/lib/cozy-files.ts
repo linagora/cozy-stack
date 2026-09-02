@@ -1,9 +1,10 @@
 import http from 'k6/http'
 
 import type { JSONObject, JSONValue } from 'k6'
-import type { RequestBody, Response } from 'k6/http'
+import type { RefinedResponse, RequestBody, Response } from 'k6/http'
 
 import {
+  makeUploadTargetDownloadUrl,
   makeUploadTargetFileUrl,
   makeUploadTargetTrashUrl,
   type UploadTarget,
@@ -34,7 +35,14 @@ type DirectoryRequest = RequestContext & {
 
 type UploadRequest = DirectoryRequest & {
   body: RequestBody
+  contentMD5: string
   filename: string
+}
+
+type DownloadRangeRequest = RequestContext & {
+  end: number
+  fileId: string
+  start: number
 }
 
 function makeJsonApiHeaders(
@@ -110,17 +118,22 @@ export function fetchUploadResponse({
   accessToken,
   baseUrl,
   body,
+  contentMD5,
   directoryId,
   filename,
   tags,
   target,
   timeout,
-}: UploadRequest): Response {
+}: UploadRequest): RefinedResponse<'text'> {
   return http.post(
     `${makeUploadTargetFileUrl(baseUrl, directoryId, target)}?Type=file&Name=${encodeURIComponent(filename)}`,
     body,
     {
-      headers: makeJsonApiHeaders(accessToken, 'application/octet-stream'),
+      headers: {
+        ...makeJsonApiHeaders(accessToken, 'application/octet-stream'),
+        'Content-MD5': contentMD5,
+      },
+      responseType: 'text',
       tags: {
         ...tags,
         name: 'POST /files/:dir-id',
@@ -129,6 +142,31 @@ export function fetchUploadResponse({
       timeout,
     },
   )
+}
+
+export function fetchDownloadRangeResponse({
+  accessToken,
+  baseUrl,
+  end,
+  fileId,
+  start,
+  tags,
+  target,
+  timeout,
+}: DownloadRangeRequest): RefinedResponse<'binary'> {
+  return http.get(makeUploadTargetDownloadUrl(baseUrl, fileId, target), {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Range: `bytes=${start}-${end}`,
+    },
+    responseType: 'binary',
+    tags: {
+      ...tags,
+      name: 'GET /files/download/:file-id',
+      operation: 'file-consistency-download',
+    },
+    timeout,
+  })
 }
 
 export function fetchTrashResponse({

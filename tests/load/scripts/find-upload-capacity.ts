@@ -45,6 +45,7 @@ type CapacityPhase =
 
 type CampaignCriteria = {
   baseline_iterations: number
+  consistency_chunk_size_bytes: number
   maximum_p95_ms: number | null
   minimum_success_rate: number
   maximum_dropped_iterations: number
@@ -92,6 +93,7 @@ type CampaignConfig = {
   campaignId: string
   confirmationIterations: number
   configuredP95LimitMs: number | null
+  consistencyChunkSizeBytes: number
   fileSize: UploadDataSize
   fileSizeBytes: number
   forceCapacityRun: boolean
@@ -312,6 +314,10 @@ function getCampaignConfig(): CampaignConfig {
       'P95_LIMIT_MS',
       process.env.P95_LIMIT_MS,
     ),
+    consistencyChunkSizeBytes: getPositiveInteger(
+      'CONSISTENCY_CHUNK_SIZE_BYTES',
+      process.env.CONSISTENCY_CHUNK_SIZE_BYTES || String(16 * 1024 * 1024),
+    ),
     fileSize: configuredFileSize,
     fileSizeBytes: getUploadDataSizeBytes(configuredFileSize),
     forceCapacityRun: process.env.FORCE_CAPACITY_RUN === '1',
@@ -376,8 +382,13 @@ function ensureResourceCapacity(config: CampaignConfig): true {
   }
 
   const dockerMemoryBytes = BigInt(dockerMemoryOutput)
+  const consistencyBufferBytes = BigInt(
+    Math.min(config.fileSizeBytes, config.consistencyChunkSizeBytes),
+  )
   const projectedMemoryBytes =
-    ONE_GIBIBYTE + 3n * BigInt(config.fileSizeBytes) * BigInt(config.maxVus)
+    ONE_GIBIBYTE +
+    (3n * BigInt(config.fileSizeBytes) + consistencyBufferBytes) *
+      BigInt(config.maxVus)
 
   if (!config.forceCapacityRun && projectedMemoryBytes > dockerMemoryBytes) {
     throw new Error(
@@ -402,6 +413,7 @@ function makeCapacityReport(config: CampaignConfig): CapacityReport {
     configured_max_vus: config.maxVus,
     criteria: {
       baseline_iterations: config.baselineIterations,
+      consistency_chunk_size_bytes: config.consistencyChunkSizeBytes,
       maximum_p95_ms: config.configuredP95LimitMs,
       minimum_success_rate: config.minimumSuccessRate,
       maximum_dropped_iterations: 0,
@@ -513,6 +525,7 @@ function runCapacityPoint(
     `FILE_SIZE=${config.fileSize}`,
     `VUS=${vus}`,
     `ITERATIONS_PER_VU=${iterationsPerVu}`,
+    `CONSISTENCY_CHUNK_SIZE_BYTES=${config.consistencyChunkSizeBytes}`,
     `CAPACITY_RUN_ID=${config.campaignId}`,
     `CAPACITY_PHASE=${phase}`,
     `MIN_SUCCESS_RATE=${config.minimumSuccessRate}`,
@@ -582,6 +595,29 @@ function runCapacityPoint(
         runnerExitCode,
         'infrastructure_failure',
         'test-directory cleanup failed',
+        metrics,
+      ),
+    )
+    return { p95Ms: metrics.p95Ms, result: 'infrastructure_failure' }
+  }
+
+  if (
+    isInterruptedCapacityPoint(
+      runnerExitCode,
+      metrics.completedIterations,
+      expectedIterations,
+    )
+  ) {
+    appendAttempt(
+      state,
+      makeAttempt(
+        phase,
+        vus,
+        iterationsPerVu,
+        summaryName,
+        runnerExitCode,
+        'infrastructure_failure',
+        'k6 stopped before completing every upload consistency check',
         metrics,
       ),
     )
@@ -666,6 +702,14 @@ function runCapacityPoint(
     ),
   )
   return { p95Ms: metrics.p95Ms, result: 'passed' }
+}
+
+export function isInterruptedCapacityPoint(
+  runnerExitCode: number,
+  completedIterations: number,
+  expectedIterations: number,
+): boolean {
+  return runnerExitCode !== 0 && completedIterations !== expectedIterations
 }
 
 function evaluateBurstLevel(

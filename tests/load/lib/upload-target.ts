@@ -74,6 +74,20 @@ export function makeUploadTargetFileUrl(
   return `${normalizeBaseUrl(baseUrl)}/sharings/drives/${encodeURIComponent(target.driveId)}/${encodedFileId}`
 }
 
+export function makeUploadTargetDownloadUrl(
+  baseUrl: string,
+  fileId: string,
+  target: UploadTarget,
+): string {
+  const encodedFileId = encodeURIComponent(fileId)
+
+  if (target.kind === 'personal') {
+    return `${normalizeBaseUrl(baseUrl)}/files/download/${encodedFileId}`
+  }
+
+  return `${normalizeBaseUrl(baseUrl)}/sharings/drives/${encodeURIComponent(target.driveId)}/download/${encodedFileId}`
+}
+
 export function makeUploadTargetTrashUrl(
   baseUrl: string,
   fileId: string,

@@ -33,8 +33,8 @@ $ make upload-smoke
 $ make dashboard-url
 ```
 
-These smoke targets use the bundled nginx mock to validate the harness without
-starting a Cozy stack.
+These smoke targets use the bundled streaming Node.js mock to validate the
+harness without starting a Cozy stack.
 
 Grafana defaults to <http://localhost:3000/> with the local credentials
 `admin` / `admin`. Copy `.env.example` to `.env` to change the credentials,
@@ -151,6 +151,28 @@ fixture. The mutation includes the test ID, VU, iteration, time, and a random
 value, so every uploaded file has distinct content without regenerating the
 whole fixture. The base fixture on disk remains unchanged.
 
+Before uploading, the scenario calculates the fixture MD5 and sends it as
+`Content-MD5`. After every `201` response, it validates the returned file ID,
+name, size, and MD5, then immediately downloads the complete file and compares
+its MD5 with the original upload. Any response, size, range, or checksum
+inconsistency aborts the whole k6 run; teardown still removes the test
+directory.
+
+k6's HTTP API accepts and returns complete buffers rather than JavaScript
+streams. To avoid allocating a second full-file buffer, consistency downloads
+use sequential HTTP Range requests and feed each response into an incremental
+MD5 hasher. The default chunk is 16 MiB and can be reduced to trade more HTTP
+requests for lower load-generator memory usage:
+
+```console
+$ make upload FILE_SIZE=1G VUS=2 CONSISTENCY_CHUNK_SIZE_BYTES=4194304
+```
+
+Consistency downloads use the `file-consistency-download` operation tag, so
+the upload p95 and upload success thresholds still measure only the upload
+requests. The downloads remain part of the workload and may overlap with
+slower uploads, as they would in an immediate read-after-write check.
+
 ### Upload to a shared drive
 
 Point the scenario at an existing directory-root shared drive by passing its
@@ -233,12 +255,14 @@ Default search caps keep the load-generator footprint bounded:
 | `100M`    |                 8 |
 | `1G`      |                 2 |
 
-Before a campaign, the coordinator estimates k6 memory as
-`1 GiB + 3 × file size × MAX_VUS`. It also accounts for the fixture and the
-larger of the baseline or confirmation directory, and refuses to leave less
-than 5 GiB free on the load-generator filesystem. `FORCE_CAPACITY_RUN=1`
-bypasses these guards; use it only after checking Docker memory and both
-load-generator and Cozy storage manually.
+Before a campaign, the coordinator estimates k6 memory as `1 GiB + MAX_VUS ×
+(3 × file size + min(file size, consistency chunk size))`. It also accounts
+for the fixture and the larger of the baseline or confirmation directory, and
+refuses to leave less than 5 GiB free on the load-generator filesystem.
+`FORCE_CAPACITY_RUN=1` bypasses these guards; use it only after checking Docker
+memory and both load-generator and Cozy storage manually. Every successful
+upload is downloaded once, so include that additional traffic in network and
+object-storage cost estimates.
 
 The aggregate report is written to
 `results/<campaign>-upload-capacity.json`. It records every attempt, p95,
@@ -328,4 +352,4 @@ network.
 - `grafana/k6:2.2.0`
 - `prom/prometheus:v3.14.0`
 - `grafana/grafana:13.2.0`
-- `nginx:1.29-alpine` for the local mock
+- `node:22-alpine` for the streaming local mock

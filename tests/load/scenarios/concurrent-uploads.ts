@@ -1,4 +1,5 @@
 import { check } from 'k6'
+import { createHash, md5 } from 'k6/crypto'
 import exec from 'k6/execution'
 import { Rate } from 'k6/metrics'
 
@@ -7,12 +8,18 @@ import type { Options } from 'k6/options'
 import { randomizeUploadData, uploadDataSize } from '../fixtures/upload-data.ts'
 import {
   fetchCreatedTestDirectory,
+  fetchDownloadRangeResponse,
   fetchDestroyResponse,
   fetchTrashResponse,
   fetchUploadResponse,
   type RunTags,
   type TestDirectory,
 } from '../lib/cozy-files.ts'
+import {
+  makeByteRange,
+  parseUploadedFile,
+  type UploadedFile,
+} from '../lib/upload-consistency.ts'
 import { getUploadTarget } from '../lib/upload-target.ts'
 
 function getPositiveInteger(environmentName: string, fallback: number): number {
@@ -60,6 +67,10 @@ function getRequiredEnvironmentValue(environmentName: string): string {
 }
 
 const uploadVirtualUsers = getPositiveInteger('UPLOAD_VUS', 1)
+const consistencyChunkSize = getPositiveInteger(
+  'CONSISTENCY_CHUNK_SIZE_BYTES',
+  16 * 1024 * 1024,
+)
 const uploadSuccessRate = getSuccessRate()
 const uploadP95Limit = getOptionalP95Limit()
 const uploadTarget = getUploadTarget(__ENV)
@@ -127,6 +138,73 @@ function makeUploadName(marker: string): string {
   return `load-${uploadDataSize.toLowerCase()}-${marker}.bin`
 }
 
+function abortUploadConsistency(message: string): never {
+  const abortMessage = `Upload consistency check failed: ${message}`
+
+  exec.test.abort(abortMessage)
+  throw new Error(abortMessage)
+}
+
+interface DownloadChecksumRequest {
+  accessToken: string
+  baseUrl: string
+  file: UploadedFile
+}
+
+function fetchDownloadedChecksum({
+  accessToken,
+  baseUrl,
+  file,
+}: DownloadChecksumRequest): string {
+  const hasher = createHash('md5')
+  let offset = 0
+
+  while (offset < file.size) {
+    const range = makeByteRange(offset, file.size, consistencyChunkSize)
+
+    if (range === null) {
+      abortUploadConsistency(
+        `could not construct a range at offset ${offset} for ${file.id}`,
+      )
+    }
+
+    const response = fetchDownloadRangeResponse({
+      accessToken,
+      baseUrl,
+      end: range.end,
+      fileId: file.id,
+      start: range.start,
+      tags: makeRunTags(),
+      target: uploadTarget,
+      timeout: __ENV.UPLOAD_TIMEOUT || '30m',
+    })
+
+    if (response.status !== 206) {
+      abortUploadConsistency(
+        `download range ${range.header} for ${file.id} returned status ${response.status}, expected 206`,
+      )
+    }
+    if (response.body.byteLength !== range.length) {
+      abortUploadConsistency(
+        `download range ${range.header} for ${file.id} returned ${response.body.byteLength} bytes, expected ${range.length}`,
+      )
+    }
+
+    const expectedContentRange = `bytes ${range.start}-${range.end}/${file.size}`
+
+    if (response.headers['Content-Range'] !== expectedContentRange) {
+      abortUploadConsistency(
+        `download range ${range.header} for ${file.id} returned Content-Range ${response.headers['Content-Range'] || '<missing>'}, expected ${expectedContentRange}`,
+      )
+    }
+
+    hasher.update(response.body)
+    offset = range.end + 1
+  }
+
+  return hasher.digest('base64')
+}
+
 // k6 requires a default export for the virtual-user entry point.
 export default function runConcurrentUploadsScenario(
   testDirectory: TestDirectory,
@@ -142,10 +220,12 @@ export default function runConcurrentUploadsScenario(
   ].join('-')
   const filename = makeUploadName(marker)
   const uploadBody = randomizeUploadData(marker)
+  const expectedChecksum = md5(uploadBody, 'base64')
   const response = fetchUploadResponse({
     accessToken,
     baseUrl,
     body: uploadBody,
+    contentMD5: expectedChecksum,
     directoryId: testDirectory.id,
     filename,
     tags: makeRunTags(),
@@ -161,6 +241,47 @@ export default function runConcurrentUploadsScenario(
     ...makeRunTags(),
     operation: 'file-upload',
   })
+
+  if (!isUploadSuccessful) {
+    return null
+  }
+
+  let uploadedFile: UploadedFile
+
+  try {
+    uploadedFile = parseUploadedFile(response.body)
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    abortUploadConsistency(message)
+  }
+
+  if (uploadedFile.name !== filename) {
+    abortUploadConsistency(
+      `upload response returned name ${uploadedFile.name}, expected ${filename}`,
+    )
+  }
+  if (uploadedFile.size !== uploadBody.byteLength) {
+    abortUploadConsistency(
+      `upload response returned size ${uploadedFile.size}, expected ${uploadBody.byteLength}`,
+    )
+  }
+  if (uploadedFile.md5sum !== expectedChecksum) {
+    abortUploadConsistency(
+      `upload response returned checksum ${uploadedFile.md5sum}, expected ${expectedChecksum}`,
+    )
+  }
+
+  const downloadedChecksum = fetchDownloadedChecksum({
+    accessToken,
+    baseUrl,
+    file: uploadedFile,
+  })
+
+  if (downloadedChecksum !== expectedChecksum) {
+    abortUploadConsistency(
+      `downloaded checksum ${downloadedChecksum} for ${uploadedFile.id} does not match uploaded checksum ${expectedChecksum}`,
+    )
+  }
 
   return null
 }
