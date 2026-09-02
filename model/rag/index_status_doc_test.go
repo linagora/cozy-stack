@@ -61,12 +61,12 @@ func TestIndexStatusCloneDecodedRelationship(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &doc))
 
 	cloned := doc.Clone().(*IndexStatus)
-	clonedFile := cloned.Rels["file"]
+	clonedFile := cloned.Rels["doc"]
 	clonedData, ok := clonedFile.Data.(map[string]interface{})
 	require.True(t, ok)
 	clonedData["_id"] = "d4e5f6"
 
-	originalFile := doc.Rels["file"]
+	originalFile := doc.Rels["doc"]
 	originalData, ok := originalFile.Data.(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "a1b2c3", originalData["_id"])
