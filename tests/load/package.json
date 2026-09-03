@@ -1,0 +1,18 @@
+{
+  "name": "twake-drive-load",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --import tsx --test src/lib/*.test.ts",
+    "typecheck": "tsc -p tsconfig.k6.json && tsc -p tsconfig.node.json"
+  },
+  "devDependencies": {
+    "@types/k6": "2.2.0",
+    "@types/node": "22.20.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
