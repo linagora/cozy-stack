@@ -79,6 +79,16 @@ system-tests:
 	@scripts/system-test.sh
 .PHONY: system-tests
 
+## load-test: run the concurrent-upload smoke test
+load-test:
+	@$(MAKE) -C tests/load upload-smoke
+.PHONY: load-test
+
+## load-test-cozy: provision and run an upload against the local Docker stack
+load-test-cozy:
+	@$(MAKE) -C tests/load cozy-upload
+.PHONY: load-test-cozy
+
 ## clean: clean the generated files and directories
 clean:
 	@rm -rf bin scripts/node_modules

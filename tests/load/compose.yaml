@@ -1,0 +1,225 @@
+name: twake-drive-load
+
+services:
+  couchdb:
+    image: couchdb:3.3.3
+    profiles:
+      - cozy
+    restart: "${RESTART_POLICY:-no}"
+    environment:
+      COUCHDB_USER: cozy
+      COUCHDB_PASSWORD: cozy
+    volumes:
+      - couchdb-data:/opt/couchdb/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://cozy:cozy@localhost:5984/_up >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - load-test
+
+  redis:
+    image: redis:7.2-alpine
+    profiles:
+      - cozy
+    restart: "${RESTART_POLICY:-no}"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - load-test
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    profiles:
+      - cozy
+    restart: "${RESTART_POLICY:-no}"
+    environment:
+      RABBITMQ_DEFAULT_USER: cozy
+      RABBITMQ_DEFAULT_PASS: cozy
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - load-test
+
+  cozy-stack:
+    image: twake-drive-load-cozy-stack:local
+    profiles:
+      - cozy
+    build:
+      context: ../..
+      dockerfile: scripts/docker/production/Dockerfile
+      args:
+        COZY_ENV: development
+    restart: "${RESTART_POLICY:-no}"
+    command:
+      - cozy-stack
+      - -c
+      - /cozy-config/cozy.yaml
+      - serve
+    environment:
+      COUCHDB_HOST: couchdb
+      COUCHDB_USER: cozy
+      COUCHDB_PASSWORD: cozy
+      COZY_ADMIN_PASSPHRASE: cozy
+      LOCAL_USER_ID: ${HOST_UID:-1000}
+      LOCAL_GROUP_ID: ${HOST_GID:-1000}
+    ports:
+      - "${COZY_STACK_BIND_ADDRESS:-127.0.0.1}:${COZY_STACK_PORT:-8080}:8080"
+    expose:
+      - "6060"
+    volumes:
+      - ./config/cozy/cozy.yaml:/cozy-config/cozy.yaml:ro
+      - cozy-stack-config:/etc/cozy
+      - cozy-stack-data:/var/lib/cozy/data
+    depends_on:
+      couchdb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "cozy-stack -c /cozy-config/cozy.yaml --host 127.0.0.1 status >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    networks:
+      load-test:
+        aliases:
+          - load.localhost
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    restart: "${RESTART_POLICY:-no}"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=14d
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-2GB}
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/-/healthy || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - load-test
+
+  grafana:
+    image: grafana/grafana:13.2.0
+    restart: "${RESTART_POLICY:-no}"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_HTTP_PORT: "3000"
+    ports:
+      - "${GRAFANA_BIND_ADDRESS:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - load-test
+
+  mock:
+    image: node:22-alpine
+    restart: "${RESTART_POLICY:-no}"
+    command:
+      - node
+      - --experimental-strip-types
+      - /mock/server.ts
+    volumes:
+      - ./src/mock/server.ts:/mock/server.ts:ro
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/health || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+    networks:
+      - load-test
+
+  k6:
+    image: grafana/k6:2.2.0
+    profiles:
+      - runner
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /scripts
+    environment:
+      BASE_URL: ${BASE_URL:-http://mock}
+      COZY_ACCESS_TOKEN: ${COZY_ACCESS_TOKEN:-}
+      FILE_SIZE: ${FILE_SIZE:-1K}
+      UPLOAD_VUS: ${UPLOAD_VUS:-1}
+      ITERATIONS_PER_VU: ${ITERATIONS_PER_VU:-1}
+      CONSISTENCY_CHUNK_SIZE_BYTES: ${CONSISTENCY_CHUNK_SIZE_BYTES:-16777216}
+      UPLOAD_TARGET: ${UPLOAD_TARGET:-personal}
+      SHARED_DRIVE_ID: ${SHARED_DRIVE_ID:-}
+      SHARED_DRIVE_ROOT_ID: ${SHARED_DRIVE_ROOT_ID:-}
+      CAPACITY_RUN_ID: ${CAPACITY_RUN_ID:-}
+      CAPACITY_PHASE: ${CAPACITY_PHASE:-}
+      MIN_SUCCESS_RATE: ${MIN_SUCCESS_RATE:-0.99}
+      P95_LIMIT_MS: ${P95_LIMIT_MS:-}
+      MAX_DURATION: ${MAX_DURATION:-30m}
+      UPLOAD_TIMEOUT: ${UPLOAD_TIMEOUT:-30m}
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: p(90),p(95),p(99),min,max,avg
+      K6_PROMETHEUS_RW_STALE_MARKERS: "false"
+    extra_hosts:
+      - "cozy.localhost:host-gateway"
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/upload-binaries:/upload-binaries:ro
+      - ./src/fixtures:/fixtures:ro
+      - ./src/lib:/lib:ro
+      - ./src/scenarios:/scripts:ro
+      - ./data/results:/results
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - load-test
+
+networks:
+  load-test:
+
+volumes:
+  couchdb-data:
+  redis-data:
+  rabbitmq-data:
+  cozy-stack-config:
+  cozy-stack-data:
+  prometheus-data:
+  grafana-data:
