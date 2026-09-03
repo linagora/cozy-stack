@@ -117,15 +117,16 @@ func (j *JSONDoc) SetRev(rev string) {
 // Clone is used to create a copy of the document
 func (j *JSONDoc) Clone() Doc {
 	cloned := JSONDoc{Type: j.Type}
-	cloned.M = deepClone(j.M)
+	cloned.M = CloneJSONMap(j.M)
 	return &cloned
 }
 
-func deepClone(m map[string]interface{}) map[string]interface{} {
+// CloneJSONMap returns a recursive copy of a JSON object.
+func CloneJSONMap(m map[string]interface{}) map[string]interface{} {
 	clone := make(map[string]interface{}, len(m))
 	for k, v := range m {
 		if vv, ok := v.(map[string]interface{}); ok {
-			clone[k] = deepClone(vv)
+			clone[k] = CloneJSONMap(vv)
 		} else if vv, ok := v.([]interface{}); ok {
 			clone[k] = deepCloneSlice(vv)
 		} else {
@@ -139,7 +140,7 @@ func deepCloneSlice(s []interface{}) []interface{} {
 	clone := make([]interface{}, len(s))
 	for i, v := range s {
 		if vv, ok := v.(map[string]interface{}); ok {
-			clone[i] = deepClone(vv)
+			clone[i] = CloneJSONMap(vv)
 		} else if vv, ok := v.([]interface{}); ok {
 			clone[i] = deepCloneSlice(vv)
 		} else {

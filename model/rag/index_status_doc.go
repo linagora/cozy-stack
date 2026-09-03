@@ -44,12 +44,7 @@ func (s *IndexStatus) Clone() couchdb.Doc {
 		at := *s.LastErrorDate
 		cloned.LastErrorDate = &at
 	}
-	if s.Rels != nil {
-		cloned.Rels = make(jsonapi.RelationshipMap, len(s.Rels))
-		for k, v := range s.Rels {
-			cloned.Rels[k] = v
-		}
-	}
+	cloned.Rels = s.Rels.Clone()
 	return &cloned
 }
 
