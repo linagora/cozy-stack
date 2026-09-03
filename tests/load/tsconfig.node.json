@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": [
+    "src/fixtures/upload-sizes.ts",
+    "src/lib/upload-consistency.ts",
+    "src/lib/upload-consistency.test.ts",
+    "src/lib/upload-target.ts",
+    "src/lib/upload-target.test.ts",
+    "src/mock/**/*.ts",
+    "src/scripts/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}

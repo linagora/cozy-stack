@@ -1,0 +1,6 @@
+.env
+node_modules/
+data/upload-binaries/*
+!data/upload-binaries/.gitkeep
+data/results/*
+!data/results/.gitkeep
