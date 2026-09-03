@@ -5,9 +5,9 @@ This directory contains the first infrastructure milestone for
 as an on-demand container, stores metrics in Prometheus, and provisions a
 Grafana dashboard.
 
-The harness includes an authenticated concurrent file-upload workload for
-personal drives, a work-in-progress shared-drive mode, and an adaptive search
-for the maximum sustained upload concurrency of one Cozy instance.
+The harness includes authenticated exact-work and fixed-duration file-upload
+workloads for personal drives, a work-in-progress shared-drive mode, and an
+adaptive search for the maximum upload concurrency of one Cozy instance.
 Organization membership and other file workloads remain separate future
 scenarios.
 
@@ -133,6 +133,12 @@ real stack:
 $ make cozy-capacity FILE_SIZE=1K MAX_VUS=8
 ```
 
+Or keep a known concurrency active for a fixed time:
+
+```console
+$ make cozy-upload-soak FILE_SIZE=1M VUS=8 DURATION=10m
+```
+
 Inspect the services with `make cozy-status` or `make cozy-logs`. Stop only the
 bundled Cozy services with `make cozy-down`; their named volumes and the
 Grafana and Prometheus services are preserved.
@@ -199,8 +205,28 @@ predictable. For example, this runs 50 uploads with up to 10 active workflows:
 $ make upload BASE_URL=http://cozy.localhost:8080 FILE_SIZE=100K VUS=10 ITERATIONS_PER_VU=5
 ```
 
-Each workflow also includes the consistency download, so `VUS=10` does not
-mean that 10 upload bodies are always in flight.
+Use a soak run to find out whether a concurrency level stays healthy over
+time. This keeps 10 workflows active for 30 minutes and runs as many complete
+upload-and-check iterations as they can finish:
+
+```console
+$ make upload-soak BASE_URL=http://cozy.localhost:8080 FILE_SIZE=1M VUS=10 DURATION=30m
+```
+
+The soak run uses k6's `constant-vus` executor. When `DURATION` ends, it stops
+starting iterations and gives active upload-and-check workflows up to
+`GRACEFUL_STOP` to finish; the default is 30 minutes so large uploads are not
+cut off during validation. The regular `upload` target continues to use
+`per-vu-iterations`. Its `MAX_DURATION` is only a safety deadline, not a way to
+hold load for a fixed time.
+
+Uploaded files stay in the execution's temporary directory until teardown.
+Before a long soak, use a short run to estimate upload throughput and check
+that the target has enough free storage for `throughput × file size ×
+duration`. A normal teardown deletes the complete temporary directory.
+
+Each workflow also includes the consistency download, so `VUS=10` means ten
+active client workflows, not that ten upload bodies are always in flight.
 
 Each k6 point creates a uniquely named directory before starting its VUs. All
 VUs in that point share the same Cozy instance, OAuth token, and directory.
@@ -209,9 +235,9 @@ deletes it. A setup or cleanup failure is reported as an infrastructure
 failure rather than a capacity result.
 
 Before each request, the scenario changes 256 bytes in the selected in-memory
-binary. The mutation includes the test ID, VU, iteration, time, and a random
-value, so every uploaded file has distinct content without regenerating the
-whole binary. The base binary on disk remains unchanged.
+binary. The mutation includes the execution ID, VU, iteration, time, and a
+random value, so every uploaded file has distinct content without regenerating
+the whole binary. The base binary on disk remains unchanged.
 
 Before uploading, the scenario calculates the binary MD5 and sends it as
 `Content-MD5`. After every `201` response, it validates the returned file ID,
@@ -354,10 +380,23 @@ summary path. An `exact` result has a measured failing level above it. A
 `lower_bound` result is displayed as `maximum >= MAX_VUS`, because the
 configured cap passed and no higher level was attempted.
 
-Grafana can filter k6 metrics by campaign, test ID, file size, concurrency,
-and phase. Use the Stack source selector to inspect either the bundled Compose
-target or a stack started directly on the host. The stack panels show scrape
-health, request rate, error rate, server latency, CPU, memory, goroutines, file
+Grafana can filter k6 metrics by campaign, execution ID, file size,
+concurrency, and phase. A campaign groups every capacity-search point. An
+execution ID identifies one k6 process at one concurrency and attempt; for a
+standalone upload or soak run, the campaign and execution ID are the same.
+Make generates a UTC execution ID by default. Pass `EXECUTION_ID=name` for a
+standalone run or `CAPACITY_RUN_ID=name` for a capacity campaign when you want
+a stable name in Grafana.
+
+The dashboard keeps successful and failed upload p95 values separate and uses
+seconds, which is the Prometheus base unit used by k6 remote write. It also
+shows failed-upload totals, a failure-rate timeline, and failures grouped by
+execution, concurrency, and HTTP status. The HTTP status is available in k6
+metrics; the server-side error message still comes from stack logs.
+
+Use the Stack source selector to inspect either the bundled Compose target or
+a stack started directly on the host. The stack panels show scrape health,
+request rate, error rate, server latency, CPU, memory, goroutines, file
 descriptor usage, garbage collection, and upload-related worker queues.
 
 The stack HTTP metrics are labelled by method and status code, but not by
@@ -404,11 +443,11 @@ When adding a scenario:
 
 The next test families should stay separate:
 
-- exact upload concurrency, which we have now;
+- exact-work and fixed-duration upload concurrency, which we have now;
 - shared-drive uploads from several member instances;
 - upload throughput in uploads per second;
 - mixed read and write user flows;
-- long soak tests;
+- mixed-workload and multi-instance soak tests;
 - data-scale setup for users, organizations, shares, and files;
 - membership change load.
 
@@ -455,11 +494,13 @@ $ make upload-smoke
 $ make cozy-up
 $ make cozy-prepare
 $ make cozy-upload FILE_SIZE=1K VUS=1
+$ make cozy-upload-soak FILE_SIZE=1M VUS=8 DURATION=10m
 $ make cozy-capacity FILE_SIZE=1K MAX_VUS=8
 $ make cozy-status
 $ make cozy-logs
 $ make cozy-down
 $ make upload BASE_URL=https://target.example FILE_SIZE=1M VUS=10
+$ make upload-soak BASE_URL=https://target.example FILE_SIZE=1M VUS=10 DURATION=30m
 $ make upload-capacity BASE_URL=https://target.example FILE_SIZE=10M
 $ make upload-capacity-all BASE_URL=https://target.example
 $ make status
@@ -469,7 +510,7 @@ $ make down
 
 `make down` preserves the Prometheus and Grafana volumes. Every run writes a
 JSON summary under `data/results/` and tags Prometheus metrics with campaign,
-test, file-size, concurrency, and phase identifiers.
+execution, file-size, concurrency, and phase identifiers.
 
 ## Deployment
 

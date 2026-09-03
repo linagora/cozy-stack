@@ -509,8 +509,8 @@ function runCapacityPoint(
   state.attemptNumber += 1
 
   const { config } = state
-  const testId = `${config.campaignId}-${phase}-v${vus}-a${state.attemptNumber}`
-  const summaryName = `${testId}-summary.json`
+  const executionId = `${config.campaignId}-${phase}-v${vus}-a${state.attemptNumber}`
+  const summaryName = `${executionId}-summary.json`
   const summaryPath = join(resultsDirectory, summaryName)
   const expectedIterations = vus * iterationsPerVu
 
@@ -525,13 +525,14 @@ function runCapacityPoint(
     `BASE_URL=${config.baseUrl}`,
     `FILE_SIZE=${config.fileSize}`,
     `VUS=${vus}`,
+    'UPLOAD_MODE=iterations',
     `ITERATIONS_PER_VU=${iterationsPerVu}`,
     `CONSISTENCY_CHUNK_SIZE_BYTES=${config.consistencyChunkSizeBytes}`,
     `CAPACITY_RUN_ID=${config.campaignId}`,
     `CAPACITY_PHASE=${phase}`,
     `MIN_SUCCESS_RATE=${config.minimumSuccessRate}`,
     `P95_LIMIT_MS=${p95LimitMs ?? ''}`,
-    `TEST_ID=${testId}`,
+    `EXECUTION_ID=${executionId}`,
     `UPLOAD_TARGET=${config.uploadTarget.kind}`,
   ]
 
