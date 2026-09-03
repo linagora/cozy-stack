@@ -3,7 +3,7 @@ import { createHash, md5 } from 'k6/crypto'
 import exec from 'k6/execution'
 import { Rate } from 'k6/metrics'
 
-import type { Options } from 'k6/options'
+import type { Options, Scenario } from 'k6/options'
 
 import { randomizeUploadData, uploadDataSize } from '../fixtures/upload-data.ts'
 import {
@@ -66,6 +66,18 @@ function getRequiredEnvironmentValue(environmentName: string): string {
   return value
 }
 
+type UploadMode = 'iterations' | 'soak'
+
+function getUploadMode(): UploadMode {
+  const value = __ENV.UPLOAD_MODE || 'iterations'
+
+  if (value !== 'iterations' && value !== 'soak') {
+    throw new Error('UPLOAD_MODE must be iterations or soak')
+  }
+
+  return value
+}
+
 const uploadVirtualUsers = getPositiveInteger('UPLOAD_VUS', 1)
 const consistencyChunkSize = getPositiveInteger(
   'CONSISTENCY_CHUNK_SIZE_BYTES',
@@ -76,6 +88,8 @@ const uploadP95Limit = getOptionalP95Limit()
 const uploadTarget = getUploadTarget(__ENV)
 const uploadSuccess = new Rate('upload_success')
 const cleanupSuccess = new Rate('cleanup_success')
+const uploadMode = getUploadMode()
+const executionId = __ENV.EXECUTION_ID || 'upload'
 
 const uploadThresholdTags = '{operation:file-upload}'
 const thresholds: NonNullable<Options['thresholds']> = {
@@ -88,15 +102,28 @@ const thresholds: NonNullable<Options['thresholds']> = {
   [`upload_success${uploadThresholdTags}`]: [`rate>=${uploadSuccessRate}`],
 }
 
+function getUploadScenario(): Scenario {
+  if (uploadMode === 'soak') {
+    return {
+      duration: __ENV.DURATION || '10m',
+      executor: 'constant-vus',
+      gracefulStop: __ENV.GRACEFUL_STOP || '30m',
+      vus: uploadVirtualUsers,
+    }
+  }
+
+  return {
+    executor: 'per-vu-iterations',
+    iterations: getPositiveInteger('ITERATIONS_PER_VU', 1),
+    maxDuration: __ENV.MAX_DURATION || '30m',
+    vus: uploadVirtualUsers,
+  }
+}
+
 export const options: Options = {
   discardResponseBodies: true,
   scenarios: {
-    concurrent_uploads: {
-      executor: 'per-vu-iterations',
-      vus: uploadVirtualUsers,
-      iterations: getPositiveInteger('ITERATIONS_PER_VU', 1),
-      maxDuration: __ENV.MAX_DURATION || '30m',
-    },
+    concurrent_uploads: getUploadScenario(),
   },
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
   thresholds,
@@ -104,12 +131,12 @@ export const options: Options = {
 
 function makeRunTags(): RunTags {
   return {
-    campaignid: __ENV.CAPACITY_RUN_ID || __ENV.TEST_ID || 'upload',
+    campaignid: __ENV.CAPACITY_RUN_ID || executionId,
     concurrency: String(uploadVirtualUsers),
+    executionid: executionId,
     filesize: uploadDataSize,
     phase: __ENV.CAPACITY_PHASE || 'single-run',
     target: uploadTarget.kind,
-    testid: __ENV.TEST_ID || 'upload',
   }
 }
 
@@ -120,7 +147,7 @@ export function setup(): TestDirectory {
   const directoryName = [
     'twake-load',
     uploadDataSize.toLowerCase(),
-    __ENV.TEST_ID || 'upload',
+    executionId,
     Date.now(),
   ].join('-')
 
@@ -216,7 +243,7 @@ export default function runConcurrentUploadsScenario(
     exec.vu.idInTest,
     Date.now(),
     Math.floor(Math.random() * 0xffffffff),
-    __ENV.TEST_ID || 'upload',
+    executionId,
   ].join('-')
   const filename = makeUploadName(marker)
   const uploadBody = randomizeUploadData(marker)
