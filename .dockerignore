@@ -1,0 +1,8 @@
+storage/
+.gocache/
+scripts/node_modules/
+tests/load/node_modules/
+tests/load/results/
+tests/load/fixtures/*.bin
+.playwright-mcp/
+**/.DS_Store

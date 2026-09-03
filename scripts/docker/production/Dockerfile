@@ -6,6 +6,8 @@
 FROM golang:1.25-bookworm as build
 WORKDIR /app
 
+ARG COZY_ENV=production
+
 # Use docker layer caching to avoid redownloading go modules if the code has
 # changed but not the dependencies.
 COPY go.mod .
@@ -14,7 +16,7 @@ RUN go mod download
 
 # Build cozy-stack
 COPY . .
-RUN ./scripts/build.sh release ./cozy-stack
+RUN COZY_ENV="${COZY_ENV}" ./scripts/build.sh release ./cozy-stack
 
 
 # Multi-stage image: the main image
