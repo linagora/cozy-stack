@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --import tsx --test src/lib/*.test.ts",
+    "test": "node --import tsx --test src/lib/*.test.ts src/scripts/*.test.ts",
     "typecheck": "tsc -p tsconfig.k6.json && tsc -p tsconfig.node.json"
   },
   "devDependencies": {
