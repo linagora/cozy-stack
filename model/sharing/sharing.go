@@ -33,6 +33,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/realtime"
 	"github.com/cozy/cozy-stack/pkg/utils"
+	"github.com/gofrs/uuid/v5"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/labstack/echo/v4"
 )
@@ -301,6 +302,16 @@ func (s *Sharing) BeOwner(inst *instance.Instance, slug string) error {
 // or updates it with the new codes if the document already exists
 func (s *Sharing) CreatePreviewPermissions(inst *instance.Instance) (*permission.Permission, error) {
 	doc, _ := permission.GetForSharePreview(inst, s.SID)
+	permissionID := ""
+	if doc == nil {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return nil, err
+		}
+		permissionID = id.String()
+	} else {
+		permissionID = doc.ID()
+	}
 
 	codes := make(map[string]string, len(s.Members)-1)
 	shortcodes := make(map[string]string, len(s.Members)-1)
@@ -329,7 +340,7 @@ func (s *Sharing) CreatePreviewPermissions(inst *instance.Instance) (*permission
 		if !okCode {
 			// Use a scoped subject to avoid generating identical share codes
 			// for different permission types or sharings within the same second.
-			codes[key], err = inst.CreateShareCode("preview:" + s.SID + ":" + key)
+			codes[key], err = inst.CreateShareCode("preview:"+s.SID+":"+key, permissionID)
 			if err != nil {
 				return nil, err
 			}
@@ -359,6 +370,7 @@ func (s *Sharing) CreatePreviewPermissions(inst *instance.Instance) (*permission
 		md := metadata.New()
 		md.CreatedByApp = s.AppSlug
 		subdoc := permission.Permission{
+			PID:         permissionID,
 			Permissions: set,
 			Metadata:    md,
 		}
@@ -432,7 +444,7 @@ func (s *Sharing) GetInteractCode(inst *instance.Instance, member *Member, membe
 		key = indexKey
 	}
 	// Use a scoped subject to avoid collisions with preview codes or other sharings
-	code, err := inst.CreateShareCode("interact:" + s.SID + ":" + key)
+	code, err := inst.CreateShareCode("interact:"+s.SID+":"+key, permission.ShareInteractPermissionID(s.SID))
 	if err != nil {
 		return "", err
 	}
@@ -456,7 +468,7 @@ func (s *Sharing) createInteractPermissions(inst *instance.Instance, m *Member) 
 		key = m.Instance
 	}
 	// Use a scoped subject to avoid collisions with preview codes or other sharings
-	code, err := inst.CreateShareCode("interact:" + s.SID + ":" + key)
+	code, err := inst.CreateShareCode("interact:"+s.SID+":"+key, permission.ShareInteractPermissionID(s.SID))
 	if err != nil {
 		return "", err
 	}

@@ -799,6 +799,10 @@ func (i *Instance) PickKey(audience string) ([]byte, error) {
 
 // MakeJWT is a shortcut to create a JWT
 func (i *Instance) MakeJWT(audience, subject, scope, sessionID string, issuedAt time.Time) (string, error) {
+	return i.makeJWT(audience, subject, scope, sessionID, "", issuedAt)
+}
+
+func (i *Instance) makeJWT(audience, subject, scope, sessionID, tokenID string, issuedAt time.Time) (string, error) {
 	secret, err := i.PickKey(audience)
 	if err != nil {
 		return "", err
@@ -806,6 +810,7 @@ func (i *Instance) MakeJWT(audience, subject, scope, sessionID string, issuedAt 
 	return crypto.NewJWT(secret, permission.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Audience: jwt.ClaimStrings{audience},
+			ID:       tokenID,
 			Issuer:   i.Domain,
 			IssuedAt: jwt.NewNumericDate(issuedAt),
 			Subject:  subject,
@@ -838,12 +843,11 @@ func (i *Instance) BuildKonnectorToken(slug string) string {
 	return token
 }
 
-// CreateShareCode returns a new sharecode to put the codes field of a
-// permissions document
-func (i *Instance) CreateShareCode(subject string) (string, error) {
+// CreateShareCode returns a new sharecode tied to a permissions document by its JWT ID.
+func (i *Instance) CreateShareCode(subject, permissionID string) (string, error) {
 	scope := ""
 	sessionID := ""
-	return i.MakeJWT(consts.ShareAudience, subject, scope, sessionID, time.Now())
+	return i.makeJWT(consts.ShareAudience, subject, scope, sessionID, permissionID, time.Now())
 }
 
 // MovedError is used to return an error when the instance has been moved to a

@@ -21,6 +21,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/web/middlewares"
+	"github.com/gofrs/uuid/v5"
 	"github.com/justincampbell/bigduration"
 	"github.com/labstack/echo/v4"
 )
@@ -201,6 +202,11 @@ func HandleCreateShareByLink(c echo.Context, inst *instance.Instance, opts Creat
 	names := strings.Split(c.QueryParam("codes"), ",")
 	ttl := c.QueryParam("ttl")
 	tiny, _ := strconv.ParseBool(c.QueryParam("tiny"))
+	permissionID, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+	subdoc.SetID(permissionID.String())
 
 	// Process TTL/expiration
 	var expiresAt interface{}
@@ -231,7 +237,7 @@ func HandleCreateShareByLink(c echo.Context, inst *instance.Instance, opts Creat
 		codes = make(map[string]string, len(names))
 		shortcodes = make(map[string]string, len(names))
 		for _, name := range names {
-			longcode, err := inst.CreateShareCode(name)
+			longcode, err := inst.CreateShareCode(name, subdoc.ID())
 			if err != nil {
 				return err
 			}

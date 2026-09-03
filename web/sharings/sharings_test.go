@@ -620,7 +620,7 @@ func TestSharings(t *testing.T) {
 		require.NoError(t, err)
 		perms, err := permission.GetForSharePreview(aliceInstance, sharingID)
 		require.NoError(t, err)
-		fooShareCode, err := aliceInstance.CreateShareCode(newMemberMail)
+		fooShareCode, err := aliceInstance.CreateShareCode(newMemberMail, perms.ID())
 		require.NoError(t, err)
 
 		// Adding its sharecode

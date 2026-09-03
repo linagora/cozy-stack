@@ -765,6 +765,7 @@ func CreateShareSet(
 	}
 	// SourceID stays the same, allow quick destruction of all children permissions
 	doc := &Permission{
+		PID:         subdoc.PID,
 		Type:        TypeShareByLink,
 		SourceID:    sourceID,
 		Permissions: set,
@@ -782,7 +783,12 @@ func CreateShareSet(
 		doc.Password = hash
 	}
 
-	err := couchdb.CreateDoc(db, doc)
+	var err error
+	if doc.ID() == "" {
+		err = couchdb.CreateDoc(db, doc)
+	} else {
+		err = couchdb.CreateNamedDocWithDB(db, doc)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -793,6 +799,7 @@ func CreateShareSet(
 // CreateSharePreviewSet creates a Permission doc for previewing a sharing
 func CreateSharePreviewSet(db prefixer.Prefixer, sharingID string, codes, shortcodes map[string]string, subdoc Permission) (*Permission, error) {
 	doc := &Permission{
+		PID:         subdoc.PID,
 		Type:        TypeSharePreview,
 		Permissions: subdoc.Permissions,
 		Codes:       codes,
@@ -800,7 +807,12 @@ func CreateSharePreviewSet(db prefixer.Prefixer, sharingID string, codes, shortc
 		SourceID:    consts.Sharings + "/" + sharingID,
 		Metadata:    subdoc.Metadata,
 	}
-	err := couchdb.CreateDoc(db, doc)
+	var err error
+	if doc.ID() == "" {
+		err = couchdb.CreateDoc(db, doc)
+	} else {
+		err = couchdb.CreateNamedDocWithDB(db, doc)
+	}
 	if err != nil {
 		return nil, err
 	}

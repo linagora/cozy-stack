@@ -518,7 +518,7 @@ func (im *importer) importPermission(zf *zip.File) error {
 	}
 	// We need to remake the long codes with the new instance domain
 	for name := range doc.Codes {
-		longcode, err := im.inst.CreateShareCode(name)
+		longcode, err := im.inst.CreateShareCode(name, doc.ID())
 		if err != nil {
 			return err
 		}

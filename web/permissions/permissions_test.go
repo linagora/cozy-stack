@@ -12,6 +12,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/cozy/cozy-stack/web/middlewares"
@@ -283,15 +284,31 @@ func TestPermissions(t *testing.T) {
 	t.Run("CreateSubPermission", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
-		_, codes, err := createTestSubPermissions(e, token, "alice,bob")
+		id, codes, err := createTestSubPermissions(e, token, "alice,bob")
 		require.NoError(t, err)
 
 		aCode := codes.Value("alice").String().NotEmpty().Raw()
 		bCode := codes.Value("bob").String().NotEmpty().Raw()
+		otherID, otherCodes, err := createTestSubPermissions(e, token, "alice")
+		require.NoError(t, err)
+		otherCode := otherCodes.Value("alice").String().NotEmpty().Raw()
 
 		assert.NotEqual(t, aCode, token)
 		assert.NotEqual(t, bCode, token)
 		assert.NotEqual(t, aCode, bCode)
+		assert.NotEqual(t, id, otherID)
+		assert.NotEqual(t, aCode, otherCode)
+		for _, share := range []struct {
+			permissionID string
+			code         string
+		}{{id, aCode}, {id, bCode}, {otherID, otherCode}} {
+			var claims permission.Claims
+			err := crypto.ParseJWT(share.code, func(_ *jwt.Token) (interface{}, error) {
+				return testInstance.PickKey(consts.ShareAudience)
+			}, &claims)
+			require.NoError(t, err)
+			assert.Equal(t, share.permissionID, claims.ID)
+		}
 
 		obj := e.GET("/permissions/self").
 			WithHeader("Authorization", "Bearer "+aCode).
@@ -302,6 +319,10 @@ func TestPermissions(t *testing.T) {
 		perms := obj.Path("$.data.attributes.permissions").Object()
 		perms.Keys().Length().Equal(2)
 		perms.Path("$.whatever.type").String().Equal("io.cozy.files")
+
+		e.GET("/permissions/self").
+			WithHeader("Authorization", "Bearer "+otherCode).
+			Expect().Status(200)
 	})
 
 	t.Run("CreateSubSubFail", func(t *testing.T) {
