@@ -14,7 +14,17 @@ RUN go mod download
 
 # Build cozy-stack
 COPY . .
-RUN ./scripts/build.sh release ./cozy-stack
+# Build directly instead of going through scripts/build.sh, which runs
+# `git describe` / `git rev-parse` and trips on the COPY'd working tree
+# inside the container. The version string can be overridden at build
+# time via --build-arg VERSION_STRING=...
+ARG VERSION_STRING=docker-build
+RUN BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+ && go build \
+      -ldflags "-X github.com/cozy/cozy-stack/pkg/config.Version=${VERSION_STRING} \
+        -X github.com/cozy/cozy-stack/pkg/config.BuildTime=${BUILD_TIME} \
+        -X github.com/cozy/cozy-stack/pkg/config.BuildMode=production" \
+      -o ./cozy-stack
 
 
 # Multi-stage image: the main image

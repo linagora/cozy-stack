@@ -85,6 +85,11 @@ security features. Please do not use this binary as your production server.
 		return nil, nil, fmt.Errorf("failed to init the swift connection: %w", err)
 	}
 
+	// Init the main global connection to the S3 server
+	if err := config.InitDefaultS3Connection(); err != nil {
+		return nil, nil, fmt.Errorf("failed to init the S3 connection: %w", err)
+	}
+
 	workersList, err := job.GetWorkersList()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get the workers list: %w", err)

@@ -88,7 +88,6 @@ func (h *HTTPHandler) getInstance(c echo.Context) error {
 	} else if url != "" {
 		doc.M["legal_notice_url"] = url
 	}
-
 	return jsonapi.Data(c, http.StatusOK, &apiInstance{doc}, nil)
 }
 
