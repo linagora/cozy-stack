@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+  - job_name: cozy-stack-local
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:6060
+
+  - job_name: cozy-stack-compose
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - cozy-stack:6060
