@@ -161,9 +161,16 @@ func Purge(inst *instance.Instance, logger logger.Logger) (PurgeResult, error) {
 		if err == nil && !file.Trashed {
 			parentPath, ok := dirPaths[file.DirID]
 			if !ok {
-				if dir, err := fs.DirByID(file.DirID); err == nil {
+				dir, dirErr := fs.DirByID(file.DirID)
+				switch {
+				case dirErr == nil:
 					parentPath, ok = dir.Fullpath, true
 					dirPaths[file.DirID] = parentPath
+				case errors.Is(dirErr, os.ErrNotExist):
+					// The parent directory is gone: the file is orphaned,
+					// nothing claims it.
+				default:
+					return result, dirErr
 				}
 			}
 			keep = ok && cl.covers(parentPath)

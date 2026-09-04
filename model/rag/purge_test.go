@@ -5,6 +5,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/rag"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +49,50 @@ func TestPurgeWithGlobalTrigger(t *testing.T) {
 	assert.Equal(t, rag.PurgeResult{Scanned: 2, Deleted: 1}, res)
 	_, ok := r.fake.File(doc.DocID)
 	assert.True(t, ok, "claimed by the global trigger")
+}
+
+// TestPurgeOrphanedFileIsDeleted covers the "not found" branch of the
+// parent directory lookup: the directory doc is gone (deleted outside the
+// VFS, bypassing trash), so the file is orphaned and purged even though a
+// global trigger would otherwise claim it.
+func TestPurgeOrphanedFileIsDeleted(t *testing.T) {
+	r := newRAGTest(t)
+	orphan := r.mkdir("/Orphan")
+	doc := r.writeFile("/Orphan/o.txt", "epsilon")
+	r.addTrigger(rag.IndexMessage{Doctype: consts.Files})
+	r.fake.AddFile(doc.DocID, "x")
+
+	// Delete the directory doc directly, bypassing VFS trash semantics, so
+	// the file's dir_id now points at nothing.
+	require.NoError(t, couchdb.DeleteDoc(r.inst, orphan))
+
+	res, err := rag.Purge(r.inst, rag.TestingLogger())
+	require.NoError(t, err)
+	assert.Equal(t, rag.PurgeResult{Scanned: 1, Deleted: 1}, res)
+	_, ok := r.fake.File(doc.DocID)
+	assert.False(t, ok, "the file's parent directory is gone: orphaned")
+}
+
+// TestPurgeAbortsOnDirLookupError covers the "any other error" branch: a
+// directory lookup failure that is not a not-found (here: an id starting
+// with "_", rejected by couchdb before any HTTP round-trip, so the failure
+// is deterministic) must abort the purge rather than delete the file.
+func TestPurgeAbortsOnDirLookupError(t *testing.T) {
+	r := newRAGTest(t)
+	r.mkdir("/KB")
+	doc := r.writeFile("/KB/a.txt", "alpha")
+	r.addTrigger(rag.IndexMessage{Doctype: consts.Files})
+	r.fake.AddFile(doc.DocID, "x")
+
+	raw, err := r.inst.VFS().FileByID(doc.DocID)
+	require.NoError(t, err)
+	raw.DirID = "_bogus"
+	require.NoError(t, couchdb.UpdateDoc(r.inst, raw))
+
+	_, err = rag.Purge(r.inst, rag.TestingLogger())
+	require.Error(t, err)
+	_, ok := r.fake.File(doc.DocID)
+	assert.True(t, ok, "the purge aborted before touching openRAG")
 }
 
 func TestReset(t *testing.T) {
