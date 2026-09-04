@@ -1,88 +1,16 @@
 package rag
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 
-	"github.com/cozy/cozy-stack/pkg/config/config"
-	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// recordedRequest captures one request observed by a test httptest server.
-type recordedRequest struct {
-	Method string
-	Path   string
-	Body   []byte
-}
-
-// requestRecorder is a small thread-safe helper to record and assert on the
-// HTTP requests received by an httptest server.
-type requestRecorder struct {
-	mu       sync.Mutex
-	requests []recordedRequest
-}
-
-func (r *requestRecorder) record(req *http.Request) {
-	body, _ := io.ReadAll(req.Body)
-	req.Body.Close()
-	// Restore the body so the test's own handler can still read it.
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	rr := recordedRequest{Method: req.Method, Path: req.URL.Path, Body: body}
-	r.mu.Lock()
-	r.requests = append(r.requests, rr)
-	r.mu.Unlock()
-}
-
-func (r *requestRecorder) all() []recordedRequest {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]recordedRequest, len(r.requests))
-	copy(out, r.requests)
-	return out
-}
-
-func (r *requestRecorder) countPath(path string) int {
-	n := 0
-	for _, rr := range r.all() {
-		if rr.Path == path {
-			n++
-		}
-	}
-	return n
-}
-
-func testLogger() logger.Logger {
-	return logger.WithNamespace("rag-test")
-}
-
-func newRAGTestServer(t *testing.T, handler http.HandlerFunc) (config.RAGServer, *requestRecorder) {
-	t.Helper()
-	rec := &requestRecorder{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		rec.record(req)
-		handler(w, req)
-	}))
-	t.Cleanup(srv.Close)
-	server := config.RAGServer{URL: srv.URL, APIKey: "test-key"}
-	return server, rec
-}
-
-func decodeFileIDs(t *testing.T, body []byte) []string {
-	t.Helper()
-	var payload struct {
-		FileIDs []string `json:"file_ids"`
-	}
-	require.NoError(t, json.Unmarshal(body, &payload))
-	return payload.FileIDs
-}
 
 // --- ensureWorkspaceHTTP ---------------------------------------------------
 
