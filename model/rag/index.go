@@ -167,13 +167,10 @@ func deleteFromRAGHTTP(server config.RAGServer, domain, fileID string) error {
 	path := fmt.Sprintf("/indexer/partition/%s/file/%s", domain, url.PathEscape(fileID))
 	res, err := callRAG(server, http.MethodDelete, nil, path, echo.MIMEApplicationJSON)
 	if err != nil {
-		return err
+		return retryable(err)
 	}
-	defer res.Body.Close()
-	if res.StatusCode >= 500 {
-		return fmt.Errorf("DELETE status code: %d", res.StatusCode)
-	}
-	return nil
+	res.Body.Close()
+	return statusError("DELETE file", res.StatusCode, http.StatusNotFound)
 }
 
 // needsIndexation reports whether the file must be sent again. isNew tells
@@ -200,7 +197,7 @@ func indexedMD5Sum(server config.RAGServer, domain, fileID string) (md5sum strin
 	path := fmt.Sprintf("/partition/%s/file/%s", domain, url.PathEscape(fileID))
 	res, err := callRAG(server, http.MethodGet, nil, path, echo.MIMEApplicationJSON)
 	if err != nil {
-		return "", false, err
+		return "", false, retryable(err)
 	}
 	defer res.Body.Close()
 
@@ -216,7 +213,7 @@ func indexedMD5Sum(server config.RAGServer, domain, fileID string) (md5sum strin
 	case http.StatusNotFound:
 		return "", false, nil
 	default:
-		return "", false, fmt.Errorf("GET status code: %d", res.StatusCode)
+		return "", false, statusError("GET file", res.StatusCode)
 	}
 }
 

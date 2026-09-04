@@ -19,37 +19,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type recordedRequest struct {
+type RecordedRequest struct {
 	Method string
 	Path   string
 	Body   []byte
 }
 
-type requestRecorder struct {
+type RequestRecorder struct {
 	mu       sync.Mutex
-	requests []recordedRequest
+	requests []RecordedRequest
 }
 
-func (r *requestRecorder) record(req *http.Request) {
+func (r *RequestRecorder) record(req *http.Request) {
 	body, _ := io.ReadAll(req.Body)
 	req.Body.Close()
 	req.Body = io.NopCloser(bytes.NewReader(body))
 	r.mu.Lock()
-	r.requests = append(r.requests, recordedRequest{Method: req.Method, Path: req.URL.Path, Body: body})
+	r.requests = append(r.requests, RecordedRequest{Method: req.Method, Path: req.URL.Path, Body: body})
 	r.mu.Unlock()
 }
 
-func (r *requestRecorder) all() []recordedRequest {
+func (r *RequestRecorder) All() []RecordedRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]recordedRequest, len(r.requests))
+	out := make([]RecordedRequest, len(r.requests))
 	copy(out, r.requests)
 	return out
 }
 
-func (r *requestRecorder) count(method, p string) int {
+func (r *RequestRecorder) Count(method, p string) int {
 	n := 0
-	for _, rr := range r.all() {
+	for _, rr := range r.All() {
 		if rr.Method == method && rr.Path == p {
 			n++
 		}
@@ -57,9 +57,9 @@ func (r *requestRecorder) count(method, p string) int {
 	return n
 }
 
-func (r *requestRecorder) countPath(p string) int {
+func (r *RequestRecorder) CountPath(p string) int {
 	n := 0
-	for _, rr := range r.all() {
+	for _, rr := range r.All() {
 		if rr.Path == p {
 			n++
 		}
@@ -67,13 +67,13 @@ func (r *requestRecorder) countPath(p string) int {
 	return n
 }
 
-func testLogger() logger.Logger {
+func TestingLogger() logger.Logger {
 	return logger.WithNamespace("rag-test")
 }
 
-func newRAGTestServer(t *testing.T, handler http.HandlerFunc) (config.RAGServer, *requestRecorder) {
+func newRAGTestServer(t *testing.T, handler http.HandlerFunc) (config.RAGServer, *RequestRecorder) {
 	t.Helper()
-	rec := &requestRecorder{}
+	rec := &RequestRecorder{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		rec.record(req)
 		handler(w, req)
@@ -91,61 +91,65 @@ func decodeFileIDs(t *testing.T, body []byte) []string {
 	return payload.FileIDs
 }
 
-// fakeFile is the state openRAG keeps for one indexed file.
-type fakeFile struct {
+// FakeFile is the state openRAG keeps for one indexed file.
+type FakeFile struct {
 	MD5        string
 	Workspaces []string
 }
 
-// fakeOpenRAG is an in-memory openRAG implementing the routes the stack uses.
-type fakeOpenRAG struct {
+// FakeOpenRAG is an in-memory openRAG implementing the routes the stack uses.
+type FakeOpenRAG struct {
 	t          *testing.T
-	server     config.RAGServer
-	rec        *requestRecorder
+	Server     config.RAGServer
+	Rec        *RequestRecorder
 	mu         sync.Mutex
-	files      map[string]*fakeFile
+	files      map[string]*FakeFile
 	workspaces map[string]bool
-	// fail, when set, is consulted before every request: a non-zero status
+	// Fail, when set, is consulted before every request: a non-zero status
 	// is returned as-is without touching the state.
-	fail func(method, path string) int
+	Fail func(method, path string) int
+	// OnUpload, when set, is called after a successful POST/PUT with the
+	// file id and the doc_rev found in the metadata form field. Integration
+	// tests use it to emulate the indexer's status callback.
+	OnUpload func(fileID, docRev string)
 }
 
-func newFakeOpenRAG(t *testing.T) *fakeOpenRAG {
+func NewFakeOpenRAG(t *testing.T) *FakeOpenRAG {
 	t.Helper()
-	f := &fakeOpenRAG{t: t, files: map[string]*fakeFile{}, workspaces: map[string]bool{}}
-	f.server, f.rec = newRAGTestServer(t, f.handle)
+	f := &FakeOpenRAG{t: t, files: map[string]*FakeFile{}, workspaces: map[string]bool{}}
+	f.Server, f.Rec = newRAGTestServer(t, f.handle)
 	return f
 }
 
-func (f *fakeOpenRAG) addFile(id, md5 string, workspaces ...string) {
+func (f *FakeOpenRAG) AddFile(id, md5 string, workspaces ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.files[id] = &fakeFile{MD5: md5, Workspaces: append([]string{}, workspaces...)}
+	f.files[id] = &FakeFile{MD5: md5, Workspaces: append([]string{}, workspaces...)}
 }
 
-func (f *fakeOpenRAG) addWorkspace(id string) {
+func (f *FakeOpenRAG) AddWorkspace(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.workspaces[id] = true
 }
 
-func (f *fakeOpenRAG) file(id string) (fakeFile, bool) {
+func (f *FakeOpenRAG) File(id string) (FakeFile, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	ff, ok := f.files[id]
 	if !ok {
-		return fakeFile{}, false
+		return FakeFile{}, false
 	}
-	return fakeFile{MD5: ff.MD5, Workspaces: append([]string{}, ff.Workspaces...)}, true
+	return FakeFile{MD5: ff.MD5, Workspaces: append([]string{}, ff.Workspaces...)}, true
 }
 
-func (f *fakeOpenRAG) hasWorkspace(id string) bool {
+func (f *FakeOpenRAG) HasWorkspace(id string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.workspaces[id]
 }
 
-func (f *fakeOpenRAG) fileIDs() []string {
+func (f *FakeOpenRAG) FileIDs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	ids := make([]string, 0, len(f.files))
@@ -176,9 +180,9 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 //	GET    /partition/{d}/files/{id}/workspaces    → {"workspace_ids":[..]} | 404
 //	POST   /partition/{d}/workspaces/{ws}/files    → 200 | 404 (unknown ws or any unknown id)
 //	DELETE /partition/{d}/workspaces/{ws}/files/{id} → 200 | 404
-func (f *fakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
-	if f.fail != nil {
-		if status := f.fail(req.Method, req.URL.Path); status != 0 {
+func (f *FakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
+	if f.Fail != nil {
+		if status := f.Fail(req.Method, req.URL.Path); status != 0 {
 			writeJSON(w, status, map[string]string{"error": "injected"})
 			return
 		}
@@ -192,7 +196,7 @@ func (f *fakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
 	case req.Method == http.MethodGet && len(segs) == 2 && segs[0] == "partition" && trailingSlash:
 		links := []map[string]string{}
 		for id := range f.files {
-			links = append(links, map[string]string{"link": fmt.Sprintf("%s/partition/%s/file/%s", f.server.URL, segs[1], id)})
+			links = append(links, map[string]string{"link": fmt.Sprintf("%s/partition/%s/file/%s", f.Server.URL, segs[1], id)})
 		}
 		writeJSON(w, 200, map[string]interface{}{"files": links})
 	case req.Method == http.MethodPost && len(segs) == 2 && segs[0] == "partition":
@@ -234,7 +238,16 @@ func (f *fakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
 					}
 				}
 			}
-			f.files[id] = &fakeFile{MD5: req.URL.Query().Get("md5sum"), Workspaces: wsIDs}
+			f.files[id] = &FakeFile{MD5: req.URL.Query().Get("md5sum"), Workspaces: wsIDs}
+			if f.OnUpload != nil {
+				var meta struct {
+					DocRev string `json:"doc_rev"`
+				}
+				_ = json.Unmarshal([]byte(req.FormValue("metadata")), &meta)
+				f.mu.Unlock()
+				f.OnUpload(id, meta.DocRev)
+				f.mu.Lock()
+			}
 			writeJSON(w, 200, map[string]string{})
 		default:
 			writeJSON(w, 405, nil)

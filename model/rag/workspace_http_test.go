@@ -23,9 +23,9 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 		})
 
 		resolve := func() (string, []string, error) { return "My folder", []string{"file1"}, nil }
-		err := ensureWorkspaceHTTP(server, "example.mycozy.cloud", "folder1", resolve, testLogger())
+		err := ensureWorkspaceHTTP(server, "example.mycozy.cloud", "folder1", resolve, TestingLogger())
 		require.NoError(t, err)
-		assert.Len(t, rec.all(), 1, "no further calls once the workspace is known to exist")
+		assert.Len(t, rec.All(), 1, "no further calls once the workspace is known to exist")
 	})
 
 	t.Run("workspace already exists: resolver is not called (laziness)", func(t *testing.T) {
@@ -38,10 +38,10 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 			resolverCalled = true
 			return "", nil, fmt.Errorf("resolver must not be called on GET 200")
 		}
-		err := ensureWorkspaceHTTP(server, "example.mycozy.cloud", "folder1", resolve, testLogger())
+		err := ensureWorkspaceHTTP(server, "example.mycozy.cloud", "folder1", resolve, TestingLogger())
 		require.NoError(t, err)
 		assert.False(t, resolverCalled, "resolver must stay lazy on the GET-200 short-circuit")
-		assert.Len(t, rec.all(), 1)
+		assert.Len(t, rec.All(), 1)
 	})
 
 	t.Run("workspace missing: creates partition, workspace, and backfills", func(t *testing.T) {
@@ -68,12 +68,12 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 		})
 
 		resolve := func() (string, []string, error) { return "My folder", []string{"file1", "file2"}, nil }
-		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, testLogger())
+		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, TestingLogger())
 		require.NoError(t, err)
-		assert.Equal(t, 1, rec.countPath("/partition/dom/workspaces/folder1"))
-		assert.Equal(t, 1, rec.countPath("/partition/dom"))
-		assert.Equal(t, 1, rec.countPath("/partition/dom/workspaces"))
-		assert.Equal(t, 1, rec.countPath("/partition/dom/workspaces/folder1/files"))
+		assert.Equal(t, 1, rec.CountPath("/partition/dom/workspaces/folder1"))
+		assert.Equal(t, 1, rec.CountPath("/partition/dom"))
+		assert.Equal(t, 1, rec.CountPath("/partition/dom/workspaces"))
+		assert.Equal(t, 1, rec.CountPath("/partition/dom/workspaces/folder1/files"))
 	})
 
 	t.Run("workspace create 409 is tolerated and backfill still runs", func(t *testing.T) {
@@ -93,7 +93,7 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 		})
 
 		resolve := func() (string, []string, error) { return "My folder", []string{"file1"}, nil }
-		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, testLogger())
+		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, TestingLogger())
 		require.NoError(t, err)
 	})
 
@@ -140,11 +140,11 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 		})
 
 		resolve := func() (string, []string, error) { return "My folder", []string{"file1", "image1", "file2"}, nil }
-		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, testLogger())
+		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, TestingLogger())
 		require.NoError(t, err)
 
 		var singleIDBodies [][]string
-		for _, rr := range rec.all() {
+		for _, rr := range rec.All() {
 			if rr.Method == http.MethodPost && rr.Path == "/partition/dom/workspaces/folder1/files" {
 				ids := decodeFileIDs(t, rr.Body)
 				if len(ids) == 1 {
@@ -177,10 +177,10 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 		})
 
 		resolve := func() (string, []string, error) { return "My folder", []string{"file1"}, nil }
-		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, testLogger())
+		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, TestingLogger())
 		require.Error(t, err)
 		var deletes int
-		for _, rr := range rec.all() {
+		for _, rr := range rec.All() {
 			if rr.Method == http.MethodDelete && rr.Path == "/partition/dom/workspaces/folder1" {
 				deletes++
 			}
@@ -220,7 +220,7 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 		})
 
 		resolve := func() (string, []string, error) { return "My folder", []string{"file1"}, nil }
-		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, testLogger())
+		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, TestingLogger())
 		require.Error(t, err)
 		mu.Lock()
 		assert.True(t, created)
@@ -246,11 +246,11 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 		})
 
 		resolve := func() (string, []string, error) { return "My folder", []string{"file1"}, nil }
-		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, testLogger())
+		err := ensureWorkspaceHTTP(server, "dom", "folder1", resolve, TestingLogger())
 		require.Error(t, err)
 
 		var deletes int
-		for _, rr := range rec.all() {
+		for _, rr := range rec.All() {
 			if rr.Method == http.MethodDelete && rr.Path == "/partition/dom/workspaces/folder1" {
 				deletes++
 			}
@@ -296,12 +296,12 @@ func TestEnsureWorkspaceHTTP(t *testing.T) {
 		})
 
 		resolve := func() (string, []string, error) { return "My folder", []string{"file1"}, nil }
-		require.Error(t, ensureWorkspaceHTTP(server, "dom", "folder1", resolve, testLogger()))
-		require.NoError(t, ensureWorkspaceHTTP(server, "dom", "folder1", resolve, testLogger()))
+		require.Error(t, ensureWorkspaceHTTP(server, "dom", "folder1", resolve, TestingLogger()))
+		require.NoError(t, ensureWorkspaceHTTP(server, "dom", "folder1", resolve, TestingLogger()))
 
-		assert.Equal(t, 2, rec.countPath("/partition/dom/workspaces"),
+		assert.Equal(t, 2, rec.CountPath("/partition/dom/workspaces"),
 			"the workspace must be re-created by the second ensure")
-		assert.Equal(t, 2, rec.countPath("/partition/dom/workspaces/folder1/files"),
+		assert.Equal(t, 2, rec.CountPath("/partition/dom/workspaces/folder1/files"),
 			"the backfill must rerun after the rollback")
 	})
 }
@@ -328,11 +328,11 @@ func TestReconcileMembershipHTTP(t *testing.T) {
 		})
 
 		known := map[string]string{"ws-add": "/a", "ws-keep": "/b", "ws-remove": "/c"}
-		reconcileMembershipHTTP(server, "dom", "file1", []string{"ws-keep", "ws-add"}, known, testLogger())
+		reconcileMembershipHTTP(server, "dom", "file1", []string{"ws-keep", "ws-add"}, known, TestingLogger())
 
-		assert.Equal(t, 1, rec.countPath("/partition/dom/workspaces/ws-add/files"))
-		assert.Equal(t, 1, rec.countPath("/partition/dom/workspaces/ws-remove/files/file1"))
-		assert.Equal(t, 0, rec.countPath("/partition/dom/workspaces/ws-keep/files"))
+		assert.Equal(t, 1, rec.CountPath("/partition/dom/workspaces/ws-add/files"))
+		assert.Equal(t, 1, rec.CountPath("/partition/dom/workspaces/ws-remove/files/file1"))
+		assert.Equal(t, 0, rec.CountPath("/partition/dom/workspaces/ws-keep/files"))
 	})
 
 	t.Run("foreign workspace in actual membership is never deleted", func(t *testing.T) {
@@ -353,9 +353,9 @@ func TestReconcileMembershipHTTP(t *testing.T) {
 		})
 
 		known := map[string]string{"ws-keep": "/b"}
-		reconcileMembershipHTTP(server, "dom", "file1", []string{"ws-keep"}, known, testLogger())
+		reconcileMembershipHTTP(server, "dom", "file1", []string{"ws-keep"}, known, TestingLogger())
 
-		for _, rr := range rec.all() {
+		for _, rr := range rec.All() {
 			assert.NotEqual(t, http.MethodDelete, rr.Method, "no delete should be issued for a foreign workspace")
 		}
 	})
@@ -366,9 +366,9 @@ func TestReconcileMembershipHTTP(t *testing.T) {
 		})
 
 		known := map[string]string{"ws-add": "/a"}
-		reconcileMembershipHTTP(server, "dom", "file1", []string{"ws-add"}, known, testLogger())
+		reconcileMembershipHTTP(server, "dom", "file1", []string{"ws-add"}, known, TestingLogger())
 
-		assert.Len(t, rec.all(), 1, "only the failed GET, no add/remove calls")
+		assert.Len(t, rec.All(), 1, "only the failed GET, no add/remove calls")
 	})
 }
 
@@ -391,4 +391,60 @@ func TestDirIDEscaping(t *testing.T) {
 	exists, err := workspaceExists(server, "dom", "kb/../1")
 	require.NoError(t, err)
 	assert.True(t, exists)
+}
+
+func TestEnsureWorkspaceExists(t *testing.T) {
+	t.Run("existing workspace: a single GET", func(t *testing.T) {
+		fake := NewFakeOpenRAG(t)
+		fake.AddWorkspace("kb")
+		require.NoError(t, ensureWorkspaceExists(fake.Server, "dom", "kb", "Docs", TestingLogger()))
+		assert.Len(t, fake.Rec.All(), 1)
+	})
+
+	t.Run("missing workspace: partition and workspace are created", func(t *testing.T) {
+		fake := NewFakeOpenRAG(t)
+		require.NoError(t, ensureWorkspaceExists(fake.Server, "dom", "kb", "Docs", TestingLogger()))
+		assert.True(t, fake.HasWorkspace("kb"))
+		assert.Equal(t, 1, fake.Rec.Count(http.MethodPost, "/partition/dom"))
+		reqs := fake.Rec.All()
+		last := reqs[len(reqs)-1]
+		assert.Equal(t, "/partition/dom/workspaces", last.Path)
+		assert.Contains(t, string(last.Body), `"display_name":"Docs"`)
+		assert.Contains(t, string(last.Body), `"workspace_id":"kb"`)
+	})
+
+	t.Run("409 on creation is tolerated", func(t *testing.T) {
+		server, _ := newRAGTestServer(t, func(w http.ResponseWriter, req *http.Request) {
+			switch {
+			case req.Method == http.MethodGet:
+				w.WriteHeader(http.StatusNotFound)
+			case req.Method == http.MethodPost && req.URL.Path == "/partition/dom/workspaces":
+				w.WriteHeader(http.StatusConflict)
+			default:
+				w.WriteHeader(http.StatusCreated)
+			}
+		})
+		require.NoError(t, ensureWorkspaceExists(server, "dom", "kb", "Docs", TestingLogger()))
+	})
+
+	t.Run("5xx on creation is a retryable error", func(t *testing.T) {
+		fake := NewFakeOpenRAG(t)
+		fake.Fail = func(method, path string) int {
+			if method == http.MethodPost && path == "/partition/dom/workspaces" {
+				return 500
+			}
+			return 0
+		}
+		err := ensureWorkspaceExists(fake.Server, "dom", "kb", "Docs", TestingLogger())
+		require.Error(t, err)
+		assert.True(t, isRetryable(err))
+	})
+}
+
+func TestDeleteWorkspace(t *testing.T) {
+	fake := NewFakeOpenRAG(t)
+	fake.AddWorkspace("kb")
+	require.NoError(t, deleteWorkspace(fake.Server, "dom", "kb"))
+	assert.False(t, fake.HasWorkspace("kb"))
+	require.NoError(t, deleteWorkspace(fake.Server, "dom", "kb"), "404 is tolerated")
 }

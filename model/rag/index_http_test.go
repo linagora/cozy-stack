@@ -28,7 +28,7 @@ func formFields(t *testing.T, contentType string, body []byte) url.Values {
 }
 
 func TestUploadToRAG(t *testing.T) {
-	upload := func(t *testing.T, up ragUpload) (recordedRequest, string) {
+	upload := func(t *testing.T, up ragUpload) (RecordedRequest, string) {
 		t.Helper()
 		var contentType string
 		server, rec := newRAGTestServer(t, func(w http.ResponseWriter, req *http.Request) {
@@ -41,7 +41,7 @@ func TestUploadToRAG(t *testing.T) {
 		res, err := uploadToRAG(up, strings.NewReader("hello"))
 		require.NoError(t, err)
 		defer res.Body.Close()
-		requests := rec.all()
+		requests := rec.All()
 		require.Len(t, requests, 1)
 		return requests[0], contentType
 	}
@@ -89,7 +89,7 @@ func TestDeleteFromRAGHTTP(t *testing.T) {
 		})
 		require.NoError(t, deleteFromRAGHTTP(server, "alice.example.net", "a1b2c3"))
 
-		requests := rec.all()
+		requests := rec.All()
 		require.Len(t, requests, 1)
 		assert.Equal(t, http.MethodDelete, requests[0].Method)
 		assert.Equal(t, "/indexer/partition/alice.example.net/file/a1b2c3", requests[0].Path)
@@ -120,7 +120,7 @@ func TestIndexedMD5Sum(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, known)
 		assert.Equal(t, "098f6bcd4621d373cade4e832627b4f6", md5sum)
-		assert.Equal(t, "/partition/alice.example.net/file/a1b2c3", rec.all()[0].Path)
+		assert.Equal(t, "/partition/alice.example.net/file/a1b2c3", rec.All()[0].Path)
 	})
 
 	t.Run("an unknown file is reported as such rather than as an error", func(t *testing.T) {
