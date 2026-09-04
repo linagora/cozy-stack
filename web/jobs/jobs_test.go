@@ -180,6 +180,8 @@ func TestJobs(t *testing.T) {
 	})
 
 	t.Run("CreateRagIndexTriggerWithAppToken", func(t *testing.T) {
+		// Only the permission check on the rag-index worker is under test:
+		// the trigger arguments and the dir_id are arbitrary.
 		_, appToken := setup.GetTestClient(consts.Triggers)
 		e := testutils.CreateTestClient(t, ts.URL)
 

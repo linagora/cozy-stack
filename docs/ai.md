@@ -114,6 +114,20 @@ POST /jobs/queue/rag-index
 The `remove` job detaches the folder's files, deletes the unclaimed ones,
 and drops the workspace.
 
+Rollout order matters: this version of the stack no longer creates the
+knowledge base workspace when a chat starts, it is only created by the
+scoped trigger. The app version that provisions those triggers must
+therefore be deployed before, or together with, this stack version.
+Otherwise a chat on an assistant with a knowledge base fails with an error
+event until the trigger exists and has run once. An operator can create the
+missing triggers by hand, with the CLI token procedure described below.
+
+Removal has an ordering rule too: delete the scoped trigger (or make sure
+none of its jobs is still queued) *before* pushing the `remove` job. A
+scoped job that runs after the removal re-creates the workspace and
+re-indexes the folder from a fresh checkpoint, leaving an orphan workspace
+that only `cozy-stack rag purge` cleans up.
+
 By default, only text-based files are indexed. Images, videos, and audio files
 can be indexed by enabling the following feature flags:
 
