@@ -1,4 +1,3 @@
-// model/rag/membership.go
 package rag
 
 import (

@@ -1,4 +1,3 @@
-// model/rag/remove.go
 package rag
 
 import (

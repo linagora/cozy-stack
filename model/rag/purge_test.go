@@ -119,5 +119,4 @@ func TestReset(t *testing.T) {
 
 	_, err = rag.Reset(r.inst, "unknown")
 	assert.ErrorIs(t, err, rag.ErrNoIndexTrigger)
-
 }

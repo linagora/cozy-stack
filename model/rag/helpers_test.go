@@ -1,4 +1,3 @@
-// model/rag/helpers_test.go
 package rag
 
 import (

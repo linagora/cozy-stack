@@ -1,4 +1,3 @@
-// model/rag/scope.go
 package rag
 
 import (
