@@ -210,6 +210,30 @@ func TestIndexGlobalReuploadKeepsMemberships(t *testing.T) {
 	assert.Equal(t, []string{kb.DocID}, ff.Workspaces, "the KB membership survived the re-upload")
 }
 
+func TestIndexRenameKBFolder(t *testing.T) {
+	r := newRAGTest(t)
+	kb := r.mkdir("/KB")
+	doc := r.writeFile("/KB/a.txt", "alpha")
+	msg := rag.IndexMessage{Doctype: consts.Files, DirID: kb.DocID}
+	r.addTrigger(msg)
+	require.NoError(t, r.index(msg))
+	ff, ok := r.fake.File(doc.DocID)
+	require.True(t, ok)
+	require.Equal(t, []string{kb.DocID}, ff.Workspaces)
+	uploads := r.uploads(doc)
+
+	// The scope follows the folder by id, not by path.
+	name := "Knowledge"
+	_, err := vfs.ModifyDirMetadata(r.inst.VFS(), kb, &vfs.DocPatch{Name: &name})
+	require.NoError(t, err)
+	require.NoError(t, r.index(msg))
+
+	ff, ok = r.fake.File(doc.DocID)
+	require.True(t, ok, "a renamed knowledge base folder still claims its files")
+	assert.Equal(t, []string{kb.DocID}, ff.Workspaces)
+	assert.Equal(t, uploads, r.uploads(doc), "a rename is not a new content")
+}
+
 func TestIndexMoveOutOfScope(t *testing.T) {
 	r := newRAGTest(t)
 	kb := r.mkdir("/KB")
@@ -368,9 +392,9 @@ func TestIndexNonRetryableErrorIsSkipped(t *testing.T) {
 		return 0
 	}
 
-	err := r.index(msg)
-	require.Error(t, err)
-	assert.False(t, rag.IsRetryable(err))
+	// A 4xx is logged and skipped: the job itself succeeds, replaying it
+	// would only hit the same 4xx again.
+	require.NoError(t, r.index(msg))
 	_, ok := r.fake.File(good.DocID)
 	assert.True(t, ok, "the batch continued past the 4xx")
 	cp, err := rag.LoadCheckpoint(r.inst, consts.Files, "rag-index-"+kb.DocID)

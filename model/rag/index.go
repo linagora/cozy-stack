@@ -31,8 +31,10 @@ const (
 	// worker.
 	BatchSize = 100
 	// maxBatchRetries caps the attempts at a batch that keeps failing on
-	// retryable errors, so one poisoned file cannot stall a trigger.
-	maxBatchRetries = 5
+	// retryable errors, so one poisoned file cannot stall a trigger. The
+	// worker retries a failed job MaxExecCount times (3, see worker/rag), and
+	// every execution consumes one attempt: 15 is about five trigger firings.
+	maxBatchRetries = 15
 	// ActionRemove asks the worker to detach a folder's files from its
 	// workspace, delete the unclaimed ones, and drop the workspace.
 	ActionRemove = "remove"
@@ -86,11 +88,30 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 		return fmt.Errorf("unknown rag-index action %q", msg.Action)
 	}
 
-	ctx, err := newIndexContext(inst, logger, msg.DirID)
-	if err != nil || ctx == nil {
+	if inst.RAGServer().URL == "" {
+		return errors.New("no RAG server configured")
+	}
+	cp, err := loadCheckpoint(inst, msg.Doctype, msg.checkpointID())
+	if err != nil {
 		return err
 	}
-	return ctx.runBatch(msg)
+	feed, err := callChangesFeed(inst, msg.Doctype, cp.LastSeq)
+	if err != nil {
+		return err
+	}
+	if feed.LastSeq == cp.LastSeq {
+		// Nothing happened since the last run: the scoped setup below (folder
+		// resolution, workspace creation, global trigger lookup) would be pure
+		// overhead, and a trigger firing on every file event fires a lot.
+		return nil
+	}
+
+	ctx, err := newIndexContext(inst, logger, msg.DirID)
+	if err != nil || ctx == nil {
+		// A scoped job whose folder is gone leaves the checkpoint untouched.
+		return err
+	}
+	return ctx.runBatch(msg, cp, feed)
 }
 
 // indexContext is the state of one rag-index run.
@@ -102,12 +123,11 @@ type indexContext struct {
 	scope  *scope // nil for the global job
 }
 
-// newIndexContext returns (nil, nil) when a scoped job's folder is gone.
+// newIndexContext builds the state of a run: the feature flags and, for a
+// scoped job, the folder and its workspace. It returns (nil, nil) when a
+// scoped job's folder is gone.
 func newIndexContext(inst *instance.Instance, logger logger.Logger, dirID string) (*indexContext, error) {
 	server := inst.RAGServer()
-	if server.URL == "" {
-		return nil, errors.New("no RAG server configured")
-	}
 	// An error only means some sources were unreachable, the flags are usable.
 	flags, _ := feature.GetFlags(inst)
 	ctx := &indexContext{inst: inst, logger: logger, server: server, flags: flags}
@@ -124,26 +144,18 @@ func newIndexContext(inst *instance.Instance, logger logger.Logger, dirID string
 	return ctx, nil
 }
 
-// runBatch processes up to BatchSize changes after the checkpoint.
-func (ctx *indexContext) runBatch(msg IndexMessage) error {
-	cp, err := loadCheckpoint(ctx.inst, msg.Doctype, msg.checkpointID())
-	if err != nil {
-		return err
-	}
-	feed, err := callChangesFeed(ctx.inst, msg.Doctype, cp.LastSeq)
-	if err != nil {
-		return err
-	}
-	if feed.LastSeq == cp.LastSeq {
-		return nil
-	}
-
+// runBatch processes the (at most BatchSize) changes of the feed loaded after
+// the checkpoint, then advances the checkpoint unless the batch must be
+// retried.
+func (ctx *indexContext) runBatch(msg IndexMessage, cp checkpoint, feed *couchdb.ChangesResponse) error {
 	var errj error
+	var failed []string
 	retry := false
 	for _, change := range feed.Results {
 		if err := ctx.handleChange(change); err != nil {
 			ctx.logger.Warnf("Index error on %s: %s", change.DocID, err)
 			errj = errors.Join(errj, err)
+			failed = append(failed, change.DocID)
 			if isRetryable(err) {
 				retry = true
 			}
@@ -158,17 +170,24 @@ func (ctx *indexContext) runBatch(msg IndexMessage) error {
 		return errj
 	}
 	if retry {
-		ctx.logger.Errorf("Giving up on the batch after %s after %d attempts: %s", cp.LastSeq, cp.Retries+1, errj)
+		ctx.logger.Errorf("Giving up on the batch after %s after %d attempts on %v: %s",
+			cp.LastSeq, cp.Retries+1, failed, errj)
 	}
 	cp.LastSeq = feed.LastSeq
 	cp.Retries = 0
 	if err := saveCheckpoint(ctx.inst, msg.Doctype, msg.checkpointID(), cp); err != nil {
-		errj = errors.Join(errj, err)
+		return errors.Join(errj, err)
 	}
 	if feed.Pending > 0 {
 		_ = pushJob(ctx.inst, msg)
 	}
-	return errj
+	if retry {
+		// Gave up: the job must still report the batch as failed.
+		return errj
+	}
+	// Any remaining failure was non-retryable: it was logged and skipped, and
+	// the batch is done. Failing the job would only replay it for nothing.
+	return nil
 }
 
 func (ctx *indexContext) handleChange(change couchdb.Change) error {
