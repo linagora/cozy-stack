@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/feature"
@@ -267,13 +268,9 @@ func (ctx *indexContext) indexFile(f fileInfo, workspaceID string) error {
 	}
 	defer content.Close()
 
-	workspaces := ""
-	if workspaceID != "" {
-		ids, err := json.Marshal([]string{workspaceID})
-		if err != nil {
-			return err
-		}
-		workspaces = string(ids)
+	workspaces, err := ctx.workspacesForUpload(f.ID, workspaceID, isNew)
+	if err != nil {
+		return err
 	}
 	meta := map[string]string{
 		"md5sum":   f.MD5,
@@ -307,6 +304,38 @@ func (ctx *indexContext) indexFile(f fileInfo, workspaceID string) error {
 		return ensureMembership(ctx.server, ctx.inst.Domain, workspaceID, f.ID)
 	}
 	return nil
+}
+
+// workspacesForUpload is the workspace_ids form field of an upload, as a JSON
+// array (empty string when there is nothing to send). openRAG replaces the
+// membership list of the file on every upload, so a re-upload must carry the
+// memberships the file already has — those of the other triggers included —
+// on top of the one of the running job. A file openRAG does not know yet has
+// none.
+func (ctx *indexContext) workspacesForUpload(fileID, workspaceID string, isNew bool) (string, error) {
+	var ids []string
+	if workspaceID != "" {
+		ids = append(ids, workspaceID)
+	}
+	if !isNew {
+		current, found, err := fileWorkspaces(ctx.server, ctx.inst.Domain, fileID)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			ids = append(ids, current...)
+		}
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // fileInfo is the subset of a file document the indexer needs, built either

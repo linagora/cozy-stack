@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"os"
 	"slices"
 	"testing"
 
@@ -67,6 +68,20 @@ func (r *ragTest) mkdir(path string) *vfs.DirDoc {
 func (r *ragTest) writeFile(path, content string) *vfs.FileDoc {
 	r.t.Helper()
 	f, err := vfs.Create(r.inst.VFS(), path)
+	require.NoError(r.t, err)
+	_, err = f.Write([]byte(content))
+	require.NoError(r.t, err)
+	require.NoError(r.t, f.Close())
+	doc, err := r.inst.VFS().FileByPath(path)
+	require.NoError(r.t, err)
+	return doc
+}
+
+// rewriteFile replaces the content of an existing file, the way a re-upload
+// from the client does: a new revision, a new md5sum, the same doc id.
+func (r *ragTest) rewriteFile(path, content string) *vfs.FileDoc {
+	r.t.Helper()
+	f, err := vfs.OpenFile(r.inst.VFS(), path, os.O_WRONLY, 0)
 	require.NoError(r.t, err)
 	_, err = f.Write([]byte(content))
 	require.NoError(r.t, err)
@@ -166,6 +181,33 @@ func TestIndexGlobalAndScopedCoexist(t *testing.T) {
 	ff, ok = r.fake.File(inKB.DocID)
 	require.True(t, ok)
 	assert.Empty(t, ff.Workspaces)
+}
+
+func TestIndexGlobalReuploadKeepsMemberships(t *testing.T) {
+	r := newRAGTest(t)
+	kb := r.mkdir("/KB")
+	doc := r.writeFile("/KB/a.txt", "alpha")
+	global := rag.IndexMessage{Doctype: consts.Files}
+	scoped := rag.IndexMessage{Doctype: consts.Files, DirID: kb.DocID}
+	r.addTrigger(global)
+	r.addTrigger(scoped)
+
+	require.NoError(t, r.index(global))
+	require.NoError(t, r.index(scoped))
+	ff, ok := r.fake.File(doc.DocID)
+	require.True(t, ok)
+	require.Equal(t, []string{kb.DocID}, ff.Workspaces)
+
+	// New content, and only the global trigger runs on it. Its upload
+	// replaces the membership list openRAG holds for the file, so it has to
+	// carry the knowledge base workspace it knows nothing about.
+	r.rewriteFile("/KB/a.txt", "alpha bravo")
+	require.NoError(t, r.index(global))
+
+	assert.Equal(t, 2, r.uploads(doc), "the new content was sent")
+	ff, ok = r.fake.File(doc.DocID)
+	require.True(t, ok)
+	assert.Equal(t, []string{kb.DocID}, ff.Workspaces, "the KB membership survived the re-upload")
 }
 
 func TestIndexMoveOutOfScope(t *testing.T) {
