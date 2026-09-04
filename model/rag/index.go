@@ -22,17 +22,45 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/couchdb/revision"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/labstack/echo/v4"
 )
 
-// BatchSize is the maximal number of documents manipulated at once by the
-// worker.
-const BatchSize = 100
+const (
+	// BatchSize is the maximal number of documents manipulated at once by the
+	// worker.
+	BatchSize = 100
+	// maxBatchRetries caps the attempts at a batch that keeps failing on
+	// retryable errors, so one poisoned file cannot stall a trigger.
+	maxBatchRetries = 5
+	// ActionRemove asks the worker to detach a folder's files from its
+	// workspace, delete the unclaimed ones, and drop the workspace.
+	ActionRemove = "remove"
+	workerType   = "rag-index"
+)
 
+// IndexMessage is the message of rag-index triggers and jobs. Without DirID
+// the whole instance is indexed; with DirID only the files under that folder
+// (recursively) are, and they are attached to the openRAG workspace named
+// after the folder id.
 type IndexMessage struct {
 	Doctype string `json:"doctype"`
+	DirID   string `json:"dir_id,omitempty"`
+	Action  string `json:"action,omitempty"`
+}
+
+func (m IndexMessage) lockName() string {
+	if m.DirID == "" {
+		return "index/" + m.Doctype
+	}
+	return "index/" + m.Doctype + "/" + m.DirID
+}
+
+func (m IndexMessage) checkpointID() string {
+	if m.DirID == "" {
+		return "rag-index"
+	}
+	return "rag-index-" + m.DirID
 }
 
 func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) error {
@@ -40,21 +68,21 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 		return errors.New("Only file can be indexed for the moment")
 	}
 
-	mu := config.Lock().ReadWrite(inst, "index/"+msg.Doctype)
+	mu := config.Lock().LongOperation(inst, msg.lockName())
 	if err := mu.Lock(); err != nil {
 		return err
 	}
 	defer mu.Unlock()
 
-	lastSeq, err := getLastSeqNumber(inst, msg.Doctype)
+	cp, err := loadCheckpoint(inst, msg.Doctype, msg.checkpointID())
 	if err != nil {
 		return err
 	}
-	feed, err := callChangesFeed(inst, msg.Doctype, lastSeq)
+	feed, err := callChangesFeed(inst, msg.Doctype, cp.LastSeq)
 	if err != nil {
 		return err
 	}
-	if feed.LastSeq == lastSeq {
+	if feed.LastSeq == cp.LastSeq {
 		return nil
 	}
 
@@ -69,7 +97,7 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 			errj = errors.Join(errj, err)
 		}
 	}
-	_ = updateLastSequenceNumber(inst, msg.Doctype, feed.LastSeq)
+	_ = saveCheckpoint(inst, msg.Doctype, msg.checkpointID(), checkpoint{LastSeq: feed.LastSeq})
 
 	if feed.Pending > 0 {
 		_ = pushJob(inst, msg.Doctype)
@@ -422,40 +450,6 @@ func decodeMD5Sum(v interface{}) string {
 		return ""
 	}
 	return hex.EncodeToString(raw)
-}
-
-// getLastSeqNumber returns the last sequence number of the previous
-// indexation for this doctype.
-func getLastSeqNumber(inst *instance.Instance, doctype string) (string, error) {
-	result, err := couchdb.GetLocal(inst, doctype, "rag-index")
-	if couchdb.IsNotFoundError(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	seq, _ := result["last_seq"].(string)
-	return seq, nil
-}
-
-// updateLastSequenceNumber updates the last sequence number for this
-// indexation if it's superior to the number in CouchDB.
-func updateLastSequenceNumber(inst *instance.Instance, doctype, seq string) error {
-	result, err := couchdb.GetLocal(inst, doctype, "rag-index")
-	if err != nil {
-		if !couchdb.IsNotFoundError(err) {
-			return err
-		}
-		result = make(map[string]interface{})
-	} else {
-		if prev, ok := result["last_seq"].(string); ok {
-			if revision.Generation(seq) <= revision.Generation(prev) {
-				return nil
-			}
-		}
-	}
-	result["last_seq"] = seq
-	return couchdb.PutLocal(inst, doctype, "rag-index", result)
 }
 
 // callChangesFeed fetches the last changes from the changes feed
