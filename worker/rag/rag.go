@@ -12,8 +12,8 @@ func init() {
 	job.AddWorker(&job.WorkerConfig{
 		WorkerType:   "rag-index",
 		Concurrency:  runtime.NumCPU(),
-		MaxExecCount: 1,
-		Reserved:     true,
+		MaxExecCount: 3,
+		RetryDelay:   30 * time.Second,
 		Timeout:      15 * time.Minute,
 		WorkerFunc:   WorkerIndex,
 	})

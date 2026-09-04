@@ -15,6 +15,7 @@ import (
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/cozy/cozy-stack/web/middlewares"
+	_ "github.com/cozy/cozy-stack/worker/rag"
 	"github.com/gavv/httpexpect/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
@@ -175,6 +176,41 @@ func TestJobs(t *testing.T) {
 			WithHeader("Authorization", "Bearer "+token).
 			WithHeader("Content-Type", "application/json").
 			WithBytes([]byte(`{"data": {"attributes": {"arguments": "foobar"}}}`)).
+			Expect().Status(403)
+	})
+
+	t.Run("CreateRagIndexTriggerWithAppToken", func(t *testing.T) {
+		_, appToken := setup.GetTestClient(consts.Triggers)
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		obj := e.POST("/jobs/triggers").
+			WithHeader("Authorization", "Bearer "+appToken).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes([]byte(`{
+				"data": {
+					"attributes": {
+						"type": "@event",
+						"arguments": "io.cozy.ai.chat.assistants",
+						"debounce": "1m",
+						"worker": "rag-index",
+						"message": {"doctype": "io.cozy.files", "dir_id": "kb"}
+					}
+				}
+			}`)).
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+		triggerID := obj.Path("$.data.id").String().NotEmpty().Raw()
+
+		e.DELETE("/jobs/triggers/"+triggerID).
+			WithHeader("Authorization", "Bearer "+appToken).
+			Expect().Status(204)
+
+		// rag-query stays reserved.
+		e.POST("/jobs/queue/rag-query").
+			WithHeader("Authorization", "Bearer "+appToken).
+			WithHeader("Content-Type", "application/json").
+			WithBytes([]byte(`{"data": {"attributes": {"arguments": {}}}}`)).
 			Expect().Status(403)
 	})
 
