@@ -207,7 +207,10 @@ func (ctx *indexContext) handleDirChange(change couchdb.Change) error {
 			return errj
 		}
 		if err != nil {
-			return errors.Join(errj, err)
+			// The remaining children were not evaluated against the scope,
+			// and nothing else will bring them back: hold the checkpoint so
+			// the whole directory is re-listed on the next run.
+			return errors.Join(errj, retryable(err))
 		}
 		if file == nil || file.Trashed {
 			continue
