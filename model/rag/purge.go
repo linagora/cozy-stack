@@ -187,6 +187,18 @@ func Purge(inst *instance.Instance, logger logger.Logger) (PurgeResult, error) {
 	return result, nil
 }
 
+// resetCheckpoint deletes the checkpoint of one trigger under the lock that
+// trigger's jobs take, so a batch already running cannot save its own
+// LastSeq over the reset.
+func resetCheckpoint(inst *instance.Instance, msg IndexMessage) error {
+	mu := config.Lock().LongOperation(inst, msg.lockName())
+	if err := mu.Lock(); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+	return deleteCheckpoint(inst, msg.Doctype, msg.checkpointID())
+}
+
 // Reset drops the checkpoint of the matching rag-index triggers (all of them
 // when dirID is empty) and launches them, forcing a full re-index from the
 // beginning of the changes feed. It returns the number of triggers reset.
@@ -201,7 +213,7 @@ func Reset(inst *instance.Instance, dirID string) (int, error) {
 		if dirID != "" && msg.DirID != dirID {
 			continue
 		}
-		if err := deleteCheckpoint(inst, msg.Doctype, msg.checkpointID()); err != nil {
+		if err := resetCheckpoint(inst, msg); err != nil {
 			return n, err
 		}
 		req := t.Infos().JobRequest()
