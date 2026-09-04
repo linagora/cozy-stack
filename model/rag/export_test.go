@@ -16,3 +16,7 @@ var (
 	SaveCheckpoint   = saveCheckpoint
 	DeleteCheckpoint = deleteCheckpoint
 )
+
+const MaxBatchRetries = maxBatchRetries
+
+var IsRetryable = isRetryable

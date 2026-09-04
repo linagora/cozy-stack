@@ -466,8 +466,8 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 		metadata["llm_override"] = override
 	}
 	if dirID := assistant.knowledgeBaseDirID(logger); dirID != "" {
-		if err := ensureWorkspace(inst, logger, dirID); err != nil {
-			logger.Warnf("cannot ensure RAG workspace %s: %s", dirID, err)
+		if err := checkWorkspace(inst, dirID); err != nil {
+			logger.Warnf("RAG workspace %s unavailable: %s", dirID, err)
 			// A folder-scoped assistant must never answer from the whole
 			// instance: surface the error to the client and stop.
 			publishError(inst, msg.ID, err)

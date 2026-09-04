@@ -16,7 +16,6 @@ import (
 
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/logger"
-	"github.com/stretchr/testify/require"
 )
 
 type RecordedRequest struct {
@@ -57,16 +56,6 @@ func (r *RequestRecorder) Count(method, p string) int {
 	return n
 }
 
-func (r *RequestRecorder) CountPath(p string) int {
-	n := 0
-	for _, rr := range r.All() {
-		if rr.Path == p {
-			n++
-		}
-	}
-	return n
-}
-
 func TestingLogger() logger.Logger {
 	return logger.WithNamespace("rag-test")
 }
@@ -80,15 +69,6 @@ func newRAGTestServer(t *testing.T, handler http.HandlerFunc) (config.RAGServer,
 	}))
 	t.Cleanup(srv.Close)
 	return config.RAGServer{URL: srv.URL, APIKey: "test-key"}, rec
-}
-
-func decodeFileIDs(t *testing.T, body []byte) []string {
-	t.Helper()
-	var payload struct {
-		FileIDs []string `json:"file_ids"`
-	}
-	require.NoError(t, json.Unmarshal(body, &payload))
-	return payload.FileIDs
 }
 
 // FakeFile is the state openRAG keeps for one indexed file.

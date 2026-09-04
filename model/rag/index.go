@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/cozy/cozy-stack/model/feature"
 	"github.com/cozy/cozy-stack/model/instance"
@@ -63,6 +62,7 @@ func (m IndexMessage) checkpointID() string {
 	return "rag-index-" + m.DirID
 }
 
+// Index is the entry point of the rag-index worker.
 func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) error {
 	if msg.Doctype != consts.Files {
 		return errors.New("Only file can be indexed for the moment")
@@ -74,11 +74,62 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 	}
 	defer mu.Unlock()
 
-	cp, err := loadCheckpoint(inst, msg.Doctype, msg.checkpointID())
+	switch msg.Action {
+	case "":
+	case ActionRemove:
+		if msg.DirID == "" {
+			return errors.New("the remove action requires a dir_id")
+		}
+		return removeFolder(inst, logger, msg.DirID)
+	default:
+		return fmt.Errorf("unknown rag-index action %q", msg.Action)
+	}
+
+	ctx, err := newIndexContext(inst, logger, msg.DirID)
+	if err != nil || ctx == nil {
+		return err
+	}
+	return ctx.runBatch(msg)
+}
+
+// indexContext is the state of one rag-index run.
+type indexContext struct {
+	inst   *instance.Instance
+	logger logger.Logger
+	server config.RAGServer
+	flags  *feature.Flags
+	scope  *scope // nil for the global job
+}
+
+// newIndexContext returns (nil, nil) when a scoped job's folder is gone.
+func newIndexContext(inst *instance.Instance, logger logger.Logger, dirID string) (*indexContext, error) {
+	server := inst.RAGServer()
+	if server.URL == "" {
+		return nil, errors.New("no RAG server configured")
+	}
+	// An error only means some sources were unreachable, the flags are usable.
+	flags, _ := feature.GetFlags(inst)
+	ctx := &indexContext{inst: inst, logger: logger, server: server, flags: flags}
+	if dirID != "" {
+		sc, err := newScope(inst, server, logger, dirID)
+		if err != nil {
+			return nil, err
+		}
+		if sc == nil {
+			return nil, nil
+		}
+		ctx.scope = sc
+	}
+	return ctx, nil
+}
+
+// runBatch processes up to BatchSize changes after the checkpoint.
+func (ctx *indexContext) runBatch(msg IndexMessage) error {
+	cp, err := loadCheckpoint(ctx.inst, msg.Doctype, msg.checkpointID())
 	if err != nil {
 		return err
 	}
-	feed, err := callChangesFeed(inst, msg.Doctype, cp.LastSeq)
+	feed, err := callChangesFeed(ctx.inst, msg.Doctype, cp.LastSeq)
 	if err != nil {
 		return err
 	}
@@ -86,59 +137,215 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 		return nil
 	}
 
-	// Lazily loaded on first use, so batches that never reconcile workspace
-	// membership (e.g. deletions only) skip the CouchDB and openRAG queries.
-	kb := sync.OnceValue(func() *kbContext { return loadKBContext(inst, logger) })
-
 	var errj error
+	retry := false
 	for _, change := range feed.Results {
-		if err := callRAGIndexer(inst, msg.Doctype, change, kb, logger); err != nil {
-			logger.Warnf("Index error: %s", err)
+		if err := ctx.handleChange(change); err != nil {
+			ctx.logger.Warnf("Index error on %s: %s", change.DocID, err)
 			errj = errors.Join(errj, err)
+			if isRetryable(err) {
+				retry = true
+			}
 		}
 	}
-	_ = saveCheckpoint(inst, msg.Doctype, msg.checkpointID(), checkpoint{LastSeq: feed.LastSeq})
 
-	if feed.Pending > 0 {
-		_ = pushJob(inst, msg.Doctype)
+	if retry && cp.Retries < maxBatchRetries {
+		cp.Retries++
+		if err := saveCheckpoint(ctx.inst, msg.Doctype, msg.checkpointID(), cp); err != nil {
+			errj = errors.Join(errj, err)
+		}
+		return errj
 	}
-
+	if retry {
+		ctx.logger.Errorf("Giving up on the batch after %s after %d attempts: %s", cp.LastSeq, cp.Retries+1, errj)
+	}
+	cp.LastSeq = feed.LastSeq
+	cp.Retries = 0
+	if err := saveCheckpoint(ctx.inst, msg.Doctype, msg.checkpointID(), cp); err != nil {
+		errj = errors.Join(errj, err)
+	}
+	if feed.Pending > 0 {
+		_ = pushJob(ctx.inst, msg)
+	}
 	return errj
 }
 
-func callRAGIndexer(inst *instance.Instance, doctype string, change couchdb.Change, kb func() *kbContext, logger logger.Logger) error {
+func (ctx *indexContext) handleChange(change couchdb.Change) error {
 	if strings.HasPrefix(change.DocID, "_design/") {
 		return nil
 	}
-
 	if change.Doc.Get("type") == consts.DirType {
-		// Moving a directory rewrites the path of every descendant directory
-		// but never touches the file docs, which may have silently entered or
-		// left a knowledge-base folder. Each descendant shows up in this same
-		// feed, so reconciling the direct children covers the whole subtree.
-		dirPath, _ := change.Doc.Get("path").(string)
-		if dirPath != "" && !strings.HasPrefix(dirPath, vfs.TrashDirName) {
-			reconcileDirChildren(inst, logger, kb(), change.DocID, dirPath)
+		if ctx.scope == nil {
+			return nil
+		}
+		return ctx.handleDirChange(change)
+	}
+	if change.Deleted || change.Doc.Get("trashed") == true {
+		return deleteFromRAG(ctx.inst, change.DocID)
+	}
+	return ctx.handleFile(fileInfoFromChange(change))
+}
+
+// handleDirChange reacts to a directory document change (typically a move
+// or a rename): the file documents of the subtree do not change, so the
+// direct file children of every changed directory are re-evaluated against
+// the scope. Descendant directories show up in the same feed.
+func (ctx *indexContext) handleDirChange(change couchdb.Change) error {
+	if strings.HasPrefix(change.Doc.Rev(), "1-") {
+		return nil // a new directory is empty
+	}
+	dirPath, _ := change.Doc.Get("path").(string)
+	if dirPath == "" {
+		return nil
+	}
+	ctx.scope.cachePath(change.DocID, dirPath)
+	iter := ctx.inst.VFS().DirIterator(&vfs.DirDoc{DocID: change.DocID, Fullpath: dirPath}, nil)
+	var errj error
+	for {
+		_, file, err := iter.Next()
+		if errors.Is(err, vfs.ErrIteratorDone) {
+			return errj
+		}
+		if err != nil {
+			return errors.Join(errj, err)
+		}
+		if file == nil || file.Trashed {
+			continue
+		}
+		if err := ctx.handleFile(fileInfoFromDoc(file)); err != nil {
+			errj = errors.Join(errj, err)
+		}
+	}
+}
+
+// handleFile applies the scope rule to one live file.
+func (ctx *indexContext) handleFile(f fileInfo) error {
+	if ctx.scope == nil {
+		return ctx.indexFile(f, "")
+	}
+	parentPath, ok := ctx.scope.parentPath(ctx.inst, f.DirID)
+	if !ok {
+		ctx.logger.Warnf("cannot resolve parent path for file %s (dir %s): skipped", f.ID, f.DirID)
+		return nil
+	}
+	if ctx.scope.contains(parentPath) {
+		return ctx.indexFile(f, ctx.scope.dirID)
+	}
+	if f.fromFeed && strings.HasPrefix(f.Rev, "1-") {
+		// The file document was created after the checkpoint and is out of
+		// scope: it was never indexed, no need to ask openRAG. A file reached
+		// through a directory change does not qualify: moving its parent
+		// leaves it at rev 1- even though it may well be indexed.
+		return nil
+	}
+	return detachFile(ctx.inst, f.ID, ctx.scope.dirID, ctx.scope.globalExists, ctx.logger)
+}
+
+// indexFile sends the file to the indexer when openRAG does not hold its
+// current content, and keeps its membership in workspaceID (when not empty).
+func (ctx *indexContext) indexFile(f fileInfo, workspaceID string) error {
+	if !isClassAllowed(ctx.flags, f.Class) {
+		return SetIndexStatus(ctx.inst, f.ID, StatusNotSupported, f.Rev)
+	}
+	needed, isNew, err := needsIndexation(ctx.inst, f.ID, f.MD5)
+	if err != nil {
+		return err
+	}
+	if !needed {
+		if workspaceID != "" {
+			return ensureMembership(ctx.server, ctx.inst.Domain, workspaceID, f.ID)
 		}
 		return nil
 	}
 
-	// An error only means some sources were unreachable, the flags are usable.
-	flags, _ := feature.GetFlags(inst)
-	if inst.RAGServer().URL == "" {
-		return errors.New("no RAG server configured")
+	name, content, err := resolveContent(ctx.inst, f)
+	if err != nil {
+		return err
 	}
+	defer content.Close()
 
-	class, _ := change.Doc.Get("class").(string)
-	if !isClassAllowed(flags, class) {
-		rev, _ := change.Doc.Get("_rev").(string)
-		return SetIndexStatus(inst, change.DocID, StatusNotSupported, rev)
+	workspaces := ""
+	if workspaceID != "" {
+		ids, err := json.Marshal([]string{workspaceID})
+		if err != nil {
+			return err
+		}
+		workspaces = string(ids)
 	}
+	meta := map[string]string{
+		"md5sum":   f.MD5,
+		"datetime": f.Datetime,
+		"doctype":  consts.Files,
+		// Echoed back by the indexer on the callback, which is ordered on it.
+		"doc_rev": f.Rev,
+	}
+	res, err := uploadToRAG(ragUpload{
+		Server:      ctx.server,
+		Domain:      ctx.inst.Domain,
+		FileID:      f.ID,
+		Name:        name,
+		DirID:       f.DirID,
+		MD5Sum:      f.MD5,
+		Meta:        meta,
+		Workspaces:  workspaces,
+		CallbackURL: ctx.inst.PageURL(IndexStatusPath, nil),
+		IsNew:       isNew,
+	}, content)
+	if err != nil {
+		return retryable(err)
+	}
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, res.Body)
+	if err := statusError("upload", res.StatusCode); err != nil {
+		return err
+	}
+	if !isNew && workspaceID != "" {
+		// A PUT re-embeds the content: make sure the membership survived it.
+		return ensureMembership(ctx.server, ctx.inst.Domain, workspaceID, f.ID)
+	}
+	return nil
+}
 
-	if change.Deleted || change.Doc.Get("trashed") == true {
-		return deleteFromRAG(inst, change.DocID)
+// fileInfo is the subset of a file document the indexer needs, built either
+// from a changes feed entry or from a VFS document.
+type fileInfo struct {
+	ID, Rev, DirID, Name, Mime, Class, MD5, InternalID, Datetime string
+	Metadata                                                     map[string]interface{}
+	// fromFeed tells that the file document itself is one of the changes of
+	// the batch, as opposed to being reached by iterating a changed
+	// directory. Only then does its revision say something about how recent
+	// the file is.
+	fromFeed bool
+}
+
+func fileInfoFromChange(change couchdb.Change) fileInfo {
+	doc := change.Doc
+	f := fileInfo{ID: change.DocID, Rev: doc.Rev(), fromFeed: true}
+	f.DirID, _ = doc.Get("dir_id").(string)
+	f.Name, _ = doc.Get("name").(string)
+	f.Mime, _ = doc.Get("mime").(string)
+	f.Class, _ = doc.Get("class").(string)
+	f.InternalID, _ = doc.Get("internal_vfs_id").(string)
+	f.MD5 = decodeMD5Sum(doc.Get("md5sum"))
+	f.Metadata, _ = doc.Get("metadata").(map[string]interface{})
+	f.Datetime, _ = f.Metadata["datetime"].(string)
+	return f
+}
+
+func fileInfoFromDoc(doc *vfs.FileDoc) fileInfo {
+	f := fileInfo{
+		ID:         doc.DocID,
+		Rev:        doc.DocRev,
+		DirID:      doc.DirID,
+		Name:       doc.DocName,
+		Mime:       doc.Mime,
+		Class:      doc.Class,
+		InternalID: doc.InternalID,
+		MD5:        hex.EncodeToString(doc.MD5Sum),
+		Metadata:   map[string]interface{}(doc.Metadata),
 	}
-	return upsertToRAG(inst, doctype, change, kb, logger)
+	f.Datetime, _ = f.Metadata["datetime"].(string)
+	return f
 }
 
 func isClassAllowed(flags *feature.Flags, class string) bool {
@@ -225,108 +432,16 @@ func isIndexed(inst *instance.Instance, docID string) bool {
 	return doc.Indexed
 }
 
-func upsertToRAG(inst *instance.Instance, doctype string, change couchdb.Change, kb func() *kbContext, logger logger.Logger) error {
-	md5sum := decodeMD5Sum(change.Doc.Get("md5sum"))
-	needed, isNewFile, err := needsIndexation(inst, change.DocID, md5sum)
-	if err != nil {
-		return err
-	}
-
-	dirID, _ := change.Doc.Get("dir_id").(string)
-	if !needed {
-		// The content did not change but the file may have been
-		// moved/renamed: keep the knowledge-base workspaces in sync.
-		reconcileMembership(inst, logger, kb(), change.DocID, dirID)
-		return nil
-	}
-
-	name, content, err := resolveContent(inst, change)
-	if err != nil {
-		return err
-	}
-	defer content.Close()
-
-	// The streaming goroutine below needs the workspace membership, but
-	// kbContext is not safe for concurrent use: resolve it here, on the
-	// indexing loop, before the goroutine starts.
-	workspaceIDsJSON, attachUnknown := resolveWorkspaces(inst, logger, kb(), change.DocID, dirID)
-
-	datetime := ""
-	if metadata, ok := change.Doc.Get("metadata").(map[string]interface{}); ok {
-		datetime, _ = metadata["datetime"].(string)
-	}
-	rev, _ := change.Doc.Get("_rev").(string)
-	meta := map[string]string{
-		"md5sum":   md5sum,
-		"datetime": datetime,
-		"doctype":  doctype,
-		// Echoed back by the indexer on the callback, which is ordered on it.
-		"doc_rev": rev,
-	}
-
-	res, err := uploadToRAG(ragUpload{
-		Server:      inst.RAGServer(),
-		Domain:      inst.Domain,
-		FileID:      change.DocID,
-		Name:        name,
-		DirID:       dirID,
-		MD5Sum:      md5sum,
-		Meta:        meta,
-		Workspaces:  workspaceIDsJSON,
-		CallbackURL: inst.PageURL(IndexStatusPath, nil),
-		IsNew:       isNewFile,
-	}, content)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode >= 500 {
-		return fmt.Errorf("Status code: %d", res.StatusCode)
-	}
-
-	if (!isNewFile || attachUnknown) && res.StatusCode < 300 {
-		// A re-upload may also have moved the file. And for a new file whose
-		// membership could not be resolved before the upload, this is the only
-		// chance to attach it, now that the transient error may have cleared.
-		reconcileMembership(inst, logger, kb(), change.DocID, dirID)
-	}
-	return nil
-}
-
-// resolveWorkspaces returns the knowledge-base workspaces the file belongs to.
-// The boolean tells that they could not be resolved, which is not the same as
-// belonging to none.
-func resolveWorkspaces(inst *instance.Instance, logger logger.Logger, kbc *kbContext, fileID, dirID string) (string, bool) {
-	if kbc.empty() {
-		return "", false
-	}
-	desired, ok := kbc.desiredFor(inst, dirID)
-	if !ok {
-		logger.Warnf("cannot resolve parent path for file %s (dir %s): skipping workspace attach", fileID, dirID)
-		return "", true
-	}
-	if len(desired) == 0 {
-		return "", false
-	}
-	wsJSON, err := json.Marshal(desired)
-	if err != nil {
-		return "", false
-	}
-	return string(wsJSON), false
-}
-
 // resolveContent returns what to send to the RAG server. A note is sent as the
 // markdown it renders to.
-func resolveContent(inst *instance.Instance, change couchdb.Change) (string, io.ReadCloser, error) {
-	name, _ := change.Doc.Get("name").(string)
-	mime, _ := change.Doc.Get("mime").(string)
+func resolveContent(inst *instance.Instance, f fileInfo) (string, io.ReadCloser, error) {
+	name := f.Name
 
-	if mime == consts.NoteMimeType {
-		metadata, _ := change.Doc.Get("metadata").(map[string]interface{})
-		schema, _ := metadata["schema"].(map[string]interface{})
-		raw, _ := metadata["content"].(map[string]interface{})
+	if f.Mime == consts.NoteMimeType {
+		schema, _ := f.Metadata["schema"].(map[string]interface{})
+		raw, _ := f.Metadata["content"].(map[string]interface{})
 		noteDoc := &note.Document{
-			DocID:      change.DocID,
+			DocID:      f.ID,
 			SchemaSpec: schema,
 			RawContent: raw,
 		}
@@ -339,14 +454,12 @@ func resolveContent(inst *instance.Instance, change couchdb.Change) (string, io.
 		return name, io.NopCloser(bytes.NewReader(md)), nil
 	}
 
-	dirID, _ := change.Doc.Get("dir_id").(string)
-	internalID, _ := change.Doc.Get("internal_vfs_id").(string)
-	f, err := inst.VFS().OpenFile(&vfs.FileDoc{
+	file, err := inst.VFS().OpenFile(&vfs.FileDoc{
 		Type:       consts.FileType,
-		DocID:      change.DocID,
-		DirID:      dirID,
+		DocID:      f.ID,
+		DirID:      f.DirID,
 		DocName:    name,
-		InternalID: internalID,
+		InternalID: f.InternalID,
 	})
 	if err != nil {
 		return "", nil, err
@@ -355,7 +468,7 @@ func resolveContent(inst *instance.Instance, change couchdb.Change) (string, io.
 		// See https://github.com/OpenLLM-France/RAGondin/issues/88
 		name = strings.TrimSuffix(name, consts.DocsExtension) + consts.MarkdownExtension
 	}
-	return name, f, nil
+	return name, file, nil
 }
 
 type ragUpload struct {
@@ -461,17 +574,15 @@ func callChangesFeed(inst *instance.Instance, doctype, since string) (*couchdb.C
 }
 
 // pushJob adds a new job to continue on the pending documents in the changes
-// feed.
-func pushJob(inst *instance.Instance, doctype string) error {
-	msg, err := job.NewMessage(&IndexMessage{
-		Doctype: doctype,
-	})
+// feed, with the same message.
+func pushJob(inst *instance.Instance, msg IndexMessage) error {
+	m, err := job.NewMessage(&msg)
 	if err != nil {
 		return err
 	}
 	_, err = job.System().PushJob(inst, &job.JobRequest{
-		WorkerType: "rag-index",
-		Message:    msg,
+		WorkerType: workerType,
+		Message:    m,
 	})
 	return err
 }
