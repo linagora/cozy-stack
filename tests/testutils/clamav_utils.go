@@ -7,10 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 
-	c "github.com/docker/docker/api/types/container"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -30,14 +28,6 @@ type ClamAVFixture struct {
 func StartClamAV(t *testing.T) *ClamAVFixture {
 	t.Helper()
 
-	clamdHostPort := getFreePort(t)
-
-	hostCfg := func(hc *c.HostConfig) {
-		hc.PortBindings = nat.PortMap{
-			"3310/tcp": []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: clamdHostPort}},
-		}
-	}
-
 	req := tc.ContainerRequest{
 		Image:         "clamav/clamav:stable",
 		ImagePlatform: "linux/amd64", // Force amd64 platform for ARM Macs
@@ -46,7 +36,6 @@ func StartClamAV(t *testing.T) *ClamAVFixture {
 			// Skip freshclam initial update for faster startup in tests
 			"CLAMAV_NO_FRESHCLAMD": "true",
 		},
-		HostConfigModifier: hostCfg,
 		WaitingFor: wait.ForAll(
 			wait.ForListeningPort("3310/tcp"),
 			wait.ForLog("socket found, clamd started").WithStartupTimeout(120*time.Second),
@@ -61,6 +50,9 @@ func StartClamAV(t *testing.T) *ClamAVFixture {
 
 	host, err := container.Host(context.Background())
 	require.NoError(t, err, "failed to get host for ClamAV")
+	clamdPort, err := container.MappedPort(context.Background(), "3310/tcp")
+	require.NoError(t, err, "failed to get port for ClamAV")
+	clamdHostPort := clamdPort.Port()
 
 	fixture := &ClamAVFixture{
 		Container: container,

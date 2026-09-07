@@ -43,10 +43,7 @@ func StartRabbitMQ(t *testing.T, withVolume bool, enableTLS bool) *RabbitFixture
 	pass := "guest"
 
 	// Unique volume name if you want persistence across Stop/Start *within the test*.
-	amqpHostPort := getFreePort(t)
-	httpHostPort := getFreePort(t)
-	amqpsHostPort := ""
-
+	var amqpHostPort, httpHostPort, amqpsHostPort string
 	volName := "rmq_" + regexp.MustCompile(`[^a-z0-9_.-]+`).ReplaceAllString(strings.ToLower(t.Name()), "")
 	hostCfg := func(hc *c.HostConfig) {
 		hc.PortBindings = nat.PortMap{
@@ -54,7 +51,6 @@ func StartRabbitMQ(t *testing.T, withVolume bool, enableTLS bool) *RabbitFixture
 			"15672/tcp": []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: httpHostPort}},
 		}
 		if enableTLS {
-			amqpsHostPort = getFreePort(t)
 			hc.PortBindings["5671/tcp"] = []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: amqpsHostPort}}
 
 			hc.Binds = append(hc.Binds,
@@ -88,10 +84,28 @@ func StartRabbitMQ(t *testing.T, withVolume bool, enableTLS bool) *RabbitFixture
 		}(),
 	}
 
-	container, err := tc.GenericContainer(context.Background(), tc.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
+	var container tc.Container
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		amqpHostPort = getFreePort(t)
+		httpHostPort = getFreePort(t)
+		if enableTLS {
+			amqpsHostPort = getFreePort(t)
+		}
+		container, err = tc.GenericContainer(context.Background(), tc.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		})
+		if err == nil {
+			break
+		}
+		if container != nil {
+			_ = container.Terminate(context.Background())
+		}
+		if !strings.Contains(err.Error(), "port is already allocated") {
+			break
+		}
+	}
 	require.NoError(t, err, "failed to start RabbitMQ")
 
 	host, err := container.Host(context.Background())
