@@ -49,12 +49,7 @@ type Report struct {
 	AvatarCopied bool
 }
 
-// CopyContent copies all object-storage content (files including trashed
-// ones, file versions, and the avatar) from src to dst. db is only used to
-// enumerate the CouchDB documents (io.cozy.files and io.cozy.files.versions)
-// that describe what content exists; CopyContent creates or modifies NO
-// CouchDB document — it only reads from CouchDB and writes object bytes.
-func CopyContent(db prefixer.Prefixer, src, dst vfs.VFS, srcAv, dstAv vfs.Avatarer) (*Report, error) {
+func copyContent(db prefixer.Prefixer, src, dst vfs.VFS, srcAv, dstAv vfs.Avatarer) (*Report, error) {
 	writer, ok := dst.(contentWriter)
 	if !ok {
 		return nil, fmt.Errorf("storagemigration: target backend does not support index-free writes")
@@ -75,13 +70,7 @@ func CopyContent(db prefixer.Prefixer, src, dst vfs.VFS, srcAv, dstAv vfs.Avatar
 	return rep, nil
 }
 
-// Verify re-enumerates the same content that CopyContent copies (files,
-// versions, avatar) and confirms each object exists on dst with a byte size
-// matching the source CouchDB document, without creating or modifying any
-// CouchDB document. It compares the counted totals against expected (the
-// Report returned by CopyContent) and returns the FIRST discrepancy found as
-// a descriptive error.
-func Verify(db prefixer.Prefixer, dst vfs.VFS, dstAv vfs.Avatarer, expected *Report) error {
+func verify(db prefixer.Prefixer, dst vfs.VFS, dstAv vfs.Avatarer, expected *Report) error {
 	stater, ok := dst.(contentStater)
 	if !ok {
 		return fmt.Errorf("storagemigration: target backend does not support index-free stats")
@@ -117,11 +106,8 @@ func Verify(db prefixer.Prefixer, dst vfs.VFS, dstAv vfs.Avatarer, expected *Rep
 	return nil
 }
 
-// sourceReport enumerates the instance's CouchDB documents (io.cozy.files
-// and io.cozy.files.versions) and checks srcAv for an avatar, to compute the
-// Report a FlagOnly flip expects the already-populated target to satisfy. It
-// does not read or write any object-storage content itself: it describes
-// what the source SHOULD have on the target, for Verify to confirm.
+// sourceReport describes the source content that an already-populated target
+// must contain before a flag-only switch.
 func sourceReport(db prefixer.Prefixer, srcAv vfs.Avatarer) (*Report, error) {
 	rep := &Report{}
 
@@ -130,10 +116,9 @@ func sourceReport(db prefixer.Prefixer, srcAv vfs.Avatarer) (*Report, error) {
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			return fmt.Errorf("storagemigration: decode file doc: %w", err)
 		}
-		if doc.Type == consts.DirType {
-			return nil
+		if doc.Type != consts.DirType {
+			rep.Files++
 		}
-		rep.Files++
 		return nil
 	})
 	if err != nil {
@@ -151,7 +136,6 @@ func sourceReport(db prefixer.Prefixer, srcAv vfs.Avatarer) (*Report, error) {
 	ar, _, err := srcAv.OpenAvatar()
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		// No avatar on the source: rep.AvatarCopied stays false.
 	case err != nil:
 		return nil, fmt.Errorf("storagemigration: open source avatar: %w", err)
 	default:
@@ -311,10 +295,8 @@ func copyAvatar(srcAv, dstAv vfs.Avatarer, rep *Report) error {
 // splitVersionID splits a io.cozy.files.versions document id
 // ("<fileID>/<internalID>") into its fileID and internalID parts.
 func splitVersionID(versionDocID string) (fileID, internalID string) {
-	if i := strings.IndexByte(versionDocID, '/'); i >= 0 {
-		return versionDocID[:i], versionDocID[i+1:]
-	}
-	return versionDocID, ""
+	fileID, internalID, _ = strings.Cut(versionDocID, "/")
+	return
 }
 
 // Options configures a call to Migrate.
@@ -322,18 +304,12 @@ type Options struct {
 	// To is the target storage scheme: config.SchemeS3 or config.SchemeSwift.
 	To string
 	// DryRun copies and verifies the content on the target backend but does
-	// not flip the instance's FsScheme: the instance keeps serving reads and
-	// writes from its current (source) backend. Combined with FlagOnly, it
-	// still verifies the already-populated target but likewise never flips.
+	// not flip the instance's FsScheme. Combined with FlagOnly, it verifies
+	// the retained target without switching.
 	DryRun bool
-	// FlagOnly switches the instance's FsScheme pointer to an already
-	// populated target backend without copying anything. It is intended for
-	// rollback (switching back to a backend that a previous migration left
-	// populated) and requires Force, since any write performed against the
-	// source since that previous cutover is lost.
+	// FlagOnly switches to an already-populated target without copying.
 	FlagOnly bool
-	// Force is required together with FlagOnly, acknowledging the data-loss
-	// risk described above.
+	// Force acknowledges that FlagOnly may discard writes made since cutover.
 	Force bool
 	// PurgeSource deletes the source backend's objects after a successful
 	// flip. It is a best-effort cleanup performed once the instance is
@@ -363,9 +339,8 @@ type containerNamer interface {
 // (instance.BlockedMoving) for the duration of the copy/verify and unblocked
 // on every return path.
 //
-// FsScheme is updated ONLY after Verify succeeds (or, for FlagOnly, after the
-// target backend has been validated); a DryRun or a failed Verify always
-// leaves FsScheme unchanged.
+// FsScheme is updated ONLY after verification succeeds; a DryRun or failed
+// verification always leaves FsScheme unchanged.
 //
 // If opts.To already equals the instance's current storage scheme AND
 // opts.PurgeSource is set, Migrate runs in purge-only mode instead: see
@@ -403,7 +378,6 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 			return nil, fmt.Errorf("storagemigration: source swift layout %d is not supported, only layout 2 (v3) can be migrated", inst.SwiftLayout)
 		}
 	}
-
 	if opts.FlagOnly && !opts.Force {
 		return nil, errors.New("storagemigration: flag-only migration requires Force: any write performed against the source since the previous cutover would be lost")
 	}
@@ -422,22 +396,14 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 	if err := lifecycle.Block(inst, instance.BlockedMoving.Code); err != nil {
 		return nil, fmt.Errorf("storagemigration: block instance: %w", err)
 	}
-	defer func() {
-		_ = lifecycle.Unblock(inst)
-	}()
+	defer lifecycle.Unblock(inst)
 
 	if opts.FlagOnly {
-		// FlagOnly does not copy anything, but it must not flip onto a
-		// target that does not already hold the source's content: an
-		// unpopulated (or merely-existing, e.g. freshly EnsureBucket'd)
-		// target would otherwise silently strand the instance on zero
-		// files. Compute the expected counts from the source and verify
-		// the target really has them before flipping.
 		expected, err := sourceReport(inst, srcAv)
 		if err != nil {
 			return nil, err
 		}
-		if err := Verify(inst, dst, dstAv, expected); err != nil {
+		if err := verify(inst, dst, dstAv, expected); err != nil {
 			return expected, err
 		}
 		if opts.DryRun {
@@ -446,11 +412,11 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 		return flip(inst, opts, srcScheme, expected)
 	}
 
-	rep, err := CopyContent(inst, src, dst, srcAv, dstAv)
+	rep, err := copyContent(inst, src, dst, srcAv, dstAv)
 	if err != nil {
 		return rep, err
 	}
-	if err := Verify(inst, dst, dstAv, rep); err != nil {
+	if err := verify(inst, dst, dstAv, rep); err != nil {
 		return rep, err
 	}
 
