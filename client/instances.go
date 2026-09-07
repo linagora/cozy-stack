@@ -309,19 +309,11 @@ func (ac *AdminClient) MigrateStorage(domain string, opts MigrateStorageOptions)
 		return nil, fmt.Errorf("Invalid domain: %s", domain)
 	}
 	q := url.Values{
-		"to": {opts.To},
-	}
-	if opts.DryRun {
-		q.Add("dry_run", "true")
-	}
-	if opts.FlagOnly {
-		q.Add("flag_only", "true")
-	}
-	if opts.Force {
-		q.Add("force", "true")
-	}
-	if opts.PurgeSource {
-		q.Add("purge_source", "true")
+		"to":           {opts.To},
+		"dry_run":      {strconv.FormatBool(opts.DryRun)},
+		"flag_only":    {strconv.FormatBool(opts.FlagOnly)},
+		"force":        {strconv.FormatBool(opts.Force)},
+		"purge_source": {strconv.FormatBool(opts.PurgeSource)},
 	}
 	res, err := ac.Req(&request.Options{
 		Method:  "POST",

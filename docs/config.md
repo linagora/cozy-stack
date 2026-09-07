@@ -116,11 +116,19 @@ while `fs.url` keeps pointing at the previous backend:
 ```yaml
 fs:
   url: swift://openstack/?UserName={{ .Env.OS_USERNAME }}&Password={{ .Env.OS_PASSWORD }}
-  migration_target: s3://s3.rbx.io.cloud.ovh.net?access_key=ACCESS&secret_key=SECRET&region=rbx&bucket_prefix=cozy&use_ssl=true
+  migration_target: s3://s3.example.net?access_key=ACCESS&secret_key=SECRET&region=rbx
+  s3:
+    auto_create_buckets: false
+    buckets:
+      default:
+        name: company-storage
 ```
 
 As with `fs.url`, S3 credentials are passed as `access_key` and `secret_key`
-query parameters of the URL.
+query parameters of the URL. Configure the target buckets in `fs.s3.buckets`.
+During migration, entries without their own `url` use `fs.migration_target`.
+Bucket provisioning follows `fs.s3.auto_create_buckets`; with the setting above,
+create the buckets before starting the stack.
 
 Once `fs.migration_target` is set, the
 [`cozy-stack instances migrate-storage`](cli/cozy-stack_instances_migrate-storage.md)

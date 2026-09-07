@@ -99,7 +99,9 @@ security features. Please do not use this binary as your production server.
 		if config.FsURL().Scheme == config.SchemeS3 {
 			return nil, nil, fmt.Errorf("fs.migration_target must not be set when fs.url is already an s3 scheme")
 		}
-		if err := config.InitS3Connection(config.Fs{URL: config.MigrationTargetURL()}); err != nil {
+		target := config.GetConfig().Fs
+		target.URL = config.MigrationTargetURL()
+		if err := config.InitS3Connection(target); err != nil {
 			return nil, nil, fmt.Errorf("failed to init the S3 migration target connection: %w", err)
 		}
 	}

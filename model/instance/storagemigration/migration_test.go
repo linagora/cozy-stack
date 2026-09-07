@@ -1,4 +1,4 @@
-package storagemigration_test
+package storagemigration
 
 import (
 	"bytes"
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
-	"github.com/cozy/cozy-stack/model/instance/storagemigration"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/model/vfs/vfsafero"
 	"github.com/cozy/cozy-stack/model/vfs/vfss3"
@@ -29,8 +28,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// migrationPrefixer is a minimal vfs.Prefixer (+ GetOrgID, required by
-// vfss3.New's bucket-name derivation) implementation local to this external
+// migrationPrefixer is a minimal vfs.Prefixer implementation local to this
 // test package, mirroring model/vfs/vfs_test.go's contexter fixture.
 type migrationPrefixer struct {
 	cluster int
@@ -43,7 +41,6 @@ func (p *migrationPrefixer) DBCluster() int         { return p.cluster }
 func (p *migrationPrefixer) DomainName() string     { return p.domain }
 func (p *migrationPrefixer) DBPrefix() string       { return p.prefix }
 func (p *migrationPrefixer) GetContextName() string { return p.context }
-func (p *migrationPrefixer) GetOrgID() string       { return "migrationtestorg" }
 
 // migrationDisk is a minimal vfs.DiskThresholder (unlimited quota).
 type migrationDisk struct{}
@@ -105,17 +102,15 @@ func setupMigrationFixture(t *testing.T) *migrationFixture {
 
 	// Target: S3-backed VFS against a MinIO test container.
 	mf := testutils.StartMinio(t)
-	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}))
+	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL(), S3: config.FsS3{Buckets: map[string]config.FsS3Bucket{"default": {Name: "migration-storage"}}}}))
 
 	s3Mutex := config.Lock().ReadWrite(db, "storagemigration-test-s3")
 	dst, err := vfss3.New(db, index, &migrationDisk{}, s3Mutex)
 	require.NoError(t, err)
 
-	bucket := vfss3.BucketName(db.GetOrgID(), config.GetS3BucketPrefix())
-	client := mf.Client(t)
-	require.NoError(t, client.MakeBucket(context.Background(), bucket, minio.MakeBucketOptions{}))
-
-	keyPrefix := db.DBPrefix() + "/"
+	storage := config.GetS3Storage(config.S3StorageFiles)
+	bucket, client := storage.Bucket, storage.Client
+	keyPrefix := storage.Prefix + db.DBPrefix() + "/"
 	dstAv := vfss3.NewAvatarFs(client, bucket, keyPrefix)
 
 	return &migrationFixture{
@@ -187,7 +182,7 @@ func TestCopyContentMovesFilesVersionsAndAvatar(t *testing.T) {
 	revBefore2 := file2.Rev()
 	revBefore3 := file3.Rev()
 
-	rep, err := storagemigration.CopyContent(fx.db, fx.src, fx.dst, fx.srcAv, fx.dstAv)
+	rep, err := copyContent(fx.db, fx.src, fx.dst, fx.srcAv, fx.dstAv)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, rep.Files) // 2 live + 1 trashed
@@ -240,19 +235,19 @@ func TestVerifySucceedsAfterCopyAndFailsWhenObjectMissing(t *testing.T) {
 	file1 := createSourceFile(t, fx, "file1.txt", []byte("hello from file 1"))
 	_ = createSourceFile(t, fx, "file2.txt", []byte("hello from file 2, a bit longer"))
 
-	rep, err := storagemigration.CopyContent(fx.db, fx.src, fx.dst, fx.srcAv, fx.dstAv)
+	rep, err := copyContent(fx.db, fx.src, fx.dst, fx.srcAv, fx.dstAv)
 	require.NoError(t, err)
 
-	require.NoError(t, storagemigration.Verify(fx.db, fx.dst, fx.dstAv, rep))
+	require.NoError(t, verify(fx.db, fx.dst, fx.dstAv, rep))
 
 	// Remove one known target object directly via the raw MinIO client, then
 	// confirm Verify now detects the discrepancy.
-	keyPrefix := fx.db.DBPrefix() + "/"
+	keyPrefix := "files/" + fx.db.DBPrefix() + "/"
 	objKey := vfss3.MakeObjectKey(keyPrefix, file1.DocID, file1.InternalID)
 
 	require.NoError(t, fx.minioClient.RemoveObject(context.Background(), fx.bucket, objKey, minio.RemoveObjectOptions{}))
 
-	assert.Error(t, storagemigration.Verify(fx.db, fx.dst, fx.dstAv, rep))
+	assert.Error(t, verify(fx.db, fx.dst, fx.dstAv, rep))
 }
 
 func assertFileContentOn(t *testing.T, fs vfs.VFS, doc *vfs.FileDoc, want []byte) {
@@ -281,7 +276,7 @@ func setupMigrateInstance(t *testing.T) *instance.Instance {
 	inst := setup.GetTestInstance()
 
 	mf := testutils.StartMinio(t)
-	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}))
+	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL(), S3: config.FsS3{Buckets: map[string]config.FsS3Bucket{"default": {Name: "migration-storage"}}}}))
 
 	createInstanceFile(t, inst, "migrate-file1.txt", []byte("hello from migrate file 1"))
 	createInstanceFile(t, inst, "migrate-file2.txt", []byte("hello from migrate file 2, a bit longer"))
@@ -318,7 +313,7 @@ func createInstanceFile(t *testing.T, inst *instance.Instance, name string, cont
 func TestMigrateFlipsSchemeAfterVerify(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	rep, err := Migrate(inst, Options{To: config.SchemeS3})
 	require.NoError(t, err)
 	require.NotNil(t, rep)
 
@@ -347,7 +342,7 @@ func TestMigrateFlipsSchemeAfterVerify(t *testing.T) {
 func TestMigrateDryRunDoesNotFlip(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, DryRun: true})
+	rep, err := Migrate(inst, Options{To: config.SchemeS3, DryRun: true})
 	require.NoError(t, err)
 	require.NotNil(t, rep)
 	assert.Greater(t, rep.Files, 0)
@@ -359,48 +354,32 @@ func TestMigrateDryRunDoesNotFlip(t *testing.T) {
 func TestMigrateFlagOnlyRequiresForce(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, FlagOnly: true})
+	_, err := Migrate(inst, Options{To: config.SchemeS3, FlagOnly: true})
 	require.Error(t, err)
 	assert.Equal(t, "", inst.FsScheme)
 }
 
-// TestMigrateFlagOnlyFlipsWhenTargetPopulated covers the CRITICAL fix: a
-// FlagOnly+Force flip must succeed (and actually flip) once the target
-// backend genuinely already holds the source's content.
 func TestMigrateFlagOnlyFlipsWhenTargetPopulated(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	// Populate the S3 target for real once, so it already contains the
-	// instance's full content (2 files + avatar) by the time the flag-only
-	// flip below relies on it.
-	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	_, err := Migrate(inst, Options{To: config.SchemeS3})
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeS3, inst.FsScheme)
 
-	// Simulate a rollback scenario: the instance is pointed back at its
-	// (still fully intact, never purged) previous scheme, and we now want
-	// to flip it back onto the S3 target without recopying anything, since
-	// that target is already fully populated from the migration above.
 	inst.FsScheme = ""
 
-	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, FlagOnly: true, Force: true})
+	rep, err := Migrate(inst, Options{To: config.SchemeS3, FlagOnly: true, Force: true})
 	require.NoError(t, err)
 	require.NotNil(t, rep)
-
 	assert.Equal(t, config.SchemeS3, inst.FsScheme)
 	assert.Equal(t, 2, rep.Files)
 	assert.True(t, rep.AvatarCopied)
 }
 
-// TestMigrateFlagOnlyFailsWhenTargetEmpty covers the CRITICAL fix's negative
-// path: a FlagOnly+Force flip against a target that only exists (e.g. an
-// empty bucket created by buildTarget's EnsureBucket call) but does not
-// actually hold the source's content must fail, and must NOT flip
-// FsScheme.
 func TestMigrateFlagOnlyFailsWhenTargetEmpty(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, FlagOnly: true, Force: true})
+	_, err := Migrate(inst, Options{To: config.SchemeS3, FlagOnly: true, Force: true})
 	require.Error(t, err)
 	assert.Equal(t, "", inst.FsScheme)
 }
@@ -431,14 +410,14 @@ func TestMigratePurgeSourceRemovesSourceObjects(t *testing.T) {
 	require.NoError(t, instance.Update(inst))
 
 	mf := testutils.StartMinio(t)
-	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}))
+	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL(), S3: config.FsS3{Buckets: map[string]config.FsS3Bucket{"default": {Name: "migration-storage"}}}}))
 
 	createInstanceFile(t, inst, "purge-file1.txt", []byte("hello from purge file 1"))
 	createInstanceFile(t, inst, "purge-file2.txt", []byte("hello from purge file 2, a bit longer"))
 
 	// Step 1: migrate mem -> swift for real, so the swift container backing
 	// this instance is genuinely populated.
-	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeSwift})
+	_, err := Migrate(inst, Options{To: config.SchemeSwift})
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeSwift, inst.FsScheme)
 
@@ -450,7 +429,7 @@ func TestMigratePurgeSourceRemovesSourceObjects(t *testing.T) {
 
 	// Step 2: migrate swift -> S3 with PurgeSource, exercising the swift
 	// source purge implementation.
-	_, err = storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, PurgeSource: true})
+	_, err = Migrate(inst, Options{To: config.SchemeS3, PurgeSource: true})
 	require.NoError(t, err)
 	assert.Equal(t, config.SchemeS3, inst.FsScheme)
 
@@ -503,14 +482,14 @@ func TestMigratePurgeOnlyReclaimsOtherBackend(t *testing.T) {
 	require.NoError(t, instance.Update(inst))
 
 	mf := testutils.StartMinio(t)
-	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}))
+	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL(), S3: config.FsS3{Buckets: map[string]config.FsS3Bucket{"default": {Name: "migration-storage"}}}}))
 
 	createInstanceFile(t, inst, "purge-only-file1.txt", []byte("hello from purge-only file 1"))
 	createInstanceFile(t, inst, "purge-only-file2.txt", []byte("hello from purge-only file 2, a bit longer"))
 
 	// Step 1: migrate mem -> swift for real, so the swift container backing
 	// this instance is genuinely populated.
-	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeSwift})
+	_, err := Migrate(inst, Options{To: config.SchemeSwift})
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeSwift, inst.FsScheme)
 
@@ -519,7 +498,7 @@ func TestMigratePurgeOnlyReclaimsOtherBackend(t *testing.T) {
 	// Step 2: migrate swift -> S3 WITHOUT PurgeSource, so the instance ends
 	// on S3 while the swift source is deliberately retained, exactly as
 	// docs/s3.md's rollback window describes.
-	_, err = storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	_, err = Migrate(inst, Options{To: config.SchemeS3})
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeS3, inst.FsScheme)
 
@@ -532,7 +511,7 @@ func TestMigratePurgeOnlyReclaimsOtherBackend(t *testing.T) {
 	// To == the instance's CURRENT scheme (s3) and PurgeSource set. This
 	// must not error out on the "already uses that scheme" guard; it must
 	// instead purge the other backend (swift) and leave the instance as-is.
-	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, PurgeSource: true})
+	rep, err := Migrate(inst, Options{To: config.SchemeS3, PurgeSource: true})
 	require.NoError(t, err)
 	require.NotNil(t, rep)
 	assert.Equal(t, config.SchemeS3, inst.FsScheme, "purge-only must not change the instance's scheme")
@@ -559,37 +538,80 @@ func TestMigratePurgeOnlyReclaimsOtherBackend(t *testing.T) {
 func TestMigratePurgeOnlyWithoutPurgeFlagStillErrors(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	_, err := Migrate(inst, Options{To: config.SchemeS3})
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeS3, inst.FsScheme)
 
-	_, err = storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	_, err = Migrate(inst, Options{To: config.SchemeS3})
 	require.Error(t, err)
 	assert.Equal(t, config.SchemeS3, inst.FsScheme)
 }
 
-// TestMigrateFlagOnlyDryRunDoesNotFlip covers the IMPORTANT fix: combining
-// FlagOnly with DryRun must still verify the target, but must NOT flip
-// FsScheme, even with Force set.
 func TestMigrateFlagOnlyDryRunDoesNotFlip(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	// Populate the S3 target for real once, so it already contains the
-	// instance's full content by the time the flag-only dry-run below
-	// relies on it.
-	_, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3})
+	_, err := Migrate(inst, Options{To: config.SchemeS3})
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeS3, inst.FsScheme)
 
-	// Reset the scheme, as a rollback scenario would have it, then attempt a
-	// flag-only flip back onto S3 as a dry run.
 	inst.FsScheme = ""
 
-	rep, err := storagemigration.Migrate(inst, storagemigration.Options{To: config.SchemeS3, FlagOnly: true, Force: true, DryRun: true})
+	rep, err := Migrate(inst, Options{To: config.SchemeS3, FlagOnly: true, Force: true, DryRun: true})
 	require.NoError(t, err)
 	require.NotNil(t, rep)
 	assert.Equal(t, 2, rep.Files)
-
-	assert.Equal(t, "", inst.FsScheme, "a dry-run flag-only migration must not flip FsScheme")
+	assert.Equal(t, "", inst.FsScheme)
 	assert.False(t, inst.Blocked, "instance must be unblocked after a dry-run flag-only migration")
+}
+
+func TestS3MigrationUsesConfiguredBucketAndScopesPurge(t *testing.T) {
+	config.UseTestFile(t)
+	mf := testutils.StartMinio(t)
+	client := mf.Client(t)
+	ctx := context.Background()
+	bucket := "migration-files"
+	require.NoError(t, client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}))
+	require.NoError(t, client.MakeBucket(ctx, "migration-other", minio.MakeBucketOptions{}))
+	disabled := false
+	require.NoError(t, config.InitS3Connection(config.Fs{
+		URL: mf.FsURL(),
+		S3: config.FsS3{AutoCreateBuckets: &disabled, Buckets: map[string]config.FsS3Bucket{
+			"default":             {Name: "migration-other"},
+			config.S3StorageFiles: {Name: bucket},
+		}},
+	}))
+
+	inst := &instance.Instance{Domain: "alice"}
+	dst, avatar, err := buildTarget(inst, config.SchemeS3)
+	require.NoError(t, err)
+	docID, internalID := "0123456789012345678901234567890a", "abcdef0123456789"
+	require.NoError(t, dst.(contentWriter).WriteContentAt(docID, internalID, bytes.NewReader([]byte("file")), 4))
+	w, err := avatar.CreateAvatar("image/png")
+	require.NoError(t, err)
+	_, err = w.Write([]byte("avatar"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	fileKey := vfss3.MakeObjectKey("files/alice/", docID, internalID)
+	for _, key := range []string{fileKey, "files/alice/avatar"} {
+		_, err := client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+		require.NoError(t, err)
+	}
+	preserved := []string{"files/bob/file", "files/alice-other/file", "assets/alice/icon", "exports/alice/archive"}
+	for _, key := range preserved {
+		_, err := client.PutObject(ctx, bucket, key, bytes.NewReader([]byte("keep")), 4, minio.PutObjectOptions{})
+		require.NoError(t, err)
+	}
+	_, err = client.PutObject(ctx, "migration-other", fileKey, bytes.NewReader([]byte("keep")), 4, minio.PutObjectOptions{})
+	require.NoError(t, err)
+
+	require.NoError(t, purgeSource(inst, config.SchemeS3))
+	var remaining []string
+	for obj := range client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Recursive: true}) {
+		require.NoError(t, obj.Err)
+		remaining = append(remaining, obj.Key)
+	}
+	assert.ElementsMatch(t, preserved, remaining)
+	_, err = client.StatObject(ctx, "migration-other", fileKey, minio.StatObjectOptions{})
+	require.NoError(t, err)
 }
