@@ -17,7 +17,7 @@ import (
 // writeContentAtPrefixer is a minimal vfs.Prefixer implementation, local to
 // this test, so it can live in an external test package (package
 // vfss3_test) without importing anything from the internal vfss3 test
-// harness. It also exposes GetOrgID so vfss3.New can build the bucket name.
+// harness.
 type writeContentAtPrefixer struct {
 	cluster int
 	domain  string
@@ -29,7 +29,6 @@ func (p *writeContentAtPrefixer) DBCluster() int         { return p.cluster }
 func (p *writeContentAtPrefixer) DomainName() string     { return p.domain }
 func (p *writeContentAtPrefixer) DBPrefix() string       { return p.prefix }
 func (p *writeContentAtPrefixer) GetContextName() string { return p.context }
-func (p *writeContentAtPrefixer) GetOrgID() string       { return "wcatestorg" }
 
 // writeContentAtDisk is a minimal vfs.DiskThresholder, unused by
 // WriteContentAt itself but required by vfss3.New's signature.
@@ -54,18 +53,15 @@ func TestWriteContentAtPutsBytesWithoutIndex(t *testing.T) {
 	}
 	index := vfs.NewCouchdbIndexer(db)
 
-	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}))
+	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL(), S3: config.FsS3{Buckets: map[string]config.FsS3Bucket{"default": {Name: "migration-storage"}}}}))
 
 	mutex := config.Lock().ReadWrite(db, "vfs-s3-writecontentat-test")
 	sfs, err := vfss3.New(db, index, &writeContentAtDisk{}, mutex)
 	require.NoError(t, err)
 
-	// WriteContentAt never creates its own bucket (that's InitFs's job, which
-	// we deliberately skip here since it would also touch CouchDB through
-	// Indexer.InitIndex). Create the bucket directly against the raw client.
-	bucket := vfss3.BucketName(db.GetOrgID(), config.GetS3BucketPrefix())
-	client := mf.Client(t)
-	require.NoError(t, client.MakeBucket(context.Background(), bucket, minio.MakeBucketOptions{}))
+	// Startup initialized the bucket; no CouchDB index is needed for writes.
+	storage := config.GetS3Storage(config.S3StorageFiles)
+	bucket, client := storage.Bucket, storage.Client
 
 	w := sfs.(interface {
 		WriteContentAt(docID, internalID string, content io.Reader, size int64) error
@@ -77,9 +73,10 @@ func TestWriteContentAtPutsBytesWithoutIndex(t *testing.T) {
 
 	require.NoError(t, w.WriteContentAt(docID, internalID, bytes.NewReader(payload), int64(len(payload))))
 
-	objKey := vfss3.MakeObjectKey(db.DBPrefix()+"/", docID, internalID)
+	objKey := vfss3.MakeObjectKey("files/"+db.DBPrefix()+"/", docID, internalID)
 	obj, err := client.GetObject(context.Background(), bucket, objKey, minio.GetObjectOptions{})
 	require.NoError(t, err)
+	defer obj.Close()
 	got, err := io.ReadAll(obj)
 	require.NoError(t, err)
 	require.Equal(t, payload, got)

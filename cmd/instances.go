@@ -274,7 +274,7 @@ The source data is kept unless --purge-source is given.`,
 		if err != nil {
 			return err
 		}
-		fmt.Printf("migrated: %d files, %d versions, %d bytes, avatar=%v\n",
+		fmt.Fprintf(os.Stdout, "migrated: %d files, %d versions, %d bytes, avatar=%v\n",
 			rep.Files, rep.Versions, rep.Bytes, rep.AvatarCopied)
 		return nil
 	},

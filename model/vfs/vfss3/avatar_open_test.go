@@ -22,8 +22,6 @@ func TestOpenAvatarRoundTrip(t *testing.T) {
 
 	mf := testutils.StartMinio(t)
 
-	require.NoError(t, config.InitS3Connection(config.Fs{URL: mf.FsURL("test")}))
-
 	bucket := "io-cozy-vfss3-openavatar-test"
 	keyPrefix := "io.cozy.vfss3.openavatar.test/"
 

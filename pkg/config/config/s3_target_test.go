@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,31 +11,38 @@ import (
 )
 
 func TestMigrationTargetInitsS3WhenGlobalIsSwift(t *testing.T) {
-	// A minimal fake S3 endpoint: InitS3Connection only needs a successful
-	// ListBuckets call (a signed GET on "/") to consider the connection live;
-	// bucket-creation failures are only logged, so any other response is fine.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			w.Header().Set("Content-Type", "application/xml")
-			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
-<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-  <Owner><ID>test</ID><DisplayName>test</DisplayName></Owner>
-  <Buckets></Buckets>
-</ListAllMyBucketsResult>`)
-			return
-		}
+	previousConfig, previousStorages := config, s3Storages
+	t.Cleanup(func() { config, s3Storages = previousConfig, previousStorages })
+	s3Storages = nil
+	assert.False(t, HasS3Client())
+
+	requests := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		assert.Equal(t, http.MethodHead, r.Method)
+		assert.Equal(t, "/migration-storage/", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	endpoint := srv.Listener.Addr().String()
 
-	swiftURL, _ := url.Parse("swift://openstack/")
-	s3URL, _ := url.Parse(fmt.Sprintf("s3://%s/?access_key=key&secret_key=secret&bucket_prefix=cozy&use_ssl=false", endpoint))
-	config = &Config{Fs: Fs{URL: swiftURL, MigrationTarget: s3URL}}
+	v := createTestViper()
+	v.Set("fs.url", "swift://openstack/")
+	v.Set("fs.migration_target", fmt.Sprintf("s3://%s?access_key=key&secret_key=secret&region=rbx", srv.Listener.Addr()))
+	v.Set("fs.s3.auto_create_buckets", false)
+	v.Set("fs.s3.buckets.default.name", "migration-storage")
+	require.NoError(t, UseViper(v))
+	config.Fs.Transport = srv.Client().Transport
 
 	require.True(t, HasS3Target())
-	// Init the S3 globals from the target even though the global scheme is swift.
-	require.NoError(t, InitS3Connection(Fs{URL: MigrationTargetURL()}))
-	assert.NotNil(t, GetS3Client())
-	assert.Equal(t, "cozy", GetS3BucketPrefix())
+	// Use the configured buckets and transport with the alternate endpoint.
+	target := config.Fs
+	target.URL = MigrationTargetURL()
+	require.NoError(t, InitS3Connection(target))
+	assert.True(t, HasS3Client())
+	assert.Equal(t, SchemeSwift, FsURL().Scheme)
+	assert.Equal(t, 1, requests)
+	storage := GetS3Storage(S3StorageFiles)
+	assert.NotNil(t, storage.Client)
+	assert.Equal(t, "migration-storage", storage.Bucket)
+	assert.Equal(t, "files/", storage.Prefix)
 }
