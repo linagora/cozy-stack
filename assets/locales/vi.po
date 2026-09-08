@@ -1390,3 +1390,6 @@ msgstr "Cập nhật phương thức thanh toán"
 
 msgid "Banners Billing Support Label"
 msgstr "Liên hệ bộ phận hỗ trợ"
+
+msgid "Banners Trial Ending Text"
+msgstr "Bản dùng thử miễn phí của bạn sẽ kết thúc vào ngày %s."

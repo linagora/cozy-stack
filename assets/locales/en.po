@@ -1360,3 +1360,6 @@ msgstr "Your workspace is temporarily restricted"
 
 msgid "Banners Billing Support Label"
 msgstr "Contact support"
+
+msgid "Banners Trial Ending Text"
+msgstr "Your free trial will end on %s."

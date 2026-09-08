@@ -892,7 +892,16 @@ func (h *BillingLifecycleHandler) Handle(ctx context.Context, d amqp.Delivery) e
 
 	eventAt := time.Unix(msg.Timestamp, 0).UTC()
 	for _, domain := range domains {
-		if err := banner.RefreshBilling(domain, status, eventAt); err != nil {
+		var err error
+		// A trial carries its own statuses, and the rewrite above is about
+		// payments: the routing keys are distinct, so it cannot have reached
+		// one and the status arrives here as the Cloudery sent it.
+		if d.RoutingKey == RoutingKeyTrialChanged {
+			err = banner.RefreshTrial(domain, status, msg.TrialEndsAt, eventAt)
+		} else {
+			err = banner.RefreshBilling(domain, status, eventAt)
+		}
+		if err != nil {
 			return fmt.Errorf("billing.lifecycle: materialize for %s: %w", domain, err)
 		}
 		log.Infof("billing.lifecycle: %s applied to %s (status %s, attempt %d, event %s, at %s)",

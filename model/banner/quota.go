@@ -103,9 +103,10 @@ func ctaTarget(raw string) string {
 
 // translate falls back to English inside i18n for an untranslated locale,
 // which is why Lang says the language that was asked for rather than the one
-// that came out.
-func translate(locale, context, msgid string) string {
-	return i18n.Translate(msgid, lang(locale), context)
+// that came out. vars are interpolated into the translated wording, and a
+// msgid with no verb in it takes none.
+func translate(locale, context, msgid string, vars ...interface{}) string {
+	return i18n.Translate(msgid, lang(locale), context, vars...)
 }
 
 func lang(locale string) string {

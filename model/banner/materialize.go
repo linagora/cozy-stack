@@ -3,6 +3,9 @@ package banner
 import (
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/logger"
@@ -171,4 +174,60 @@ func Stored(db prefixer.Prefixer, category string) (*Banner, error) {
 		return nil, err
 	}
 	return &doc, nil
+}
+
+// refresh re-evaluates one category of an instance from a bus event, and is
+// what both the payment and the trial entry points are. eventAt is the moment
+// Stripe recorded the event, not the moment this runs, so it both stamps the
+// document and orders it against what is stored. evaluate receives the manager
+// premium page, empty when the stack does not know it.
+func refresh(domain, category string, eventAt time.Time, evaluate func(inst *instance.Instance, managerURL string) *Banner) error {
+	inst, err := lifecycle.GetInstance(domain)
+	if err != nil {
+		return err
+	}
+	if !inst.HasBannersEnabled() {
+		return nil
+	}
+
+	// One lock name for every category, deliberately: at expiry the Cloudery
+	// sends trial.changed and payment.failed from one Stripe event, and this
+	// makes the two run one after the other rather than racing.
+	mu := config.Lock().ReadWrite(inst, "banners")
+	if err := mu.Lock(); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+
+	stale, err := supersededBy(inst, category, eventAt)
+	if err != nil || stale {
+		return err
+	}
+
+	var managerURL string
+	if premium, err := inst.ManagerURL(instance.ManagerPremiumURL); err == nil {
+		managerURL = premium
+	}
+
+	return Materialize(inst, category, evaluate(inst, managerURL), time.Now())
+}
+
+// supersededBy reports whether the stored banner was produced by an event at
+// least as recent as this one, in which case this one is a redelivery or
+// arrived out of order. Bus delivery is at-least-once and unordered, so
+// without this a redelivered failure could overwrite a recovery.
+//
+// ponytail: Source.At is the event that last changed the document, not the
+// last one seen, since an unchanged re-evaluation writes nothing. So an event
+// redelivered after a later one deleted the document recreates it. Both rules
+// bound the damage themselves, the trial through its validity window and the
+// payment one through the next event, and both need a single queue reordered
+// or a replay past the Cloudery's own dedupe. Record the last applied event
+// time per instance if that ever happens.
+func supersededBy(db prefixer.Prefixer, category string, eventAt time.Time) (bool, error) {
+	stored, err := Stored(db, category)
+	if err != nil || stored == nil {
+		return false, err
+	}
+	return !stored.Source.At.Before(eventAt), nil
 }

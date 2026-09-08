@@ -1418,3 +1418,6 @@ msgstr "Обновить способ оплаты"
 
 msgid "Banners Billing Support Label"
 msgstr "Связаться со службой поддержки"
+
+msgid "Banners Trial Ending Text"
+msgstr "Ваш бесплатный пробный период закончится %s."

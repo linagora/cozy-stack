@@ -14,7 +14,7 @@ import (
 // TestMain loads the real catalogs, so a message id that no longer exists
 // fails here rather than rendering its own name to a user.
 func TestMain(m *testing.M) {
-	for _, locale := range []string{"en", "fr"} {
+	for _, locale := range []string{"en", "fr", "ru", "vi"} {
 		po, err := os.ReadFile("../../assets/locales/" + locale + ".po")
 		if err != nil {
 			panic(err)
@@ -351,5 +351,93 @@ func TestEvaluateBilling(t *testing.T) {
 		require.Nil(t, b.CTA, "no manager URL is configured in this state")
 		ensureEscapable(b)
 		assert.True(t, b.Dismissible, "otherwise the user cannot reach the application at all")
+	})
+}
+
+func TestEvaluateTrial(t *testing.T) {
+	endsAt := now.Add(14 * 24 * time.Hour)
+	state := func(status string) TrialState {
+		return TrialState{Status: status, EndsAt: endsAt, Locale: "en"}
+	}
+
+	t.Run("a banner while the trial is running", func(t *testing.T) {
+		b := EvaluateTrial(state("trialing"), now)
+		require.NotNil(t, b)
+		assert.Equal(t, BannerIDTrialEnding, b.BannerID)
+		assert.Equal(t, CategoryTrial, b.Category)
+		assert.Equal(t, SeverityInfo, b.Severity)
+		assert.Equal(t, SurfaceBanner, b.Surface)
+		assert.True(t, b.Dismissible, "it stands for two weeks")
+		assert.Equal(t, 25, b.Priority, "a real problem always outranks it")
+		assert.Nil(t, b.SecondaryCTA, "nothing is blocked here")
+		assert.Equal(t, TriggerTrialChanged, b.Source.Trigger)
+		assert.Equal(t, now, b.Source.At)
+	})
+
+	t.Run("the window ends when the trial does, so the banner expires without an event", func(t *testing.T) {
+		b := EvaluateTrial(state("trialing"), now)
+		require.NotNil(t, b)
+		require.NotNil(t, b.StartsAt)
+		assert.Equal(t, now, *b.StartsAt)
+		require.NotNil(t, b.EndsAt)
+		assert.Equal(t, endsAt, *b.EndsAt)
+	})
+
+	t.Run("nothing once the trial is over, whatever ended it", func(t *testing.T) {
+		for _, status := range []string{"active", "canceled", "past_due"} {
+			assert.Nil(t, EvaluateTrial(state(status), now), status)
+		}
+	})
+
+	t.Run("nothing when the end date is unknown", func(t *testing.T) {
+		assert.Nil(t, EvaluateTrial(TrialState{Status: "trialing", Locale: "en"}, now),
+			"a window ending at the zero time would occupy the slot and show nothing")
+	})
+
+	t.Run("nothing when the trial has already ended", func(t *testing.T) {
+		stale := state("trialing")
+		stale.EndsAt = now.Add(-time.Hour)
+		assert.Nil(t, EvaluateTrial(stale, now),
+			"a trialing event redelivered after the trial is over must not recreate the banner")
+	})
+
+	t.Run("a call to action only when the manager URL is one", func(t *testing.T) {
+		without := EvaluateTrial(state("trialing"), now)
+		require.NotNil(t, without)
+		assert.Nil(t, without.CTA)
+
+		s := state("trialing")
+		s.ManagerURL = "https://manager.example.org/premium"
+		with := EvaluateTrial(s, now)
+		require.NotNil(t, with)
+		require.NotNil(t, with.CTA)
+		assert.Equal(t, "https://manager.example.org/premium", with.CTA.URL)
+
+		s.ManagerURL = "javascript:alert(1)"
+		assert.Nil(t, EvaluateTrial(s, now).CTA)
+	})
+
+	t.Run("the text carries the date, localized like every other banner", func(t *testing.T) {
+		french := state("trialing")
+		french.Locale = "fr"
+		b := EvaluateTrial(french, now)
+		require.NotNil(t, b)
+		assert.Equal(t, "fr", b.Lang)
+		assert.Equal(t, "Votre période d'essai gratuite se terminera le 5 août 2026.", b.Text)
+
+		english := EvaluateTrial(state("trialing"), now)
+		require.NotNil(t, english)
+		assert.Equal(t, "Your free trial will end on 5 August 2026.", english.Text)
+	})
+
+	t.Run("every locale that carries the wording carries the date with it", func(t *testing.T) {
+		for _, locale := range []string{"en", "fr", "ru", "vi"} {
+			s := state("trialing")
+			s.Locale = locale
+			b := EvaluateTrial(s, now)
+			require.NotNil(t, b, locale)
+			assert.Contains(t, b.Text, "2026", "%s dropped the placeholder", locale)
+			assert.NotContains(t, b.Text, "%!", locale)
+		}
 	})
 }

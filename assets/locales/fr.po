@@ -1470,3 +1470,6 @@ msgstr "Mettre à jour le moyen de paiement"
 
 msgid "Banners Billing Support Label"
 msgstr "Contacter le support"
+
+msgid "Banners Trial Ending Text"
+msgstr "Votre période d'essai gratuite se terminera le %s."

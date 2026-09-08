@@ -1,5 +1,7 @@
 package rabbitmq
 
+import "time"
+
 const (
 	ExchangeAuth      = "auth"
 	ExchangeBilling   = "billing"
@@ -33,6 +35,7 @@ const (
 	RoutingKeyNextcloudMigrationCanceled  = "nextcloud.migration.canceled"
 	RoutingKeyPaymentFailed               = "payment.failed"
 	RoutingKeyPaymentRecovered            = "payment.recovered"
+	RoutingKeyTrialChanged                = "trial.changed"
 )
 
 // BillingLifecycleMessage is published by the Cloudery when a payment event
@@ -58,6 +61,12 @@ type BillingLifecycleMessage struct {
 	// Delivery is at-least-once and unordered, so this, not the arrival time,
 	// decides which event wins.
 	Timestamp int64 `json:"timestamp"`
+	// TrialEndsAt is when the free trial ends, known from the day it starts,
+	// so the banner can state an absolute date and no deadline trigger is
+	// needed. It rides on every lifecycle message rather than on a trial one
+	// because the Cloudery declares it on the shared base class the payment
+	// and trial messages both extend, so it is zero on a payment message.
+	TrialEndsAt time.Time `json:"trialEndsAt,omitempty"`
 }
 
 // UserDeletionRequestedMessage is published when a user asks Twake to delete the account linked to the current cozy instance.

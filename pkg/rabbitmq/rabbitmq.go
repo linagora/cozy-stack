@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"crypto/tls"
@@ -277,6 +278,14 @@ func BuildExchangeSpecs(exchangesCfg []config.RabbitExchange) []ExchangeSpec {
 				handler = NewAppInstallHandler()
 			case QueueBillingLifecycle:
 				handler = NewBillingLifecycleHandler()
+				// Bindings come from the deployment config, not from the code,
+				// so a routing key missing there is silence: the Cloudery
+				// publishes, the exchange drops it, and no banner ever appears.
+				for _, key := range []string{RoutingKeyPaymentFailed, RoutingKeyPaymentRecovered, RoutingKeyTrialChanged} {
+					if !slices.Contains(configQueue.Bindings, key) {
+						log.Warnf("Queue %s is not bound to %s: those events will never be consumed", configQueue.Name, key)
+					}
+				}
 			}
 
 			if handler == nil {
