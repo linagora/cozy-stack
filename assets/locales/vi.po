@@ -1390,3 +1390,12 @@ msgstr "Cập nhật phương thức thanh toán"
 
 msgid "Banners Billing Support Label"
 msgstr "Liên hệ bộ phận hỗ trợ"
+
+msgid "Banners Billing Grace Info Text"
+msgstr "Khoản thanh toán gần nhất của bạn không thành công. Hãy cập nhật phương thức thanh toán để giữ gói đăng ký của bạn."
+
+msgid "Banners Billing Grace Warning Text"
+msgstr "Khoản thanh toán của bạn đã không thành công hai lần. Hãy cập nhật phương thức thanh toán để giữ gói đăng ký của bạn."
+
+msgid "Banners Billing Grace Error Text"
+msgstr "Khoản thanh toán của bạn vẫn không thành công. Hãy cập nhật phương thức thanh toán ngay để không mất quyền truy cập vào gói của bạn."

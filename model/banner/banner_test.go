@@ -316,20 +316,56 @@ func TestEvaluateBilling(t *testing.T) {
 	state := func(status string) BillingState {
 		return BillingState{Status: status, Locale: "en"}
 	}
+	b2b := func(status string) BillingState {
+		return BillingState{Status: status, B2B: true, Locale: "en"}
+	}
+	grace := func(attempt int) BillingState {
+		return BillingState{Status: "past_due", AttemptCount: attempt, Locale: "en"}
+	}
 
 	t.Run("no banner while the subscription is paying", func(t *testing.T) {
 		assert.Nil(t, EvaluateBilling(state("active"), now))
 		assert.Nil(t, EvaluateBilling(state("trialing"), now))
 	})
 
-	t.Run("no banner while Stripe is still retrying", func(t *testing.T) {
-		assert.Nil(t, EvaluateBilling(state("past_due"), now),
-			"past_due keeps the plan, and no approved wording exists for that state")
+	t.Run("a retry the user can still fix warns without blocking", func(t *testing.T) {
+		for attempt, severity := range map[int]string{1: SeverityInfo, 2: SeverityWarning, 3: SeverityError} {
+			b := EvaluateBilling(grace(attempt), now)
+			require.NotNil(t, b, attempt)
+			assert.Equal(t, severity, b.Severity, attempt)
+			assert.Equal(t, SurfaceBanner, b.Surface, attempt)
+			assert.True(t, b.Dismissible, attempt)
+			assert.Empty(t, b.Title, attempt)
+		}
 	})
 
-	t.Run("a subscription Stripe gave up on blocks", func(t *testing.T) {
+	t.Run("an escalation is a new occurrence a dismissal does not hide", func(t *testing.T) {
+		first := EvaluateBilling(grace(1), now)
+		second := EvaluateBilling(grace(2), now)
+		require.NotNil(t, first)
+		require.NotNil(t, second)
+		assert.NotEqual(t, first.BannerID, second.BannerID)
+
+		stored := Merge(first, nil)
+		dismissed := now
+		stored.DismissedAt = &dismissed
+		assert.Nil(t, Merge(second, stored).DismissedAt,
+			"the user dismissed the first attempt, not the second")
+	})
+
+	t.Run("an attempt outside the escalation reuses its nearest step", func(t *testing.T) {
+		for attempt, nearest := range map[int]int{0: 1, maxGraceAttempt + 1: maxGraceAttempt, maxGraceAttempt + 5: maxGraceAttempt} {
+			b := EvaluateBilling(grace(attempt), now)
+			step := EvaluateBilling(grace(nearest), now)
+			require.NotNil(t, b, attempt)
+			assert.Equal(t, step.BannerID, b.BannerID, attempt)
+			assert.False(t, changed(b, step), attempt, "an unchanged evaluation must not write")
+		}
+	})
+
+	t.Run("a subscription Stripe gave up on blocks an organization", func(t *testing.T) {
 		for _, status := range []string{"unpaid", "canceled"} {
-			b := EvaluateBilling(state(status), now)
+			b := EvaluateBilling(b2b(status), now)
 			require.NotNil(t, b, status)
 			assert.Equal(t, BannerIDBillingRestricted, b.BannerID, status)
 			assert.Equal(t, SeverityError, b.Severity, status)
@@ -338,15 +374,49 @@ func TestEvaluateBilling(t *testing.T) {
 		}
 	})
 
+	t.Run("the same statuses say nothing to a single subscriber", func(t *testing.T) {
+		for _, status := range []string{"unpaid", "canceled"} {
+			assert.Nil(t, EvaluateBilling(state(status), now), status,
+				"they drop to the free tier rather than losing their workspace")
+		}
+	})
+
+	t.Run("giving up replaces the grace banner for an organization only", func(t *testing.T) {
+		org := grace(2)
+		org.B2B = true
+		require.Equal(t, SurfaceBanner, EvaluateBilling(org, now).Surface)
+		org.Status = "unpaid"
+		require.NotNil(t, EvaluateBilling(org, now))
+		assert.Equal(t, SurfaceModal, EvaluateBilling(org, now).Surface)
+
+		solo := grace(2)
+		require.NotNil(t, EvaluateBilling(solo, now))
+		solo.Status = "unpaid"
+		assert.Nil(t, EvaluateBilling(solo, now))
+	})
+
+	t.Run("a recovery leaves no banner to materialize", func(t *testing.T) {
+		recovered := grace(3)
+		recovered.Status = "active"
+		assert.Nil(t, EvaluateBilling(recovered, now))
+	})
+
 	t.Run("the wording is localized like every other banner", func(t *testing.T) {
-		b := EvaluateBilling(BillingState{Status: "unpaid", Locale: "fr"}, now)
+		b := EvaluateBilling(BillingState{Status: "unpaid", B2B: true, Locale: "fr"}, now)
 		require.NotNil(t, b)
 		assert.Equal(t, "fr", b.Lang)
 		assert.NotEqual(t, textBillingRestricted, b.Text, "the message id must not reach the document")
+
+		for attempt, wording := range graceWording {
+			g := EvaluateBilling(BillingState{Status: "past_due", AttemptCount: attempt + 1, Locale: "fr"}, now)
+			require.NotNil(t, g, attempt)
+			assert.Equal(t, "fr", g.Lang, attempt)
+			assert.NotEqual(t, wording.msgid, g.Text, "the message id must not reach the document")
+		}
 	})
 
 	t.Run("a blocking dialog with no call to action is made closable", func(t *testing.T) {
-		b := EvaluateBilling(state("unpaid"), now)
+		b := EvaluateBilling(b2b("unpaid"), now)
 		require.NotNil(t, b)
 		require.Nil(t, b.CTA, "no manager URL is configured in this state")
 		ensureEscapable(b)

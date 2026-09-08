@@ -1470,3 +1470,12 @@ msgstr "Mettre à jour le moyen de paiement"
 
 msgid "Banners Billing Support Label"
 msgstr "Contacter le support"
+
+msgid "Banners Billing Grace Info Text"
+msgstr "Votre dernier paiement a échoué. Mettez à jour votre moyen de paiement pour conserver votre abonnement."
+
+msgid "Banners Billing Grace Warning Text"
+msgstr "Votre paiement a échoué à deux reprises. Mettez à jour votre moyen de paiement pour conserver votre abonnement."
+
+msgid "Banners Billing Grace Error Text"
+msgstr "Votre paiement échoue toujours. Mettez à jour votre moyen de paiement dès maintenant pour ne pas perdre l'accès à votre offre."

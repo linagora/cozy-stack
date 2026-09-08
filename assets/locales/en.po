@@ -1360,3 +1360,12 @@ msgstr "Your workspace is temporarily restricted"
 
 msgid "Banners Billing Support Label"
 msgstr "Contact support"
+
+msgid "Banners Billing Grace Info Text"
+msgstr "Your last payment failed. Update your payment method to keep your subscription."
+
+msgid "Banners Billing Grace Warning Text"
+msgstr "Your payment has failed twice. Update your payment method to keep your subscription."
+
+msgid "Banners Billing Grace Error Text"
+msgstr "Your payment is still failing. Update your payment method now to avoid losing access to your plan."

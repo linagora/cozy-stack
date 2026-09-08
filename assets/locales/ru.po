@@ -1418,3 +1418,12 @@ msgstr "Обновить способ оплаты"
 
 msgid "Banners Billing Support Label"
 msgstr "Связаться со службой поддержки"
+
+msgid "Banners Billing Grace Info Text"
+msgstr "Ваш последний платёж не прошёл. Обновите способ оплаты, чтобы сохранить подписку."
+
+msgid "Banners Billing Grace Warning Text"
+msgstr "Ваш платёж не прошёл дважды. Обновите способ оплаты, чтобы сохранить подписку."
+
+msgid "Banners Billing Grace Error Text"
+msgstr "Ваш платёж по-прежнему не проходит. Обновите способ оплаты сейчас, чтобы не потерять доступ к вашему тарифу."

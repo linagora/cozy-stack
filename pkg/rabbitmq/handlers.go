@@ -873,8 +873,9 @@ func (h *BillingLifecycleHandler) Handle(ctx context.Context, d amqp.Delivery) e
 		status = "active"
 	}
 
+	b2b := msg.Domain != ""
 	var domains []string
-	if msg.Domain == "" {
+	if !b2b {
 		domains = []string{msg.WorkplaceFqdn}
 	} else {
 		list, err := lifecycle.ListOrgInstances(msg.Domain)
@@ -892,7 +893,7 @@ func (h *BillingLifecycleHandler) Handle(ctx context.Context, d amqp.Delivery) e
 
 	eventAt := time.Unix(msg.Timestamp, 0).UTC()
 	for _, domain := range domains {
-		if err := banner.RefreshBilling(domain, status, eventAt); err != nil {
+		if err := banner.RefreshBilling(domain, status, msg.AttemptCount, b2b, eventAt); err != nil {
 			return fmt.Errorf("billing.lifecycle: materialize for %s: %w", domain, err)
 		}
 		log.Infof("billing.lifecycle: %s applied to %s (status %s, attempt %d, event %s, at %s)",

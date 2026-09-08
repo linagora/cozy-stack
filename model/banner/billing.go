@@ -1,6 +1,7 @@
 package banner
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -9,13 +10,23 @@ import (
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 )
 
-// BannerIDBillingRestricted identifies the one payment state that has an
-// approved design.
+// BannerIDBillingRestricted identifies the payment states an organization
+// cannot recover from on its own.
 const BannerIDBillingRestricted = "billing.restricted"
 
 // TriggerPaymentFailed is recorded on documents produced by a payment event.
 // There is no recovered counterpart: a recovery deletes the document.
 const TriggerPaymentFailed = "payment.failed"
+
+// maxGraceAttempt caps the attempt: Stripe keeps retrying past it with
+// nothing new to say.
+const maxGraceAttempt = len(graceWording)
+
+// The grace banner sits under the restricted dialog and over the quota ones.
+const (
+	priorityBillingGrace      = 150
+	priorityBillingRestricted = 200
+)
 
 // The wording, as message ids of the stack locales.
 const (
@@ -25,13 +36,28 @@ const (
 	textBillingSupportLabel    = "Banners Billing Support Label"
 )
 
+// graceWording is the escalation, indexed by attempt. The sentences are
+// provisional, for product to replace in place.
+var graceWording = [...]struct {
+	severity string
+	msgid    string
+}{
+	{SeverityInfo, "Banners Billing Grace Info Text"},
+	{SeverityWarning, "Banners Billing Grace Warning Text"},
+	{SeverityError, "Banners Billing Grace Error Text"},
+}
+
 // BillingState is what the billing rules need to decide. It is the payment
 // event plus the instance wording context, kept separate from the instance so
 // the rules stay testable without one.
 type BillingState struct {
 	// Status is the subscription status as Stripe reports it, verbatim.
 	Status string
-	Locale string
+	// AttemptCount is the invoice attempt_count, passed through untouched, so
+	// it returns to 1 when a new invoice opens. Zero reads as a first attempt.
+	AttemptCount int
+	B2B          bool
+	Locale       string
 	// ContextName can override a translation.
 	ContextName string
 	// ManagerURL is where the call to action points, empty when unknown.
@@ -41,14 +67,49 @@ type BillingState struct {
 // EvaluateBilling returns the banner that applies to a payment state, or nil
 // when none does.
 func EvaluateBilling(state BillingState, now time.Time) *Banner {
-	// Only a subscription Stripe has given up on produces a banner. While it is
-	// retrying the status is past_due, the Cloudery keeps the plan, and every
-	// approved wording describes an already restricted workspace, so there is
-	// nothing to say to a user whose access is intact.
-	if state.Status != "unpaid" && state.Status != "canceled" {
+	switch state.Status {
+	case "past_due":
+		return graceBanner(state, now)
+	case "unpaid", "canceled":
+		// Only an organization keeps its plan into these statuses, which is
+		// what the restricted wording describes. A single subscriber drops to
+		// the free tier instead.
+		if !state.B2B {
+			return nil
+		}
+		return restrictedBanner(state, now)
+	default:
 		return nil
 	}
+}
 
+// The attempt is part of the identifier because Merge carries a dismissal
+// forward only while the identifier is unchanged: an escalation has to read as
+// a new occurrence, and a re-evaluation of the same attempt has to not.
+func graceBanner(state BillingState, now time.Time) *Banner {
+	attempt := min(max(state.AttemptCount, 1), maxGraceAttempt)
+	wording := graceWording[attempt-1]
+
+	startsAt := now
+	banner := &Banner{
+		BannerID:    "billing.grace.attempt-" + strconv.Itoa(attempt),
+		Category:    CategoryBilling,
+		Severity:    wording.severity,
+		Surface:     SurfaceBanner,
+		Text:        translate(state.Locale, state.ContextName, wording.msgid),
+		Lang:        lang(state.Locale),
+		Dismissible: true,
+		Priority:    priorityBillingGrace,
+		StartsAt:    &startsAt,
+		Source:      Source{Trigger: TriggerPaymentFailed, At: now},
+	}
+	if target := ctaTarget(state.ManagerURL); target != "" {
+		banner.CTA = &CTA{Label: translate(state.Locale, state.ContextName, textBillingCTALabel), URL: target}
+	}
+	return banner
+}
+
+func restrictedBanner(state BillingState, now time.Time) *Banner {
 	startsAt := now
 	banner := &Banner{
 		BannerID:    BannerIDBillingRestricted,
@@ -59,7 +120,7 @@ func EvaluateBilling(state BillingState, now time.Time) *Banner {
 		Text:        translate(state.Locale, state.ContextName, textBillingRestricted),
 		Lang:        lang(state.Locale),
 		Dismissible: false,
-		Priority:    200,
+		Priority:    priorityBillingRestricted,
 		StartsAt:    &startsAt,
 		Source:      Source{Trigger: TriggerPaymentFailed, At: now},
 	}
@@ -78,7 +139,7 @@ func EvaluateBilling(state BillingState, now time.Time) *Banner {
 // RefreshBilling re-evaluates the billing banner of an instance from a payment
 // event. eventAt is the moment Stripe recorded the event, not the moment this
 // runs, so it both stamps the document and orders it against what is stored.
-func RefreshBilling(domain, status string, eventAt time.Time) error {
+func RefreshBilling(domain, status string, attemptCount int, b2b bool, eventAt time.Time) error {
 	inst, err := lifecycle.GetInstance(domain)
 	if err != nil {
 		return err
@@ -99,9 +160,11 @@ func RefreshBilling(domain, status string, eventAt time.Time) error {
 	}
 
 	state := BillingState{
-		Status:      status,
-		Locale:      inst.Locale,
-		ContextName: inst.ContextName,
+		Status:       status,
+		AttemptCount: attemptCount,
+		B2B:          b2b,
+		Locale:       inst.Locale,
+		ContextName:  inst.ContextName,
 	}
 	if premium, err := inst.ManagerURL(instance.ManagerPremiumURL); err == nil {
 		state.ManagerURL = premium
