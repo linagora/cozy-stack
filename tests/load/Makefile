@@ -107,10 +107,10 @@ cozy-status:
 	@$(COZY_COMPOSE) ps
 
 cozy-logs:
-	@$(COZY_COMPOSE) logs --tail=200 couchdb redis rabbitmq cozy-stack
+	@$(COZY_COMPOSE) logs --tail=200 couchdb redis rabbitmq minio cozy-stack
 
 cozy-down:
-	@$(COZY_COMPOSE) stop cozy-stack rabbitmq redis couchdb
+	@$(COZY_COMPOSE) stop cozy-stack minio rabbitmq redis couchdb
 
 upload-binaries: $(NODE_MODULES_MARKER)
 	@$(NODE_BIN)/tsx src/scripts/generate-upload-binaries.ts all

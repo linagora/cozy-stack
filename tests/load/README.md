@@ -116,6 +116,7 @@ network as k6, Prometheus, and Grafana:
 - CouchDB 3.3.3
 - Redis 7.2
 - RabbitMQ 3.13
+- MinIO using the stack's S3 storage backend
 
 The stack is published at <http://load.localhost:8080>, but k6 reaches the
 `load.localhost` network alias directly. This keeps load traffic inside Docker
@@ -295,9 +296,9 @@ configured shared-drive root and performs upload, trash, and permanent-delete
 operations through `/sharings/drives/:id`. It leaves the shared drive itself in
 place.
 
-S3 remains an implementation detail of the target stack. To measure the S3
-backend, deploy an S3-enabled stack, configure its `fs.url`, and run this same
-HTTP scenario against it. S3 credentials do not belong on the load generator.
+The bundled Cozy stack uses MinIO through the S3 storage backend. For a remote
+stack, configure its `fs.url` for S3 and run this same HTTP scenario against
+it. S3 credentials do not belong on the load generator.
 
 Run each size separately. According to the
 [k6 guidance for large tests](https://grafana.com/docs/k6/latest/testing-guides/running-large-tests/#file-upload-considerations),
