@@ -30,18 +30,25 @@ func TestBuildRequest_MatrixID(t *testing.T) {
 		require.Equal(t, "@al.ice:stg.lin-saas.com", req.Payload.MatrixID)
 	})
 
-	t.Run("falls back to the domain slug when no email is present", func(t *testing.T) {
-		settings := &couchdb.JSONDoc{M: map[string]interface{}{}}
-		req := buildRequest(inst, settings)
-		require.Equal(t, "@alicewonderland:stg.lin-saas.com", req.Payload.MatrixID)
+	t.Run("the homeserver is the mail domain, not the instance domain", func(t *testing.T) {
+		settings := &couchdb.JSONDoc{M: map[string]interface{}{
+			"email": "al.ice@linagora.com",
+		}}
+		req := buildRequest(&instance.Instance{Domain: "alice.twake.linagora.com"}, settings)
+		require.Equal(t, "@al.ice:linagora.com", req.Payload.MatrixID)
 	})
 
-	t.Run("single-label domain yields no matrix id", func(t *testing.T) {
-		local := &instance.Instance{Domain: "localhost"}
+	t.Run("no email yields no matrix id", func(t *testing.T) {
+		settings := &couchdb.JSONDoc{M: map[string]interface{}{}}
+		req := buildRequest(inst, settings)
+		require.Empty(t, req.Payload.MatrixID)
+	})
+
+	t.Run("an email without a domain yields no matrix id", func(t *testing.T) {
 		settings := &couchdb.JSONDoc{M: map[string]interface{}{
-			"email": "al.ice@example.org",
+			"email": "alicewonderland",
 		}}
-		req := buildRequest(local, settings)
+		req := buildRequest(inst, settings)
 		require.Empty(t, req.Payload.MatrixID)
 	})
 

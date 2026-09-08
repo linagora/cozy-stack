@@ -304,25 +304,19 @@ func buildRequest(inst *instance.Instance, settings *couchdb.JSONDoc) UserSettin
 		request.Payload.FirstName = parts[0]
 		request.Payload.LastName = parts[len(parts)-1]
 	}
-	if email, ok := settings.M["email"].(string); ok {
-		request.Payload.Email = email
-	}
+	email, _ := settings.M["email"].(string)
+	request.Payload.Email = email
 	if phone, ok := settings.M["phone"].(string); ok {
 		request.Payload.Phone = phone
 	}
 	if matrixID, _ := settings.M["matrix_id"].(string); IsMatrixID(matrixID) {
 		request.Payload.MatrixID = matrixID
-	} else if len(parts) > 1 {
-		// The Matrix localpart comes from the email local part, which preserves
-		// dots and can differ from the domain slug. Fall back to the slug when
-		// no email is available. The homeserver part stays domain-derived.
-		localpart := nickname
-		email, _ := settings.M["email"].(string)
-		if local, _, found := strings.Cut(email, "@"); found && local != "" {
-			localpart = strings.ToLower(local)
+	} else if local, domain, found := strings.Cut(email, "@"); found {
+		// The homeserver is the mail domain: the instance domain is an
+		// unrelated value and must not be used here.
+		if id := strings.ToLower("@" + local + ":" + domain); IsMatrixID(id) {
+			request.Payload.MatrixID = id
 		}
-		id := fmt.Sprintf("@%s:%s", localpart, strings.Join(parts[1:], "."))
-		request.Payload.MatrixID = id
 	}
 
 	return request
