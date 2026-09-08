@@ -14,6 +14,12 @@ import (
 // cannot recover from on its own.
 const BannerIDBillingRestricted = "billing.restricted"
 
+// BannerIDBillingGrace mints the identifier of one step of the grace period.
+// It is part of the stored contract: a client keys its dismissal on it.
+func BannerIDBillingGrace(attempt int) string {
+	return "billing.grace.attempt-" + strconv.Itoa(attempt)
+}
+
 // TriggerPaymentFailed is recorded on documents produced by a payment event.
 // There is no recovered counterpart: a recovery deletes the document.
 const TriggerPaymentFailed = "payment.failed"
@@ -139,7 +145,7 @@ func restrictedBanner(state BillingState, now time.Time) *Banner {
 // RefreshBilling re-evaluates the billing banner of an instance from a payment
 // event. eventAt is the moment Stripe recorded the event, not the moment this
 // runs, so it both stamps the document and orders it against what is stored.
-func RefreshBilling(domain, status string, attemptCount int, b2b bool, eventAt time.Time) error {
+func RefreshBilling(domain, status string, attemptCount int, eventAt time.Time) error {
 	inst, err := lifecycle.GetInstance(domain)
 	if err != nil {
 		return err
@@ -162,9 +168,12 @@ func RefreshBilling(domain, status string, attemptCount int, b2b bool, eventAt t
 	state := BillingState{
 		Status:       status,
 		AttemptCount: attemptCount,
-		B2B:          b2b,
-		Locale:       inst.Locale,
-		ContextName:  inst.ContextName,
+		// From the instance rather than from how the event was addressed: an
+		// instance-level event can land on an organization member, and that
+		// member still keeps the plan its organization pays for.
+		B2B:         inst.OrgDomain != "",
+		Locale:      inst.Locale,
+		ContextName: inst.ContextName,
 	}
 	if premium, err := inst.ManagerURL(instance.ManagerPremiumURL); err == nil {
 		state.ManagerURL = premium

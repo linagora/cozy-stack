@@ -10,6 +10,7 @@ import (
 	"github.com/cozy/cozy-stack/model/banner"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -153,7 +154,7 @@ func TestBillingLifecycleHandlerMaterializesBanners(t *testing.T) {
 		})
 		b := stored(t, domain)
 		require.NotNil(t, b, "past_due must produce a banner")
-		require.Equal(t, "billing.grace.attempt-1", b.BannerID)
+		require.Equal(t, banner.BannerIDBillingGrace(1), b.BannerID)
 		require.Equal(t, banner.SeverityInfo, b.Severity)
 		require.Equal(t, banner.SurfaceBanner, b.Surface)
 		require.True(t, b.Dismissible)
@@ -164,13 +165,89 @@ func TestBillingLifecycleHandlerMaterializesBanners(t *testing.T) {
 		})
 		b = stored(t, domain)
 		require.NotNil(t, b)
-		require.Equal(t, "billing.grace.attempt-2", b.BannerID, "the attempt count must reach the document")
+		require.Equal(t, banner.BannerIDBillingGrace(2), b.BannerID, "the attempt count must reach the document")
 		require.Equal(t, banner.SeverityWarning, b.Severity)
 
 		handle(t, rabbitmq.RoutingKeyPaymentRecovered, rabbitmq.BillingLifecycleMessage{
 			WorkplaceFqdn: domain, Status: "past_due", Timestamp: at(),
 		})
 		require.Nil(t, stored(t, domain), "a recovery clears the banner whatever the payload says")
+	})
+
+	t.Run("the same attempt again writes nothing", func(t *testing.T) {
+		domain := newInstance(t, "")
+
+		msg := rabbitmq.BillingLifecycleMessage{
+			WorkplaceFqdn: domain, Status: "past_due", AttemptCount: 2, Timestamp: at(),
+		}
+		handle(t, rabbitmq.RoutingKeyPaymentFailed, msg)
+		first := stored(t, domain)
+		require.NotNil(t, first)
+
+		// A redelivery, and the retry after it, both say what the document
+		// already says. A new revision here would wake every realtime client.
+		handle(t, rabbitmq.RoutingKeyPaymentFailed, msg)
+		msg.Timestamp = at()
+		handle(t, rabbitmq.RoutingKeyPaymentFailed, msg)
+
+		again := stored(t, domain)
+		require.NotNil(t, again)
+		require.Equal(t, first.DocRev, again.DocRev, "an unchanged evaluation must not write")
+	})
+
+	t.Run("a dismissal survives a retry and not an escalation", func(t *testing.T) {
+		domain := newInstance(t, "")
+
+		handle(t, rabbitmq.RoutingKeyPaymentFailed, rabbitmq.BillingLifecycleMessage{
+			WorkplaceFqdn: domain, Status: "past_due", AttemptCount: 1, Timestamp: at(),
+		})
+
+		inst, err := lifecycle.GetInstance(domain)
+		require.NoError(t, err)
+		b := stored(t, domain)
+		require.NotNil(t, b)
+		dismissed := time.Now().UTC().Truncate(time.Second)
+		b.DismissedAt = &dismissed
+		require.NoError(t, couchdb.UpdateDoc(inst, b))
+
+		handle(t, rabbitmq.RoutingKeyPaymentFailed, rabbitmq.BillingLifecycleMessage{
+			WorkplaceFqdn: domain, Status: "past_due", AttemptCount: 1, Timestamp: at(),
+		})
+		b = stored(t, domain)
+		require.NotNil(t, b)
+		require.NotNil(t, b.DismissedAt, "the same attempt must not reopen what the user closed")
+
+		handle(t, rabbitmq.RoutingKeyPaymentFailed, rabbitmq.BillingLifecycleMessage{
+			WorkplaceFqdn: domain, Status: "past_due", AttemptCount: 2, Timestamp: at(),
+		})
+		b = stored(t, domain)
+		require.NotNil(t, b)
+		require.Equal(t, banner.BannerIDBillingGrace(2), b.BannerID)
+		require.Nil(t, b.DismissedAt, "an escalation is a new occurrence the user has not seen")
+	})
+
+	t.Run("an event that arrives late loses to the one already applied", func(t *testing.T) {
+		domain := newInstance(t, "")
+
+		late := at()
+		handle(t, rabbitmq.RoutingKeyPaymentFailed, rabbitmq.BillingLifecycleMessage{
+			WorkplaceFqdn: domain, Status: "past_due", AttemptCount: 2, Timestamp: at(),
+		})
+		require.Equal(t, banner.BannerIDBillingGrace(2), stored(t, domain).BannerID)
+
+		// Delivery is unordered, so the first attempt can arrive after the
+		// second. Applying it would walk the user back down the escalation.
+		handle(t, rabbitmq.RoutingKeyPaymentFailed, rabbitmq.BillingLifecycleMessage{
+			WorkplaceFqdn: domain, Status: "past_due", AttemptCount: 1, Timestamp: late,
+		})
+		require.Equal(t, banner.BannerIDBillingGrace(2), stored(t, domain).BannerID,
+			"the older event must not overwrite the newer one")
+
+		// Same for a recovery that Stripe recorded before the failure.
+		handle(t, rabbitmq.RoutingKeyPaymentRecovered, rabbitmq.BillingLifecycleMessage{
+			WorkplaceFqdn: domain, Status: "active", Timestamp: late,
+		})
+		require.NotNil(t, stored(t, domain), "a stale recovery must not clear a later failure")
 	})
 
 	t.Run("giving up restricts an organization and releases a single subscriber", func(t *testing.T) {
@@ -200,5 +277,20 @@ func TestBillingLifecycleHandlerMaterializesBanners(t *testing.T) {
 			Timestamp: at(),
 		})
 		require.Nil(t, stored(t, solo), "a single subscriber drops to the free tier instead")
+	})
+
+	t.Run("an organization member is restricted however the event is addressed", func(t *testing.T) {
+		orgDomain := fmt.Sprintf("org-%d.example", time.Now().UnixNano())
+		member := newInstance(t, orgDomain)
+
+		// Addressed to the instance, not fanned out from the organization.
+		// What decides is the instance, which still keeps the plan its
+		// organization pays for, not the shape the Cloudery happened to use.
+		handle(t, rabbitmq.RoutingKeyPaymentFailed, rabbitmq.BillingLifecycleMessage{
+			WorkplaceFqdn: member, Status: "unpaid", AttemptCount: 4, Timestamp: at(),
+		})
+		b := stored(t, member)
+		require.NotNil(t, b, "an organization member must not be silently told nothing")
+		require.Equal(t, banner.BannerIDBillingRestricted, b.BannerID)
 	})
 }
