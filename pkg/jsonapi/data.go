@@ -67,6 +67,23 @@ func (r *Relationship) ResourceIdentifier() (*couchdb.DocReference, bool) {
 // See http://jsonapi.org/format/#document-resource-object-relationships
 type RelationshipMap map[string]Relationship
 
+// Clone returns a copy of the relationship map. Relationship data decoded from
+// JSON is cloned recursively.
+func (r RelationshipMap) Clone() RelationshipMap {
+	if r == nil {
+		return nil
+	}
+
+	cloned := make(RelationshipMap, len(r))
+	for name, relationship := range r {
+		if data, ok := relationship.Data.(map[string]interface{}); ok {
+			relationship.Data = couchdb.CloneJSONMap(data)
+		}
+		cloned[name] = relationship
+	}
+	return cloned
+}
+
 // ObjectMarshalling is a JSON-API object
 // See http://jsonapi.org/format/#document-resource-objects
 type ObjectMarshalling struct {
