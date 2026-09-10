@@ -775,6 +775,10 @@ func Routes(router *echo.Group) {
 	router.GET("/:domain/swift-prefix", getSwiftBucketName)
 	router.GET("/:domain/sharings/:sharing-id/unxor/:doc-id", unxorID)
 	router.POST("/:domain/notifications", sendNotification)
+	router.POST("/:domain/rag/reset", ragReset)
+	router.POST("/:domain/rag/prune", ragPrune)
+	router.POST("/:domain/rag/purge", ragPurge)
+	router.POST("/:domain/rag/reconcile", ragReconcile)
 
 	// Config
 	router.POST("/redis", rebuildRedis)

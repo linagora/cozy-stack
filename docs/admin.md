@@ -576,6 +576,115 @@ Content-Type: application/json
 }
 ```
 
+## RAG indexing
+
+The RAG indexing of an instance follows the knowledge base folders of its
+assistants (see [ai.md](ai.md)): there is one checkpoint for the instance,
+and no per-folder trigger any more. These routes are operator tools.
+
+Only `reset` runs under the lock the `rag-index` jobs take (`purge` takes it
+just to drop the checkpoint, after having emptied openRAG). Run `prune` and
+`purge` when no `rag-index` job is running, or they may fight with it.
+
+### POST /instances/:domain/rag/reset
+
+Deletes the `rag-index` checkpoint of the instance and launches a `rag-index`
+job, so the whole changes feed is scanned again by the RAG indexer.
+
+#### Request
+
+```http
+POST /instances/alice.cozy.localhost/rag/reset HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+### POST /instances/:domain/rag/reconcile
+
+Pushes a reconcile job per knowledge base folder: the job walks the subtree
+of the folder and indexes every file it holds. With the `dir_id` query
+parameter, only that folder is reconciled. It is how an initial indexing that
+did not finish is restarted. `dir_id` is the folder id, the one the
+assistant's `knowledgeBase` carries (`io.cozy.files.root-dir` for the whole
+Drive), not the id of its openRAG workspace.
+
+#### Request
+
+```http
+POST /instances/alice.cozy.localhost/rag/reconcile?dir_id=6c36a9ee HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "jobs": 1
+}
+```
+
+A `404 Not Found` is returned when the given folder is in no assistant's
+knowledge base.
+
+### POST /instances/:domain/rag/prune
+
+Deletes from openRAG what no knowledge base folder claims any more: the files
+gone or trashed in the Cozy, the files outside every knowledge base folder,
+and the workspaces of the folders no assistant uses. The index status of a
+deleted file is dropped too. A workspace is named after its folder id, except
+for the well-known folders: openRAG refuses an id with dots, so the root
+folder (`io.cozy.files.root-dir`) is indexed in the workspace
+`io-cozy-files-root-dir`, and likewise for the trash, "Shared with me", "No
+longer shared" and "Shared drives".
+
+#### Request
+
+```http
+POST /instances/alice.cozy.localhost/rag/prune HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "files_scanned": 12,
+  "files_deleted": 3,
+  "workspaces_deleted": 1
+}
+```
+
+### POST /instances/:domain/rag/purge
+
+Deletes everything openRAG holds for the instance: its workspaces, its files
+and its partition. The index statuses and the `rag-index` checkpoint are
+dropped too, so the next run indexes the whole instance again (use the reset
+route above to launch it right away).
+
+#### Request
+
+```http
+POST /instances/alice.cozy.localhost/rag/purge HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
 ## Contexts
 
 ### GET /instances/contexts
