@@ -102,3 +102,12 @@ func GetSwiftConnection() *swift.Connection {
 	}
 	return swiftConn
 }
+
+// HasSwiftConnection reports whether the global swift connection has been
+// initialized, without panicking. Callers that need to guard against a
+// missing swift connection (e.g. before attempting a storage migration to
+// swift) should use this instead of recovering from GetSwiftConnection's
+// panic.
+func HasSwiftConnection() bool {
+	return swiftConn != nil
+}

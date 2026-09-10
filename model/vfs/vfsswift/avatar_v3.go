@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -43,6 +44,19 @@ func (a *avatarV3) DeleteAvatar() error {
 		return nil
 	}
 	return err
+}
+
+// OpenAvatar returns a reader over the stored avatar content and its
+// content-type, or os.ErrNotExist if no avatar is stored.
+func (a *avatarV3) OpenAvatar() (io.ReadCloser, string, error) {
+	f, headers, err := a.c.ObjectOpen(a.ctx, a.container, "avatar", false, nil)
+	if err != nil {
+		if err == swift.ObjectNotFound {
+			return nil, "", os.ErrNotExist
+		}
+		return nil, "", err
+	}
+	return f, headers["Content-Type"], nil
 }
 
 func (a *avatarV3) ServeAvatarContent(w http.ResponseWriter, req *http.Request) error {
