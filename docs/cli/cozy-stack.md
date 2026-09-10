@@ -38,6 +38,7 @@ cozy-stack <command> [flags]
 * [cozy-stack instances](cozy-stack_instances.md)	 - Manage instances of a stack
 * [cozy-stack jobs](cozy-stack_jobs.md)	 - Launch and manage jobs and workers
 * [cozy-stack konnectors](cozy-stack_konnectors.md)	 - Interact with the konnectors
+* [cozy-stack rag](cozy-stack_rag.md)	 - Manage the RAG indexing of an instance
 * [cozy-stack serve](cozy-stack_serve.md)	 - Starts the stack and listens for HTTP calls
 * [cozy-stack settings](cozy-stack_settings.md)	 - Display and update settings
 * [cozy-stack status](cozy-stack_status.md)	 - Check if the HTTP server is running
