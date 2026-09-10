@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -837,66 +836,47 @@ func maskSensitiveData(data string) string {
 	return data[:3] + strings.Repeat("*", len(data)-6) + data[len(data)-3:]
 }
 
-// BillingLifecycleHandler materializes the banner that tells a user their
-// payment is failing.
-type BillingLifecycleHandler struct{}
+// BannerCommandHandler adapts banner.ApplyCommand for the message bus.
+type BannerCommandHandler struct{}
 
-func NewBillingLifecycleHandler() *BillingLifecycleHandler {
-	return &BillingLifecycleHandler{}
+func NewBannerCommandHandler() *BannerCommandHandler {
+	return &BannerCommandHandler{}
 }
 
-func (h *BillingLifecycleHandler) Handle(ctx context.Context, d amqp.Delivery) error {
+func (h *BannerCommandHandler) Handle(ctx context.Context, d amqp.Delivery) error {
 	log := logger.WithNamespace("rabbitmq")
-	log.Infof("billing.lifecycle: received message: %s", d.RoutingKey)
-
-	var msg BillingLifecycleMessage
-	if err := json.Unmarshal(d.Body, &msg); err != nil {
-		return fmt.Errorf("billing.lifecycle: failed to unmarshal message: %w", err)
+	log.Infof("banner.commands: received message: %s", d.RoutingKey)
+	if len(d.Body) > banner.MaxCommandBytes {
+		return fmt.Errorf("%w: banner command exceeds %d bytes", banner.ErrInvalidCommand, banner.MaxCommandBytes)
 	}
 
-	// A malformed message must fail here rather than silently update nothing,
-	// or a whole organization when one instance was meant.
-	if (msg.Domain == "") == (msg.WorkplaceFqdn == "") {
-		return fmt.Errorf("billing.lifecycle: exactly one of domain and workplaceFqdn is required, event %s", msg.EventID)
-	}
-	// Events are ordered by this, so one without it cannot be placed. Zero
-	// would read as 1970 and lose against anything stored, which for a
-	// recovery means a banner that never clears.
-	if msg.Timestamp <= 0 {
-		return fmt.Errorf("billing.lifecycle: timestamp is required, event %s", msg.EventID)
+	var cmd banner.Command
+	if err := json.Unmarshal(d.Body, &cmd); err != nil {
+		return fmt.Errorf("banner.commands: failed to unmarshal message: %w", err)
 	}
 
-	// A recovery says the subscription is paying again whatever the payload
-	// carries, and that is what makes the banner go away.
-	status := msg.Status
-	if d.RoutingKey == RoutingKeyPaymentRecovered {
-		status = "active"
+	// The routing key decides what to do, never the payload, so a producer
+	// cannot clear a category by naming a field.
+	switch d.RoutingKey {
+	case RoutingKeyBannerMaterialize:
+	case RoutingKeyBannerClear:
+		cmd.Clear = true
+	default:
+		return fmt.Errorf("banner.commands: unexpected routing key %s", d.RoutingKey)
 	}
 
-	var domains []string
-	if msg.Domain == "" {
-		domains = []string{msg.WorkplaceFqdn}
-	} else {
-		list, err := lifecycle.ListOrgInstances(msg.Domain)
-		if err != nil {
-			return fmt.Errorf("billing.lifecycle: could not list instances for organization %s: %w", msg.Domain, err)
-		}
-		for _, inst := range list {
-			domains = append(domains, inst.Domain)
-		}
-		if len(domains) == 0 {
-			log.Infof("billing.lifecycle: no instances found for organization %s", msg.Domain)
-			return nil
-		}
+	// A command the queue cannot fix is nacked like any other failure. The
+	// queue is declared with a delivery limit, so the broker dead letters it
+	// after those attempts rather than redelivering it forever.
+	if err := banner.ApplyCommand(cmd); err != nil {
+		return fmt.Errorf("banner.commands: %s revision %d: %w", d.RoutingKey, cmd.Revision, err)
 	}
 
-	eventAt := time.Unix(msg.Timestamp, 0).UTC()
-	for _, domain := range domains {
-		if err := banner.RefreshBilling(domain, status, eventAt); err != nil {
-			return fmt.Errorf("billing.lifecycle: materialize for %s: %w", domain, err)
-		}
-		log.Infof("billing.lifecycle: %s applied to %s (status %s, attempt %d, event %s, at %s)",
-			d.RoutingKey, domain, status, msg.AttemptCount, msg.EventID, eventAt.Format(time.RFC3339))
+	target := cmd.WorkplaceFqdn
+	if target == "" {
+		target = cmd.Domain
 	}
+	log.Infof("banner.commands: %s applied to %s (category %s, revision %d, event %s)",
+		d.RoutingKey, target, cmd.Category, cmd.Revision, cmd.EventID)
 	return nil
 }

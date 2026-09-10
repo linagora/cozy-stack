@@ -1,0 +1,36 @@
+{
+  "workplaceFqdn": "alice.twake.app",
+  "eventId": "banner-command-42",
+  "revision": 42,
+  "timestamp": 1788944400,
+  "category": "billing",
+  "bannerId": "billing.grace.cycle-a.attempt-2",
+  "severity": "warning",
+  "surface": "banner",
+  "priority": 150,
+  "dismissible": true,
+  "title": {
+    "en": "Payment failed",
+    "fr": "Échec du paiement"
+  },
+  "text": {
+    "en": "We could not charge your card. Please update your payment method before 5 August 2026.",
+    "fr": "Nous n'avons pas pu débiter votre carte. Mettez à jour votre moyen de paiement avant le 5 août 2026."
+  },
+  "cta": {
+    "label": {
+      "en": "Update payment method",
+      "fr": "Mettre à jour le moyen de paiement"
+    },
+    "url": "https://manager.example.org/linagora/twake_prod/premium"
+  },
+  "secondaryCta": {
+    "label": {
+      "en": "Contact support",
+      "fr": "Contacter le support"
+    },
+    "url": "https://twake.app/support"
+  },
+  "startsAt": "2026-08-01T00:00:00Z",
+  "endsAt": "2026-08-05T23:30:00Z"
+}

@@ -275,8 +275,8 @@ func BuildExchangeSpecs(exchangesCfg []config.RabbitExchange) []ExchangeSpec {
 				handler = NewB2BGroupLifecycleHandler()
 			case QueueAppCommands:
 				handler = NewAppInstallHandler()
-			case QueueBillingLifecycle:
-				handler = NewBillingLifecycleHandler()
+			case QueueBannerCommands:
+				handler = NewBannerCommandHandler()
 			}
 
 			if handler == nil {

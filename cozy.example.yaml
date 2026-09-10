@@ -535,6 +535,19 @@ contexts:
     # Feature flags
     features:
       - hide_konnector_errors
+    # Materialize the platform banners (io.cozy.banners) for the instances of
+    # this context. Off by default, so the rules can ship before the clients
+    # that render them. Turning it back off stops the writes and leaves the
+    # documents already materialized in place.
+    enable_banners: true
+    # The banner categories the stack.banner.commands queue is allowed to
+    # write. Its publisher is authenticated by its broker credentials and
+    # bindings, so this says what it may say, not who it is. The quota
+    # category is always refused: the stack measures disk usage itself.
+    # See docs/banners.md.
+    banner_command_categories:
+      - billing
+      - trial
     # List of applications that can be automatically updated even if the
     # permissions have changed
     additional_platform_apps:
@@ -746,3 +759,24 @@ rabbitmq:
           delivery_limit: 5
           bindings:
             - app.installation.requested
+    # Banner commands. The exchange is a deployment choice: an existing one
+    # with dedicated bindings works too, as long as both repositories name the
+    # same one. The dead letter queue is where a malformed or unauthorized
+    # command lands, so it has to exist for those to be inspectable.
+    - name: platform
+      kind: topic
+      durable: true
+      declare_exchange: false
+      queues:
+        - name: stack.banner.commands
+          declare: true
+          declare_dlx: true
+          declare_dlq: true
+          dlx_name: stack.platform.dlx
+          dlq_name: stack.dead.letter.banner.commands
+          dl_routing_key: banner.commands.dead
+          prefetch: 8
+          delivery_limit: 5
+          bindings:
+            - banner.materialize
+            - banner.clear

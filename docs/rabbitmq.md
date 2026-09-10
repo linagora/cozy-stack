@@ -149,6 +149,23 @@ rabbitmq:
           delivery_limit: 5
           bindings:
             - app.installation.requested
+    - name: platform
+      kind: topic
+      durable: true
+      declare_exchange: false
+      queues:
+        - name: stack.banner.commands
+          declare: true
+          declare_dlx: true
+          declare_dlq: true
+          dlx_name: stack.platform.dlx
+          dlq_name: stack.dead.letter.banner.commands
+          dl_routing_key: banner.commands.dead
+          prefetch: 8
+          delivery_limit: 5
+          bindings:
+            - banner.materialize
+            - banner.clear
 ```
 
 ### Dead Letter Exchange (DLX) and Dead Letter Queue (DLQ)
@@ -267,12 +284,19 @@ type Handler interface {
 
 Returning `nil` acknowledges the message. Returning a non-nil error causes the message to be requeued (subject to broker policies and delivery limits).
 
+A handler does not classify its errors. Every failure is nacked with requeue,
+and the queue's `delivery_limit` is what bounds the retries: once it is reached
+the broker dead letters the message. So a payload that does not parse costs a
+few redeliveries before it lands in the dead letter queue, and a storage failure
+gets those same attempts to succeed.
+
 Queue names are mapped to handlers in the stack. For example:
 
 - `user.password.updated` → updates an instance passphrase when a `user.password.updated` routing key is received.
 - `user.created` → validates and processes user creation events.
 - `user.phone.updated` → updates the phone number stored in user settings.
 - `domain.user.deleted` on the `b2b` exchange → removes externally managed organization contacts.
+- `banner.materialize` and `banner.clear` on the `platform` exchange → materializes or clears a platform banner, see [Banners](banners.md).
 
 Message schemas are JSON and validated in the handler. Example payload for `user.password.updated`:
 

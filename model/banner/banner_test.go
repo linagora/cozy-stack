@@ -1,18 +1,22 @@
 package banner
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/i18n"
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestMain loads the real catalogs, so a message id that no longer exists
-// fails here rather than rendering its own name to a user.
+// TestMain loads the real catalogs so a stale message id breaks the test, not
+// production, and brings up the global database (inlined from testutils to
+// avoid a circular import).
 func TestMain(m *testing.M) {
 	for _, locale := range []string{"en", "fr"} {
 		po, err := os.ReadFile("../../assets/locales/" + locale + ".po")
@@ -20,6 +24,15 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 		i18n.LoadLocale(locale, "", po)
+	}
+	if err := config.LoadTestFile(); err != nil {
+		panic(err)
+	}
+	ctx := context.Background()
+	if _, err := couchdb.CheckStatus(ctx); err == nil {
+		if err := couchdb.InitGlobalDB(ctx); err != nil {
+			panic(err)
+		}
 	}
 	os.Exit(m.Run())
 }
@@ -309,47 +322,5 @@ func TestAModalAlwaysHasAWayOut(t *testing.T) {
 		b := &Banner{Surface: SurfaceBanner, Dismissible: false}
 		ensureEscapable(b)
 		assert.False(t, b.Dismissible, "a banner does not cover the application")
-	})
-}
-
-func TestEvaluateBilling(t *testing.T) {
-	state := func(status string) BillingState {
-		return BillingState{Status: status, Locale: "en"}
-	}
-
-	t.Run("no banner while the subscription is paying", func(t *testing.T) {
-		assert.Nil(t, EvaluateBilling(state("active"), now))
-		assert.Nil(t, EvaluateBilling(state("trialing"), now))
-	})
-
-	t.Run("no banner while Stripe is still retrying", func(t *testing.T) {
-		assert.Nil(t, EvaluateBilling(state("past_due"), now),
-			"past_due keeps the plan, and no approved wording exists for that state")
-	})
-
-	t.Run("a subscription Stripe gave up on blocks", func(t *testing.T) {
-		for _, status := range []string{"unpaid", "canceled"} {
-			b := EvaluateBilling(state(status), now)
-			require.NotNil(t, b, status)
-			assert.Equal(t, BannerIDBillingRestricted, b.BannerID, status)
-			assert.Equal(t, SeverityError, b.Severity, status)
-			assert.Equal(t, SurfaceModal, b.Surface, status)
-			assert.False(t, b.Dismissible, status)
-		}
-	})
-
-	t.Run("the wording is localized like every other banner", func(t *testing.T) {
-		b := EvaluateBilling(BillingState{Status: "unpaid", Locale: "fr"}, now)
-		require.NotNil(t, b)
-		assert.Equal(t, "fr", b.Lang)
-		assert.NotEqual(t, textBillingRestricted, b.Text, "the message id must not reach the document")
-	})
-
-	t.Run("a blocking dialog with no call to action is made closable", func(t *testing.T) {
-		b := EvaluateBilling(state("unpaid"), now)
-		require.NotNil(t, b)
-		require.Nil(t, b.CTA, "no manager URL is configured in this state")
-		ensureEscapable(b)
-		assert.True(t, b.Dismissible, "otherwise the user cannot reach the application at all")
 	})
 }

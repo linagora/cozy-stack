@@ -18,6 +18,9 @@ const (
 	AppLogs = "io.cozy.apps.logs"
 	// Banners doc type for the platform messages displayed to the user
 	Banners = "io.cozy.banners"
+	// BannerCommands stores the last accepted command per category, separate
+	// from Banners so an app with dismissal access cannot rewrite the ordering.
+	BannerCommands = "io.cozy.banners.commands"
 	// Konnectors doc type for konnector application manifests
 	Konnectors = "io.cozy.konnectors"
 	// KonnectorsMaintenance doc type for maintenance of konnectors.
