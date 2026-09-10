@@ -16,24 +16,55 @@ First of all, the RAG server must be installed with its dependencies. It is
 not mandatory to install them on the same servers as the cozy-stack. And the
 URL of RAG must be filled in cozy-stack configuration file (in `rag`).
 
-For the moment, the feature is experimental, and a trigger must be created
-manually on the Cozy:
+The indexing follows the assistants: every `io.cozy.ai.chat.assistants`
+document whose `knowledgeBase` has an `io.cozy.files` entry defines a folder
+to index. The files of that folder (recursively) are sent to the openRAG
+server and attached to the workspace named after the folder id; the
+assistant's retrieval is scoped to that workspace.
 
-```sh
-$ COZY=cozy.localhost:8080
-$ TOKEN=$(cozy-stack instances token-cli $COZY io.cozy.triggers)
-$ curl "http://${COZY}/jobs/triggers" -H "Authorization: Bearer $TOKEN" -d '{ "data": { "attributes": { "type": "@event", "arguments": "io.cozy.files", "debounce": "1m", "worker": "rag-index", "message": {"doctype": "io.cozy.files"} } } }'
+openRAG indexes an upload asynchronously: while the task runs, it still
+answers 404 on the file but refuses a second POST with a 409. The worker then
+sends the file again with a PUT, which re-indexes the content, instead of
+failing on the conflict.
+
+openRAG also deduplicates by content: a partition holds one document per
+distinct content, and an upload whose content is already indexed under
+another file id is refused with a 409 `DOCUMENT_CONTENT_EXISTS`. The worker
+logs that file once (with the id of the document already holding the content)
+and skips it for good: it is not indexed, and not attached to any workspace,
+so a search hit points at the other copy. A reconcile of its folder does not
+change that — the second copy is refused again, and only counted in the
+summary of the walk.
+
+The `rag-index` worker does all of this in one job per instance, reading the
+changes feed of `io.cozy.files` from a checkpoint. It is woken up by two
+`@event` triggers, created by the app in charge of the assistants (the worker
+is not reserved, an app token with the `io.cozy.triggers` permission is
+enough):
+
+```json
+{ "data": { "attributes": {
+  "type": "@event", "arguments": "io.cozy.files", "debounce": "30s",
+  "worker": "rag-index", "message": { "doctype": "io.cozy.files" } } } }
 ```
 
-It can also be a good idea to start a first indexation with:
-
-```sh
-$ cozy-stack triggers launch --domain $COZY $TRIGGER_ID
+```json
+{ "data": { "attributes": {
+  "type": "@event", "arguments": "io.cozy.ai.chat.assistants",
+  "worker": "rag-index", "message": { "doctype": "io.cozy.files" } } } }
 ```
 
-In practice, when files are uploaded/modified/deleted, the trigger will create
-a job for the index worker (with debounce). The index worker will look at the
-changed feed, and will call the RAG for each entry in the changes feed.
+The second trigger only wakes the worker when an assistant is created,
+modified or deleted: the worker then creates the workspace of a new folder
+and pushes a job that walks its subtree (in that order: nothing is indexed
+into a workspace that does not exist, and a workspace whose job could not be
+pushed is deleted again, so the next run retries both), or removes the
+workspace of a folder no assistant uses any more (its files are deleted from
+openRAG when no other folder contains them).
+
+A chat on an assistant whose folder has no workspace yet (the job did not run
+since the assistant was created) fails with an error event saying the
+knowledge base is not indexed; it works once the job ran.
 
 By default, only text-based files are indexed. Images, videos, and audio files
 can be indexed by enabling the following feature flags:
@@ -41,6 +72,45 @@ can be indexed by enabling the following feature flags:
 - `rag.index.image.enabled`
 - `rag.index.video.enabled`
 - `rag.index.audio.enabled`
+
+### Operator tools
+
+The admin API exposes them (see [admin.md](admin.md) for the details):
+
+- `POST /instances/:domain/rag/reset` deletes the checkpoint and launches the
+  indexing: the whole changes feed is scanned again.
+- `POST /instances/:domain/rag/reconcile?dir_id=<id>` re-indexes the subtree
+  of one knowledge base folder (without `dir_id`, of all of them).
+- `POST /instances/:domain/rag/prune` deletes from openRAG the files no
+  knowledge base folder claims and the workspaces of folders no assistant uses.
+- `POST /instances/:domain/rag/purge` deletes everything openRAG holds for the
+  instance (files, workspaces, partition) and the checkpoint.
+
+A reconcile job skips the files openRAG refuses for good (an unsupported
+format, say); a file whose content is missing from the storage is skipped as
+well, since it will not come back: each one is logged and the walk goes on,
+so only transient errors (network, 5xx) fail the job and have the worker walk
+the folder again.
+A skipped file stays unindexed until it changes, or until an operator re-walks
+its folder with `POST /instances/:domain/rag/reconcile?dir_id=<id>`.
+
+Recovery: an initial indexing that did not finish (the job of a very large
+folder, a whole-Drive assistant typically, hit the worker timeout) is
+restarted with `POST /instances/:domain/rag/reconcile?dir_id=<id>`; nothing
+else replays it, since the files of the folder did not change. Removing a
+whole-Drive workspace is also much cheaper with the prune route, which
+makes one pass over openRAG's file list, than through the automatic detach of
+the workspace diff, which walks the subtree file by file. Note that prune and
+purge do not take the lock the indexing jobs use: run them when no rag-index
+job is running.
+
+A trigger can still be created by hand with a CLI token:
+
+```sh
+$ COZY=cozy.localhost:8080
+$ TOKEN=$(cozy-stack instances token-cli $COZY io.cozy.triggers)
+$ curl "http://${COZY}/jobs/triggers" -H "Authorization: Bearer $TOKEN" -d '{ "data": { "attributes": { "type": "@event", "arguments": "io.cozy.files", "debounce": "30s", "worker": "rag-index", "message": {"doctype": "io.cozy.files"} } } }'
+```
 
 ### POST /ai/index/status
 
@@ -66,6 +136,7 @@ Content-Type: application/json
   "metadata": {
     "doc_rev": "3-6a1b0b8a51a4e0e0a3b7f0f1d2c3b4a5",
     "datetime": "2026-08-20T08:12:00.000Z",
+    "created_at": "2026-08-20T08:12:03.512Z",
     "doctype": "io.cozy.files"
   }
 }
@@ -226,6 +297,10 @@ Content-Type: application/json
 - `websearch` enables web search for the query (defaults to `false`).
 - `assistantID` (optional) associates the conversation with an `io.cozy.ai.chat.assistants`
   document. When set, the response includes a `relationships` block.
+  When the assistant has a knowledge base folder, the retrieval is scoped to
+  that folder's workspace. The assistant's folder must have been indexed at
+  least once by the `rag-index` worker; otherwise the query fails with an
+  error event saying the knowledge base is not indexed.
 - `attachmentIDs` (optional) array of ids, specifying which documents should be leveraged by the RAG.
   
 

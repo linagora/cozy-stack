@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/feature"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,4 +64,75 @@ func TestIsClassAllowed(t *testing.T) {
 		assert.False(t, isClassAllowed(off, class), class)
 		assert.True(t, isClassAllowed(on, class), class)
 	}
+}
+
+// TestUploadMetaCreatedAt pins that the creation date of the file document
+// reaches the RAG server, whether the file comes from the changes feed or
+// from a VFS document, in the RFC 3339 form CouchDB stores it in.
+func TestUploadMetaCreatedAt(t *testing.T) {
+	created := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	doc := &vfs.FileDoc{
+		DocID:     "a1b2c3",
+		DocRev:    "3-abc",
+		CreatedAt: created,
+		UpdatedAt: created.Add(time.Hour),
+		Metadata:  vfs.Metadata{"datetime": "2026-03-01T00:00:00Z"},
+	}
+
+	t.Run("from a VFS document", func(t *testing.T) {
+		meta := uploadMeta(fileInfoFromDoc(doc))
+		assert.Equal(t, "2026-03-04T05:06:07Z", meta["created_at"])
+		assert.Equal(t, "2026-03-01T00:00:00Z", meta["datetime"])
+		assert.Equal(t, "3-abc", meta["doc_rev"])
+		assert.Equal(t, consts.Files, meta["doctype"])
+	})
+
+	t.Run("from the changes feed", func(t *testing.T) {
+		raw, err := json.Marshal(doc)
+		require.NoError(t, err)
+		var change couchdb.Change
+		change.DocID = doc.DocID
+		require.NoError(t, json.Unmarshal(raw, &change.Doc))
+
+		meta := uploadMeta(fileInfoFromChange(change))
+		assert.Equal(t, "2026-03-04T05:06:07Z", meta["created_at"])
+		assert.Equal(t, "2026-03-01T00:00:00Z", meta["datetime"])
+	})
+
+	t.Run("a file without a creation date sends none", func(t *testing.T) {
+		meta := uploadMeta(fileInfo{})
+		assert.Empty(t, meta["created_at"])
+	})
+}
+
+// TestClassifyConflict pins the two 409 openRAG answers on the upload route,
+// captured against the real server: the id it already holds (a PUT fixes it)
+// and the content it already indexed under another id (nothing fixes it).
+func TestClassifyConflict(t *testing.T) {
+	t.Run("the file id already exists", func(t *testing.T) {
+		body := []byte(`{"detail":"File 'abc123' already exists in partition alice.cozy.example"}`)
+		conflict, existingID := classifyConflict(body)
+		assert.Equal(t, conflictIDExists, conflict)
+		assert.Empty(t, existingID)
+	})
+
+	t.Run("the content already exists", func(t *testing.T) {
+		body := []byte(`{"detail":"[DOCUMENT_CONTENT_EXISTS]: This document already exists in partition 'alice.cozy.example'.","extra":{"existing_file_id":"other456","request_id":"r-1"}}`)
+		conflict, existingID := classifyConflict(body)
+		assert.Equal(t, conflictContentExists, conflict)
+		assert.Equal(t, "other456", existingID)
+	})
+
+	t.Run("an unknown body", func(t *testing.T) {
+		for _, body := range []string{
+			`{"detail":"the partition is locked"}`,
+			`{"detail":[{"loc":["body"],"msg":"nope"}]}`,
+			`<html>409</html>`,
+			``,
+		} {
+			conflict, existingID := classifyConflict([]byte(body))
+			assert.Equal(t, conflictUnknown, conflict, body)
+			assert.Empty(t, existingID, body)
+		}
+	})
 }
