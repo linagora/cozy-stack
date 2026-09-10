@@ -32,7 +32,7 @@ distinct content, and an upload whose content is already indexed under
 another file id is refused with a 409 `DOCUMENT_CONTENT_EXISTS`. The worker
 logs that file once (with the id of the document already holding the content)
 and skips it for good: it is not indexed, and not attached to any workspace,
-so a search hit points at the other copy. A reconcile of its folder does not
+so a search hit points at the other copy. `cozy-stack rag reconcile` does not
 change that — the second copy is refused again, and only counted in the
 summary of the walk.
 
@@ -75,15 +75,13 @@ can be indexed by enabling the following feature flags:
 
 ### Operator tools
 
-The admin API exposes them (see [admin.md](admin.md) for the details):
-
-- `POST /instances/:domain/rag/reset` deletes the checkpoint and launches the
+- `cozy-stack rag reset <domain>` deletes the checkpoint and launches the
   indexing: the whole changes feed is scanned again.
-- `POST /instances/:domain/rag/reconcile?dir_id=<id>` re-indexes the subtree
-  of one knowledge base folder (without `dir_id`, of all of them).
-- `POST /instances/:domain/rag/prune` deletes from openRAG the files no
-  knowledge base folder claims and the workspaces of folders no assistant uses.
-- `POST /instances/:domain/rag/purge` deletes everything openRAG holds for the
+- `cozy-stack rag reconcile <domain> [--dir-id <id>]` re-indexes the subtree
+  of one knowledge base folder, or of all of them.
+- `cozy-stack rag prune <domain>` deletes from openRAG the files no knowledge
+  base folder claims and the workspaces of folders no assistant uses.
+- `cozy-stack rag purge <domain>` deletes everything openRAG holds for the
   instance (files, workspaces, partition) and the checkpoint.
 
 A reconcile job skips the files openRAG refuses for good (an unsupported
@@ -92,13 +90,13 @@ well, since it will not come back: each one is logged and the walk goes on,
 so only transient errors (network, 5xx) fail the job and have the worker walk
 the folder again.
 A skipped file stays unindexed until it changes, or until an operator re-walks
-its folder with `POST /instances/:domain/rag/reconcile?dir_id=<id>`.
+its folder with `cozy-stack rag reconcile <domain> --dir-id <id>`.
 
 Recovery: an initial indexing that did not finish (the job of a very large
 folder, a whole-Drive assistant typically, hit the worker timeout) is
-restarted with `POST /instances/:domain/rag/reconcile?dir_id=<id>`; nothing
+restarted with `cozy-stack rag reconcile <domain> --dir-id <id>`; nothing
 else replays it, since the files of the folder did not change. Removing a
-whole-Drive workspace is also much cheaper with the prune route, which
+whole-Drive workspace is also much cheaper with `cozy-stack rag prune`, which
 makes one pass over openRAG's file list, than through the automatic detach of
 the workspace diff, which walks the subtree file by file. Note that prune and
 purge do not take the lock the indexing jobs use: run them when no rag-index
