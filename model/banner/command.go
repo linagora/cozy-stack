@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -39,9 +40,9 @@ type CommandCTA struct {
 type Command struct {
 	Category string `json:"category"`
 
-	// Exactly one of Domain and WorkplaceFqdn is set. Domain addresses a
-	// B2B organization, and every instance under it gets the banner.
-	Domain        string `json:"domain,omitempty"`
+	// Exactly one of Tenant and WorkplaceFqdn is set. Tenant is the B2B
+	// organization ID, and every instance under it gets the banner.
+	Tenant        string `json:"tenant,omitempty"`
 	WorkplaceFqdn string `json:"workplaceFqdn,omitempty"`
 
 	// EventID is the backend's correlation id, logged for traceability.
@@ -85,6 +86,7 @@ const (
 	maxURLLen     = 2048
 	maxPriority   = 1000
 	maxEventIDLen = 256
+	maxTenantLen  = 256
 	maxLocaleLen  = 35
 	// MaxCommandBytes bounds the JSON body at the transport boundary.
 	MaxCommandBytes = 256 * 1024
@@ -119,10 +121,10 @@ func ApplyCommand(cmd Command) error {
 // instance is a no-op. A missing workplace is retryable (not invalid): the
 // stack cannot tell a deleted instance from one still being provisioned.
 func (cmd Command) targets() ([]*instance.Instance, error) {
-	if cmd.Domain != "" {
-		list, err := lifecycle.ListOrgInstances(cmd.Domain)
+	if cmd.Tenant != "" {
+		list, err := lifecycle.ListOrgInstancesByID(cmd.Tenant)
 		if err != nil {
-			return nil, fmt.Errorf("cannot list the instances of organization %s: %w", cmd.Domain, err)
+			return nil, fmt.Errorf("cannot list the instances of organization %s: %w", cmd.Tenant, err)
 		}
 		return list, nil
 	}
@@ -312,11 +314,14 @@ func (cmd Command) validate() error {
 		return fmt.Errorf("%w: the %s category is reserved for the stack's own rules",
 			ErrInvalidCommand, CategoryQuota)
 	}
-	if (cmd.Domain == "") == (cmd.WorkplaceFqdn == "") {
-		return fmt.Errorf("%w: exactly one of domain and workplaceFqdn is required", ErrInvalidCommand)
+	if (cmd.Tenant == "") == (cmd.WorkplaceFqdn == "") {
+		return fmt.Errorf("%w: exactly one of tenant and workplaceFqdn is required", ErrInvalidCommand)
 	}
-	if target := cmd.Domain + cmd.WorkplaceFqdn; !targetFormat.MatchString(target) {
-		return fmt.Errorf("%w: %q is not a valid target", ErrInvalidCommand, target)
+	if cmd.Tenant != "" && (len(cmd.Tenant) > maxTenantLen || strings.TrimSpace(cmd.Tenant) != cmd.Tenant) {
+		return fmt.Errorf("%w: tenant must be at most %d bytes with no surrounding whitespace", ErrInvalidCommand, maxTenantLen)
+	}
+	if cmd.WorkplaceFqdn != "" && !targetFormat.MatchString(cmd.WorkplaceFqdn) {
+		return fmt.Errorf("%w: %q is not a valid target", ErrInvalidCommand, cmd.WorkplaceFqdn)
 	}
 	if cmd.Revision <= 0 {
 		return fmt.Errorf("%w: a positive revision is required", ErrInvalidCommand)

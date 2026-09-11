@@ -74,7 +74,7 @@ and [shared fixtures](../model/banner/testdata) for complete examples.
 | Field | Required | Contract |
 | --- | --- | --- |
 | `category` | always | Matches `^[a-z][a-z0-9-]{0,31}$`; `quota` is rejected. |
-| `workplaceFqdn` / `domain` | exactly one | Plain host name: a single instance / a B2B organization whose members receive the command. |
+| `workplaceFqdn` / `tenant` | exactly one | A single instance host name / a B2B organization ID matching instance `org_id`, whose members receive the command; `tenant` is at most 256 bytes with no surrounding whitespace. |
 | `revision` | always | Positive counter, increasing per target and category. |
 | `timestamp` | always | Decision time in positive epoch seconds, within the RFC3339 range. Does not order commands. |
 | `eventId` | no | Correlation ID, at most 256 bytes. |

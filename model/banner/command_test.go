@@ -14,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +45,7 @@ func TestFixturesAreTheContract(t *testing.T) {
 		cmd := fixture(t, "materialize")
 
 		assert.Equal(t, "alice.twake.app", cmd.WorkplaceFqdn)
-		assert.Empty(t, cmd.Domain)
+		assert.Empty(t, cmd.Tenant)
 		assert.Equal(t, "banner-command-42", cmd.EventID)
 		assert.Equal(t, int64(42), cmd.Revision)
 		assert.Equal(t, int64(decidedAt), cmd.Timestamp)
@@ -73,10 +74,10 @@ func TestFixturesAreTheContract(t *testing.T) {
 		assert.NoError(t, cmd.validate())
 	})
 
-	t.Run("an organization is addressed by its domain", func(t *testing.T) {
+	t.Run("an organization is addressed by its tenant ID", func(t *testing.T) {
 		cmd := fixture(t, "organization")
 
-		assert.Equal(t, "acme.example", cmd.Domain)
+		assert.Equal(t, "acme_org:123", cmd.Tenant)
 		assert.Empty(t, cmd.WorkplaceFqdn)
 		assert.Equal(t, SurfaceModal, cmd.Surface)
 		assert.NoError(t, cmd.validate())
@@ -118,8 +119,11 @@ func TestValidateRejections(t *testing.T) {
 		{"category starting with a digit", func(c *Command) { c.Category = "2fa" }, "not a valid category"},
 		{"category too long", func(c *Command) { c.Category = strings.Repeat("a", 33) }, "not a valid category"},
 		{"the quota category", func(c *Command) { c.Category = CategoryQuota }, "reserved for the stack's own rules"},
-		{"no target", func(c *Command) { c.WorkplaceFqdn = "" }, "exactly one of domain and workplaceFqdn"},
-		{"both targets", func(c *Command) { c.Domain = "acme.example" }, "exactly one of domain and workplaceFqdn"},
+		{"no target", func(c *Command) { c.WorkplaceFqdn = "" }, "exactly one of tenant and workplaceFqdn"},
+		{"both targets", func(c *Command) { c.Tenant = "acme.example" }, "exactly one of tenant and workplaceFqdn"},
+		{"tenant too long", func(c *Command) { c.WorkplaceFqdn = ""; c.Tenant = strings.Repeat("a", maxTenantLen+1) }, "tenant must be at most"},
+		{"blank tenant", func(c *Command) { c.WorkplaceFqdn = ""; c.Tenant = " " }, "no surrounding whitespace"},
+		{"tenant with surrounding whitespace", func(c *Command) { c.WorkplaceFqdn = ""; c.Tenant = " acme" }, "no surrounding whitespace"},
 		{"a target with a path", func(c *Command) { c.WorkplaceFqdn = "alice.twake.app/../bob" }, "is not a valid target"},
 		{"a target with a scheme", func(c *Command) { c.WorkplaceFqdn = "https://alice.twake.app" }, "is not a valid target"},
 		{"a target too long", func(c *Command) { c.WorkplaceFqdn = strings.Repeat("a", 256) }, "is not a valid target"},
@@ -210,7 +214,7 @@ func TestValidateRejections(t *testing.T) {
 			{"oversized event id", func(c *Command) { c.EventID = strings.Repeat("e", maxEventIDLen+1) }, "eventId is longer than"},
 			{"oversized wording", func(c *Command) { c.Text = Localized{"en": strings.Repeat("x", 2<<20)} }, "clear must not carry presentation"},
 			{"ordinary wording", func(c *Command) { c.Text = Localized{"en": "ignored?"} }, "clear must not carry presentation"},
-			{"no target", func(c *Command) { c.WorkplaceFqdn = "" }, "exactly one of domain and workplaceFqdn"},
+			{"no target", func(c *Command) { c.WorkplaceFqdn = "" }, "exactly one of tenant and workplaceFqdn"},
 			{"the quota category", func(c *Command) { c.Category = CategoryQuota }, "reserved"},
 		} {
 			cmd := clear()
@@ -344,7 +348,7 @@ func useCommandContexts(t *testing.T) {
 	t.Cleanup(func() { conf.Contexts = previous })
 }
 
-func newInstance(t *testing.T, contextName, locale, orgDomain string) *instance.Instance {
+func newInstance(t *testing.T, contextName, locale, orgID string) *instance.Instance {
 	t.Helper()
 	domain := fmt.Sprintf("banner-cmd-%d.example", time.Now().UnixNano())
 	inst, err := lifecycle.Create(&lifecycle.Options{
@@ -352,7 +356,7 @@ func newInstance(t *testing.T, contextName, locale, orgDomain string) *instance.
 		Email:       "alice@example.org",
 		Locale:      locale,
 		ContextName: contextName,
-		OrgDomain:   orgDomain,
+		OrgID:       orgID,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
@@ -724,20 +728,24 @@ func TestApplyCommandToAnOrganization(t *testing.T) {
 	needCouchDB(t)
 	useCommandContexts(t)
 
-	orgCommand := func(t *testing.T, orgDomain string, revision int64) Command {
+	orgCommand := func(t *testing.T, orgID string, revision int64) Command {
 		t.Helper()
 		cmd := fixture(t, "organization")
-		cmd.Domain = orgDomain
+		cmd.Tenant = orgID
 		cmd.Revision = revision
 		return cmd
 	}
 
 	t.Run("every instance of the organization gets the banner", func(t *testing.T) {
-		orgDomain := fmt.Sprintf("acme-%d.example", time.Now().UnixNano())
-		first := newInstance(t, commandContext, "en", orgDomain)
-		second := newInstance(t, commandContext, "fr", orgDomain)
+		orgID := fmt.Sprintf("acme-org-%d", time.Now().UnixNano())
+		first := newInstance(t, commandContext, "en", orgID)
+		second := newInstance(t, commandContext, "fr", orgID)
 
-		require.NoError(t, ApplyCommand(orgCommand(t, orgDomain, 7)))
+		other := newInstance(t, commandContext, "en", orgID+"-other")
+		other.OrgDomain = orgID
+		require.NoError(t, couchdb.UpdateDoc(prefixer.GlobalPrefixer, other))
+
+		require.NoError(t, ApplyCommand(orgCommand(t, orgID, 7)))
 
 		for _, inst := range []*instance.Instance{first, second} {
 			stored := storedBanner(t, inst)
@@ -745,28 +753,35 @@ func TestApplyCommandToAnOrganization(t *testing.T) {
 			assert.Equal(t, "billing.restricted", stored.BannerID)
 		}
 		assert.Equal(t, "fr", storedBanner(t, second).Lang, "each member reads its own language")
+		assert.Nil(t, storedBanner(t, other), "a matching organization domain must not select another tenant")
+
+		clear := orgCommand(t, orgID, 8)
+		clear = Command{Category: clear.Category, Tenant: clear.Tenant, Revision: clear.Revision, Timestamp: clear.Timestamp, Clear: true}
+		require.NoError(t, ApplyCommand(clear))
+		assert.Nil(t, storedBanner(t, first))
+		assert.Nil(t, storedBanner(t, second))
 	})
 
 	t.Run("a replay reaches a member provisioned after the command", func(t *testing.T) {
-		orgDomain := fmt.Sprintf("acme-%d.example", time.Now().UnixNano())
-		first := newInstance(t, commandContext, "en", orgDomain)
-		require.NoError(t, ApplyCommand(orgCommand(t, orgDomain, 7)))
+		orgID := fmt.Sprintf("acme-org-%d", time.Now().UnixNano())
+		first := newInstance(t, commandContext, "en", orgID)
+		require.NoError(t, ApplyCommand(orgCommand(t, orgID, 7)))
 		before := storedBanner(t, first)
 		require.NotNil(t, before)
 
-		joined := newInstance(t, commandContext, "en", orgDomain)
-		require.NoError(t, ApplyCommand(orgCommand(t, orgDomain, 7)))
+		joined := newInstance(t, commandContext, "en", orgID)
+		require.NoError(t, ApplyCommand(orgCommand(t, orgID, 7)))
 
 		require.NotNil(t, storedBanner(t, joined), "an equal revision resolves membership again")
 		assert.Equal(t, before.DocRev, storedBanner(t, first).DocRev, "and leaves the members it already reached alone")
 	})
 
 	t.Run("a refused category rejects the organization before any writes", func(t *testing.T) {
-		orgDomain := fmt.Sprintf("acme-%d.example", time.Now().UnixNano())
-		accepting := newInstance(t, commandContext, "en", orgDomain)
-		refusing := newInstance(t, refusedContext, "en", orgDomain)
+		orgID := fmt.Sprintf("acme-org-%d", time.Now().UnixNano())
+		accepting := newInstance(t, commandContext, "en", orgID)
+		refusing := newInstance(t, refusedContext, "en", orgID)
 
-		err := ApplyCommand(orgCommand(t, orgDomain, 7))
+		err := ApplyCommand(orgCommand(t, orgID, 7))
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidCommand)
 		assert.ErrorContains(t, err, refusing.Domain)
@@ -789,13 +804,13 @@ func TestApplyCommandToAnOrganization(t *testing.T) {
 
 		// A permanent rejection needs an explicit replay after configuration
 		// repair; it is not an automatic broker retry.
-		require.NoError(t, ApplyCommand(orgCommand(t, orgDomain, 7)))
+		require.NoError(t, ApplyCommand(orgCommand(t, orgID, 7)))
 		assert.NotNil(t, storedBanner(t, accepting))
 		assert.NotNil(t, storedBanner(t, refusing))
 	})
 
 	t.Run("an organization with no instance is a no-op", func(t *testing.T) {
-		assert.NoError(t, ApplyCommand(orgCommand(t, fmt.Sprintf("empty-%d.example", time.Now().UnixNano()), 7)))
+		assert.NoError(t, ApplyCommand(orgCommand(t, fmt.Sprintf("empty-org-%d", time.Now().UnixNano()), 7)))
 	})
 }
 

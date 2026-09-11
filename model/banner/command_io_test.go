@@ -25,18 +25,18 @@ func TestCommandPartialFanoutRetriesStorageFailure(t *testing.T) {
 	needCouchDB(t)
 	useCommandContexts(t)
 	first := newInstance(t, commandContext, "en", "")
-	org := first.Domain
-	first.OrgDomain = org
+	org := "org-" + first.Domain
+	first.OrgID = org
 	// The instance helper registers cleanup; creation of the other members
 	// uses the same org without assuming CouchDB's member ordering.
 	require.NoError(t, couchdb.UpdateDoc(prefixer.GlobalPrefixer, first))
 	newInstance(t, commandContext, "fr", org)
 	newInstance(t, commandContext, "en", org)
-	members, err := lifecycle.ListOrgInstances(org)
+	members, err := lifecycle.ListOrgInstancesByID(org)
 	require.NoError(t, err)
 	require.Len(t, members, 3)
 	cmd := fixture(t, "organization")
-	cmd.Domain = org
+	cmd.Tenant = org
 	failPath := "/" + couchdb.EscapeCouchdbName(members[1].DBPrefix()+"/"+consts.Banners) + "/banner-billing"
 	client := config.CouchClient()
 	original := client.Transport

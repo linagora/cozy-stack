@@ -1,5 +1,5 @@
 {
-  "domain": "acme.example",
+  "tenant": "acme_org:123",
   "eventId": "banner-command-7",
   "revision": 7,
   "timestamp": 1788944400,

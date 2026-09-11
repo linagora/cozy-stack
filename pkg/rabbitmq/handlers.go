@@ -875,6 +875,6 @@ func (h *BannerCommandHandler) Handle(ctx context.Context, d amqp.Delivery) erro
 	// Accepted, not applied: a command that lost to a newer revision, or
 	// addressed an instance that displays no banner, gets here too.
 	log.Infof("banner.commands: %s accepted for %s (category %s, revision %d, event %s)",
-		d.RoutingKey, cmd.Domain+cmd.WorkplaceFqdn, cmd.Category, cmd.Revision, cmd.EventID)
+		d.RoutingKey, cmd.Tenant+cmd.WorkplaceFqdn, cmd.Category, cmd.Revision, cmd.EventID)
 	return nil
 }
