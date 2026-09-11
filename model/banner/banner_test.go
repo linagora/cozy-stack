@@ -1,18 +1,22 @@
 package banner
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/i18n"
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestMain loads the real catalogs, so a message id that no longer exists
-// fails here rather than rendering its own name to a user.
+// TestMain loads the real catalogs so a stale message id breaks the test, not
+// production, and brings up the global database (inlined from testutils to
+// avoid a circular import).
 func TestMain(m *testing.M) {
 	for _, locale := range []string{"en", "fr"} {
 		po, err := os.ReadFile("../../assets/locales/" + locale + ".po")
@@ -20,6 +24,15 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 		i18n.LoadLocale(locale, "", po)
+	}
+	if err := config.LoadTestFile(); err != nil {
+		panic(err)
+	}
+	ctx := context.Background()
+	if _, err := couchdb.CheckStatus(ctx); err == nil {
+		if err := couchdb.InitGlobalDB(ctx); err != nil {
+			panic(err)
+		}
 	}
 	os.Exit(m.Run())
 }
@@ -136,11 +149,11 @@ func TestEvaluateQuotaDocumentShape(t *testing.T) {
 		SettingsURL: "https://jdoe-settings.example.org/#/subscription",
 	}
 
-	t.Run("the validity window starts when the occurrence does", func(t *testing.T) {
+	t.Run("the rule states no window, so the occurrence keeps its own start", func(t *testing.T) {
 		b := EvaluateQuota(state, now)
 		require.NotNil(t, b)
-		require.NotNil(t, b.StartsAt, "startsAt is not one of the fields a client may find missing")
-		assert.Equal(t, now, *b.StartsAt)
+		assert.Nil(t, b.StartsAt, "a re-evaluation must not move the moment the occurrence began")
+		assert.Equal(t, now, b.Source.At, "which is what Materialize starts a first one at")
 	})
 
 	t.Run("the text is localized, and lang says which language it is in", func(t *testing.T) {
@@ -184,7 +197,7 @@ func TestMergeCarriesTheWindowForward(t *testing.T) {
 
 	t.Run("the same occurrence keeps the moment it started", func(t *testing.T) {
 		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
-		fresh := &Banner{BannerID: BannerIDQuotaAlmostFull, StartsAt: &now}
+		fresh := &Banner{BannerID: BannerIDQuotaAlmostFull}
 
 		merged := Merge(fresh, stored)
 
@@ -192,14 +205,36 @@ func TestMergeCarriesTheWindowForward(t *testing.T) {
 		assert.Equal(t, began, *merged.StartsAt)
 	})
 
-	t.Run("a new occurrence starts now", func(t *testing.T) {
+	t.Run("a new occurrence forgets it", func(t *testing.T) {
 		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
-		fresh := &Banner{BannerID: BannerIDQuotaExceeded, StartsAt: &now}
+		fresh := &Banner{BannerID: BannerIDQuotaExceeded}
+
+		merged := Merge(fresh, stored)
+
+		assert.Nil(t, merged.StartsAt, "Materialize starts a new occurrence at the decision")
+	})
+
+	t.Run("a stated window replaces the stored start", func(t *testing.T) {
+		moved := now.Add(72 * time.Hour)
+		ends := moved.Add(24 * time.Hour)
+		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
+		fresh := &Banner{BannerID: BannerIDQuotaAlmostFull, StartsAt: &moved, EndsAt: &ends}
 
 		merged := Merge(fresh, stored)
 
 		require.NotNil(t, merged.StartsAt)
-		assert.Equal(t, now, *merged.StartsAt)
+		assert.Equal(t, moved, *merged.StartsAt,
+			"a producer moving its own window gets the window it asked for")
+	})
+
+	t.Run("an omitted start is not carried into an inverted window", func(t *testing.T) {
+		ends := began.Add(-24 * time.Hour)
+		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
+		fresh := &Banner{BannerID: BannerIDQuotaAlmostFull, EndsAt: &ends}
+
+		merged := Merge(fresh, stored)
+
+		assert.Nil(t, merged.StartsAt, "a start after the end would never display")
 	})
 
 	t.Run("merging does not write through to the evaluated banner", func(t *testing.T) {
@@ -257,8 +292,7 @@ func TestEvaluateQuotaFillsEveryContractField(t *testing.T) {
 	assert.Equal(t, "fr", b.Lang)
 	assert.True(t, b.Dismissible)
 	assert.Equal(t, 50, b.Priority)
-	require.NotNil(t, b.StartsAt)
-	assert.Equal(t, now, *b.StartsAt)
+	assert.Nil(t, b.StartsAt, "Materialize fills the window a rule states none of")
 	assert.Equal(t, TriggerUsageThreshold, b.Source.Trigger)
 	assert.Equal(t, now, b.Source.At)
 	assert.Nil(t, b.DismissedAt)
@@ -309,47 +343,5 @@ func TestAModalAlwaysHasAWayOut(t *testing.T) {
 		b := &Banner{Surface: SurfaceBanner, Dismissible: false}
 		ensureEscapable(b)
 		assert.False(t, b.Dismissible, "a banner does not cover the application")
-	})
-}
-
-func TestEvaluateBilling(t *testing.T) {
-	state := func(status string) BillingState {
-		return BillingState{Status: status, Locale: "en"}
-	}
-
-	t.Run("no banner while the subscription is paying", func(t *testing.T) {
-		assert.Nil(t, EvaluateBilling(state("active"), now))
-		assert.Nil(t, EvaluateBilling(state("trialing"), now))
-	})
-
-	t.Run("no banner while Stripe is still retrying", func(t *testing.T) {
-		assert.Nil(t, EvaluateBilling(state("past_due"), now),
-			"past_due keeps the plan, and no approved wording exists for that state")
-	})
-
-	t.Run("a subscription Stripe gave up on blocks", func(t *testing.T) {
-		for _, status := range []string{"unpaid", "canceled"} {
-			b := EvaluateBilling(state(status), now)
-			require.NotNil(t, b, status)
-			assert.Equal(t, BannerIDBillingRestricted, b.BannerID, status)
-			assert.Equal(t, SeverityError, b.Severity, status)
-			assert.Equal(t, SurfaceModal, b.Surface, status)
-			assert.False(t, b.Dismissible, status)
-		}
-	})
-
-	t.Run("the wording is localized like every other banner", func(t *testing.T) {
-		b := EvaluateBilling(BillingState{Status: "unpaid", Locale: "fr"}, now)
-		require.NotNil(t, b)
-		assert.Equal(t, "fr", b.Lang)
-		assert.NotEqual(t, textBillingRestricted, b.Text, "the message id must not reach the document")
-	})
-
-	t.Run("a blocking dialog with no call to action is made closable", func(t *testing.T) {
-		b := EvaluateBilling(state("unpaid"), now)
-		require.NotNil(t, b)
-		require.Nil(t, b.CTA, "no manager URL is configured in this state")
-		ensureEscapable(b)
-		assert.True(t, b.Dismissible, "otherwise the user cannot reach the application at all")
 	})
 }

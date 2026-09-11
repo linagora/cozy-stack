@@ -29,7 +29,12 @@ func init() {
 
 	// The other half of the quota: the Cloudery moves the limit rather than
 	// the usage, and a downgrade crosses the threshold with nothing written.
-	lifecycle.RefreshBanners = func(domain string) { refreshQuota(domain, -1) }
+	// A language change lands here too, and reaches the commanded banners as
+	// well as the ones the stack words itself.
+	lifecycle.RefreshBanners = func(domain string) {
+		refreshQuota(domain, -1)
+		refreshCommands(domain)
+	}
 }
 
 // refreshQuota re-evaluates the quota banner of an instance. A negative usage
@@ -83,4 +88,73 @@ func refreshQuotaAt(domain string, used int64) error {
 
 	now := time.Now()
 	return Materialize(inst, CategoryQuota, EvaluateQuota(state, now), now)
+}
+
+// refreshCommands re-materializes the commanded banners of an instance from
+// the commands the stack retained. It decides nothing: the wording, the
+// revision and the decision time are the ones the backend already sent, and
+// only the language is picked again. Without this a language change leaves a
+// commanded banner in the previous language next to a stack written one in
+// the new one.
+func refreshCommands(domain string) {
+	if err := refreshCommandsAt(domain); err != nil {
+		logger.WithDomain(domain).WithNamespace("banner").
+			Warnf("cannot refresh the commanded banners: %s", err)
+	}
+}
+
+func refreshCommandsAt(domain string) error {
+	inst, err := lifecycle.GetInstance(domain)
+	if err != nil {
+		return err
+	}
+	if !inst.HasBannersEnabled() {
+		return nil
+	}
+
+	// The lock a command takes, so a refresh cannot race a newer command into
+	// restoring the banner that command just replaced.
+	mu := config.Lock().ReadWrite(inst, "banners")
+	if err := mu.Lock(); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+
+	// ponytail: one _all_docs read per instance patch, including the quota
+	// patches that share this hook and never need it. Split the hook by reason
+	// if that read ever shows up.
+	states, err := storedCommands(inst)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	for _, state := range states {
+		// A cleared category holds no document, and a record from before the
+		// stack retained the wording has nothing to pick from.
+		if state.Clear || state.Accepted == nil {
+			continue
+		}
+		// A category the context has stopped accepting is left alone rather
+		// than rewritten; turning the setting off needs a cleanup either way.
+		if !inst.AllowsBannerCategory(state.Category) {
+			continue
+		}
+		// Re-localizing rewrites a banner, it does not restore one. The
+		// retained command carries the wording, not the occurrence's own
+		// start, which lives on the document an application is allowed to
+		// delete; recreating from the command alone would move a scheduled
+		// banner to the decision time of whichever command wrote last.
+		current, err := Stored(inst, state.Category)
+		if err != nil {
+			return err
+		}
+		if current == nil {
+			continue
+		}
+		if err := Materialize(inst, state.Category, state.Accepted.banner(inst.Locale), now); err != nil {
+			return err
+		}
+	}
+	return nil
 }

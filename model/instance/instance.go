@@ -901,6 +901,25 @@ func (i *Instance) HasBannersEnabled() bool {
 	return false
 }
 
+// AllowsBannerCategory reports whether the context settings allow the banner
+// command queue to write a category on this instance.
+func (i *Instance) AllowsBannerCategory(category string) bool {
+	ctxSettings, ok := i.SettingsContext()
+	if !ok {
+		return false
+	}
+	categories, ok := ctxSettings["banner_command_categories"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, allowed := range categories {
+		if name, ok := allowed.(string); ok && name == category {
+			return true
+		}
+	}
+	return false
+}
+
 func (i *Instance) HasPremiumLinksEnabled() bool {
 	if ctxSettings, ok := i.SettingsContext(); ok {
 		if enabled, ok := ctxSettings["enable_premium_links"].(bool); ok {

@@ -1,0 +1,27 @@
+{
+  "tenant": "acme_org:123",
+  "eventId": "banner-command-7",
+  "revision": 7,
+  "timestamp": 1788944400,
+  "category": "billing",
+  "bannerId": "billing.restricted",
+  "severity": "error",
+  "surface": "modal",
+  "priority": 200,
+  "dismissible": false,
+  "title": {
+    "en": "Your workspace is temporarily restricted",
+    "fr": "Votre espace de travail est temporairement restreint"
+  },
+  "text": {
+    "en": "Some features are limited for your organization. Please contact your administrator.",
+    "fr": "Certaines fonctionnalités sont limitées pour votre organisation. Contactez votre administrateur."
+  },
+  "cta": {
+    "label": {
+      "en": "Contact support",
+      "fr": "Contacter le support"
+    },
+    "url": "https://twake.app/support"
+  }
+}

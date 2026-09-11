@@ -48,6 +48,7 @@ Feel free to [open an issue](https://github.com/cozy/cozy-stack/issues/new) for 
 
 ### Up-to-date
 
+-   [Banners](banners.md)
 -   [Flagship app](flagship.md)
 -   [Move design](move-design.md)
 -   [Realtime internals](realtime-internals.md)

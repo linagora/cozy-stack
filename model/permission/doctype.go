@@ -21,6 +21,7 @@ var blockList = map[string]bool{
 	consts.RemoteSecrets:         none,
 
 	// Only stack can manipulate them
+	consts.BannerCommands:      none,
 	consts.Sessions:            none,
 	consts.Permissions:         none,
 	consts.Intents:             none,
