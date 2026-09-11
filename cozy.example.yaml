@@ -67,7 +67,20 @@ fs:
 
   # url: file://localhost/var/lib/cozy
   # url: swift://openstack/?UserName={{ .Env.OS_USERNAME }}&Password={{ .Env.OS_PASSWORD }}&ProjectName={{ .Env.OS_PROJECT_NAME }}&UserDomainName={{ .Env.OS_USER_DOMAIN_NAME }}&Timeout={{ .Env.GOSWIFT_TIMEOUT }}
-  # url: s3://{{ .Env.S3_ENDPOINT }}?access_key={{ .Env.S3_ACCESS_KEY }}&secret_key={{ .Env.S3_SECRET_KEY }}&region={{ .Env.S3_REGION }}&bucket_prefix=cozy&use_ssl=true
+  # url: s3://{{ .Env.S3_ENDPOINT }}?access_key={{ .Env.S3_ACCESS_KEY }}&secret_key={{ .Env.S3_SECRET_KEY }}&region={{ .Env.S3_REGION }}&use_ssl=true
+
+  # S3 buckets are created automatically by default. See docs/s3.md.
+  # To use pre-created buckets and optional connections per concrete bucket:
+  # s3:
+  #   auto_create_buckets: false
+  #   buckets:
+  #     default:
+  #       name: company-storage
+  #     files:
+  #       name: company-files
+  #       url: s3://{{ .Env.S3_VFS_ENDPOINT }}?access_key={{ .Env.S3_VFS_ACCESS_KEY }}&secret_key={{ .Env.S3_VFS_SECRET_KEY }}&region={{ .Env.S3_REGION }}
+  #     exports:
+  #       name: company-backups
 
   # Swift FS can be used with advanced parameters to activate TLS properties.
   # For using swift with https, you must use the "swift+https" scheme.

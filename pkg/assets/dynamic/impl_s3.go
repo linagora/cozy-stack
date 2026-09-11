@@ -3,7 +3,6 @@ package dynamic
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/cozy/cozy-stack/pkg/assets/model"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/s3util"
 	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/minio/minio-go/v7"
 )
@@ -22,6 +22,7 @@ import (
 type S3FS struct {
 	client *minio.Client
 	bucket string
+	prefix string
 	ctx    context.Context
 }
 
@@ -32,22 +33,12 @@ func NewS3FS() (*S3FS, error) {
 	})
 
 	ctx := context.Background()
-	client := config.GetS3Client()
-	bucket := config.GetS3BucketPrefix() + "-assets"
-
-	err := client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{Region: config.GetS3Region()})
-	if err != nil {
-		code := minio.ToErrorResponse(err).Code
-		if code != "BucketAlreadyOwnedByYou" && code != "BucketAlreadyExists" {
-			return nil, fmt.Errorf("Cannot create bucket for dynamic assets: %s", err)
-		}
-	}
-
-	return &S3FS{client: client, bucket: bucket, ctx: ctx}, nil
+	storage := config.GetS3Storage("assets")
+	return &S3FS{client: storage.Client, bucket: storage.Bucket, prefix: storage.Prefix, ctx: ctx}, nil
 }
 
 func (s *S3FS) Add(_ string, _ string, asset *model.Asset) error {
-	objectName := path.Join(asset.Context, asset.Name)
+	objectName := s.prefix + path.Join(asset.Context, asset.Name)
 	data := asset.GetData()
 	_, err := s.client.PutObject(s.ctx, s.bucket, objectName,
 		bytes.NewReader(data), int64(len(data)),
@@ -56,7 +47,7 @@ func (s *S3FS) Add(_ string, _ string, asset *model.Asset) error {
 }
 
 func (s *S3FS) Get(ctx string, name string) ([]byte, error) {
-	objectName := path.Join(ctx, name)
+	objectName := s.prefix + path.Join(ctx, name)
 	if entry, ok := cache.Get(objectName); ok {
 		if !entry.found {
 			return nil, os.ErrNotExist
@@ -84,7 +75,7 @@ func (s *S3FS) Get(ctx string, name string) ([]byte, error) {
 }
 
 func (s *S3FS) Remove(context, name string) error {
-	objectName := path.Join(context, name)
+	objectName := s.prefix + path.Join(context, name)
 	return s.client.RemoveObject(s.ctx, s.bucket, objectName, minio.RemoveObjectOptions{})
 }
 
@@ -92,20 +83,21 @@ func (s *S3FS) List() (map[string][]*model.Asset, error) {
 	objs := map[string][]*model.Asset{}
 
 	for obj := range s.client.ListObjects(s.ctx, s.bucket, minio.ListObjectsOptions{
+		Prefix:    s.prefix,
 		Recursive: true,
 	}) {
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
 
-		splitted := strings.SplitN(obj.Key, "/", 2)
+		splitted := strings.SplitN(strings.TrimPrefix(obj.Key, s.prefix), "/", 2)
 		if len(splitted) < 2 {
 			continue
 		}
 		ctx := splitted[0]
 		assetName := model.NormalizeAssetName(splitted[1])
 
-		a, err := GetAsset(ctx, assetName)
+		a, err := getAsset(s, ctx, assetName)
 		if err != nil {
 			return nil, err
 		}
@@ -118,7 +110,7 @@ func (s *S3FS) List() (map[string][]*model.Asset, error) {
 
 func (s *S3FS) CheckStatus(ctx context.Context) (time.Duration, error) {
 	before := time.Now()
-	_, err := s.client.ListBuckets(ctx)
+	err := s3util.CheckBucket(ctx, s.client, s.bucket)
 	if err != nil {
 		return 0, err
 	}

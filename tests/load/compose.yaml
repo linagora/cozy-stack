@@ -97,7 +97,8 @@ services:
       COUCHDB_USER: cozy
       COUCHDB_PASSWORD: cozy
       COZY_ADMIN_PASSPHRASE: cozy
-      COZY_FS_URL: s3://minio:9000?access_key=minioadmin&secret_key=minioadmin&bucket_prefix=cozy&use_ssl=false
+      COZY_FS_URL: s3://minio:9000?access_key=minioadmin&secret_key=minioadmin&use_ssl=false
+      COZY_FS_S3_BUCKETS_DEFAULT_NAME: cozy-load-test
       LOCAL_USER_ID: ${HOST_UID:-1000}
       LOCAL_GROUP_ID: ${HOST_GID:-1000}
     ports:

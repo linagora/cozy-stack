@@ -13,7 +13,6 @@ import (
 	"hash"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -38,44 +37,8 @@ type s3VFS struct {
 	ctx         context.Context
 	bucket      string
 	keyPrefix   string // prefix + "/"
-	region      string
 	mu          lock.ErrorRWLocker
 	log         *logger.Entry
-}
-
-var bucketNameCleaner = regexp.MustCompile(`[^a-z0-9-]`)
-
-// sanitizeBucketName produces a valid S3 bucket name component from an arbitrary string.
-func sanitizeBucketName(s string) string {
-	s = strings.ToLower(s)
-	s = strings.ReplaceAll(s, "_", "-")
-	s = strings.ReplaceAll(s, ".", "-")
-	s = bucketNameCleaner.ReplaceAllString(s, "")
-	// Collapse consecutive hyphens
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	s = strings.Trim(s, "-")
-	if len(s) > 37 {
-		s = s[:37]
-	}
-	return s
-}
-
-// BucketName returns the S3 bucket name for a given orgID and bucket prefix.
-func BucketName(orgID, bucketPrefix string) string {
-	if orgID == "" {
-		orgID = "default"
-	}
-	name := bucketPrefix + "-" + sanitizeBucketName(orgID)
-	if len(name) > 63 {
-		name = name[:63]
-	}
-	name = strings.TrimRight(name, "-")
-	if len(name) < 3 {
-		name += strings.Repeat("0", 3-len(name))
-	}
-	return name
 }
 
 // MakeObjectKey builds the S3 object key for a given file.
@@ -111,14 +74,7 @@ func NewInternalID() string {
 
 // New returns a vfs.VFS instance backed by an S3-compatible object store.
 func New(db vfs.Prefixer, index vfs.Indexer, disk vfs.DiskThresholder, mu lock.ErrorRWLocker) (vfs.VFS, error) {
-	client := config.GetS3Client()
-	bucketPrefix := config.GetS3BucketPrefix()
-
-	orgID := ""
-	if inst, ok := db.(interface{ GetOrgID() string }); ok {
-		orgID = inst.GetOrgID()
-	}
-	bucket := BucketName(orgID, bucketPrefix)
+	storage := config.GetS3Storage("files")
 	dbPrefix := db.DBPrefix()
 	if dbPrefix == "" {
 		return nil, fmt.Errorf("vfss3: empty DBPrefix")
@@ -127,15 +83,14 @@ func New(db vfs.Prefixer, index vfs.Indexer, disk vfs.DiskThresholder, mu lock.E
 	return &s3VFS{
 		Indexer:         index,
 		DiskThresholder: disk,
-		client:          client,
+		client:          storage.Client,
 		cluster:         db.DBCluster(),
 		domain:          db.DomainName(),
 		prefix:          dbPrefix,
 		contextName:     db.GetContextName(),
 		ctx:             context.Background(),
-		bucket:          bucket,
-		keyPrefix:       dbPrefix + "/",
-		region:          config.GetS3Region(),
+		bucket:          storage.Bucket,
+		keyPrefix:       storage.Prefix + dbPrefix + "/",
 		mu:              mu,
 		log:             logger.WithDomain(db.DomainName()).WithNamespace("vfss3"),
 	}, nil
@@ -177,7 +132,6 @@ func (sfs *s3VFS) UseSharingIndexer(index vfs.Indexer) vfs.VFS {
 		ctx:             context.Background(),
 		bucket:          sfs.bucket,
 		keyPrefix:       sfs.keyPrefix,
-		region:          sfs.region,
 		mu:              sfs.mu,
 		log:             sfs.log,
 	}
@@ -188,22 +142,7 @@ func (sfs *s3VFS) InitFs() error {
 		return lockerr
 	}
 	defer sfs.mu.Unlock()
-	if err := sfs.Indexer.InitIndex(); err != nil {
-		return err
-	}
-	err := sfs.client.MakeBucket(sfs.ctx, sfs.bucket, minio.MakeBucketOptions{
-		Region: sfs.region,
-	})
-	if err != nil {
-		code := minio.ToErrorResponse(err).Code
-		if code == "BucketAlreadyOwnedByYou" || code == "BucketAlreadyExists" {
-			return nil
-		}
-		sfs.log.Errorf("Could not create bucket %q: %s", sfs.bucket, err.Error())
-		return err
-	}
-	sfs.log.Infof("Created bucket %q", sfs.bucket)
-	return nil
+	return sfs.Indexer.InitIndex()
 }
 
 func (sfs *s3VFS) Delete() error {
@@ -741,7 +680,7 @@ func (sfs *s3VFS) CopyFileFromOtherFS(
 	dstKey := MakeObjectKey(sfs.keyPrefix, newdoc.DocID, newdoc.InternalID)
 
 	// Try server-side copy if the source is also an s3VFS on the same client.
-	if srcS3, ok := srcFS.(*s3VFS); ok {
+	if srcS3, ok := srcFS.(*s3VFS); ok && srcS3.client == sfs.client {
 		srcKey := MakeObjectKey(srcS3.keyPrefix, srcDoc.DocID, srcDoc.InternalID)
 		if _, err := sfs.client.CopyObject(sfs.ctx,
 			minio.CopyDestOptions{Bucket: sfs.bucket, Object: dstKey},

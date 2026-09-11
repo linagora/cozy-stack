@@ -43,6 +43,7 @@ func StartMinio(t *testing.T) *MinioFixture {
 		},
 		Cmd: []string{"server", "/data"},
 		HostConfigModifier: func(hc *c.HostConfig) {
+			hc.Tmpfs = map[string]string{"/data": "rw,size=512m"}
 			hc.PortBindings = nat.PortMap{
 				"9000/tcp": []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: hostPort}},
 			}
@@ -89,10 +90,10 @@ func (f *MinioFixture) Client(t *testing.T) *minio.Client {
 }
 
 // FsURL returns a *url.URL suitable for config.InitS3Connection.
-func (f *MinioFixture) FsURL(bucketPrefix string) *url.URL {
+func (f *MinioFixture) FsURL() *url.URL {
 	return &url.URL{
 		Scheme:   "s3",
 		Host:     f.Endpoint,
-		RawQuery: fmt.Sprintf("access_key=%s&secret_key=%s&bucket_prefix=%s&use_ssl=false", f.AccessKey, f.SecretKey, bucketPrefix),
+		RawQuery: fmt.Sprintf("access_key=%s&secret_key=%s&use_ssl=false", f.AccessKey, f.SecretKey),
 	}
 }

@@ -232,6 +232,19 @@ type Fs struct {
 	AutoCleanTrashedAfter map[string]string
 	Versioning            FsVersioning
 	Contexts              map[string]interface{}
+	S3                    FsS3
+}
+
+// FsS3 configures bucket provisioning and destinations by storage type.
+type FsS3 struct {
+	AutoCreateBuckets *bool                 `mapstructure:"auto_create_buckets"`
+	Buckets           map[string]FsS3Bucket `mapstructure:"buckets"`
+}
+
+// FsS3Bucket contains the bucket name and optional connection URL.
+type FsS3Bucket struct {
+	Name string `mapstructure:"name"`
+	URL  string `mapstructure:"url"`
 }
 
 // FsVersioning contains the configuration for the versioning of files
@@ -790,8 +803,7 @@ func Setup(cfgFile string) (err error) {
 		if err := viper.MergeConfig(dest); err != nil {
 			if _, isParseErr := err.(viper.ConfigParseError); isParseErr {
 				log.Errorf("Failed to read cozy-stack configurations from %s", cfgFile)
-				log.Errorf("%s", dest.String())
-				return err
+				return fmt.Errorf("Unable to parse configuration file %s", cfgFile)
 			}
 		}
 	}
@@ -837,6 +849,9 @@ func UseViper(v *viper.Viper) error {
 	}
 	fsURL, err := url.Parse(fs_url)
 	if err != nil {
+		if strings.HasPrefix(fs_url, "s3:") {
+			return errors.New("s3: invalid fs.url")
+		}
 		return err
 	}
 	if fsURL.Scheme == "file" {
@@ -846,6 +861,28 @@ func UseViper(v *viper.Viper) error {
 		}
 		if fsPath == "/" {
 			return fmt.Errorf("Filesystem path should not be root, was: %q", fsPath)
+		}
+	}
+
+	var s3 FsS3
+	if err := v.UnmarshalKey("fs.s3", &s3, func(c *mapstructure.DecoderConfig) {
+		c.ErrorUnused = true
+	}); err != nil {
+		return errors.New("s3: invalid fs.s3 configuration")
+	}
+	if err := v.UnmarshalKey("fs.s3.auto_create_buckets", &s3.AutoCreateBuckets); err != nil {
+		return errors.New("s3: invalid fs.s3.auto_create_buckets configuration")
+	}
+	if s3.Buckets == nil {
+		s3.Buckets = make(map[string]FsS3Bucket)
+	}
+	for _, kind := range append([]string{"default"}, s3StorageKinds...) {
+		entry := s3.Buckets[kind]
+		key := "fs.s3.buckets." + kind
+		if v.IsSet(key+".name") || v.IsSet(key+".url") {
+			entry.Name = v.GetString(key + ".name")
+			entry.URL = v.GetString(key + ".url")
+			s3.Buckets[kind] = entry
 		}
 	}
 
@@ -1164,6 +1201,7 @@ func UseViper(v *viper.Viper) error {
 				MinDelayBetweenTwoVersions: v.GetDuration("fs.versioning.min_delay_between_two_versions"),
 			},
 			Contexts: v.GetStringMap("fs.contexts"),
+			S3:       s3,
 		},
 		CouchDB: couch,
 		Jobs:    jobs,

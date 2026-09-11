@@ -43,9 +43,8 @@ func SystemCache() Cache {
 		ctx := context.Background()
 		return swiftCache{conn, ctx}
 	case config.SchemeS3:
-		client := config.GetS3Client()
-		bucket := config.GetS3BucketPrefix() + "-previews"
-		return newS3Cache(client, bucket)
+		storage := config.GetS3Storage("previews")
+		return newS3Cache(storage.Client, storage.Bucket, storage.Prefix)
 	default:
 		panic(fmt.Errorf("previewfs: unknown storage provider %s", fsURL.Scheme))
 	}
@@ -159,27 +158,16 @@ func (s swiftCache) SetPreview(md5sum []byte, buffer *bytes.Buffer) error {
 type s3Cache struct {
 	client *minio.Client
 	bucket string
+	prefix string
 	ctx    context.Context
 }
 
-func newS3Cache(client *minio.Client, bucket string) s3Cache {
-	return s3Cache{client: client, bucket: bucket, ctx: context.Background()}
-}
-
-func (s s3Cache) ensureBucket() error {
-	err := s.client.MakeBucket(s.ctx, s.bucket, minio.MakeBucketOptions{})
-	if err != nil {
-		code := minio.ToErrorResponse(err).Code
-		if code == "BucketAlreadyOwnedByYou" || code == "BucketAlreadyExists" {
-			return nil
-		}
-		return err
-	}
-	return nil
+func newS3Cache(client *minio.Client, bucket, prefix string) s3Cache {
+	return s3Cache{client: client, bucket: bucket, prefix: prefix, ctx: context.Background()}
 }
 
 func (s s3Cache) getObject(name string) (*bytes.Buffer, error) {
-	obj, err := s.client.GetObject(s.ctx, s.bucket, name, minio.GetObjectOptions{})
+	obj, err := s.client.GetObject(s.ctx, s.bucket, s.prefix+name, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -198,20 +186,10 @@ func (s s3Cache) getObject(name string) (*bytes.Buffer, error) {
 
 func (s s3Cache) putObject(name string, buffer *bytes.Buffer) error {
 	data := buffer.Bytes()
-	_, err := s.client.PutObject(s.ctx, s.bucket, name,
+	_, err := s.client.PutObject(s.ctx, s.bucket, s.prefix+name,
 		bytes.NewReader(data), int64(len(data)),
 		minio.PutObjectOptions{ContentType: "image/jpg"})
-	if err != nil {
-		code := minio.ToErrorResponse(err).Code
-		if code == "NoSuchBucket" {
-			if berr := s.ensureBucket(); berr != nil {
-				return berr
-			}
-			_, err = s.client.PutObject(s.ctx, s.bucket, name,
-				bytes.NewReader(data), int64(len(data)),
-				minio.PutObjectOptions{ContentType: "image/jpg"})
-		}
-	}
+
 	return err
 }
 

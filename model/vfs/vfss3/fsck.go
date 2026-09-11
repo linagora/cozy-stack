@@ -162,7 +162,7 @@ func (sfs *s3VFS) checkFiles(
 			accumulate(&vfs.FsckLog{
 				Type:    vfs.IndexMissing,
 				IsFile:  true,
-				FileDoc: objectToFileDoc(obj),
+				FileDoc: objectToFileDoc(obj, objName),
 			})
 			if failFast {
 				return nil
@@ -221,17 +221,10 @@ func (sfs *s3VFS) checkFiles(
 	return nil
 }
 
-func objectToFileDoc(obj minio.ObjectInfo) *vfs.TreeFile {
+func objectToFileDoc(obj minio.ObjectInfo, objName string) *vfs.TreeFile {
 	md5sum, _ := hex.DecodeString(strings.Trim(obj.ETag, "\""))
 	name := "unknown"
 	mime, class := vfs.ExtractMimeAndClass(obj.ContentType)
-	// Strip any key prefix — we need to find the object name portion
-	// which is just the last segments of the key.
-	objName := obj.Key
-	if idx := strings.Index(objName, "/"); idx >= 0 {
-		// The first segment is the key prefix (db prefix); skip it
-		objName = objName[idx+1:]
-	}
 	fileID, internalID := makeDocID(objName)
 	return &vfs.TreeFile{
 		DirOrFileDoc: vfs.DirOrFileDoc{
