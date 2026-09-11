@@ -139,8 +139,6 @@ func TestValidateRejections(t *testing.T) {
 		{"a priority above the range", func(c *Command) { c.Priority = maxPriority + 1 }, "priority"},
 		{"a window that ends before it starts", func(c *Command) { c.StartsAt, c.EndsAt = c.EndsAt, c.StartsAt }, "startsAt is not before endsAt"},
 		{"a window with no length", func(c *Command) { c.EndsAt = c.StartsAt }, "startsAt is not before endsAt"},
-		{"implicit start after end", func(c *Command) { c.StartsAt = nil }, "startsAt is not before endsAt"},
-		{"implicit start equals end", func(c *Command) { c.StartsAt = nil; at := time.Unix(c.Timestamp, 0); c.EndsAt = &at }, "startsAt is not before endsAt"},
 		{"window outside RFC3339", func(c *Command) { at := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC); c.EndsAt = &at }, "window must be within"},
 		{"no text", func(c *Command) { c.Text = nil }, "required in the en fallback locale"},
 		{"text without the fallback locale", func(c *Command) { delete(c.Text, "en") }, "required in the en fallback locale"},
@@ -176,6 +174,20 @@ func TestValidateRejections(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
+
+	t.Run("an end stated without a start is not judged here", func(t *testing.T) {
+		// The start comes from the stored occurrence, which validation cannot
+		// see, so the pair is checked once the merge has resolved it.
+		for _, name := range []string{"an end before the decision", "an end at the decision"} {
+			cmd := valid(t)
+			at := time.Unix(cmd.Timestamp, 0).UTC()
+			if name == "an end before the decision" {
+				at = at.Add(-24 * time.Hour)
+			}
+			cmd.StartsAt, cmd.EndsAt = nil, &at
+			assert.NoError(t, cmd.validate(), name)
+		}
+	})
 
 	t.Run("a complete command is accepted", func(t *testing.T) {
 		assert.NoError(t, valid(t).validate())
@@ -229,14 +241,14 @@ func TestCommandDocumentShape(t *testing.T) {
 		require.NotNil(t, b.EndsAt)
 	})
 
-	t.Run("a window the backend left out starts when it decided", func(t *testing.T) {
+	t.Run("a window the backend left out is left for Materialize to fill", func(t *testing.T) {
 		cmd := valid(t)
 		cmd.StartsAt, cmd.EndsAt = nil, nil
 		b := cmd.banner("en")
 		require.NotNil(t, b)
-		require.NotNil(t, b.StartsAt)
-		assert.Equal(t, at, *b.StartsAt, "so a redelivery is identical to the original")
+		assert.Nil(t, b.StartsAt, "an unstated window keeps the occurrence's own start")
 		assert.Nil(t, b.EndsAt)
+		assert.Equal(t, at, b.Source.At, "and Materialize starts a first one at the decision")
 	})
 
 	t.Run("a clear produces no document", func(t *testing.T) {
@@ -573,6 +585,66 @@ func TestApplyCommand(t *testing.T) {
 		assert.Nil(t, storedBanner(t, inst), "a cleared category stays cleared")
 	})
 
+	t.Run("a moved window is applied at both ends", func(t *testing.T) {
+		inst := newInstance(t, commandContext, "en", "")
+		require.NoError(t, ApplyCommand(materialize(t, inst, 70)))
+
+		// The same occurrence, moved wholesale into the next year. Applying
+		// only the new end would leave a window the backend never asked for.
+		moved := materialize(t, inst, 71)
+		starts := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+		ends := time.Date(2027, 3, 10, 0, 0, 0, 0, time.UTC)
+		moved.StartsAt, moved.EndsAt = &starts, &ends
+		require.NoError(t, ApplyCommand(moved))
+
+		stored := storedBanner(t, inst)
+		require.NotNil(t, stored)
+		require.NotNil(t, stored.StartsAt)
+		require.NotNil(t, stored.EndsAt)
+		assert.Equal(t, starts, stored.StartsAt.UTC())
+		assert.Equal(t, ends, stored.EndsAt.UTC())
+	})
+
+	t.Run("a command that states no window keeps the occurrence's start", func(t *testing.T) {
+		inst := newInstance(t, commandContext, "en", "")
+		require.NoError(t, ApplyCommand(materialize(t, inst, 72)))
+		began := storedBanner(t, inst).StartsAt
+		require.NotNil(t, began)
+
+		reworded := materialize(t, inst, 73)
+		reworded.StartsAt, reworded.EndsAt = nil, nil
+		reworded.Text["en"] = "We could not charge your card. This is the last attempt."
+		require.NoError(t, ApplyCommand(reworded))
+
+		stored := storedBanner(t, inst)
+		require.NotNil(t, stored)
+		require.NotNil(t, stored.StartsAt)
+		assert.Equal(t, began.UTC(), stored.StartsAt.UTC(),
+			"rewording an occurrence must not restart it")
+	})
+
+	t.Run("an end moved on its own is accepted, even into the past", func(t *testing.T) {
+		inst := newInstance(t, commandContext, "en", "")
+		require.NoError(t, ApplyCommand(materialize(t, inst, 74)))
+		began := storedBanner(t, inst).StartsAt
+		require.NotNil(t, began)
+
+		// The backend closes the window without restating the start. Judging
+		// this at intake against the decision time would refuse it.
+		ended := materialize(t, inst, 75)
+		ended.Timestamp = time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC).Unix()
+		ends := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+		ended.StartsAt, ended.EndsAt = nil, &ends
+		require.NoError(t, ApplyCommand(ended))
+
+		stored := storedBanner(t, inst)
+		require.NotNil(t, stored)
+		require.NotNil(t, stored.EndsAt)
+		assert.Equal(t, ends, stored.EndsAt.UTC())
+		require.NotNil(t, stored.StartsAt)
+		assert.Equal(t, began.UTC(), stored.StartsAt.UTC(), "the occurrence keeps its own start")
+	})
+
 	t.Run("a category the context does not accept is refused", func(t *testing.T) {
 		inst := newInstance(t, refusedContext, "en", "")
 
@@ -632,6 +704,8 @@ func TestApplyCommand(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, fromRules)
 		assert.Equal(t, BannerIDQuotaExceeded, fromRules.BannerID)
+		require.NotNil(t, fromRules.StartsAt, "startsAt is not a field a client may find missing")
+		assert.Equal(t, now, *fromRules.StartsAt)
 		require.NotNil(t, storedBanner(t, inst))
 
 		// And the quota slot stays the stack's own, whatever the queue says.

@@ -100,7 +100,7 @@ fields only. Nonempty presentation fields are rejected:
 | `cta`, `secondaryCta` | no | `url` must be an absolute `https` URL. A secondary action needs a primary one. |
 | `dismissible` | no | Defaults to false. A modal with neither a call to action nor a dismissal is made dismissible. |
 | `priority` | no | 0 to 1000. The stack's own quota banners sit at 50 and 100. |
-| `startsAt`, `endsAt` | no | RFC 3339. `startsAt` defaults to the decision time. |
+| `startsAt`, `endsAt` | no | RFC 3339. A stated `startsAt` replaces the stored one. Omit it to keep the moment the occurrence began, which is the decision time of the command that opened it. |
 
 The document also carries `source.trigger`, which is `banner.command` for
 everything that arrives this way, and `cozyMetadata.createdByApp`, which stays
@@ -145,9 +145,10 @@ command fails the delivery, so the broker redelivers it up to the queue's
 - `bannerId` matches `^[a-z0-9.-]{1,64}$`.
 - `severity` is one of `info`, `warning`, `error`.
 - `surface` is one of `banner`, `modal`.
-- `priority` is between 0 and 1000; the effective start (`startsAt`, or
-  `timestamp` when omitted) is before `endsAt`. Window values must be
-  representable in RFC3339.
+- `priority` is between 0 and 1000. Window values must be representable in
+  RFC3339, and a command that states both ends has `startsAt` before `endsAt`.
+  A command that states only `endsAt` is not judged here: its start comes from
+  the stored occurrence, so moving an end alone is allowed.
 - `text`, `title` and every label are present in the `en` fallback locale.
 - a call to action has an absolute `https` URL, and a secondary one has a
   primary alongside it.

@@ -68,7 +68,8 @@ func EvaluateQuota(state QuotaState, now time.Time) *Banner {
 }
 
 func buildQuotaBanner(id, severity string, priority int, msgid string, state QuotaState, now time.Time) *Banner {
-	startsAt := now
+	// No StartsAt: a re-evaluation states no window, so Materialize keeps the
+	// moment the occurrence began rather than moving it to this evaluation.
 	banner := &Banner{
 		BannerID:    id,
 		Category:    CategoryQuota,
@@ -78,7 +79,6 @@ func buildQuotaBanner(id, severity string, priority int, msgid string, state Quo
 		Lang:        lang(state.Locale),
 		Dismissible: severity != SeverityError,
 		Priority:    priority,
-		StartsAt:    &startsAt,
 		Source:      Source{Trigger: TriggerUsageThreshold, At: now},
 	}
 	if target := ctaTarget(state.SettingsURL); target != "" {

@@ -267,11 +267,6 @@ func (cmd Command) banner(instanceLocale string) *Banner {
 		EndsAt:       cmd.EndsAt,
 		Source:       Source{Trigger: TriggerCommand, At: at},
 	}
-	// Default to the decision time so a redelivery is identical to the original.
-	if b.StartsAt == nil {
-		startsAt := at
-		b.StartsAt = &startsAt
-	}
 	return b
 }
 
@@ -360,10 +355,6 @@ func (cmd Command) validate() error {
 	if cmd.Priority < 0 || cmd.Priority > maxPriority {
 		return fmt.Errorf("%w: priority %d is outside 0..%d", ErrInvalidCommand, cmd.Priority, maxPriority)
 	}
-	startsAt := time.Unix(cmd.Timestamp, 0).UTC()
-	if cmd.StartsAt != nil {
-		startsAt = *cmd.StartsAt
-	}
 	for _, at := range []*time.Time{cmd.StartsAt, cmd.EndsAt} {
 		if at != nil {
 			if _, err := at.MarshalJSON(); err != nil {
@@ -371,7 +362,11 @@ func (cmd Command) validate() error {
 			}
 		}
 	}
-	if cmd.EndsAt != nil && !startsAt.Before(*cmd.EndsAt) {
+	// Only a window the command states both ends of can be judged here. When
+	// the start is left out it comes from the stored occurrence, which this
+	// side of the lock cannot see, so substituting the decision time would
+	// refuse an end the backend is entitled to move on its own.
+	if cmd.StartsAt != nil && cmd.EndsAt != nil && !cmd.StartsAt.Before(*cmd.EndsAt) {
 		return fmt.Errorf("%w: startsAt is not before endsAt", ErrInvalidCommand)
 	}
 	// cozy-client drops a secondary action that has no primary.

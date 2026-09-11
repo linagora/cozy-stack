@@ -149,11 +149,11 @@ func TestEvaluateQuotaDocumentShape(t *testing.T) {
 		SettingsURL: "https://jdoe-settings.example.org/#/subscription",
 	}
 
-	t.Run("the validity window starts when the occurrence does", func(t *testing.T) {
+	t.Run("the rule states no window, so the occurrence keeps its own start", func(t *testing.T) {
 		b := EvaluateQuota(state, now)
 		require.NotNil(t, b)
-		require.NotNil(t, b.StartsAt, "startsAt is not one of the fields a client may find missing")
-		assert.Equal(t, now, *b.StartsAt)
+		assert.Nil(t, b.StartsAt, "a re-evaluation must not move the moment the occurrence began")
+		assert.Equal(t, now, b.Source.At, "which is what Materialize starts a first one at")
 	})
 
 	t.Run("the text is localized, and lang says which language it is in", func(t *testing.T) {
@@ -197,7 +197,7 @@ func TestMergeCarriesTheWindowForward(t *testing.T) {
 
 	t.Run("the same occurrence keeps the moment it started", func(t *testing.T) {
 		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
-		fresh := &Banner{BannerID: BannerIDQuotaAlmostFull, StartsAt: &now}
+		fresh := &Banner{BannerID: BannerIDQuotaAlmostFull}
 
 		merged := Merge(fresh, stored)
 
@@ -205,14 +205,36 @@ func TestMergeCarriesTheWindowForward(t *testing.T) {
 		assert.Equal(t, began, *merged.StartsAt)
 	})
 
-	t.Run("a new occurrence starts now", func(t *testing.T) {
+	t.Run("a new occurrence forgets it", func(t *testing.T) {
 		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
-		fresh := &Banner{BannerID: BannerIDQuotaExceeded, StartsAt: &now}
+		fresh := &Banner{BannerID: BannerIDQuotaExceeded}
+
+		merged := Merge(fresh, stored)
+
+		assert.Nil(t, merged.StartsAt, "Materialize starts a new occurrence at the decision")
+	})
+
+	t.Run("a stated window replaces the stored start", func(t *testing.T) {
+		moved := now.Add(72 * time.Hour)
+		ends := moved.Add(24 * time.Hour)
+		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
+		fresh := &Banner{BannerID: BannerIDQuotaAlmostFull, StartsAt: &moved, EndsAt: &ends}
 
 		merged := Merge(fresh, stored)
 
 		require.NotNil(t, merged.StartsAt)
-		assert.Equal(t, now, *merged.StartsAt)
+		assert.Equal(t, moved, *merged.StartsAt,
+			"a producer moving its own window gets the window it asked for")
+	})
+
+	t.Run("an omitted start is not carried into an inverted window", func(t *testing.T) {
+		ends := began.Add(-24 * time.Hour)
+		stored := &Banner{DocID: "abc", BannerID: BannerIDQuotaAlmostFull, StartsAt: &began}
+		fresh := &Banner{BannerID: BannerIDQuotaAlmostFull, EndsAt: &ends}
+
+		merged := Merge(fresh, stored)
+
+		assert.Nil(t, merged.StartsAt, "a start after the end would never display")
 	})
 
 	t.Run("merging does not write through to the evaluated banner", func(t *testing.T) {
@@ -270,8 +292,7 @@ func TestEvaluateQuotaFillsEveryContractField(t *testing.T) {
 	assert.Equal(t, "fr", b.Lang)
 	assert.True(t, b.Dismissible)
 	assert.Equal(t, 50, b.Priority)
-	require.NotNil(t, b.StartsAt)
-	assert.Equal(t, now, *b.StartsAt)
+	assert.Nil(t, b.StartsAt, "Materialize fills the window a rule states none of")
 	assert.Equal(t, TriggerUsageThreshold, b.Source.Trigger)
 	assert.Equal(t, now, b.Source.At)
 	assert.Nil(t, b.DismissedAt)
