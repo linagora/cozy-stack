@@ -373,6 +373,25 @@ func storedBanner(t *testing.T, inst *instance.Instance) *Banner {
 	return stored
 }
 
+func storedState(t *testing.T, inst *instance.Instance) *commandState {
+	t.Helper()
+	stored, err := storedCommand(inst, CategoryBilling)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	return stored
+}
+
+// dismiss records a dismissal the way an application does, by writing the
+// public document.
+func dismiss(t *testing.T, inst *instance.Instance) {
+	t.Helper()
+	stored := storedBanner(t, inst)
+	require.NotNil(t, stored)
+	at := time.Now().UTC().Truncate(time.Second)
+	stored.DismissedAt = &at
+	require.NoError(t, couchdb.UpdateDoc(inst, stored))
+}
+
 func TestApplyCommand(t *testing.T) {
 	config.UseTestFile(t)
 	needCouchDB(t)
@@ -485,14 +504,73 @@ func TestApplyCommand(t *testing.T) {
 		require.NotNil(t, stored)
 		assert.Equal(t, "fr", stored.Lang)
 		assert.Equal(t, "Échec du paiement", stored.Title)
+	})
 
-		// The stack keeps no copy of the other locales, so a language change
-		// leaves the wording as it was until the backend sends the next
-		// command. Only the stack's own rules reword themselves.
-		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{Locale: "de"}))
-		stored = storedBanner(t, inst)
+	t.Run("a refresh re-localizes a banner but does not restore a deleted one", func(t *testing.T) {
+		inst := newInstance(t, commandContext, "fr", "")
+		scheduled := materialize(t, inst, 76)
+		starts := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+		ends := time.Date(2027, 3, 2, 0, 0, 0, 0, time.UTC)
+		scheduled.StartsAt, scheduled.EndsAt = &starts, &ends
+		require.NoError(t, ApplyCommand(scheduled))
+
+		// A later decision on the same occurrence that states no window: the
+		// scheduled start now lives only on the public document.
+		reworded := materialize(t, inst, 77)
+		reworded.StartsAt, reworded.EndsAt = nil, &ends
+		require.NoError(t, ApplyCommand(reworded))
+		require.Equal(t, starts, storedBanner(t, inst).StartsAt.UTC())
+
+		// An application deletes it, as its write access lets it.
+		require.NoError(t, couchdb.DeleteDoc(inst, storedBanner(t, inst)))
+		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{Locale: "en"}))
+
+		assert.Nil(t, storedBanner(t, inst),
+			"recreating it would move a March 2027 banner to the decision time")
+	})
+
+	t.Run("a language change re-picks a locale the backend already sent", func(t *testing.T) {
+		inst := newInstance(t, commandContext, "fr", "")
+		require.NoError(t, ApplyCommand(materialize(t, inst, 61)))
+		require.Equal(t, "fr", storedBanner(t, inst).Lang)
+
+		// The stack keeps every locale the backend sent, so it can pick again
+		// without the backend publishing anything.
+		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{Locale: "en"}))
+
+		stored := storedBanner(t, inst)
 		require.NotNil(t, stored)
-		assert.Equal(t, "fr", stored.Lang)
+		assert.Equal(t, "en", stored.Lang)
+		assert.Equal(t, "Payment failed", stored.Title)
+		assert.Equal(t, int64(61), storedState(t, inst).Revision, "re-localizing is not a decision")
+	})
+
+	t.Run("a language change falls back for a locale the backend did not send", func(t *testing.T) {
+		inst := newInstance(t, commandContext, "fr", "")
+		require.NoError(t, ApplyCommand(materialize(t, inst, 62)))
+
+		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{Locale: "de"}))
+
+		stored := storedBanner(t, inst)
+		require.NotNil(t, stored)
+		assert.Equal(t, consts.DefaultLocale, stored.Lang)
+	})
+
+	t.Run("a language change keeps a dismissal and a cleared category", func(t *testing.T) {
+		inst := newInstance(t, commandContext, "fr", "")
+		require.NoError(t, ApplyCommand(materialize(t, inst, 63)))
+		dismiss(t, inst)
+
+		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{Locale: "en"}))
+
+		stored := storedBanner(t, inst)
+		require.NotNil(t, stored)
+		assert.Equal(t, "en", stored.Lang)
+		require.NotNil(t, stored.DismissedAt, "a new language is not a new occurrence")
+
+		require.NoError(t, ApplyCommand(clearCommand(t, inst, 64)))
+		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{Locale: "fr"}))
+		assert.Nil(t, storedBanner(t, inst), "a cleared category stays cleared")
 	})
 
 	t.Run("a category the context does not accept is refused", func(t *testing.T) {

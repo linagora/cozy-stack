@@ -116,10 +116,13 @@ string the document needs exists in it, and `en` otherwise. `lang` names the
 language the user actually reads. Falling back field by field would put a
 French sentence above an English button.
 
-The stack keeps no copy of the locales it did not use, so changing an
-instance's language leaves a commanded banner in the language it was
-materialized in until the backend publishes its next command. Only the banners
-the stack writes itself are reworded on a language change.
+The stack keeps every locale the command carried, on the private
+`io.cozy.banners.commands` document, so changing an instance's language picks
+one again without the backend publishing anything. The revision, the wording
+and the decision time are unchanged: only the language moves. Re-localizing
+rewrites a banner rather than restoring one, so a category whose document is
+gone stays gone until the next command. A record written before the stack
+retained the wording has nothing to pick from, and stays as it is too.
 
 The languages available for a commanded banner are the ones the backend sends,
 not the stack's `consts.SupportedLocales`: the stack renders nothing here, so
@@ -193,7 +196,7 @@ recorded for a member whose banner was not written.
 Bus delivery is at-least-once and unordered, so ordering cannot come from the
 arrival time, and it cannot come from the visible document either: a clear
 leaves none behind and an unchanged decision writes none. The stack keeps the
-last accepted revision per instance and category in `io.cozy.banners.commands`,
+last accepted command per instance and category in `io.cozy.banners.commands`,
 a separate doctype blocked from public reads and writes, including wildcard
 application grants and the bulk/replication API, so an application cannot
 rewrite the ordering record. It is a normal document, so it is included in the

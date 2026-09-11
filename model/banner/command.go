@@ -174,6 +174,9 @@ func (cmd Command) applyTo(inst *instance.Instance) error {
 
 // commandState records the last command accepted for a category, so ordering
 // survives clears (which leave no public document) and unchanged decisions.
+// It keeps the command whole, so the stack can pick the language again when
+// the instance changes locale without the backend publishing anything. The
+// doctype is blocklisted, so none of this is reachable from an application.
 type commandState struct {
 	DocID  string `json:"_id,omitempty"`
 	DocRev string `json:"_rev,omitempty"`
@@ -182,6 +185,11 @@ type commandState struct {
 	Revision int64  `json:"revision"`
 	Clear    bool   `json:"clear"`
 	EventID  string `json:"eventId,omitempty"`
+
+	// Accepted is the command as it arrived, with every locale the backend
+	// sent. Absent on a clear, and on a record written before the stack
+	// retained it: only a new command can refresh one of those.
+	Accepted *Command `json:"accepted,omitempty"`
 }
 
 func (d *commandState) ID() string         { return d.DocID }
@@ -194,12 +202,32 @@ func (d *commandState) Clone() couchdb.Doc { cloned := *d; return &cloned }
 var _ couchdb.Doc = &commandState{}
 
 func (cmd Command) state() *commandState {
-	return &commandState{
+	state := &commandState{
 		Category: cmd.Category,
 		Revision: cmd.Revision,
 		Clear:    cmd.Clear,
 		EventID:  cmd.EventID,
 	}
+	// A clear has no wording to keep, and its category holds no document to
+	// re-localize.
+	if !cmd.Clear {
+		accepted := cmd
+		state.Accepted = &accepted
+	}
+	return state
+}
+
+// storedCommands returns the state retained for every category of an instance.
+func storedCommands(db prefixer.Prefixer) ([]*commandState, error) {
+	var states []*commandState
+	err := couchdb.GetAllDocs(db, consts.BannerCommands, nil, &states)
+	if couchdb.IsNoDatabaseError(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return states, nil
 }
 
 // storedCommand returns the state retained for a category, or nil when none
