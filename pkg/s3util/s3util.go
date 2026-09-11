@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 )
@@ -29,6 +30,26 @@ func WrapNotFound(err error) error {
 		return fmt.Errorf("s3 storage error: %s", code)
 	}
 	return err
+}
+
+// CheckBucket verifies access without listing or creating buckets, within 30 seconds.
+func CheckBucket(ctx context.Context, client *minio.Client, bucket string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	creds, err := client.GetCreds()
+	if err != nil || creds.AccessKeyID == "" || creds.SecretAccessKey == "" {
+		return fmt.Errorf("s3: no usable credentials for bucket %q", bucket)
+	}
+	exists, err := client.BucketExists(ctx, bucket)
+	if err != nil {
+		// Provider errors can echo credentials or signed request details.
+		return fmt.Errorf("s3: bucket %q is inaccessible; check endpoint, credentials and permissions", bucket)
+	}
+	if !exists {
+		return fmt.Errorf("s3: expected bucket %q does not exist", bucket)
+	}
+	return nil
 }
 
 // EnsureBucket creates the bucket if it does not already exist.

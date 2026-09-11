@@ -921,7 +921,8 @@ func makeS3FS(t *testing.T) vfs.VFS {
 	index := vfs.NewCouchdbIndexer(db)
 
 	require.NoError(t, config.InitS3Connection(config.Fs{
-		URL: minioFixture.FsURL("test"),
+		URL: minioFixture.FsURL(),
+		S3:  config.FsS3{Buckets: map[string]config.FsS3Bucket{"default": {Name: "test-storage"}}},
 	}))
 
 	mutex = config.Lock().ReadWrite(db, "vfs-s3-test")
