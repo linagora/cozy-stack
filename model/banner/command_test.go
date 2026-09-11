@@ -23,25 +23,25 @@ const decidedAt = 1788944400
 // fixture decodes one of the shared wire fixtures, which are what the backend
 // publisher is developed against. A field this package stops reading, or a
 // field it starts requiring, breaks here rather than in production.
-func fixture(name string) Command {
+func fixture(t *testing.T, name string) Command {
+	t.Helper()
 	raw, err := os.ReadFile("testdata/" + name + ".json")
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(t, err)
 	var cmd Command
-	if err := json.Unmarshal(raw, &cmd); err != nil {
-		panic(err)
-	}
+	require.NoError(t, json.Unmarshal(raw, &cmd))
 	return cmd
 }
 
 // valid is a command every field of which passes, so a case can break exactly
 // one thing and name what it broke.
-func valid() Command { return fixture("materialize") }
+func valid(t *testing.T) Command {
+	t.Helper()
+	return fixture(t, "materialize")
+}
 
 func TestFixturesAreTheContract(t *testing.T) {
 	t.Run("a materialize carries its decision and every locale of it", func(t *testing.T) {
-		cmd := fixture("materialize")
+		cmd := fixture(t, "materialize")
 
 		assert.Equal(t, "alice.twake.app", cmd.WorkplaceFqdn)
 		assert.Empty(t, cmd.Domain)
@@ -64,7 +64,7 @@ func TestFixturesAreTheContract(t *testing.T) {
 	})
 
 	t.Run("a clear carries no wording", func(t *testing.T) {
-		cmd := fixture("clear")
+		cmd := fixture(t, "clear")
 		cmd.Clear = true
 
 		assert.Empty(t, cmd.BannerID)
@@ -74,7 +74,7 @@ func TestFixturesAreTheContract(t *testing.T) {
 	})
 
 	t.Run("an organization is addressed by its domain", func(t *testing.T) {
-		cmd := fixture("organization")
+		cmd := fixture(t, "organization")
 
 		assert.Equal(t, "acme.example", cmd.Domain)
 		assert.Empty(t, cmd.WorkplaceFqdn)
@@ -168,7 +168,7 @@ func TestValidateRejections(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := valid()
+			cmd := valid(t)
 			tc.break_(&cmd)
 			err := cmd.validate()
 			require.Error(t, err)
@@ -178,12 +178,12 @@ func TestValidateRejections(t *testing.T) {
 	}
 
 	t.Run("a complete command is accepted", func(t *testing.T) {
-		assert.NoError(t, valid().validate())
+		assert.NoError(t, valid(t).validate())
 	})
 
 	t.Run("a clear is still addressed and ordered", func(t *testing.T) {
 		clear := func() Command {
-			cmd := fixture("clear")
+			cmd := fixture(t, "clear")
 			cmd.Clear = true
 			return cmd
 		}
@@ -212,7 +212,7 @@ func TestCommandDocumentShape(t *testing.T) {
 	at := time.Unix(decidedAt, 0).UTC()
 
 	t.Run("every field of the contract", func(t *testing.T) {
-		b := valid().banner("en")
+		b := valid(t).banner("en")
 		require.NotNil(t, b)
 		assert.Equal(t, "billing.grace.cycle-a.attempt-2", b.BannerID)
 		assert.Equal(t, CategoryBilling, b.Category)
@@ -230,7 +230,7 @@ func TestCommandDocumentShape(t *testing.T) {
 	})
 
 	t.Run("a window the backend left out starts when it decided", func(t *testing.T) {
-		cmd := valid()
+		cmd := valid(t)
 		cmd.StartsAt, cmd.EndsAt = nil, nil
 		b := cmd.banner("en")
 		require.NotNil(t, b)
@@ -240,7 +240,7 @@ func TestCommandDocumentShape(t *testing.T) {
 	})
 
 	t.Run("a clear produces no document", func(t *testing.T) {
-		cmd := valid()
+		cmd := valid(t)
 		cmd.Clear = true
 		assert.Nil(t, cmd.banner("en"))
 	})
@@ -248,7 +248,7 @@ func TestCommandDocumentShape(t *testing.T) {
 
 func TestLocaleIsPickedForTheWholeBanner(t *testing.T) {
 	t.Run("the instance locale when the backend sent all of it", func(t *testing.T) {
-		b := valid().banner("fr")
+		b := valid(t).banner("fr")
 		require.NotNil(t, b)
 		assert.Equal(t, "Échec du paiement", b.Title)
 		assert.Contains(t, b.Text, "Nous n'avons pas pu")
@@ -257,21 +257,21 @@ func TestLocaleIsPickedForTheWholeBanner(t *testing.T) {
 	})
 
 	t.Run("the fallback locale when the backend sent none of it", func(t *testing.T) {
-		b := valid().banner("de")
+		b := valid(t).banner("de")
 		require.NotNil(t, b)
 		assert.Equal(t, "Payment failed", b.Title)
 		assert.Equal(t, "en", b.Lang, "lang names the language the user actually reads")
 	})
 
 	t.Run("an instance with no locale reads the fallback", func(t *testing.T) {
-		b := valid().banner("")
+		b := valid(t).banner("")
 		require.NotNil(t, b)
 		assert.Equal(t, "en", b.Lang)
 	})
 
 	t.Run("a language the stack has no catalog for is still the backend's to send", func(t *testing.T) {
 		require.NotContains(t, consts.SupportedLocales, "ru")
-		cmd := valid()
+		cmd := valid(t)
 		cmd.Text["ru"] = "Мы не смогли списать средства с вашей карты."
 		cmd.Title["ru"] = "Платёж не прошёл"
 		cmd.CTA.Label["ru"] = "Обновить способ оплаты"
@@ -290,7 +290,7 @@ func TestLocaleIsPickedForTheWholeBanner(t *testing.T) {
 			func(c *Command) { delete(c.CTA.Label, "fr") },
 			func(c *Command) { delete(c.SecondaryCTA.Label, "fr") },
 		} {
-			cmd := valid()
+			cmd := valid(t)
 			missing(&cmd)
 			b := cmd.banner("fr")
 			require.NotNil(t, b)
@@ -351,7 +351,7 @@ func newInstance(t *testing.T, contextName, locale, orgDomain string) *instance.
 // keeps the fixture's timestamp, so only the revision orders them.
 func materialize(t *testing.T, inst *instance.Instance, revision int64) Command {
 	t.Helper()
-	cmd := fixture("materialize")
+	cmd := fixture(t, "materialize")
 	cmd.WorkplaceFqdn = inst.Domain
 	cmd.Revision = revision
 	return cmd
@@ -359,7 +359,7 @@ func materialize(t *testing.T, inst *instance.Instance, revision int64) Command 
 
 func clearCommand(t *testing.T, inst *instance.Instance, revision int64) Command {
 	t.Helper()
-	cmd := fixture("clear")
+	cmd := fixture(t, "clear")
 	cmd.WorkplaceFqdn = inst.Domain
 	cmd.Revision = revision
 	cmd.Clear = true
@@ -512,7 +512,7 @@ func TestApplyCommand(t *testing.T) {
 	})
 
 	t.Run("an unknown workplace is retried, not rejected", func(t *testing.T) {
-		cmd := valid()
+		cmd := valid(t)
 		cmd.WorkplaceFqdn = fmt.Sprintf("missing-%d.example", time.Now().UnixNano())
 
 		err := ApplyCommand(cmd)
@@ -574,7 +574,7 @@ func TestApplyCommandToAnOrganization(t *testing.T) {
 
 	orgCommand := func(t *testing.T, orgDomain string, revision int64) Command {
 		t.Helper()
-		cmd := fixture("organization")
+		cmd := fixture(t, "organization")
 		cmd.Domain = orgDomain
 		cmd.Revision = revision
 		return cmd

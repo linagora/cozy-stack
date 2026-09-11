@@ -35,7 +35,7 @@ func TestCommandPartialFanoutRetriesStorageFailure(t *testing.T) {
 	members, err := lifecycle.ListOrgInstances(org)
 	require.NoError(t, err)
 	require.Len(t, members, 3)
-	cmd := fixture("organization")
+	cmd := fixture(t, "organization")
 	cmd.Domain = org
 	failPath := "/" + couchdb.EscapeCouchdbName(members[1].DBPrefix()+"/"+consts.Banners) + "/banner-billing"
 	client := config.CouchClient()
