@@ -649,13 +649,14 @@ func TestApplyCommand(t *testing.T) {
 		assert.Equal(t, began.UTC(), stored.StartsAt.UTC(), "the occurrence keeps its own start")
 	})
 
-	t.Run("a category the context does not accept is refused", func(t *testing.T) {
+	t.Run("a category the context does not accept is skipped", func(t *testing.T) {
 		inst := newInstance(t, refusedContext, "en", "")
 
-		err := ApplyCommand(materialize(t, inst, 80))
-		assert.ErrorIs(t, err, ErrInvalidCommand)
-		assert.ErrorContains(t, err, "does not accept commands for the billing category")
+		require.NoError(t, ApplyCommand(materialize(t, inst, 80)))
 		assert.Nil(t, storedBanner(t, inst))
+		stored, err := storedCommand(inst, CategoryBilling)
+		require.NoError(t, err)
+		assert.Nil(t, stored, "skipping must not advance the revision")
 	})
 
 	t.Run("an instance that displays no banner is a no-op", func(t *testing.T) {
@@ -776,22 +777,18 @@ func TestApplyCommandToAnOrganization(t *testing.T) {
 		assert.Equal(t, before.DocRev, storedBanner(t, first).DocRev, "and leaves the members it already reached alone")
 	})
 
-	t.Run("a refused category rejects the organization before any writes", func(t *testing.T) {
+	t.Run("a disallowed category skips only that instance", func(t *testing.T) {
 		orgID := fmt.Sprintf("acme-org-%d", time.Now().UnixNano())
 		accepting := newInstance(t, commandContext, "en", orgID)
 		refusing := newInstance(t, refusedContext, "en", orgID)
 
-		err := ApplyCommand(orgCommand(t, orgID, 7))
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidCommand)
-		assert.ErrorContains(t, err, refusing.Domain)
-		assert.Nil(t, storedBanner(t, accepting))
+		require.NoError(t, ApplyCommand(orgCommand(t, orgID, 7)))
+		before := storedBanner(t, accepting)
+		require.NotNil(t, before)
 		assert.Nil(t, storedBanner(t, refusing))
-		for _, inst := range []*instance.Instance{accepting, refusing} {
-			stored, err := storedCommand(inst, CategoryBilling)
-			require.NoError(t, err)
-			assert.Nil(t, stored, "rejection must not advance a member's revision")
-		}
+		stored, err := storedCommand(refusing, CategoryBilling)
+		require.NoError(t, err)
+		assert.Nil(t, stored, "skipping must not advance the member's revision")
 
 		conf := config.GetConfig()
 		conf.Contexts[refusedContext] = map[string]interface{}{
@@ -802,10 +799,10 @@ func TestApplyCommandToAnOrganization(t *testing.T) {
 			conf.Contexts[refusedContext] = map[string]interface{}{"enable_banners": true}
 		})
 
-		// A permanent rejection needs an explicit replay after configuration
-		// repair; it is not an automatic broker retry.
+		// Replay reaches a previously skipped member after its context allows
+		// the category, without changing members that already accepted it.
 		require.NoError(t, ApplyCommand(orgCommand(t, orgID, 7)))
-		assert.NotNil(t, storedBanner(t, accepting))
+		assert.Equal(t, before.DocRev, storedBanner(t, accepting).DocRev)
 		assert.NotNil(t, storedBanner(t, refusing))
 	})
 

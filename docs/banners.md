@@ -22,9 +22,9 @@ Broker credentials, permissions and bindings control who can publish. Each
 category must have one owner; overlapping audiences with independent revision
 counters need separate categories. `quota` is reserved for the stack's rules.
 
-Disabled instances are skipped. If any enabled recipient disallows the category,
-the whole command is rejected before any writes. Disabling banners stops writes
-but does not remove existing documents.
+Instances that disable banners or disallow the category are skipped; other
+eligible recipients still receive the command. Skipping an instance leaves its
+existing documents and recorded revision unchanged.
 
 ### Commands
 

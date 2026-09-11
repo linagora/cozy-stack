@@ -104,12 +104,6 @@ func ApplyCommand(cmd Command) error {
 		return err
 	}
 	for _, inst := range instances {
-		if inst.HasBannersEnabled() && !inst.AllowsBannerCategory(cmd.Category) {
-			return fmt.Errorf("%w: the context of %s does not accept commands for the %s category",
-				ErrInvalidCommand, inst.Domain, cmd.Category)
-		}
-	}
-	for _, inst := range instances {
 		if err := cmd.applyTo(inst); err != nil {
 			return fmt.Errorf("%s: %w", inst.Domain, err)
 		}
@@ -136,8 +130,8 @@ func (cmd Command) targets() ([]*instance.Instance, error) {
 }
 
 func (cmd Command) applyTo(inst *instance.Instance) error {
-	// An instance that displays no banner is a no-op, not a rejection.
-	if !inst.HasBannersEnabled() {
+	// Instances that disable banners or disallow this category are skipped.
+	if !inst.HasBannersEnabled() || !inst.AllowsBannerCategory(cmd.Category) {
 		return nil
 	}
 
