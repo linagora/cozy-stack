@@ -34,6 +34,7 @@ const installedMarkerSuffix = ".cozy-installed"
 type s3Copier struct {
 	client      *minio.Client
 	bucket      string
+	prefix      string
 	appObj      string
 	started     bool
 	objectNames []string
@@ -41,10 +42,11 @@ type s3Copier struct {
 }
 
 // NewS3Copier creates a Copier that stores app files in S3.
-func NewS3Copier(client *minio.Client, bucket string) Copier {
+func NewS3Copier(client *minio.Client, bucket, prefix string) Copier {
 	return &s3Copier{
 		client: client,
 		bucket: bucket,
+		prefix: prefix,
 		ctx:    context.Background(),
 	}
 }
@@ -54,7 +56,7 @@ func (f *s3Copier) Exist(slug, version, shasum string) (bool, error) {
 	if shasum != "" {
 		f.appObj += "-" + shasum
 	}
-	_, err := f.client.StatObject(f.ctx, f.bucket, f.appObj+installedMarkerSuffix, minio.StatObjectOptions{})
+	_, err := f.client.StatObject(f.ctx, f.bucket, f.prefix+f.appObj+installedMarkerSuffix, minio.StatObjectOptions{})
 	if err == nil {
 		return true, nil
 	}
@@ -68,10 +70,6 @@ func (f *s3Copier) Start(slug, version, shasum string) (bool, error) {
 	exist, err := f.Exist(slug, version, shasum)
 	if err != nil || exist {
 		return exist, err
-	}
-
-	if err := s3util.EnsureBucket(f.ctx, f.client, f.bucket, ""); err != nil {
-		return false, err
 	}
 
 	f.objectNames = []string{}
@@ -90,7 +88,7 @@ func (f *s3Copier) Copy(stat os.FileInfo, src io.Reader) error {
 	if strings.Contains(name, "..") {
 		return fmt.Errorf("appfs: invalid filename %q", name)
 	}
-	objName := path.Join(f.appObj, name)
+	objName := f.prefix + path.Join(f.appObj, name)
 
 	contentType := filetype.ByExtension(path.Ext(stat.Name()))
 	if contentType == "" {
@@ -130,7 +128,7 @@ func (f *s3Copier) Commit() (err error) {
 	// Create the marker object that signals the version is complete. The
 	// suffix keeps it on a distinct key from the <slug>/<version>/... files,
 	// so S3 browsers don't render a folder and a file with the same name.
-	_, err = f.client.PutObject(f.ctx, f.bucket, f.appObj+installedMarkerSuffix,
+	_, err = f.client.PutObject(f.ctx, f.bucket, f.prefix+f.appObj+installedMarkerSuffix,
 		bytes.NewReader(nil), 0, minio.PutObjectOptions{
 			ContentType: "text/plain",
 		})
@@ -141,14 +139,16 @@ func (f *s3Copier) Commit() (err error) {
 type s3Server struct {
 	client *minio.Client
 	bucket string
+	prefix string
 	ctx    context.Context
 }
 
 // NewS3FileServer creates a FileServer that serves app files from S3.
-func NewS3FileServer(client *minio.Client, bucket string) FileServer {
+func NewS3FileServer(client *minio.Client, bucket, prefix string) FileServer {
 	return &s3Server{
 		client: client,
 		bucket: bucket,
+		prefix: prefix,
 		ctx:    context.Background(),
 	}
 }
@@ -249,11 +249,7 @@ func (s *s3Server) ServeFileContent(w http.ResponseWriter, req *http.Request, sl
 }
 
 func (s *s3Server) ServeCodeTarball(w http.ResponseWriter, req *http.Request, slug, version, shasum string) error {
-	objName := path.Join(slug, version)
-	if shasum != "" {
-		objName += "-" + shasum
-	}
-	objName += ".tgz"
+	objName := s.makeObjectName(slug, version, shasum, "") + ".tgz"
 
 	// Try to serve a pre-built tarball first.
 	obj, err := s.client.GetObject(s.ctx, s.bucket, objName, minio.GetObjectOptions{})
@@ -291,9 +287,9 @@ func (s *s3Server) makeObjectName(slug, version, shasum, file string) string {
 	}
 	// Prevent path traversal
 	if strings.Contains(file, "..") {
-		return basepath + "/invalid"
+		return s.prefix + basepath + "/invalid"
 	}
-	return path.Join(basepath, file)
+	return s.prefix + path.Join(basepath, file)
 }
 
 func (s *s3Server) FilesList(slug, version, shasum string) ([]string, error) {
@@ -314,14 +310,13 @@ func (s *s3Server) FilesList(slug, version, shasum string) ([]string, error) {
 	return names, nil
 }
 
-// S3AppsBucket returns the S3 bucket name used for storing applications of a
-// given type. The bucket is shared across all instances (like Swift containers).
-func S3AppsBucket(bucketPrefix string, appsType consts.AppType) string {
+// S3AppsStorageType returns the S3 storage type for an application.
+func S3AppsStorageType(appsType consts.AppType) string {
 	switch appsType {
 	case consts.WebappType:
-		return bucketPrefix + "-apps-web"
+		return "apps_web"
 	case consts.KonnectorType:
-		return bucketPrefix + "-apps-konnectors"
+		return "apps_konnectors"
 	}
 	panic("Unknown AppType")
 }

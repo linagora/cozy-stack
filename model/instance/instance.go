@@ -294,10 +294,9 @@ func (i *Instance) AvatarFS() vfs.Avatarer {
 			panic(ErrInvalidSwiftLayout)
 		}
 	case config.SchemeS3:
-		client := config.GetS3Client()
-		bucket := vfss3.BucketName(i.GetOrgID(), config.GetS3BucketPrefix())
-		keyPrefix := i.DBPrefix() + "/"
-		return vfss3.NewAvatarFs(client, bucket, keyPrefix)
+		storage := config.GetS3Storage("files")
+		keyPrefix := storage.Prefix + i.DBPrefix() + "/"
+		return vfss3.NewAvatarFs(storage.Client, storage.Bucket, keyPrefix)
 	default:
 		panic(fmt.Sprintf("instance: unknown storage provider %s", fsURL.Scheme))
 	}
@@ -323,10 +322,9 @@ func (i *Instance) ThumbsFS() vfs.Thumbser {
 			panic(ErrInvalidSwiftLayout)
 		}
 	case config.SchemeS3:
-		client := config.GetS3Client()
-		bucket := vfss3.BucketName(i.GetOrgID(), config.GetS3BucketPrefix())
-		keyPrefix := i.DBPrefix() + "/"
-		return vfss3.NewThumbsFs(client, bucket, keyPrefix)
+		storage := config.GetS3Storage("files")
+		keyPrefix := storage.Prefix + i.DBPrefix() + "/"
+		return vfss3.NewThumbsFs(storage.Client, storage.Bucket, keyPrefix)
 	default:
 		panic(fmt.Sprintf("instance: unknown storage provider %s", fsURL.Scheme))
 	}

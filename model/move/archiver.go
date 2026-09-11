@@ -154,11 +154,11 @@ func (a *switfArchiver) RemoveArchives(exportDocs []*ExportDoc) error {
 }
 
 func newS3Archiver() Archiver {
-	client := config.GetS3Client()
-	bucket := config.GetS3BucketPrefix() + "-exports"
+	storage := config.GetS3Storage("exports")
 	return &s3Archiver{
-		client: client,
-		bucket: bucket,
+		client: storage.Client,
+		bucket: storage.Bucket,
+		prefix: storage.Prefix,
 		ctx:    context.Background(),
 	}
 }
@@ -166,23 +166,12 @@ func newS3Archiver() Archiver {
 type s3Archiver struct {
 	client *minio.Client
 	bucket string
+	prefix string
 	ctx    context.Context
 }
 
-func (a *s3Archiver) ensureBucket() error {
-	err := a.client.MakeBucket(a.ctx, a.bucket, minio.MakeBucketOptions{})
-	if err != nil {
-		code := minio.ToErrorResponse(err).Code
-		if code == "BucketAlreadyOwnedByYou" || code == "BucketAlreadyExists" {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
 func (a *s3Archiver) OpenArchive(inst *instance.Instance, exportDoc *ExportDoc) (io.ReadCloser, error) {
-	objectName := exportDoc.Domain + "/" + exportDoc.ID()
+	objectName := a.prefix + exportDoc.Domain + "/" + exportDoc.ID()
 	obj, err := a.client.GetObject(a.ctx, a.bucket, objectName, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, err
@@ -198,11 +187,7 @@ func (a *s3Archiver) OpenArchive(inst *instance.Instance, exportDoc *ExportDoc) 
 }
 
 func (a *s3Archiver) CreateArchive(exportDoc *ExportDoc) (io.WriteCloser, error) {
-	if err := a.ensureBucket(); err != nil {
-		return nil, err
-	}
-
-	objectName := exportDoc.Domain + "/" + exportDoc.ID()
+	objectName := a.prefix + exportDoc.Domain + "/" + exportDoc.ID()
 	pr, pw := io.Pipe()
 
 	go func() {
@@ -223,7 +208,7 @@ func (a *s3Archiver) RemoveArchives(exportDocs []*ExportDoc) error {
 
 	objectsCh := make(chan minio.ObjectInfo, len(exportDocs))
 	for _, e := range exportDocs {
-		objectsCh <- minio.ObjectInfo{Key: e.Domain + "/" + e.ID()}
+		objectsCh <- minio.ObjectInfo{Key: a.prefix + e.Domain + "/" + e.ID()}
 	}
 	close(objectsCh)
 
