@@ -135,8 +135,12 @@ not what enables one.
 The command is rejected, never repaired. An authorized backend can put
 arbitrary text in front of a user, so anything unexpected in a payload is a
 backend bug worth surfacing rather than something to guess at. A rejected
-command fails the delivery, so the broker redelivers it up to the queue's
-`delivery_limit` and then dead letters it.
+command fails the delivery, so the broker redelivers it and dead letters it
+once the queue's `delivery_limit` is reached. The limit bounds deliveries, not
+retries, and on the RabbitMQ version the test fixture pins a limit of 5 runs
+the handler six times. Confirm that against the broker a deployment actually
+runs: how a redelivery is counted has changed between RabbitMQ releases, and
+the stack requeues with `basic.nack`.
 
 - `category` matches `^[a-z][a-z0-9-]{0,31}$` and is not `quota`.
 - exactly one of `domain` and `workplaceFqdn`, each a plain host name.
@@ -161,9 +165,11 @@ command fails the delivery, so the broker redelivers it up to the queue's
 
 An instance whose context has no `enable_banners` is a no-op rather than a
 rejection: the backend knows its customers, not which of them display banners.
-A workplace that is not here is retried rather than rejected, because the stack
-cannot tell a deleted instance from one still being provisioned; the queue's
-delivery limit is what bounds those retries.
+A workplace that is not here fails the delivery like any other error. Nothing
+in the path delays a redelivery, so the attempts are consumed as fast as the
+consumer loops rather than spread over any useful interval: it is a rejection
+with extra log lines, not a wait for a slow provisioning. Repair the instance
+and replay the dead lettered command.
 
 ### Authorization
 
