@@ -1,48 +1,44 @@
 ## Banners
 
-A banner is a platform message displayed to the user by their applications: a
-quota warning, a payment problem, a trial about to end. The stack stores one
-`io.cozy.banners` document per category and the clients render whatever they
-find. There is no computation behind a read: the rules run when an input
-changes and the result is written to the instance database.
+This is the publisher reference for backend banner commands. The stack stores
+one `io.cozy.banners` document per category and instance. See
+[ADR 054](https://github.com/linagora/twake-workplace-private/blob/main/documentation/docs/adrs/adr-054.md)
+for the platform design.
 
-Banners are off unless the instance context enables them:
+### Configuration
+
+Enable banners and allow the publisher's categories in each recipient context:
 
 ```yaml
 contexts:
   b2b_twake_default:
     enable_banners: true
+    banner_command_categories:
+      - billing
+      - trial
 ```
 
-Turning the switch back off stops the writes and leaves the documents already
-materialized in place, so a rollback needs a cleanup too.
+Broker credentials, permissions and bindings control who can publish. Each
+category must have one owner; overlapping audiences with independent revision
+counters need separate categories. `quota` is reserved for the stack's rules.
 
-### Producers
+Disabled instances are skipped. If any enabled recipient disallows the category,
+the whole command is rejected before any writes. Disabling banners stops writes
+but does not remove existing documents.
 
-Two kinds of producer write the same documents through the same code:
+### Commands
 
-- **In-process rules**, for what the stack owns. Disk usage is the only one
-  today (`model/banner/quota.go`): the stack measures it, so the stack decides,
-  and the wording comes from its own locale catalogs.
-- **A backend on the bus**, for what the stack cannot verify. A payment status,
-  a dunning step, a trial conversion are decisions another service already
-  made, so they arrive as commands carrying their own wording. The stack
-  validates, targets, orders, localizes and stores them; it decides nothing
-  about what they say.
+Publish JSON on the `platform` exchange, consumed by `stack.banner.commands`.
+The routing key selects the operation:
 
-A producer never addresses a document. It names a category, and the stack does
-the rest. `quota` is reserved to the in-process rules and a command naming it
-is rejected.
+- `banner.materialize`: create or replace the banner in a category.
+- `banner.clear`: delete the banner in a category; nonempty presentation fields
+  are rejected.
 
-### The command contract
+See [RabbitMQ configuration](rabbitmq.md#configuration) for queue declarations
+and [shared fixtures](../model/banner/testdata) for complete examples.
 
-Commands are consumed from the `stack.banner.commands` queue with two routing
-keys. See [the RabbitMQ documentation](rabbitmq.md) for the queue declaration.
-The fixtures in `model/banner/testdata` are the shared examples the publisher
-is developed against.
-
-**`banner.materialize`** puts a banner in a category, replacing whatever that
-category holds:
+`banner.materialize`:
 
 ```json
 {
@@ -54,25 +50,16 @@ category holds:
   "bannerId": "billing.grace.cycle-a.attempt-2",
   "severity": "warning",
   "surface": "banner",
-  "priority": 150,
   "dismissible": true,
-  "title": { "en": "Payment failed", "fr": "Échec du paiement" },
   "text": { "en": "We could not charge your card.", "fr": "Nous n'avons pas pu débiter votre carte." },
   "cta": {
     "label": { "en": "Update payment method", "fr": "Mettre à jour le moyen de paiement" },
     "url": "https://manager.example.org/linagora/twake_prod/premium"
-  },
-  "secondaryCta": {
-    "label": { "en": "Contact support", "fr": "Contacter le support" },
-    "url": "https://twake.app/support"
-  },
-  "startsAt": "2026-08-01T00:00:00Z",
-  "endsAt": "2026-08-05T23:30:00Z"
+  }
 }
 ```
 
-**`banner.clear`** empties a category. It carries the addressing and ordering
-fields only. Nonempty presentation fields are rejected:
+`banner.clear`:
 
 ```json
 {
@@ -84,165 +71,53 @@ fields only. Nonempty presentation fields are rejected:
 }
 ```
 
-| Field | Required | Notes |
+| Field | Required | Contract |
 | --- | --- | --- |
-| `category` | always | The slot to write. One document per category per instance. `quota` is refused. |
-| `workplaceFqdn` | one of the two | A single instance. |
-| `domain` | one of the two | A B2B organization: every instance under it gets the banner. |
-| `revision` | always | A positive counter the backend increments per target and category. It is what orders commands. |
-| `timestamp` | always | Positive epoch seconds representable in RFC3339, when the backend decided. Provenance, stamped on the document; it orders nothing. |
-| `eventId` | no | The backend's correlation id, at most 256 bytes. Logged and retained, never a second ordering mechanism. |
-| `bannerId` | materialize | Identifies the occurrence: a new one clears a dismissal, the same one keeps it. |
+| `category` | always | Matches `^[a-z][a-z0-9-]{0,31}$`; `quota` is rejected. |
+| `workplaceFqdn` / `domain` | exactly one | Plain host name: a single instance / a B2B organization whose members receive the command. |
+| `revision` | always | Positive counter, increasing per target and category. |
+| `timestamp` | always | Decision time in positive epoch seconds, within the RFC3339 range. Does not order commands. |
+| `eventId` | no | Correlation ID, at most 256 bytes. |
+| `bannerId` | materialize | Matches `^[a-z0-9.-]{1,64}$`. Keep it for the same occurrence to preserve dismissal; change it for a new occurrence. |
 | `severity` | materialize | `info`, `warning` or `error`. |
 | `surface` | materialize | `banner` or `modal`. |
-| `text` | materialize | A map keyed by locale, complete in `en`. |
-| `title` | no | Same shape as `text`. A client with no title names the dialog from the text. |
-| `cta`, `secondaryCta` | no | `url` must be an absolute `https` URL. A secondary action needs a primary one. |
-| `dismissible` | no | Defaults to false. A modal with neither a call to action nor a dismissal is made dismissible. |
-| `priority` | no | 0 to 1000. The stack's own quota banners sit at 50 and 100. |
-| `startsAt`, `endsAt` | no | RFC 3339. A stated `startsAt` replaces the stored one. Omit it to keep the moment the occurrence began, which is the decision time of the command that opened it. |
+| `text` | materialize | Locale map with nonempty `en`; at most 1024 bytes per locale. |
+| `title` | no | Locale map with nonempty `en` when supplied; at most 256 bytes per locale. |
+| `cta`, `secondaryCta` | no | Each has a locale-map `label` (nonempty `en`, at most 128 bytes per locale) and an absolute `https` `url` (at most 2048 bytes). A secondary CTA requires a primary one. |
+| `dismissible` | no | Defaults to false. A modal without a CTA is made dismissible. |
+| `priority` | no | 0–1000; defaults to 0. Quota banners use 50 and 100. |
+| `startsAt`, `endsAt` | no | RFC3339. If both are supplied, `startsAt` must precede `endsAt`. An explicit start replaces the stored start; omission preserves it for the same occurrence when compatible with the end, otherwise defaults to the command's decision time. |
 
-The document also carries `source.trigger`, which is `banner.command` for
-everything that arrives this way, and `cozyMetadata.createdByApp`, which stays
-`stack` whoever asked: a client cannot be made to reason about a per-producer
-author. `_id`, `_rev`, `dismissedAt` and `cozyMetadata` are not fields of the
-command and a payload carrying them is ignored, not honored.
+Each locale map accepts at most 32 locales with keys of 1–35 bytes. The JSON
+body is limited to 256 KiB, including whitespace and unknown fields.
+`_id`, `_rev`, `dismissedAt` and `cozyMetadata` are not command fields and are
+ignored if supplied.
 
 ### Localization
 
-`text`, `title` and every label are rendered by the backend, not by the stack.
-The stack picks **one** locale for the whole banner: the instance's, if every
-string the document needs exists in it, and `en` otherwise. `lang` names the
-language the user actually reads. Falling back field by field would put a
-French sentence above an English button.
+The publisher supplies all wording. The stack selects the instance's locale
+only if it is complete for every supplied text and label; otherwise the whole
+banner falls back to `en`. The stored `lang` identifies the selected language.
+Any complete publisher-supplied locale is supported, independently of the
+stack's translation catalogs.
 
-The stack keeps every locale the command carried, on the private
-`io.cozy.banners.commands` document, so changing an instance's language picks
-one again without the backend publishing anything. The revision, the wording
-and the decision time are unchanged: only the language moves. Re-localizing
-rewrites a banner rather than restoring one, so a category whose document is
-gone stays gone until the next command. A record written before the stack
-retained the wording has nothing to pick from, and stays as it is too.
+On an instance language change, existing banners are re-localized from retained
+commands without republishing. Deleted banners and older records without
+retained wording are left unchanged.
 
-The languages available for a commanded banner are the ones the backend sends,
-not the stack's `consts.SupportedLocales`: the stack renders nothing here, so
-its own catalogs have no say. Those catalogs still decide the languages of what
-the stack does write itself, the quota banners, and shipping a `.po` file is
-not what enables one.
+### Revisions and recovery
 
-### Validation
-
-The command is rejected, never repaired. An authorized backend can put
-arbitrary text in front of a user, so anything unexpected in a payload is a
-backend bug worth surfacing rather than something to guess at. A rejected
-command fails the delivery, so the broker redelivers it and dead letters it
-once the queue's `delivery_limit` is reached. The limit bounds deliveries, not
-retries, and on the RabbitMQ version the test fixture pins a limit of 5 runs
-the handler six times. Confirm that against the broker a deployment actually
-runs: how a redelivery is counted has changed between RabbitMQ releases, and
-the stack requeues with `basic.nack`.
-
-- `category` matches `^[a-z][a-z0-9-]{0,31}$` and is not `quota`.
-- exactly one of `domain` and `workplaceFqdn`, each a plain host name.
-- `revision` and `timestamp` are above zero; the timestamp must serialize as an
-  RFC3339 time (milliseconds sent as seconds are rejected).
-- `bannerId` matches `^[a-z0-9.-]{1,64}$`.
-- `severity` is one of `info`, `warning`, `error`.
-- `surface` is one of `banner`, `modal`.
-- `priority` is between 0 and 1000. Window values must be representable in
-  RFC3339, and a command that states both ends has `startsAt` before `endsAt`.
-  A command that states only `endsAt` is not judged here: its start comes from
-  the stored occurrence, so moving an end alone is allowed.
-- `text`, `title` and every label are present in the `en` fallback locale.
-- a call to action has an absolute `https` URL, and a secondary one has a
-  primary alongside it.
-- lengths, in bytes, per locale: 256 for a title, 1024 for a text, 128 for a
-  label, 2048 for a URL, 256 for `eventId`; at most 32 locales per map,
-  with locale keys of 1–35 bytes. The JSON command is limited to 256 KiB,
-  including whitespace and unknown fields at the transport boundary.
-- clear commands reject nonempty presentation fields, including wording and
-  windows; their addressing, timestamp and correlation fields are still validated.
-
-An instance whose context has no `enable_banners` is a no-op rather than a
-rejection: the backend knows its customers, not which of them display banners.
-A workplace that is not here fails the delivery like any other error. Nothing
-in the path delays a redelivery, so the attempts are consumed as fast as the
-consumer loops rather than spread over any useful interval: it is a rejection
-with extra log lines, not a wait for a slow provisioning. Repair the instance
-and replay the dead lettered command.
-
-### Authorization
-
-The queue is the authority on who publishes: broker credentials, permissions
-and bindings, not a field of the payload. The context settings say what that
-publisher is allowed to say:
-
-```yaml
-contexts:
-  b2b_twake_default:
-    enable_banners: true
-    banner_command_categories:
-      - billing
-      - trial
-```
-
-**One category, one owner.** Two producers writing the same category means last
-writer wins by counters that were never comparable. Scopes that can be active
-at the same time need separate categories.
-
-A command for a category an enabled member context does not list is rejected
-**before any member banner or revision record is written**. Authorization is
-checked over the full resolved recipient list first. Repair the configuration
-and explicitly replay a rejected command once it has been dead lettered.
-Storage failures during fan-out are retried by the broker, and a replay of the
-same revision finishes the members that were not reached, because nothing is
-recorded for a member whose banner was not written.
-
-### Ordering and retries
-
-Bus delivery is at-least-once and unordered, so ordering cannot come from the
-arrival time, and it cannot come from the visible document either: a clear
-leaves none behind and an unchanged decision writes none. The stack keeps the
-last accepted command per instance and category in `io.cozy.banners.commands`,
-a separate doctype blocked from public reads and writes, including wildcard
-application grants and the bulk/replication API, so an application cannot
-rewrite the ordering record. It is a normal document, so it is included in the
-instance's backups and migrations.
-
-Under the instance's banner lock:
-
-1. A command whose revision is not above the recorded one is ignored. That
-   covers a redelivery and a stale command alike, including a revision the
-   backend reused with different wording, which is a backend bug the stack
-   cannot repair.
-2. Otherwise the banner is written first and the record second. A process that
-   dies between the two leaves the next delivery of that revision to do both
-   again, and materialization is idempotent, so it heals itself. The reverse
-   order would record a decision the user never saw.
-
-This is what makes a clear survive a redelivered materialize, an unchanged
-decision advance the ordering, and a partial organization fan-out finish on the
-retry. A retry reuses the revision, correlation id and payload of the original;
-only a changed decision needs a new revision. The backend allocates them, and
-must serialize its own state refresh so a newer revision never carries an older
-snapshot.
-
-Re-publishing an unchanged organization command at its existing revision is how
-a member provisioned after the fact is reached: the replay resolves membership
-again and leaves the members it already reached untouched.
-
-### Dismissals and occurrences
-
-Re-materializing the same `bannerId` keeps a dismissal the user recorded, and
-keeps the moment the occurrence began rather than the last evaluation. A new
-`bannerId` is a message the user has not seen, so it clears the dismissal.
-Escalating a dunning cycle, or starting a new one, is a new occurrence; changing
-the wording of the current one is not.
-
-### What the stack does not do
-
-Nothing replays on its own: enabling `enable_banners` on a context materializes
-nothing until the next command, and a backend that needs its banners to appear
-has to publish them again. The stack sends no acknowledgement back: a broker
-confirm means the broker accepted the message, not that any instance displays
-it.
+- Revisions at or below the last accepted revision for an instance and category
+  are ignored, even after a clear. Only a changed decision needs a new revision;
+  the publisher must ensure newer revisions carry newer state.
+- Retry with the original revision, event ID and payload. Replays complete
+  partial organization deliveries and reach newly provisioned members while
+  leaving recipients that already accepted the revision unchanged.
+- Enabling banners does not bootstrap them: the publisher must republish.
+- Invalid commands and missing workplaces fail delivery. The broker requeues
+  failures without a delay until its configured delivery limit is exhausted;
+  configure dead lettering as described in [RabbitMQ](rabbitmq.md#dead-letter-exchange-dlx-and-dead-letter-queue-dlq).
+  Fix the cause and explicitly replay dead-lettered commands with their original
+  operation routing key (`banner.materialize` or `banner.clear`).
+- The stack sends no application acknowledgement. A broker confirm means the
+  broker accepted the message, not that a banner was stored or displayed.
