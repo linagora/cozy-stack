@@ -865,18 +865,16 @@ func (h *BannerCommandHandler) Handle(ctx context.Context, d amqp.Delivery) erro
 		return fmt.Errorf("banner.commands: unexpected routing key %s", d.RoutingKey)
 	}
 
-	// A command the queue cannot fix is nacked like any other failure. The
-	// queue is declared with a delivery limit, so the broker dead letters it
-	// after those attempts rather than redelivering it forever.
+	// A failure is nacked like any other, whether or not a retry could fix it.
+	// See the queue's delivery limit in the RabbitMQ documentation for what
+	// bounds the redeliveries.
 	if err := banner.ApplyCommand(cmd); err != nil {
 		return fmt.Errorf("banner.commands: %s revision %d: %w", d.RoutingKey, cmd.Revision, err)
 	}
 
-	target := cmd.WorkplaceFqdn
-	if target == "" {
-		target = cmd.Domain
-	}
-	log.Infof("banner.commands: %s applied to %s (category %s, revision %d, event %s)",
-		d.RoutingKey, target, cmd.Category, cmd.Revision, cmd.EventID)
+	// Accepted, not applied: a command that lost to a newer revision, or
+	// addressed an instance that displays no banner, gets here too.
+	log.Infof("banner.commands: %s accepted for %s (category %s, revision %d, event %s)",
+		d.RoutingKey, cmd.Domain+cmd.WorkplaceFqdn, cmd.Category, cmd.Revision, cmd.EventID)
 	return nil
 }

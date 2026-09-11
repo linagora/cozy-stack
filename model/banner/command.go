@@ -19,9 +19,11 @@ import (
 // rule the stack runs itself.
 const TriggerCommand = "banner.command"
 
-// ErrInvalidCommand marks a command no retry can fix. A transport rejects such
-// a delivery instead of requeuing it; anything else is a storage failure worth
-// retrying.
+// ErrInvalidCommand marks a command no retry can fix, as opposed to a storage
+// failure worth retrying. Nothing acts on the difference yet: the queue runner
+// nacks every handler error alike, so an invalid command is redelivered until
+// the broker stops it. The classification is here for a transport that learns
+// to reject rather than requeue.
 var ErrInvalidCommand = errors.New("invalid banner command")
 
 // Localized is wording keyed by locale, as the backend sends it.
@@ -86,8 +88,7 @@ const (
 	maxLocaleLen  = 35
 	// MaxCommandBytes bounds the JSON body at the transport boundary.
 	MaxCommandBytes = 256 * 1024
-	// maxLocales bounds the locale map, not each value.
-	maxLocales = 32
+	maxLocales      = 32
 )
 
 // ApplyCommand materializes or clears the banner a backend asked for.
@@ -329,7 +330,6 @@ func (cmd Command) validate() error {
 	if len(cmd.EventID) > maxEventIDLen {
 		return fmt.Errorf("%w: eventId is longer than %d bytes", ErrInvalidCommand, maxEventIDLen)
 	}
-	// A clear carries no presentation fields.
 	if cmd.Clear {
 		if cmd.BannerID != "" || cmd.Severity != "" || cmd.Surface != "" ||
 			len(cmd.Title) != 0 || len(cmd.Text) != 0 || cmd.CTA != nil || cmd.SecondaryCTA != nil ||

@@ -170,7 +170,7 @@ func TestValidateRejections(t *testing.T) {
 			tc.break_(&cmd)
 			err := cmd.validate()
 			require.Error(t, err)
-			assert.ErrorIs(t, err, ErrInvalidCommand, "a transport has to know not to retry this")
+			assert.ErrorIs(t, err, ErrInvalidCommand, "the failure has to be classified as unfixable")
 			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
