@@ -78,7 +78,10 @@ can be indexed by enabling the following feature flags:
 The admin API exposes them (see [admin.md](admin.md) for the details):
 
 - `POST /instances/:domain/rag/reset` deletes the checkpoint and launches the
-  indexing: the whole changes feed is scanned again.
+  indexing: the whole changes feed is scanned again. It is the recovery when
+  changes were skipped for good, i.e. when a batch was given up on after too
+  many attempts (typically after a long openRAG outage) and the files it held
+  did not change since, and the way to launch the indexing right after a purge.
 - `POST /instances/:domain/rag/reconcile?dir_id=<id>` re-indexes the subtree
   of one knowledge base folder (without `dir_id`, of all of them).
 - `POST /instances/:domain/rag/prune` deletes from openRAG the files no
@@ -93,6 +96,10 @@ so only transient errors (network, 5xx) fail the job and have the worker walk
 the folder again.
 A skipped file stays unindexed until it changes, or until an operator re-walks
 its folder with `POST /instances/:domain/rag/reconcile?dir_id=<id>`.
+
+None of these routes is called by the stack itself: they are for an operator
+(the jobs pushed by the triggers, and the workspace reconciliation they start
+with, cover the normal course of things).
 
 Recovery: an initial indexing that did not finish (the job of a very large
 folder, a whole-Drive assistant typically, hit the worker timeout) is

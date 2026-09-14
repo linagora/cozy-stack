@@ -9,7 +9,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/labstack/echo/v4"
 )
 
@@ -17,7 +16,7 @@ import (
 // its files and the partition itself. The index statuses are dropped, and
 // so is the rag-index checkpoint, so that the next run indexes the whole
 // instance again from the beginning of the changes feed.
-func Purge(inst *instance.Instance, logger logger.Logger) error {
+func Purge(inst *instance.Instance) error {
 	server := inst.RAGServer()
 	if server.URL == "" {
 		return errors.New("no RAG server configured")
@@ -33,7 +32,7 @@ func Purge(inst *instance.Instance, logger logger.Logger) error {
 			return err
 		}
 	}
-	logger.Infof("purge: deleting the openRAG partition (%d workspaces dropped)", len(workspaces))
+	ragLogger(inst).Infof("purge: deleting the openRAG partition (%d workspaces dropped)", len(workspaces))
 	if err := deletePartition(server, inst.Domain); err != nil {
 		return err
 	}

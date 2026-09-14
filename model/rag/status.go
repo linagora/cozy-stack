@@ -10,6 +10,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/revision"
+	"github.com/cozy/cozy-stack/pkg/logger"
 )
 
 const (
@@ -23,6 +24,12 @@ const (
 // callback_url given to the indexer.
 const IndexStatusPath = "/ai/index/status"
 
+// ragLogger is the instance logger of the rag namespace, for the operations
+// run outside a job (a job has its own logger, carrying the job id).
+func ragLogger(inst *instance.Instance) logger.Logger {
+	return inst.Logger().WithNamespace("rag")
+}
+
 // lockIndexStatus guards the read-check-write of a status document.
 // couchdb.Upsert overwrites the revision it finds instead of raising a conflict,
 // so a caller that decides from what it read must hold this lock until it writes.
@@ -35,7 +42,7 @@ func lockIndexStatus(inst *instance.Instance, docID string) (func(), error) {
 }
 
 func SetIndexStatus(inst *instance.Instance, docID, newStatus, rev string) error {
-	log := inst.Logger().WithNamespace("rag")
+	log := ragLogger(inst)
 
 	unlock, err := lockIndexStatus(inst, docID)
 	if err != nil {

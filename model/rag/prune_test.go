@@ -25,7 +25,7 @@ func TestPrune(t *testing.T) {
 	r.fake.AddFile(unclaimed.DocID, "x")
 	r.fake.AddFile("ghost", "y")
 
-	res, err := rag.Prune(r.inst, rag.TestingLogger())
+	res, err := rag.Prune(r.inst)
 	require.NoError(t, err)
 	assert.Equal(t, rag.PruneResult{FilesScanned: 3, FilesDeleted: 2}, res)
 	_, ok := r.fake.File(claimed.DocID)
@@ -45,7 +45,7 @@ func TestPruneWithRootAssistant(t *testing.T) {
 	r.fake.AddFile(doc.DocID, "x", rag.RootWorkspaceID)
 	r.fake.AddFile("ghost", "y")
 
-	res, err := rag.Prune(r.inst, rag.TestingLogger())
+	res, err := rag.Prune(r.inst)
 	require.NoError(t, err)
 	assert.Equal(t, rag.PruneResult{FilesScanned: 2, FilesDeleted: 1}, res)
 	_, ok := r.fake.File(doc.DocID)
@@ -64,7 +64,7 @@ func TestPruneDropsStaleRootWorkspace(t *testing.T) {
 	r.fake.AddWorkspace(rag.RootWorkspaceID)
 	r.fake.AddFile(doc.DocID, "x", kb.DocID, rag.RootWorkspaceID)
 
-	res, err := rag.Prune(r.inst, rag.TestingLogger())
+	res, err := rag.Prune(r.inst)
 	require.NoError(t, err)
 	assert.Equal(t, rag.PruneResult{FilesScanned: 1, WorkspacesDeleted: 1}, res)
 	assert.False(t, r.fake.HasWorkspace(rag.RootWorkspaceID))
@@ -89,7 +89,7 @@ func TestPruneOrphanedFileIsDeleted(t *testing.T) {
 	// the file's dir_id now points at nothing.
 	require.NoError(t, couchdb.DeleteDoc(r.inst, orphan))
 
-	res, err := rag.Prune(r.inst, rag.TestingLogger())
+	res, err := rag.Prune(r.inst)
 	require.NoError(t, err)
 	assert.Equal(t, rag.PruneResult{FilesScanned: 1, FilesDeleted: 1}, res)
 	_, ok := r.fake.File(doc.DocID)
@@ -112,7 +112,7 @@ func TestPruneAbortsOnDirLookupError(t *testing.T) {
 	raw.DirID = "_bogus"
 	require.NoError(t, couchdb.UpdateDoc(r.inst, raw))
 
-	_, err = rag.Prune(r.inst, rag.TestingLogger())
+	_, err = rag.Prune(r.inst)
 	require.Error(t, err)
 	_, ok := r.fake.File(doc.DocID)
 	assert.True(t, ok, "the prune aborted before touching openRAG")
@@ -130,7 +130,7 @@ func TestPruneDropsWorkspacesWithoutAssistant(t *testing.T) {
 	r.fake.AddWorkspace("old-kb")
 	r.fake.AddFile(inKB.DocID, "x", kb.DocID, "old-kb")
 
-	res, err := rag.Prune(r.inst, rag.TestingLogger())
+	res, err := rag.Prune(r.inst)
 	require.NoError(t, err)
 	assert.Equal(t, rag.PruneResult{FilesScanned: 1, WorkspacesDeleted: 1}, res)
 	assert.False(t, r.fake.HasWorkspace("old-kb"))
@@ -150,7 +150,7 @@ func TestPruneKeepsClaimedFilesOfDroppedWorkspace(t *testing.T) {
 	r.fake.AddWorkspace("old-kb")
 	r.fake.AddFile(doc.DocID, "x", "old-kb")
 
-	res, err := rag.Prune(r.inst, rag.TestingLogger())
+	res, err := rag.Prune(r.inst)
 	require.NoError(t, err)
 	assert.Equal(t, rag.PruneResult{FilesScanned: 1, WorkspacesDeleted: 1}, res)
 	assert.False(t, r.fake.HasWorkspace("old-kb"))

@@ -44,7 +44,7 @@ func ragPrune(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	res, err := rag.Prune(inst, inst.Logger().WithNamespace("rag"))
+	res, err := rag.Prune(inst)
 	if err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func ragPurge(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := rag.Purge(inst, inst.Logger().WithNamespace("rag")); err != nil {
+	if err := rag.Purge(inst); err != nil {
 		return err
 	}
 	return c.NoContent(http.StatusNoContent)

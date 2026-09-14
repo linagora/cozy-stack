@@ -14,7 +14,6 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
-	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/labstack/echo/v4"
 )
 
@@ -86,12 +85,13 @@ func listPartitionFiles(server config.RAGServer, domain string) ([]string, error
 // the files gone or trashed in the VFS, the files outside every knowledge
 // base folder, and the workspaces of the folders that are in no knowledge
 // base. The index status of a deleted file is dropped too.
-func Prune(inst *instance.Instance, logger logger.Logger) (PruneResult, error) {
+func Prune(inst *instance.Instance) (PruneResult, error) {
 	var result PruneResult
 	server := inst.RAGServer()
 	if server.URL == "" {
 		return result, errors.New("no RAG server configured")
 	}
+	logger := ragLogger(inst)
 	sc, err := loadScopes(inst, logger)
 	if err != nil {
 		return result, err
@@ -139,6 +139,8 @@ func Prune(inst *instance.Instance, logger logger.Logger) (PruneResult, error) {
 		}
 		result.WorkspacesDeleted++
 	}
+	logger.Infof("prune: %d file(s) scanned on openRAG, %d deleted, %d workspace(s) deleted",
+		result.FilesScanned, result.FilesDeleted, result.WorkspacesDeleted)
 	return result, nil
 }
 
@@ -194,7 +196,7 @@ func Reset(inst *instance.Instance) error {
 // knowledge base folder when dirID is empty. It returns the number of jobs
 // pushed.
 func Reconcile(inst *instance.Instance, dirID string) (int, error) {
-	sc, err := loadScopes(inst, inst.Logger().WithNamespace("rag"))
+	sc, err := loadScopes(inst, ragLogger(inst))
 	if err != nil {
 		return 0, err
 	}

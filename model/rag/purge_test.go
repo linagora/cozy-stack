@@ -21,7 +21,7 @@ func TestPurge(t *testing.T) {
 	require.Equal(t, []string{inKB.DocID}, r.fake.FileIDs())
 	require.True(t, r.fake.HasWorkspace(kb.DocID))
 
-	require.NoError(t, rag.Purge(r.inst, rag.TestingLogger()))
+	require.NoError(t, rag.Purge(r.inst))
 
 	assert.Empty(t, r.fake.FileIDs())
 	assert.False(t, r.fake.HasWorkspace(kb.DocID))

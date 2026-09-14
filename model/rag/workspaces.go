@@ -95,6 +95,7 @@ func reconcileWorkspaces(inst *instance.Instance, logger logger.Logger, server c
 		// otherwise have every run push a whole-subtree job for nothing.
 		workspaceID := workspaceIDForDir(dirID)
 		name := workspaceDisplayName(dirID, sc.folders[dirID])
+		logger.Infof("folder %s has no workspace on openRAG: creating %s", dirID, workspaceID)
 		if err := ensureWorkspaceExists(server, inst.Domain, workspaceID, name, logger); err != nil {
 			logger.Warnf("cannot create the workspace of folder %s: %s", dirID, err)
 			continue
@@ -102,6 +103,7 @@ func reconcileWorkspaces(inst *instance.Instance, logger logger.Logger, server c
 		if pushReconcile == nil {
 			continue
 		}
+		logger.Infof("pushing a reconcile job to index the subtree of folder %s", dirID)
 		if err := pushReconcile(dirID); err != nil {
 			logger.Warnf("cannot push the reconcile job of folder %s: %s", dirID, err)
 			// Roll back: an empty workspace claims the folder is indexed
@@ -114,6 +116,7 @@ func reconcileWorkspaces(inst *instance.Instance, logger logger.Logger, server c
 	}
 	var errj error
 	for _, dirID := range toRemove {
+		logger.Infof("folder %s is in no knowledge base any more: removing its workspace", dirID)
 		if err := removeWorkspace(inst, logger, server, workspaceIDForDir(dirID)); err != nil {
 			logger.Warnf("cannot remove the workspace of folder %s: %s", dirID, err)
 			errj = errors.Join(errj, err)

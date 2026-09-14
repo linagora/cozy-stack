@@ -61,11 +61,21 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 		return errors.New("no RAG server configured")
 	}
 
+	// The lock serializes the rag-index jobs of the instance: a job started
+	// while another runs waits here (up to the lock timeout) rather than
+	// running the same batch twice.
+	start := time.Now()
 	mu := config.Lock().LongOperation(inst, indexLockName)
 	if err := mu.Lock(); err != nil {
+		logger.Warnf("cannot take the %s lock after %s: %s", indexLockName, time.Since(start), err)
 		return err
 	}
 	defer mu.Unlock()
+	if waited := time.Since(start); waited > time.Second {
+		logger.Infof("%s lock taken after waiting %s for another rag-index job", indexLockName, waited)
+	} else {
+		logger.Debugf("%s lock taken", indexLockName)
+	}
 
 	ctx := &indexContext{inst: inst, logger: logger, server: server}
 	// An error only means some sources were unreachable, the flags are usable.
@@ -109,6 +119,7 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 		return err
 	}
 	if feed.LastSeq == cp.LastSeq {
+		logger.Debugf("no change since the checkpoint %s: nothing to index", cp.LastSeq)
 		return nil
 	}
 	return ctx.runBatch(cp, feed)
@@ -127,6 +138,8 @@ type indexContext struct {
 // the checkpoint, then advances the checkpoint unless the batch must be
 // retried.
 func (ctx *indexContext) runBatch(cp checkpoint, feed *couchdb.ChangesResponse) error {
+	ctx.logger.Infof("batch after checkpoint %s: %d change(s) up to %s, %d pending, attempt %d/%d",
+		cp.LastSeq, len(feed.Results), feed.LastSeq, feed.Pending, cp.Retries+1, MaxBatchRetries+1)
 	var errj error
 	var failed []string
 	retry := false
@@ -148,6 +161,8 @@ func (ctx *indexContext) runBatch(cp checkpoint, feed *couchdb.ChangesResponse) 
 
 	if retry && cp.Retries < MaxBatchRetries {
 		cp.Retries++
+		ctx.logger.Warnf("checkpoint kept at %s: %d file(s) failed on a transient error (%v), the batch will be replayed (attempt %d/%d)",
+			cp.LastSeq, len(failed), failed, cp.Retries+1, MaxBatchRetries+1)
 		if err := saveCheckpoint(ctx.inst, consts.Files, checkpointDocID, cp); err != nil {
 			errj = errors.Join(errj, err)
 		}
@@ -157,12 +172,16 @@ func (ctx *indexContext) runBatch(cp checkpoint, feed *couchdb.ChangesResponse) 
 		ctx.logger.Errorf("Giving up on the batch after %s after %d attempts on %v: %s",
 			cp.LastSeq, cp.Retries+1, failed, errj)
 	}
+	previous := cp.LastSeq
 	cp.LastSeq = feed.LastSeq
 	cp.Retries = 0
 	if err := saveCheckpoint(ctx.inst, consts.Files, checkpointDocID, cp); err != nil {
 		return errors.Join(errj, err)
 	}
+	ctx.logger.Infof("checkpoint moved from %s to %s (%d failure(s) skipped for good)",
+		previous, cp.LastSeq, len(failed))
 	if feed.Pending > 0 {
+		ctx.logger.Infof("%d change(s) remain after the checkpoint: pushing another rag-index job", feed.Pending)
 		_ = pushJob(ctx.inst, IndexMessage{Doctype: consts.Files})
 	}
 	if retry {
@@ -182,6 +201,7 @@ func (ctx *indexContext) handleChange(change couchdb.Change) error {
 		return ctx.handleDirChange(change)
 	}
 	if change.Deleted || change.Doc.Get("trashed") == true {
+		ctx.logger.Debugf("file %s deleted or trashed: removing it from openRAG", change.DocID)
 		return deleteFromRAG(ctx.inst, change.DocID)
 	}
 	return ctx.handleFile(fileInfoFromChange(change))
@@ -244,8 +264,10 @@ func (ctx *indexContext) handleFile(f fileInfo) error {
 		// scope: it was never indexed, no need to ask openRAG. A file reached
 		// through a directory change does not qualify: moving its parent
 		// leaves it at rev 1- even though it may well be indexed.
+		ctx.logger.Debugf("file %s is outside every knowledge base folder and was never indexed: skipped", f.ID)
 		return nil
 	}
+	ctx.logger.Debugf("file %s is outside every knowledge base folder: removing it from openRAG", f.ID)
 	return deleteFromRAG(ctx.inst, f.ID)
 }
 
@@ -254,6 +276,7 @@ func (ctx *indexContext) handleFile(f fileInfo) error {
 // the knowledge base folders containing the file, mapped to workspace ids).
 func (ctx *indexContext) indexFile(f fileInfo, desired []string) error {
 	if !isClassAllowed(ctx.flags, f.Class) {
+		ctx.logger.Debugf("file %s (%s) has the class %q, not enabled for indexing: skipped", f.ID, f.Name, f.Class)
 		return SetIndexStatus(ctx.inst, f.ID, StatusNotSupported, f.Rev)
 	}
 	needed, isNew, err := needsIndexation(ctx.inst, f.ID, f.MD5)
@@ -263,7 +286,13 @@ func (ctx *indexContext) indexFile(f fileInfo, desired []string) error {
 	// openRAG knows the folders by their workspace id.
 	workspaceIDs := workspaceIDsForDirs(desired)
 	if !needed {
+		ctx.logger.Debugf("file %s (%s) is up to date on openRAG: only its workspaces %v are synced", f.ID, f.Name, workspaceIDs)
 		return syncMembership(ctx.server, ctx.inst.Domain, f.ID, workspaceIDs)
+	}
+	if isNew {
+		ctx.logger.Debugf("file %s (%s) is unknown to openRAG: uploading it to workspaces %v", f.ID, f.Name, workspaceIDs)
+	} else {
+		ctx.logger.Debugf("file %s (%s) changed since its indexing: uploading it again to workspaces %v", f.ID, f.Name, workspaceIDs)
 	}
 
 	workspaces, err := json.Marshal(workspaceIDs)
