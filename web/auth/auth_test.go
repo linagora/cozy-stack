@@ -34,20 +34,37 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/limits"
+	"github.com/cozy/cozy-stack/pkg/lock"
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web"
 	"github.com/cozy/cozy-stack/web/apps"
+	"github.com/cozy/cozy-stack/web/auth"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/gavv/httpexpect/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const domain = "cozy.example.net"
+
+func TestLockOAuthClientFailure(t *testing.T) {
+	config.UseTestFile(t)
+	conf := config.GetConfig()
+	previousLock := conf.Lock
+	t.Cleanup(func() { conf.Lock = previousLock })
+	redisClient := redis.NewClient(&redis.Options{})
+	require.NoError(t, redisClient.Close())
+	conf.Lock = lock.New(redisClient)
+
+	unlock, err := auth.LockOAuthClient(&instance.Instance{Domain: domain}, "client")
+	require.ErrorIs(t, err, redis.ErrClosed)
+	require.Nil(t, unlock)
+}
 
 func TestAuth(t *testing.T) {
 	if testing.Short() {

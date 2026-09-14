@@ -118,11 +118,11 @@ func executeTokenExchange(c echo.Context, inst *instance.Instance, req tokenExch
 		}
 	}
 
-	clientMu := config.Lock().ReadWrite(inst, "oauth/"+client.ClientID)
-	if err := clientMu.Lock(); err != nil {
+	unlock, err := LockOAuthClient(inst, client.ClientID)
+	if err != nil {
 		return nil, err
 	}
-	defer clientMu.Unlock()
+	defer unlock()
 
 	registrationToken := client.RegistrationToken
 	client, err = oauth.FindClient(inst, client.ClientID)
