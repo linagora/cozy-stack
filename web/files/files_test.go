@@ -3834,6 +3834,21 @@ func TestFiles(t *testing.T) {
 
 		upload("third.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
 
+		// A trashed folder is restored
+		e.DELETE("/files/"+dirID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
+
+		upload("fourth.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
+
+		attrs = e.GET("/files/"+dirID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.attributes").Object()
+		attrs.ValueEqual("dir_id", consts.RootDirID)
+		attrs.ValueEqual("path", "/Attachments")
+
 		// Only known references are accepted
 		e.POST("/files/").
 			WithQuery("Type", "file").
