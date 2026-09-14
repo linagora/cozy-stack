@@ -19,6 +19,9 @@ msgstr "写真"
 msgid "Tree Notes"
 msgstr "メモ"
 
+msgid "Tree Mail"
+msgstr "メール"
+
 msgid "Tree Shared Drives"
 msgstr "Drives"
 

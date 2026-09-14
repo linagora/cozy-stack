@@ -15,6 +15,9 @@ msgstr "Фотографии"
 msgid "Tree Notes"
 msgstr "Заметки"
 
+msgid "Tree Mail"
+msgstr "Почта"
+
 msgid "Tree Shared Drives"
 msgstr "Диски"
 
