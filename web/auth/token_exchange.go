@@ -95,10 +95,6 @@ func executeTokenExchange(c echo.Context, inst *instance.Instance, req tokenExch
 		return nil, err
 	}
 
-	redirectURI, err := tokenExchangeRedirectURI(c, inst, params.AppSlug)
-	if err != nil {
-		return nil, echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
 	sessionID, _ := tokenExchangeClaimString(validated.Claims, "sid")
 	mu := config.Lock().ReadWrite(inst, fmt.Sprintf("token-exchange/%q/%q/%q", inst.Domain, inst.ContextName, sessionID))
 	if err := mu.Lock(); err != nil {
@@ -106,12 +102,16 @@ func executeTokenExchange(c echo.Context, inst *instance.Instance, req tokenExch
 	}
 	defer mu.Unlock()
 
-	client, err := findTokenExchangeOAuthClient(inst, sessionID, params.SoftwareID, redirectURI)
+	client, err := findTokenExchangeOAuthClient(inst, sessionID, params.SoftwareID)
 	if err != nil {
 		return nil, err
 	}
 	created := client == nil
 	if created {
+		redirectURI, err := tokenExchangeRedirectURI(c, inst, params.AppSlug)
+		if err != nil {
+			return nil, echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		client, err = createTokenExchangeOAuthClient(inst, params, redirectURI)
 		if err != nil {
 			return nil, err
@@ -131,7 +131,7 @@ func executeTokenExchange(c echo.Context, inst *instance.Instance, req tokenExch
 	}
 	if created {
 		client.RegistrationToken = registrationToken
-	} else if !isTokenExchangeOAuthClient(client, sessionID, params.SoftwareID, redirectURI) {
+	} else if !isTokenExchangeOAuthClient(client, sessionID, params.SoftwareID) {
 		return nil, echo.NewHTTPError(http.StatusConflict, "OAuth client changed during token exchange")
 	}
 
@@ -380,7 +380,7 @@ func tokenExchangeCheckAppInstance(conf *oidcprovider.Config, inst *instance.Ins
 	return nil
 }
 
-func findTokenExchangeOAuthClient(inst *instance.Instance, sessionID, softwareID, redirectURI string) (*oauth.Client, error) {
+func findTokenExchangeOAuthClient(inst *instance.Instance, sessionID, softwareID string) (*oauth.Client, error) {
 	refs, err := oidcbinding.ListOAuthClients(inst.ContextName, sessionID)
 	if err != nil {
 		return nil, err
@@ -400,16 +400,15 @@ func findTokenExchangeOAuthClient(inst *instance.Instance, sessionID, softwareID
 		if err != nil {
 			return nil, err
 		}
-		if isTokenExchangeOAuthClient(client, sessionID, softwareID, redirectURI) {
+		if isTokenExchangeOAuthClient(client, sessionID, softwareID) {
 			return client, nil
 		}
 	}
 	return nil, nil
 }
 
-func isTokenExchangeOAuthClient(client *oauth.Client, sessionID, softwareID, redirectURI string) bool {
-	return !client.Pending && client.OIDCSessionID == sessionID && client.SoftwareID == softwareID &&
-		len(client.RedirectURIs) == 1 && client.RedirectURIs[0] == redirectURI
+func isTokenExchangeOAuthClient(client *oauth.Client, sessionID, softwareID string) bool {
+	return !client.Pending && client.OIDCSessionID == sessionID && client.SoftwareID == softwareID
 }
 
 func createTokenExchangeOAuthClient(inst *instance.Instance, params tokenExchangeOAuthClientParams, redirectURI string) (*oauth.Client, error) {

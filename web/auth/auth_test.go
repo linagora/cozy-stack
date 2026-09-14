@@ -3237,11 +3237,16 @@ func TestTokenExchange(t *testing.T) {
 		admin := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
 		require.NotEqual(t, id, admin.Value("client_id").String().Raw())
 		otherOrigin := exchange(t, sid, "admin", "io.cozy.files", "https://workspace.sales.example.com", http.StatusOK)
-		require.NotEqual(t, admin.Value("client_id").String().Raw(), otherOrigin.Value("client_id").String().Raw())
+		for _, field := range []string{"client_id", "client_secret", "registration_access_token"} {
+			otherOrigin.ValueEqual(field, admin.Value(field).Raw())
+		}
+		client, err := oauth.FindClient(testInstance, admin.Value("client_id").String().Raw())
+		require.NoError(t, err)
+		require.Equal(t, []string{"https://admin.example.com"}, client.RedirectURIs)
 
 		deleted, err := oauth.DeleteByOIDCSession(contextName, sid)
 		require.NoError(t, err)
-		require.Equal(t, 3, deleted)
+		require.Equal(t, 2, deleted)
 		_, err = oauth.FindClient(testInstance, id)
 		require.True(t, couchdb.IsNotFoundError(err))
 		_, err = oauth.FindClient(testInstance, otherSession.Value("client_id").String().Raw())
@@ -3250,12 +3255,13 @@ func TestTokenExchange(t *testing.T) {
 
 	t.Run("ConcurrentExchangesCreateOneClient", func(t *testing.T) {
 		const sid = "concurrent-exchange-sid"
+		origins := []string{"https://admin.example.com", "https://workspace.sales.example.com"}
 		ids := make([]string, 6)
 		t.Run("Requests", func(t *testing.T) {
 			for i := range ids {
 				t.Run(fmt.Sprint(i), func(t *testing.T) {
 					t.Parallel()
-					response := exchange(t, sid, "app", "", "https://mail."+testInstance.Domain, http.StatusOK)
+					response := exchange(t, sid, "admin", "io.cozy.files", origins[i%len(origins)], http.StatusOK)
 					ids[i] = response.Value("client_id").String().Raw()
 				})
 			}
@@ -3270,7 +3276,7 @@ func TestTokenExchange(t *testing.T) {
 	})
 
 	t.Run("DoesNotReuseUnrelatedOrStaleClients", func(t *testing.T) {
-		for _, mismatch := range []string{"provider", "instance", "session", "software", "redirect", "pending", "deleted", "missing-binding"} {
+		for _, mismatch := range []string{"provider", "instance", "session", "software", "pending", "deleted", "missing-binding"} {
 			t.Run(mismatch, func(t *testing.T) {
 				sid := "mismatch-" + mismatch
 				first := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
@@ -3293,8 +3299,6 @@ func TestTokenExchange(t *testing.T) {
 						client.OIDCSessionID = "other-session"
 					case "software":
 						client.SoftwareID = "other-software"
-					case "redirect":
-						client.RedirectURIs = []string{"https://other.example.com"}
 					case "pending":
 						client.Pending = true
 					}

@@ -1146,10 +1146,11 @@ The created OAuth client is bound to the upstream OIDC session so it can be
 revoked by OIDC backchannel logout.
 
 Repeated exchanges reuse an existing client when the OIDC provider/context,
-instance, session (`sid`), software ID, and redirect URI match. The client ID
-and secret remain the same, while each response contains tokens with the scope
-validated for that request. Revoking this client revokes all tokens issued
-through it. Different sessions and applications keep separate clients.
+instance, session (`sid`), and software ID match, including across allowed
+origins. The client ID and secret remain the same, while each response contains
+tokens with the scope validated for that request. Revoking this client revokes
+all tokens issued through it. Different sessions and applications keep separate
+clients.
 
 Reuse relies on the existing OIDC session bindings. If a binding is lost or
 expires (after 31 days without renewal in Redis), another client can be created.
