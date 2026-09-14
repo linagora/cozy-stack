@@ -101,9 +101,33 @@ func CreationHandler(c echo.Context) error {
 	return Create(c, nil)
 }
 
+var magicFolders = map[string]string{
+	consts.Apps + "/" + consts.NotesSlug: "Tree Notes",
+	consts.Apps + "/mail":                "Tree Mail",
+}
+
+func ensureMagicFolder(inst *instance.Instance, refID string) (*vfs.DirDoc, error) {
+	key, ok := magicFolders[refID]
+	if !ok {
+		return nil, jsonapi.InvalidParameter("MagicFolder", errors.New("unknown reference"))
+	}
+	ref := couchdb.DocReference{Type: consts.Apps, ID: refID}
+	return vfs.EnsureReferencedDir(inst, inst.VFS(), ref, inst.Translate(key), inst.PageURL("/", nil))
+}
+
 func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing) (createdFile *file, err error) {
 	inst := middlewares.GetInstance(c)
 	dirID := c.Param("file-id")
+	if refID := c.QueryParam("MagicFolder"); refID != "" {
+		if dirID != "" || sharedDrive != nil {
+			return nil, jsonapi.InvalidParameter("MagicFolder", errors.New("cannot be combined with a dir-id"))
+		}
+		dir, err := ensureMagicFolder(inst, refID)
+		if err != nil {
+			return nil, err
+		}
+		dirID = dir.ID()
+	}
 	name := c.QueryParam("Name")
 	doc, err := FileDocFromReq(c, name, dirID)
 	if err != nil {
