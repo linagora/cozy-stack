@@ -9,6 +9,7 @@ package lock
 import (
 	"flag"
 	"fmt"
+	"os"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -23,6 +24,13 @@ import (
 // If you want to test harder the lock, you can set nb = 1000 but it is too
 // slow for CI, and the lock package has very few commits in the last years.
 var nb = 100
+
+func redisTestURL() string {
+	if raw := os.Getenv("COZY_TEST_REDIS_URL"); raw != "" {
+		return raw
+	}
+	return "redis://localhost:6379/0"
+}
 
 func TestLock(t *testing.T) {
 	if testing.Short() {
@@ -43,7 +51,7 @@ func TestLock(t *testing.T) {
 	})
 
 	t.Run("RedisLock", func(t *testing.T) {
-		opt, err := redis.ParseURL("redis://localhost:6379/0")
+		opt, err := redis.ParseURL(redisTestURL())
 		require.NoError(t, err)
 		client := NewRedisLockGetter(redis.NewClient(opt))
 
@@ -82,7 +90,7 @@ func TestLock(t *testing.T) {
 			return
 		}
 
-		opt, err := redis.ParseURL("redis://localhost:6379/0")
+		opt, err := redis.ParseURL(redisTestURL())
 		require.NoError(t, err)
 		client := NewRedisLockGetter(redis.NewClient(opt))
 

@@ -120,10 +120,17 @@ func (rl *redisLock) Lock() error {
 	}
 }
 
-func (rl *redisLock) Extend() {
+func (rl *redisLock) Extend() error {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	_, _ = rl.extends()
+	ok, err := rl.extends()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errLockLost
+	}
+	return nil
 }
 
 func (rl *redisLock) RLock() error {
