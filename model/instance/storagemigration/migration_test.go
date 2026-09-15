@@ -5,8 +5,13 @@ import (
 	"context"
 	"crypto/md5"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"path"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -323,6 +328,61 @@ func TestMigrateRejectsDryRunWithPurge(t *testing.T) {
 		inst := &instance.Instance{FsScheme: scheme}
 		_, err := Migrate(inst, Options{To: config.SchemeS3, DryRun: true, PurgeSource: true})
 		assert.EqualError(t, err, "storagemigration: dry-run cannot be combined with purge-source")
+	}
+}
+
+func TestWaitForQuietStorage(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		changed string
+		failAt  int32
+	}{
+		{name: "quiet"},
+		{name: "files changed", changed: consts.Files},
+		{name: "versions changed", changed: consts.FilesVersions},
+		{name: "initial status unavailable", failAt: 1},
+		{name: "final status unavailable", failAt: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config.UseTestFile(t)
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				n := requests.Add(1)
+				if n == tc.failAt {
+					w.WriteHeader(http.StatusForbidden)
+					fmt.Fprint(w, `{"error":"forbidden","reason":"denied"}`)
+					return
+				}
+				doctype := path.Base(r.URL.Path)
+				assert.Contains(t, []string{couchdb.EscapeCouchdbName(consts.Files), couchdb.EscapeCouchdbName(consts.FilesVersions)}, doctype)
+				seq := doctype + "-a"
+				if n > 2 && doctype == couchdb.EscapeCouchdbName(tc.changed) {
+					seq = doctype + "-b"
+				}
+				fmt.Fprintf(w, `{"update_seq":%q}`, seq)
+			}))
+			defer srv.Close()
+			u, err := url.Parse(srv.URL + "/")
+			require.NoError(t, err)
+			cfg := config.GetConfig()
+			previousCouch := cfg.CouchDB
+			defer func() { cfg.CouchDB = previousCouch }()
+			cfg.CouchDB.Clusters = []config.CouchDBCluster{{URL: u}}
+			cfg.CouchDB.Client = srv.Client()
+
+			err = waitForQuietStorage(&migrationPrefixer{prefix: "quiet-test"}, time.Millisecond)
+			switch {
+			case tc.failAt != 0:
+				require.ErrorContains(t, err, "update sequence:")
+				assert.Equal(t, tc.failAt, requests.Load())
+			case tc.changed != "":
+				require.ErrorContains(t, err, "file storage changed during the quiet period")
+			default:
+				require.NoError(t, err)
+				assert.EqualValues(t, 4, requests.Load())
+			}
+		})
 	}
 }
 

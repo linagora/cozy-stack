@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
@@ -394,15 +395,18 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 	src := inst.VFS()
 	srcAv := inst.AvatarFS()
 
-	dst, dstAv, err := buildTarget(inst, opts.To)
-	if err != nil {
-		return nil, err
-	}
-
 	if err := lifecycle.Block(inst, instance.BlockedMoving.Code); err != nil {
 		return nil, fmt.Errorf("storagemigration: block instance: %w", err)
 	}
 	defer lifecycle.Unblock(inst)
+
+	if err := waitForQuietStorage(inst, 5*time.Second); err != nil {
+		return nil, err
+	}
+	dst, dstAv, err := buildTarget(inst, opts.To)
+	if err != nil {
+		return nil, err
+	}
 
 	if opts.FlagOnly {
 		expected, err := sourceReport(inst, srcAv)
@@ -431,6 +435,34 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 	}
 
 	return flip(inst, opts, srcScheme, rep)
+}
+
+func storageSequences(db prefixer.Prefixer) ([2]string, error) {
+	var seqs [2]string
+	for i, doctype := range []string{consts.Files, consts.FilesVersions} {
+		status, err := couchdb.DBStatus(db, doctype)
+		if err != nil {
+			return seqs, fmt.Errorf("storagemigration: read %s update sequence: %w", doctype, err)
+		}
+		seqs[i] = status.UpdateSeq
+	}
+	return seqs, nil
+}
+
+func waitForQuietStorage(db prefixer.Prefixer, quietPeriod time.Duration) error {
+	before, err := storageSequences(db)
+	if err != nil {
+		return err
+	}
+	time.Sleep(quietPeriod)
+	after, err := storageSequences(db)
+	if err != nil {
+		return err
+	}
+	if before != after {
+		return errors.New("storagemigration: file storage changed during the quiet period; retry when the instance is idle")
+	}
+	return nil
 }
 
 // buildTarget constructs the VFS + Avatarer pair for the target scheme,
