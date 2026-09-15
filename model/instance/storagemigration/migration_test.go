@@ -310,6 +310,14 @@ func createInstanceFile(t *testing.T, inst *instance.Instance, name string, cont
 	return got
 }
 
+func TestMigrateRejectsEquivalentSwiftSchemes(t *testing.T) {
+	inst := &instance.Instance{FsScheme: config.SchemeSwiftSecure}
+	for _, purge := range []bool{false, true} {
+		_, err := Migrate(inst, Options{To: config.SchemeSwift, PurgeSource: purge})
+		require.EqualError(t, err, "storagemigration: swift and swift+https refer to the same backend")
+	}
+}
+
 func TestMigrateFlipsSchemeAfterVerify(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
