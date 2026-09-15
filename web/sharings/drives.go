@@ -38,6 +38,7 @@ type docPatch struct {
 	docID string
 
 	vfs.DocPatch
+	Delete bool `json:"permanent_delete,omitempty"`
 }
 
 // ListSharedDrives returns the list of the shared drives.
@@ -404,6 +405,13 @@ func ModifyMetadataByIDHandler(c echo.Context, inst *instance.Instance, s *shari
 	if err != nil {
 		return files.WrapVfsError(err)
 	}
+	if patch.Delete {
+		if rootID, err := s.DriveRootID(); err == nil && c.Param("file-id") == rootID {
+			if member := GetSharedDriveMember(c); member != nil {
+				return jsonapi.Forbidden(errors.New("only the owner can destroy the root of a shared drive"))
+			}
+		}
+	}
 	if patch.DirID != nil {
 		rootID, err := s.DriveRootID()
 		if err == nil && c.Param("file-id") == rootID {
@@ -467,6 +475,13 @@ func applyPatch(c echo.Context, fs vfs.VFS, patch *docPatch) (err error) {
 		if err = middlewares.AllowVFS(c, permission.PATCH, file); err != nil {
 			return err
 		}
+	}
+
+	if patch.Delete {
+		if dir != nil {
+			return fs.DestroyDirAndContent(dir, fs.EnsureErased)
+		}
+		return fs.DestroyFile(file)
 	}
 
 	if patch.DirID != nil {

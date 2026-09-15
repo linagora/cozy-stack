@@ -186,7 +186,16 @@ type Indexer interface {
 	// representing the current revision of the file.
 	UpdateFileDoc(olddoc, newdoc *FileDoc) error
 	// DeleteFileDoc removes from the index the specified file document.
+	//
+	// Warning: no sharing revocation here. This is also the path used to
+	// dissociate a doc from a sharing, which must not revoke it. File
+	// destruction goes through DestroyFileDoc, which revokes.
 	DeleteFileDoc(doc *FileDoc) error
+	// DestroyFileDoc removes from the index the specified file document and
+	// revokes the sharings for which this file is the main file. It is used
+	// when destroying a file, as destroying bypasses the trash where the
+	// revocation of a shared file normally happens.
+	DestroyFileDoc(doc *FileDoc) error
 
 	// CreateDirDoc creates and add in the index a new directory document.
 	CreateDirDoc(doc *DirDoc) error

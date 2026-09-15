@@ -464,7 +464,7 @@ func (afs *aferoVFS) DestroyFile(doc *vfs.FileDoc) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err = afs.Indexer.DeleteFileDoc(doc); err != nil {
+	if err = afs.Indexer.DestroyFileDoc(doc); err != nil {
 		return err
 	}
 	versions, err := vfs.VersionsFor(afs, doc.DocID)

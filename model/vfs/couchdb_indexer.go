@@ -224,7 +224,7 @@ func (c *couchdbIndexer) UpdateFileDoc(olddoc, newdoc *FileDoc) error {
 	}
 
 	if !olddoc.Trashed && newdoc.Trashed {
-		c.checkTrashedFileIsShared(newdoc)
+		c.revokeSharingRefsOnFile(newdoc)
 	}
 
 	newdoc.SetID(olddoc.ID())
@@ -243,6 +243,17 @@ func (c *couchdbIndexer) DeleteFileDoc(doc *FileDoc) error {
 		DeleteNote(c.db, doc.DocID)
 	}
 	return couchdb.DeleteDoc(c.db, doc)
+}
+
+// DestroyFileDoc is called by the VFS backends when they destroy a file:
+// destroying bypasses the trash, where the revocation of a shared file
+// normally happens. It revokes the sharings for which this file is the main
+// file. It is a no-op for shortcuts (destroying them is part of the sharing
+// cleanup itself) and for files already in the trash, whose sharing
+// references were removed when they were trashed.
+func (c *couchdbIndexer) DestroyFileDoc(doc *FileDoc) error {
+	c.revokeSharingRefsOnFile(doc)
+	return c.DeleteFileDoc(doc)
 }
 
 func (c *couchdbIndexer) CreateDirDoc(doc *DirDoc) error {
@@ -264,7 +275,7 @@ func (c *couchdbIndexer) UpdateDirDoc(olddoc, newdoc *DirDoc) error {
 	isTrashed := !oldTrashed && newTrashed
 
 	if isTrashed {
-		c.checkTrashedDirIsShared(newdoc)
+		c.revokeSharingRefsOnDir(newdoc)
 		if err := c.setTrashedForFilesInsideDir(olddoc, true); err != nil {
 			return err
 		}
@@ -290,12 +301,18 @@ func (c *couchdbIndexer) UpdateDirDoc(olddoc, newdoc *DirDoc) error {
 }
 
 func (c *couchdbIndexer) DeleteDirDoc(doc *DirDoc) error {
+	// No sharing revocation here: this is also the path used to dissociate a
+	// doc from a sharing, which must not revoke it. Directory destruction
+	// goes through DeleteDirDocAndContent, which revokes.
 	return couchdb.DeleteDoc(c.db, doc)
 }
 
 func (c *couchdbIndexer) DeleteDirDocAndContent(doc *DirDoc, onlyContent bool) (files []*FileDoc, n int64, err error) {
 	var docs []couchdb.Doc
 	if !onlyContent {
+		// Destroying a dir bypasses the trash: revoke the sharing of the dir
+		// and of any nested shared dir/file before removing them.
+		c.revokeSharingRefsOnDir(doc)
 		docs = append(docs, doc)
 	}
 	err = walk(c, doc.Name(), doc, nil, func(name string, dir *DirDoc, file *FileDoc, err error) error {
@@ -306,8 +323,10 @@ func (c *couchdbIndexer) DeleteDirDocAndContent(doc *DirDoc, onlyContent bool) (
 			if dir.ID() == doc.ID() {
 				return nil
 			}
+			c.revokeSharingRefsOnDir(dir)
 			docs = append(docs, dir.Clone())
 		} else {
+			c.revokeSharingRefsOnFile(file)
 			cloned := file.Clone()
 			docs = append(docs, cloned)
 			files = append(files, cloned.(*FileDoc))
@@ -400,7 +419,7 @@ func (c *couchdbIndexer) MoveDir(oldpath, newpath string) error {
 			}
 			cloned := child.Clone()
 			if isTrashed {
-				c.checkTrashedDirIsShared(child)
+				c.revokeSharingRefsOnDir(child)
 			}
 			olddocs = append(olddocs, cloned)
 			child.Fullpath = path.Join(newpath, child.Fullpath[len(oldpath)+1:])
@@ -664,7 +683,7 @@ func (c *couchdbIndexer) setTrashedForFilesInsideDir(doc *DirDoc, trashed bool) 
 			fullpath = strings.TrimPrefix(fullpath, TrashDirName)
 			trashpath := strings.Replace(fullpath, doc.Fullpath, TrashDirName, 1)
 			if trashed {
-				c.checkTrashedFileIsShared(cloned)
+				c.revokeSharingRefsOnFile(cloned)
 				cloned.fullpath = fullpath
 				file.fullpath = trashpath
 			} else {
@@ -761,10 +780,11 @@ func (c *couchdbIndexer) ListNotSynchronizedOn(clientID string) ([]DirDoc, error
 	return docs, nil
 }
 
-// checkTrashedDirIsShared will look for a dir going to the trash if it was the
-// main dir of a sharing. If it is the case, the sharing is revoked and the
+// revokeSharingRefsOnDir looks for io.cozy.sharings references on a dir being
+// removed from the VFS, either by going to the trash or by being destroyed. If
+// the dir is the main dir of a sharing, the sharing is revoked and the
 // reference to the sharing is removed.
-func (c *couchdbIndexer) checkTrashedDirIsShared(doc *DirDoc) {
+func (c *couchdbIndexer) revokeSharingRefsOnDir(doc *DirDoc) {
 	refs := doc.ReferencedBy[:0]
 	for _, ref := range doc.ReferencedBy {
 		if ref.Type == consts.Sharings {
@@ -776,10 +796,11 @@ func (c *couchdbIndexer) checkTrashedDirIsShared(doc *DirDoc) {
 	doc.ReferencedBy = refs
 }
 
-// checkTrashedFileIsShared will look for a file going to the trash if it was
-// the main file of a sharing. If it is the case, the sharing is revoked and
-// the reference to the sharing is removed.
-func (c *couchdbIndexer) checkTrashedFileIsShared(doc *FileDoc) {
+// revokeSharingRefsOnFile looks for io.cozy.sharings references on a file
+// being removed from the VFS, either by going to the trash or by being
+// destroyed. If the file is the main file of a sharing, the sharing is revoked
+// and the reference to the sharing is removed.
+func (c *couchdbIndexer) revokeSharingRefsOnFile(doc *FileDoc) {
 	// A shortcut is created for a sharing not yet accepted if the owner of the
 	// sharing knows the Cozy URL of a recipient. Normally, this shortcut is
 	// removed when the sharing is accepted, but it is safer to avoid revoking

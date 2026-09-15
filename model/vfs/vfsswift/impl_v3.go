@@ -353,6 +353,9 @@ func (sfs *swiftVFSV3) DissociateFile(src, dst *vfs.FileDoc) error {
 	if err := thumbsFS.RemoveThumbs(src, vfs.ThumbnailFormatNames); err != nil {
 		sfs.log.Infof("Cleaning thumbnails in DissociateFile %s has failed: %s", src.ID(), err)
 	}
+	if err := sfs.Indexer.DeleteFileDoc(src); err != nil {
+		return err
+	}
 	return sfs.destroyFileLocked(src)
 }
 
@@ -418,6 +421,9 @@ func (sfs *swiftVFSV3) DestroyFile(doc *vfs.FileDoc) error {
 		return lockerr
 	}
 	defer sfs.mu.Unlock()
+	if err := sfs.Indexer.DestroyFileDoc(doc); err != nil {
+		return err
+	}
 	return sfs.destroyFileLocked(doc)
 }
 
@@ -425,9 +431,6 @@ func (sfs *swiftVFSV3) destroyFileLocked(doc *vfs.FileDoc) error {
 	diskUsage, _ := sfs.Indexer.DiskUsage()
 	objNames := []string{
 		MakeObjectNameV3(doc.DocID, doc.InternalID),
-	}
-	if err := sfs.Indexer.DeleteFileDoc(doc); err != nil {
-		return err
 	}
 	destroyed := doc.ByteSize
 	if versions, errv := vfs.VersionsFor(sfs, doc.DocID); errv == nil {
