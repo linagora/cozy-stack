@@ -318,6 +318,14 @@ func TestMigrateRejectsEquivalentSwiftSchemes(t *testing.T) {
 	}
 }
 
+func TestMigrateRejectsDryRunWithPurge(t *testing.T) {
+	for _, scheme := range []string{config.SchemeSwift, config.SchemeS3} {
+		inst := &instance.Instance{FsScheme: scheme}
+		_, err := Migrate(inst, Options{To: config.SchemeS3, DryRun: true, PurgeSource: true})
+		assert.EqualError(t, err, "storagemigration: dry-run cannot be combined with purge-source")
+	}
+}
+
 func TestMigrateFlipsSchemeAfterVerify(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
