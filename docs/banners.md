@@ -125,9 +125,13 @@ clients must filter out banners whose validity window has ended. A newer
 materialize replaces it normally. Updating the command revision also updates
 the document revision, even when its visible wording is unchanged.
 
-These fields use the same app permissions as the banner. Apps recording a
-dismissal should preserve the other fields and use the current CouchDB `_rev`;
-editing or deleting the ordering state can allow stale commands to be replayed.
+Apps cannot create, edit or delete `io.cozy.banners` documents. An app with
+`PUT` permission on the doctype can only record a dismissal: `PUT
+/data/io.cozy.banners/:id` with the current `_rev` and a non-null
+`dismissedAt`. The stack ignores every other field and stores its own
+timestamp. Dismissing a banner that is not `dismissible` returns `403`, and a
+null `dismissedAt` clears the dismissal. If a later command makes the same
+occurrence non-dismissible, the dismissal is dropped.
 
 - Revisions at or below the last accepted revision for an instance and category
   are ignored, even after a clear. Only a changed decision needs a new revision;

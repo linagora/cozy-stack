@@ -66,6 +66,7 @@ var blockList = map[string]bool{
 	consts.NotesSteps:        readable,
 	consts.NotesImages:       readable,
 	consts.BitwardenContacts: readable,
+	consts.Banners:           readable,
 }
 
 // CheckReadable will abort the context and returns false if the doctype

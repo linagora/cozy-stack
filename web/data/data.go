@@ -229,6 +229,9 @@ func UpdateDoc(c echo.Context) error {
 	if doctype == consts.Accounts {
 		return updateAccount(c)
 	}
+	if doctype == consts.Banners {
+		return updateBanner(c)
+	}
 
 	var doc couchdb.JSONDoc
 	if err := json.NewDecoder(c.Request().Body).Decode(&doc); err != nil {

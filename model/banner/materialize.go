@@ -11,9 +11,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 )
 
-// stackAuthor marks the documents clients are allowed to trust. Permissions
-// scope by doctype and verb, never by field, so any application able to record
-// a dismissal can also author a document that looks like a platform message.
+// stackAuthor marks the documents clients are allowed to trust.
 const stackAuthor = "stack"
 
 // docID is the one document a category can have. Fixing the id makes CouchDB
@@ -83,6 +81,9 @@ func Materialize(db prefixer.Prefixer, category string, fresh *Banner, now time.
 		merged.StartsAt = &at
 	}
 	ensureEscapable(merged)
+	if !merged.Dismissible {
+		merged.DismissedAt = nil
+	}
 	stamp(merged, now)
 
 	if stored == nil {
@@ -131,11 +132,12 @@ func stamp(b *Banner, now time.Time) {
 }
 
 // changed keeps an unchanged evaluation from bumping the revision on every
-// trigger, which would wake every realtime client for nothing. DocID, DocRev
-// and DismissedAt are excluded because Merge takes them from the stored
-// document, and Source.At because it moves on every evaluation by design.
+// trigger, which would wake every realtime client for nothing. DocID and
+// DocRev are excluded because Merge takes them from the stored document, and
+// Source.At because it moves on every evaluation by design.
 func changed(fresh, stored *Banner) bool {
 	return fresh.Revision != stored.Revision ||
+		timeChanged(fresh.DismissedAt, stored.DismissedAt) ||
 		fresh.EventID != stored.EventID ||
 		fresh.Cleared != stored.Cleared ||
 		!reflect.DeepEqual(fresh.Accepted, stored.Accepted) ||

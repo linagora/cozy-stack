@@ -209,6 +209,16 @@ func TestApplyCommand(t *testing.T) {
 		assert.Nil(t, storedBanner(t, inst).DismissedAt)
 	})
 
+	t.Run("a dismissal does not survive the occurrence becoming blocking", func(t *testing.T) {
+		inst := newInstance(t, commandContext, "en", "")
+		require.NoError(t, banner.ApplyCommand(materialize(t, inst, 25)))
+		dismiss(t, inst)
+		blocking := materialize(t, inst, 26)
+		blocking.Dismissible = false
+		require.NoError(t, banner.ApplyCommand(blocking))
+		assert.Nil(t, storedBanner(t, inst).DismissedAt)
+	})
+
 	t.Run("a redelivery of the same revision changes nothing", func(t *testing.T) {
 		inst := newInstance(t, commandContext, "en", "")
 		require.NoError(t, banner.ApplyCommand(materialize(t, inst, 30)))
