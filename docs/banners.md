@@ -23,8 +23,11 @@ contexts:
 
 Set `command_categories` to `["*"]` to allow every category except `quota`.
 The hosts of `csp_allowlist`, global and for the context, are always allowed as
-CTA hosts, so `cta_hosts` only lists the others. `cta_hosts` has no wildcard, and CSP
-wildcards, keywords, scheme sources and non-https URLs are ignored.
+CTA hosts. HTTPS hosts of apps installed on the recipient instance are also
+allowed, including both their Cozy subdomain and any external client URL resolved
+through `client_url_flag`. `cta_hosts` only lists additional hosts. All matching
+is exact: there is no wildcard, and CSP wildcards, keywords, scheme sources and
+non-https URLs are ignored.
 
 Broker credentials, permissions and bindings control who can publish. Each
 category must have one owner and one addressing mode: the stack keeps one
@@ -33,9 +36,9 @@ commands, so never address a category both ways. `quota` is reserved for the
 stack's rules.
 
 Instances that disable banners are skipped. Instances whose context does not
-list the category or a CTA host are skipped with a warning log. Other eligible
-recipients still receive the command. Skipping an instance leaves its existing
-documents and recorded revision unchanged. An error on one instance
+list the category or whose CTA host is not allowed are skipped with a warning log.
+Other eligible recipients still receive the command. Skipping an instance leaves
+its existing documents and recorded revision unchanged. An error on one instance
 does not stop processing the others. The stack returns all failures after
 attempting every recipient, so delivery can be retried.
 

@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/banner"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
@@ -74,7 +76,7 @@ func useCommandContexts(t *testing.T) {
 
 func newInstance(t *testing.T, contextName, locale, orgID string) *instance.Instance {
 	t.Helper()
-	domain := fmt.Sprintf("banner-cmd-%d.example", time.Now().UnixNano())
+	domain := fmt.Sprintf("bannercmd%d.example", time.Now().UnixNano())
 	inst, err := lifecycle.Create(&lifecycle.Options{
 		Domain:      domain,
 		Email:       "alice@example.org",
@@ -486,6 +488,93 @@ func TestApplyCommand(t *testing.T) {
 		require.NotNil(t, fromRules)
 		assert.Equal(t, banner.BannerIDQuotaExceeded, fromRules.BannerID)
 	})
+}
+
+func TestCommandInstalledAppCTAHosts(t *testing.T) {
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	useCommandContexts(t)
+	cfg := config.GetConfig()
+	wasSubdomains, wasCSP := cfg.Subdomains, cfg.CSPAllowList
+	t.Cleanup(func() { cfg.Subdomains, cfg.CSPAllowList = wasSubdomains, wasCSP })
+	cfg.CSPAllowList = map[string]string{"connect": "https://csp.example.org"}
+
+	for _, mode := range []config.SubdomainType{config.NestedSubdomains, config.FlatSubdomains} {
+		t.Run(fmt.Sprintf("subdomains-%d", mode), func(t *testing.T) {
+			cfg.Subdomains = mode
+			inst := newInstance(t, commandContext, "en", "")
+			other := newInstance(t, commandContext, "en", "")
+			for _, installed := range []struct {
+				instance        *instance.Instance
+				slug, clientURL string
+			}{
+				{inst, "drive", "https://External.example.org"},
+				{inst, "insecure", "http://insecure.example.org"},
+				{inst, "wildcard", "https://*.wild.example.org"},
+				{other, "drive", "https://other-client.example.org"},
+			} {
+				flag := installed.slug + ".client-url"
+				manifest := &couchdb.JSONDoc{Type: consts.Apps, M: map[string]interface{}{
+					"_id":             consts.Apps + "/" + installed.slug,
+					"slug":            installed.slug,
+					"state":           app.Ready,
+					"client_url_flag": flag,
+				}}
+				require.NoError(t, couchdb.CreateNamedDoc(installed.instance, manifest))
+				testutils.WithFlag(t, installed.instance, flag, installed.clientURL)
+			}
+
+			var revision int64
+			for _, tc := range []struct {
+				name, url string
+				allowed   bool
+			}{
+				{"hosted app", "https://" + strings.ToUpper(inst.SubDomain("drive").Host) + "/files", true},
+				{"external client", "https://external.example.org/files", true},
+				{"explicit host", "https://manager.example.org/billing", true},
+				{"CSP host", "https://csp.example.org/billing", true},
+				{"uninstalled app", inst.SubDomain("missing").String(), false},
+				{"other instance app", other.SubDomain("drive").String(), false},
+				{"other instance client", "https://other-client.example.org", false},
+				{"host suffix spoof", "https://" + inst.SubDomain("drive").Hostname() + ".evil.example", false},
+				{"external subdomain", "https://child.external.example.org", false},
+				{"non-HTTPS client", "https://insecure.example.org", false},
+				{"wildcard client", "https://child.wild.example.org", false},
+				{"literal wildcard", "https://*.wild.example.org", false},
+			} {
+				for _, secondary := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/secondary=%t", tc.name, secondary), func(t *testing.T) {
+						revision++
+						cmd := materialize(t, inst, revision)
+						if secondary {
+							cmd.SecondaryCTA.URL = tc.url
+						} else {
+							cmd.CTA.URL = tc.url
+						}
+						require.NoError(t, banner.ApplyCommand(cmd))
+						stored := storedState(t, inst)
+						if tc.allowed {
+							assert.Equal(t, revision, stored.Revision)
+						} else {
+							assert.Less(t, stored.Revision, revision, "a refused host must not advance the revision")
+						}
+					})
+				}
+			}
+
+			t.Run("both app URLs remain allowed on language refresh", func(t *testing.T) {
+				cmd := materialize(t, inst, revision+1)
+				cmd.CTA.URL = inst.SubDomain("drive").String()
+				cmd.SecondaryCTA.URL = "https://external.example.org/files"
+				require.NoError(t, banner.ApplyCommand(cmd))
+				require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{Locale: "fr"}))
+				stored := storedState(t, inst)
+				assert.Equal(t, "fr", stored.Lang)
+				assert.Equal(t, cmd.CTA.URL, stored.CTA.URL)
+				assert.Equal(t, cmd.SecondaryCTA.URL, stored.SecondaryCTA.URL)
+			})
+		})
+	}
 }
 
 func TestApplyCommandToAnOrganization(t *testing.T) {

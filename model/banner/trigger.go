@@ -142,7 +142,12 @@ func refreshCommandsAt(domain string) error {
 		}
 		// A command the context has stopped accepting is left alone rather
 		// than rewritten; turning a setting off needs a cleanup either way.
-		if state.Accepted.refusal(inst) != "" {
+		reason, err := state.Accepted.refusal(inst)
+		if err != nil {
+			log(inst).Warnf("%s: cannot refresh the commanded banner: %s", state.Category, err)
+			continue
+		}
+		if reason != "" {
 			continue
 		}
 		if err := Materialize(inst, state.Category, state.Accepted.banner(inst.Locale), now); err != nil {

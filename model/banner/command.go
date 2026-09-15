@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 )
 
 // TriggerCommand is recorded on documents a backend asked for rather than a
@@ -134,7 +137,11 @@ func (cmd Command) applyTo(inst *instance.Instance) error {
 	if !inst.BannerSettings().Enabled {
 		return nil
 	}
-	if reason := cmd.refusal(inst); reason != "" {
+	reason, err := cmd.refusal(inst)
+	if err != nil {
+		return err
+	}
+	if reason != "" {
 		log(inst).Warnf("%s: skipping revision %d, %s", cmd.Category, cmd.Revision, reason)
 		return nil
 	}
@@ -160,22 +167,56 @@ func (cmd Command) applyTo(inst *instance.Instance) error {
 	return Materialize(inst, cmd.Category, cmd.banner(inst.Locale), time.Now())
 }
 
-// refusal says why the instance's context does not accept the command, or ""
-// when it does.
-func (cmd Command) refusal(inst *instance.Instance) string {
+// refusal says why the instance does not accept the command, or "" when it
+// does. App lookup failures are returned so delivery can be retried.
+func (cmd Command) refusal(inst *instance.Instance) (string, error) {
 	settings := inst.BannerSettings()
 	if !settings.AllowsCategory(cmd.Category) {
-		return "category not in banner.command_categories"
+		return "category not in banner.command_categories", nil
 	}
+	var appHosts []string
 	for _, cta := range []*CommandCTA{cmd.CTA, cmd.SecondaryCTA} {
 		if cta == nil {
 			continue
 		}
 		if host := ctaHost(cta.URL); !settings.AllowsCTAHost(host) {
-			return fmt.Sprintf("CTA host %q not in banner.cta_hosts", host)
+			if appHosts == nil {
+				var err error
+				appHosts, err = installedAppCTAHosts(inst)
+				if err != nil {
+					return "", err
+				}
+			}
+			if !slices.Contains(appHosts, host) {
+				return fmt.Sprintf("CTA host %q not allowed by banner.cta_hosts, csp_allowlist or installed apps", host), nil
+			}
 		}
 	}
-	return ""
+	return "", nil
+}
+
+func installedAppCTAHosts(inst *instance.Instance) ([]string, error) {
+	var manifests []*app.WebappManifest
+	err := couchdb.GetAllDocs(inst, consts.Apps, nil, &manifests)
+	if couchdb.IsNoDatabaseError(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cannot list installed apps for banner CTA hosts: %w", err)
+	}
+	var hosts []string
+	for _, manifest := range manifests {
+		urls := []string{app.DefaultClientURL(inst, manifest.Slug())}
+		if manifest.ClientURLFlag() != "" {
+			urls = append(urls, app.ResolveClientURL(inst, manifest.Slug()))
+		}
+		for _, raw := range urls {
+			if host := ctaHost(ctaTarget(raw)); host != "" && !strings.Contains(host, "*") {
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	return hosts, nil
 }
 
 func ctaHost(raw string) string {

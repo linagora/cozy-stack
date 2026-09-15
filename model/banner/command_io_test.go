@@ -106,3 +106,76 @@ func TestCommandClearRetriesProjectionFailure(t *testing.T) {
 	require.NoError(t, banner.ApplyCommand(clear))
 	assert.Nil(t, storedBanner(t, inst))
 }
+
+func TestCommandAppLookupFailureIsRetryable(t *testing.T) {
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	useCommandContexts(t)
+	inst := newInstance(t, commandContext, "en", "")
+	manifest := &couchdb.JSONDoc{Type: consts.Apps, M: map[string]interface{}{
+		"_id": consts.Apps + "/drive", "slug": "drive", "state": "ready",
+	}}
+	require.NoError(t, couchdb.CreateNamedDoc(inst, manifest))
+	appsPath := "/" + couchdb.EscapeCouchdbName(inst.DBPrefix()+"/"+consts.Apps) + "/_all_docs"
+	client := config.CouchClient()
+	original := client.Transport
+	t.Cleanup(func() { client.Transport = original })
+	var failed atomic.Bool
+	client.Transport = commandRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == appsPath && failed.CompareAndSwap(false, true) {
+			return nil, errors.New("simulated app lookup outage")
+		}
+		return original.RoundTrip(r)
+	})
+
+	require.NoError(t, banner.ApplyCommand(materialize(t, inst, 1)))
+	assert.False(t, failed.Load(), "explicit hosts must not require an app lookup")
+	cmd := materialize(t, inst, 2)
+	cmd.CTA.URL = inst.SubDomain("drive").String()
+	err := banner.ApplyCommand(cmd)
+	require.ErrorContains(t, err, "simulated app lookup outage")
+	assert.NotErrorIs(t, err, banner.ErrInvalidCommand)
+	assert.Equal(t, int64(1), storedState(t, inst).Revision)
+	require.NoError(t, banner.ApplyCommand(cmd))
+	assert.Equal(t, int64(2), storedState(t, inst).Revision)
+}
+
+func TestCommandRefreshContinuesAfterAppLookupFailure(t *testing.T) {
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	useCommandContexts(t)
+	inst := newInstance(t, commandContext, "en", "")
+	manifest := &couchdb.JSONDoc{Type: consts.Apps, M: map[string]interface{}{
+		"_id": consts.Apps + "/drive", "slug": "drive", "state": "ready",
+	}}
+	require.NoError(t, couchdb.CreateNamedDoc(inst, manifest))
+	billing := materialize(t, inst, 1)
+	billing.CTA.URL = inst.SubDomain("drive").String()
+	require.NoError(t, banner.ApplyCommand(billing))
+	before := storedState(t, inst)
+	trial := materialize(t, inst, 1)
+	trial.Category = banner.CategoryTrial
+	trial.BannerID = "trial.reminder"
+	require.NoError(t, banner.ApplyCommand(trial))
+
+	appsPath := "/" + couchdb.EscapeCouchdbName(inst.DBPrefix()+"/"+consts.Apps) + "/_all_docs"
+	client := config.CouchClient()
+	original := client.Transport
+	t.Cleanup(func() { client.Transport = original })
+	var failed atomic.Bool
+	client.Transport = commandRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == appsPath {
+			failed.Store(true)
+			return nil, errors.New("simulated app lookup outage")
+		}
+		return original.RoundTrip(r)
+	})
+
+	require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{Locale: "fr"}))
+	assert.True(t, failed.Load())
+	assert.Equal(t, before.DocRev, storedState(t, inst).DocRev, "the failed banner must be left unchanged")
+	stored, err := banner.Stored(inst, banner.CategoryTrial)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "fr", stored.Lang, "later banners must still be refreshed")
+}

@@ -563,8 +563,9 @@ contexts:
       command_categories:
         - billing
         - trial
-      # The hosts a banner command's call to action may link to, on top of the
-      # https hosts of csp_allowlist, which are always allowed. There is no wildcard, and CSP wildcards are ignored.
+      # Additional hosts a banner command's call to action may link to. HTTPS
+      # hosts from csp_allowlist and installed apps (including client_url_flag
+      # URLs) are already allowed. Matching is exact; wildcards are ignored.
       cta_hosts:
         - manager.example.org
     # List of applications that can be automatically updated even if the
