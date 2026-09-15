@@ -50,6 +50,7 @@ cozy-stack instances <command> [flags]
 * [cozy-stack instances fsck](cozy-stack_instances_fsck.md)	 - Check a vfs
 * [cozy-stack instances import](cozy-stack_instances_import.md)	 - Import data from an export link
 * [cozy-stack instances ls](cozy-stack_instances_ls.md)	 - List instances
+* [cozy-stack instances migrate-storage](cozy-stack_instances_migrate-storage.md)	 - Migrate an instance's file storage to another backend (e.g. s3)
 * [cozy-stack instances modify](cozy-stack_instances_modify.md)	 - Modify the instance properties
 * [cozy-stack instances refresh-token-oauth](cozy-stack_instances_refresh-token-oauth.md)	 - Generate a new OAuth refresh token
 * [cozy-stack instances set-disk-quota](cozy-stack_instances_set-disk-quota.md)	 - Change the disk-quota of the instance

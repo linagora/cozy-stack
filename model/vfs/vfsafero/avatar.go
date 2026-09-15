@@ -74,6 +74,20 @@ func (a *avatarFS) AvatarExists() (bool, error) {
 	return infos.Size() > 0, nil
 }
 
+// OpenAvatar returns a reader over the stored avatar content and its
+// content-type, or os.ErrNotExist if no avatar is stored. The content-type
+// is not persisted on disk by this backend, so a generic value is returned.
+func (a *avatarFS) OpenAvatar() (io.ReadCloser, string, error) {
+	f, err := a.fs.Open(AvatarFilename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, "", os.ErrNotExist
+		}
+		return nil, "", err
+	}
+	return f, "application/octet-stream", nil
+}
+
 func (a *avatarFS) ServeAvatarContent(w http.ResponseWriter, req *http.Request) error {
 	s, err := a.fs.Stat(AvatarFilename)
 	if err != nil {

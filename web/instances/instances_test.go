@@ -97,4 +97,27 @@ func TestInstances(t *testing.T) {
 			attrs.HasValue("feature_sets", []string{"71df3022-abd9-11ee-b79b-9cb6d0907fa3", "790789f8-abd9-11ee-ae09-9cb6d0907fa3"})
 		})
 	})
+
+	t.Run("MigrateStorage", func(t *testing.T) {
+		domain := "migrate-storage.cozy.localhost"
+		t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
+
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		e.POST("/instances").
+			WithQuery("Domain", domain).
+			WithQuery("Locale", "en").
+			WithQuery("SwiftLayout", "-1").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(201)
+
+		// An unsupported target scheme is rejected by the Migrate guard
+		// before touching any storage backend, so this exercises the route
+		// and error propagation without requiring a live S3/Swift target.
+		e.POST("/instances/"+domain+"/migrate-storage").
+			WithQuery("to", "not-a-scheme").
+			WithQuery("dry_run", "true").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(500)
+	})
 }

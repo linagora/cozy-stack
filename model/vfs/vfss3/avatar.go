@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -78,6 +79,26 @@ func (a *avatarS3) DeleteAvatar() error {
 		return err
 	}
 	return nil
+}
+
+// OpenAvatar returns a reader over the stored avatar content and its
+// content-type, or os.ErrNotExist if no avatar is stored.
+func (a *avatarS3) OpenAvatar() (io.ReadCloser, string, error) {
+	obj, err := a.client.GetObject(a.ctx, a.bucket, a.avatarKey(), minio.GetObjectOptions{})
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return nil, "", os.ErrNotExist
+		}
+		return nil, "", err
+	}
+	info, err := obj.Stat()
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return nil, "", os.ErrNotExist
+		}
+		return nil, "", err
+	}
+	return obj, info.ContentType, nil
 }
 
 func (a *avatarS3) ServeAvatarContent(w http.ResponseWriter, req *http.Request) error {
