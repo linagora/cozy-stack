@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,20 +33,38 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/crypto"
+	"github.com/cozy/cozy-stack/pkg/limits"
+	"github.com/cozy/cozy-stack/pkg/lock"
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web"
 	"github.com/cozy/cozy-stack/web/apps"
+	"github.com/cozy/cozy-stack/web/auth"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/gavv/httpexpect/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const domain = "cozy.example.net"
+
+func TestLockOAuthClientFailure(t *testing.T) {
+	config.UseTestFile(t)
+	conf := config.GetConfig()
+	previousLock := conf.Lock
+	t.Cleanup(func() { conf.Lock = previousLock })
+	redisClient := redis.NewClient(&redis.Options{})
+	require.NoError(t, redisClient.Close())
+	conf.Lock = lock.New(redisClient)
+
+	unlock, err := auth.LockOAuthClient(&instance.Instance{Domain: domain}, "client")
+	require.ErrorIs(t, err, redis.ErrClosed)
+	require.Nil(t, unlock)
+}
 
 func TestAuth(t *testing.T) {
 	if testing.Short() {
@@ -2126,6 +2146,11 @@ func TestTokenExchange(t *testing.T) {
 
 	config.UseTestFile(t)
 	conf := config.GetConfig()
+	couchTransport := &tokenExchangeCouchDBTransport{RoundTripper: conf.CouchDB.Client.Transport}
+	if couchTransport.RoundTripper == nil {
+		couchTransport.RoundTripper = http.DefaultTransport
+	}
+	conf.CouchDB.Client.Transport = couchTransport
 	conf.Assets = "../../assets"
 	_ = web.LoadSupportedLocales()
 	if _, err := couchdb.CheckStatus(context.Background()); err != nil {
@@ -2220,6 +2245,30 @@ func TestTokenExchange(t *testing.T) {
 			}
 			delete(appConfig, "instance_claim")
 		})
+	}
+	exchange := func(t *testing.T, sid, exchangeType, scope, origin string, status int) *httpexpect.Object {
+		t.Helper()
+		audience := clientID
+		if exchangeType == "app" {
+			audience = appTokenAudience
+		}
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss": issuer, "aud": []string{audience}, "sub": "mail-user", "sid": sid,
+			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+			"org_id": testInstance.OrgID, "org_domain": testInstance.OrgDomain, "org_role": "owner",
+		})
+		response := httpexpect.WithConfig(httpexpect.Config{
+			BaseURL: ts.URL, Reporter: httpexpect.NewAssertReporter(t),
+		}).POST("/auth/token_exchange").
+			WithHost(testInstance.Domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Origin", origin).
+			WithJSON(map[string]string{"id_token": idToken, "exchange_type": exchangeType, "scope": scope}).
+			Expect().Status(status)
+		if status != http.StatusOK {
+			return nil
+		}
+		return response.JSON().Object()
 	}
 
 	t.Run("RequiresMandatoryParameters", func(t *testing.T) {
@@ -3149,6 +3198,227 @@ func TestTokenExchange(t *testing.T) {
 			Expect().
 			Status(http.StatusUnauthorized)
 	})
+
+	t.Run("ReusesClientWithCurrentScopeAndOriginalCredentials", func(t *testing.T) {
+		const sid = "reuse-admin-sid"
+		first := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
+		id := first.Value("client_id").String().Raw()
+		client, err := oauth.FindClient(testInstance, id)
+		require.NoError(t, err)
+		client.LastRefreshedAt = time.Now().Add(-time.Hour)
+		require.NoError(t, couchdb.UpdateDoc(testInstance, client))
+
+		second := exchange(t, sid, "admin", "io.cozy.contacts", "https://admin.example.com", http.StatusOK)
+		for _, field := range []string{"client_id", "client_secret", "registration_access_token"} {
+			second.ValueEqual(field, first.Value(field).Raw())
+		}
+		assertValidToken(t, testInstance, first.Value("access_token").String().Raw(), consts.AccessTokenAudience, id, "io.cozy.files")
+		assertValidToken(t, testInstance, second.Value("access_token").String().Raw(), consts.AccessTokenAudience, id, "io.cozy.contacts")
+		assertValidToken(t, testInstance, second.Value("refresh_token").String().Raw(), consts.RefreshTokenAudience, id, "io.cozy.contacts")
+		client, err = oauth.FindClient(testInstance, id)
+		require.NoError(t, err)
+		refreshed, err := time.Parse(time.RFC3339Nano, client.LastRefreshedAt.(string))
+		require.NoError(t, err)
+		require.WithinDuration(t, time.Now(), refreshed, time.Minute)
+		refs, err := oidcbinding.ListOAuthClients(contextName, sid)
+		require.NoError(t, err)
+		require.Len(t, refs, 1)
+
+		e.POST("/auth/access_token").WithHost(testInstance.Domain).
+			WithForm(map[string]string{
+				"grant_type": "refresh_token", "client_id": id,
+				"client_secret": first.Value("client_secret").String().Raw(),
+				"refresh_token": first.Value("refresh_token").String().Raw(),
+			}).Expect().Status(http.StatusOK).JSON().Object().ValueEqual("scope", "io.cozy.files")
+		e.DELETE("/auth/register/"+id).WithHost(testInstance.Domain).
+			WithHeader("Authorization", "Bearer "+first.Value("registration_access_token").String().Raw()).
+			Expect().Status(http.StatusNoContent)
+		e.POST("/auth/access_token").WithHost(testInstance.Domain).
+			WithForm(map[string]string{
+				"grant_type": "refresh_token", "client_id": id,
+				"client_secret": second.Value("client_secret").String().Raw(),
+				"refresh_token": second.Value("refresh_token").String().Raw(),
+			}).Expect().Status(http.StatusBadRequest)
+	})
+
+	t.Run("ReusesAppClientAndPreservesSessionIsolation", func(t *testing.T) {
+		const sid = "reuse-app-sid"
+		origin := "https://mail." + testInstance.Domain
+		first := exchange(t, sid, "app", "", origin, http.StatusOK)
+		second := exchange(t, sid, "app", "", origin, http.StatusOK)
+		id := first.Value("client_id").String().Raw()
+		second.ValueEqual("client_id", id)
+		second.ValueEqual("client_secret", first.Value("client_secret").Raw())
+		otherSession := exchange(t, "other-app-sid", "app", "", origin, http.StatusOK)
+		require.NotEqual(t, id, otherSession.Value("client_id").String().Raw())
+		admin := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
+		require.NotEqual(t, id, admin.Value("client_id").String().Raw())
+		otherOrigin := exchange(t, sid, "admin", "io.cozy.files", "https://workspace.sales.example.com", http.StatusOK)
+		for _, field := range []string{"client_id", "client_secret", "registration_access_token"} {
+			otherOrigin.ValueEqual(field, admin.Value(field).Raw())
+		}
+		client, err := oauth.FindClient(testInstance, admin.Value("client_id").String().Raw())
+		require.NoError(t, err)
+		require.Equal(t, []string{"https://admin.example.com"}, client.RedirectURIs)
+
+		deleted, err := oauth.DeleteByOIDCSession(contextName, sid)
+		require.NoError(t, err)
+		require.Equal(t, 2, deleted)
+		_, err = oauth.FindClient(testInstance, id)
+		require.True(t, couchdb.IsNotFoundError(err))
+		_, err = oauth.FindClient(testInstance, otherSession.Value("client_id").String().Raw())
+		require.NoError(t, err)
+	})
+
+	t.Run("ConcurrentExchangesCreateOneClient", func(t *testing.T) {
+		const sid = "concurrent-exchange-sid"
+		origins := []string{"https://admin.example.com", "https://workspace.sales.example.com"}
+		ids := make([]string, 6)
+		t.Run("Requests", func(t *testing.T) {
+			for i := range ids {
+				t.Run(fmt.Sprint(i), func(t *testing.T) {
+					t.Parallel()
+					response := exchange(t, sid, "admin", "io.cozy.files", origins[i%len(origins)], http.StatusOK)
+					ids[i] = response.Value("client_id").String().Raw()
+				})
+			}
+		})
+		for _, id := range ids {
+			require.NotEmpty(t, id)
+			require.Equal(t, ids[0], id)
+		}
+		refs, err := oidcbinding.ListOAuthClients(contextName, sid)
+		require.NoError(t, err)
+		require.Len(t, refs, 1)
+	})
+
+	t.Run("DoesNotReuseUnrelatedOrStaleClients", func(t *testing.T) {
+		for _, mismatch := range []string{"provider", "instance", "session", "software", "pending", "deleted", "missing-binding"} {
+			t.Run(mismatch, func(t *testing.T) {
+				sid := "mismatch-" + mismatch
+				first := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
+				id := first.Value("client_id").String().Raw()
+				client, err := oauth.FindClient(testInstance, id)
+				require.NoError(t, err)
+				switch mismatch {
+				case "provider", "instance", "missing-binding":
+					require.NoError(t, oidcbinding.UnbindOAuthClient(contextName, testInstance.Domain, sid, id))
+					if mismatch == "provider" {
+						require.NoError(t, oidcbinding.BindOAuthClient("other-provider", testInstance.Domain, sid, id))
+					} else if mismatch == "instance" {
+						require.NoError(t, oidcbinding.BindOAuthClient(contextName, "other.example.com", sid, id))
+					}
+				case "deleted":
+					require.NoError(t, couchdb.DeleteDoc(testInstance, client))
+				default:
+					switch mismatch {
+					case "session":
+						client.OIDCSessionID = "other-session"
+					case "software":
+						client.SoftwareID = "other-software"
+					case "pending":
+						client.Pending = true
+					}
+					require.NoError(t, couchdb.UpdateDoc(testInstance, client))
+				}
+				second := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
+				require.NotEqual(t, id, second.Value("client_id").String().Raw())
+				if mismatch != "deleted" {
+					_, err = oauth.FindClient(testInstance, id)
+					require.NoError(t, err)
+				} else {
+					refs, err := oidcbinding.ListOAuthClients(contextName, sid)
+					require.NoError(t, err)
+					require.Len(t, refs, 1)
+				}
+			})
+		}
+	})
+
+	t.Run("ReusesOneExistingDuplicateWithoutDeletingOthers", func(t *testing.T) {
+		const sid = "existing-duplicate-sid"
+		first := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
+		duplicate, err := oauth.FindClient(testInstance, first.Value("client_id").String().Raw())
+		require.NoError(t, err)
+		require.Nil(t, duplicate.Create(testInstance, oauth.NotPending))
+		require.NoError(t, oidcbinding.BindOAuthClient(contextName, testInstance.Domain, sid, duplicate.ClientID))
+		refs, err := oidcbinding.ListOAuthClients(contextName, sid)
+		require.NoError(t, err)
+		require.Len(t, refs, 2)
+		for range 2 {
+			exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK).
+				ValueEqual("client_id", refs[0].OAuthClientID)
+		}
+		for _, ref := range refs {
+			_, err := oauth.FindClient(testInstance, ref.OAuthClientID)
+			require.NoError(t, err)
+		}
+	})
+
+	t.Run("RegeneratesMissingRegistrationTokenWithoutRegisteringAgain", func(t *testing.T) {
+		const sid = "missing-registration-token-sid"
+		first := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
+		id := first.Value("client_id").String().Raw()
+		client, err := oauth.FindClient(testInstance, id)
+		require.NoError(t, err)
+		client.RegistrationToken = ""
+		require.NoError(t, couchdb.UpdateDoc(testInstance, client))
+		oldLimit := limits.GetMaximumLimit(limits.OAuthClientType)
+		limits.SetMaximumLimit(limits.OAuthClientType, 0)
+		t.Cleanup(func() { limits.SetMaximumLimit(limits.OAuthClientType, oldLimit) })
+		second := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
+		second.ValueEqual("client_id", id)
+		assertValidToken(t, testInstance, second.Value("registration_access_token").String().Raw(), consts.RegistrationTokenAudience, id, "")
+	})
+
+	t.Run("StorageFailuresDoNotDeleteReusedClientsOrCreateDuplicates", func(t *testing.T) {
+		const sid = "reuse-storage-failure-sid"
+		first := exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK)
+		id := first.Value("client_id").String().Raw()
+		before, _, err := oauth.GetAll(testInstance, 1000, "")
+		require.NoError(t, err)
+		for _, method := range []string{http.MethodGet, http.MethodPut} {
+			t.Run(method, func(t *testing.T) {
+				couchTransport.failMethod.Store(method)
+				t.Cleanup(func() { couchTransport.failMethod.Store("") })
+				exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusServiceUnavailable)
+			})
+			client, err := oauth.FindClient(testInstance, id)
+			require.NoError(t, err)
+			require.Equal(t, first.Value("client_secret").String().Raw(), client.ClientSecret)
+			refs, err := oidcbinding.ListOAuthClients(contextName, sid)
+			require.NoError(t, err)
+			require.Len(t, refs, 1)
+			after, _, err := oauth.GetAll(testInstance, 1000, "")
+			require.NoError(t, err)
+			require.Len(t, after, len(before))
+		}
+		exchange(t, sid, "admin", "io.cozy.files", "https://admin.example.com", http.StatusOK).ValueEqual("client_id", id)
+	})
+
+	t.Run("FailedBindingDeletesOnlyNewClient", func(t *testing.T) {
+		before, _, err := oauth.GetAll(testInstance, 1000, "")
+		require.NoError(t, err)
+		couchTransport.failMethod.Store(http.MethodPut)
+		t.Cleanup(func() { couchTransport.failMethod.Store("") })
+		exchange(t, "new-client-binding-failure", "admin", "io.cozy.files", "https://admin.example.com", http.StatusServiceUnavailable)
+		couchTransport.failMethod.Store("")
+		after, _, err := oauth.GetAll(testInstance, 1000, "")
+		require.NoError(t, err)
+		require.Len(t, after, len(before))
+	})
+}
+
+type tokenExchangeCouchDBTransport struct {
+	http.RoundTripper
+	failMethod atomic.Value
+}
+
+func (transport *tokenExchangeCouchDBTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == transport.failMethod.Load() && strings.Contains(req.URL.Path, couchdb.EscapeCouchdbName(consts.OAuthClients)+"/") {
+		return nil, fmt.Errorf("simulated OAuth client storage failure")
+	}
+	return transport.RoundTripper.RoundTrip(req)
 }
 
 func getLoginCSRFToken(e *httpexpect.Expect) string {
