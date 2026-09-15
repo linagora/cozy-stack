@@ -354,6 +354,9 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 	}
 
 	srcScheme := inst.StorageScheme()
+	if srcScheme == config.SchemeSwiftSecure && opts.To == config.SchemeSwift {
+		return nil, errors.New("storagemigration: swift and swift+https refer to the same backend")
+	}
 	if opts.To == srcScheme {
 		if opts.PurgeSource {
 			// Purge-only mode: the instance is already on opts.To (either
