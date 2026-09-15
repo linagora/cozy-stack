@@ -1831,9 +1831,8 @@ func sharedDrivePermissionCheck(method, path string) (shouldCheck bool, requireW
 // the specified shared drive. It verifies that:
 // 1. The sharing exists and is a drive
 // 2. The current user is a member of the sharing (by domain or email)
-// If requireWrite is true, it also checks that the user has write permission (not read-only).
 // Returns the sharing if the user has the required permissions.
-func checkSharedDrivePermission(inst *instance.Instance, sharingID string, requireWrite bool) (*sharing.Sharing, error) {
+func checkSharedDrivePermission(inst *instance.Instance, sharingID string) (*sharing.Sharing, error) {
 	// Find the sharing by ID
 	s, err := sharing.FindSharing(inst, sharingID)
 	if err != nil {
@@ -1859,12 +1858,10 @@ func checkSharedDrivePermission(inst *instance.Instance, sharingID string, requi
 	currEmail, _ := inst.SettingsEMail()
 
 	isMember := false
-	isReadOnly := false
 
 	// If this is the owner instance, they're a member with write access
 	if s.Owner {
 		isMember = true
-		isReadOnly = false
 	} else {
 		// On a recipient's instance, their own member entry is typically at index 1
 		// (index 0 is the owner). Check if there's a member with an Instance field set.
@@ -1876,13 +1873,11 @@ func checkSharedDrivePermission(inst *instance.Instance, sharingID string, requi
 			// Check by domain
 			if memberHost == inst.Domain || memberHost == currDomain {
 				isMember = true
-				isReadOnly = m.ReadOnly
 				break
 			}
 			// Check by email
 			if currEmail != "" && m.Email == currEmail {
 				isMember = true
-				isReadOnly = m.ReadOnly
 				break
 			}
 		}
@@ -1890,11 +1885,6 @@ func checkSharedDrivePermission(inst *instance.Instance, sharingID string, requi
 
 	if !isMember {
 		return nil, jsonapi.Forbidden(errors.New("not a member of this sharing"))
-	}
-
-	// If write permission is required, check that the user is not read-only
-	if requireWrite && isReadOnly {
-		return nil, jsonapi.Forbidden(errors.New("write access denied: read-only member"))
 	}
 
 	return s, nil

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -151,15 +152,21 @@ func MoveHandler(c echo.Context) error {
 	moveDirectory := req.Source.DirID != ""
 
 	if req.Source.Instance != "" && req.Dest.Instance != "" {
-		sourceSharing, err := checkSharedDrivePermission(inst, req.Source.SharingID, !req.Copy)
+		sourceSharing, err := checkSharedDrivePermission(inst, req.Source.SharingID)
 		if err != nil {
 			return err
 		}
-		destSharing, err := checkSharedDrivePermission(inst, req.Dest.SharingID, true)
+		destSharing, err := checkSharedDrivePermission(inst, req.Dest.SharingID)
 		if err != nil {
 			return err
 		}
 		if err := validateFileBackedDriveMoveCopy(req, sourceSharing, destSharing); err != nil {
+			return err
+		}
+		if err := checkMoveSidePermission(inst, sourceInstance, sourceSharing, sourceTargetID(req), sourceMoveVerb(req.Copy)); err != nil {
+			return err
+		}
+		if err := checkMoveSidePermission(inst, destInstance, destSharing, req.Dest.DirID, permission.POST); err != nil {
 			return err
 		}
 		if sourceInstance != nil && destInstance != nil {
@@ -175,11 +182,14 @@ func MoveHandler(c echo.Context) error {
 			return moveFileBetweenSharedDrives(c, req.Source.Instance, req.Source.FileID, sourceSharing, req.Dest.Instance, req.Dest.DirID, destSharing, req.Copy)
 		}
 	} else if req.Source.Instance != "" && req.Dest.Instance == "" {
-		s, err := checkSharedDrivePermission(inst, req.Source.SharingID, !req.Copy)
+		s, err := checkSharedDrivePermission(inst, req.Source.SharingID)
 		if err != nil {
 			return err
 		}
 		if err := validateFileBackedDriveMoveCopy(req, s, nil); err != nil {
+			return err
+		}
+		if err := checkMoveSidePermission(inst, sourceInstance, s, sourceTargetID(req), sourceMoveVerb(req.Copy)); err != nil {
 			return err
 		}
 		if sourceInstance != nil && destInstance != nil {
@@ -195,11 +205,14 @@ func MoveHandler(c echo.Context) error {
 			return moveFileFromSharedDrive(c, inst, req.Source.Instance, req.Source.FileID, req.Dest.DirID, s, req.Copy)
 		}
 	} else if req.Source.Instance == "" && req.Dest.Instance != "" {
-		s, err := checkSharedDrivePermission(inst, req.Dest.SharingID, true)
+		s, err := checkSharedDrivePermission(inst, req.Dest.SharingID)
 		if err != nil {
 			return err
 		}
 		if err := validateFileBackedDriveMoveCopy(req, nil, s); err != nil {
+			return err
+		}
+		if err := checkMoveSidePermission(inst, destInstance, s, req.Dest.DirID, permission.POST); err != nil {
 			return err
 		}
 		if sourceInstance != nil && destInstance != nil {
@@ -217,6 +230,58 @@ func MoveHandler(c echo.Context) error {
 	} else {
 		return jsonapi.BadRequest(errors.New("to move files inside personal drive use patch function"))
 	}
+}
+
+// checkMoveSidePermission asserts the calling instance has effective access
+// on one shared-drive side of a move/copy. The resolver runs on hostInst
+// (which hosts the target docs) but membership is resolved for callerInst
+// (the instance performing the move). For a remote target nothing can be
+// decided locally: the remote stack is the only authority.
+func checkMoveSidePermission(callerInst, hostInst *instance.Instance, s *sharing.Sharing, targetID string, verb permission.Verb) error {
+	if hostInst == nil {
+		return nil
+	}
+	// Resolve the caller as a member of this sharing to follow it across
+	// nested sharings via MemberMatching (email or instance host).
+	member := s.MemberFor(callerInst)
+	if member == nil {
+		return jsonapi.NotFound(errors.New("shared drive target not found"))
+	}
+	if member.Status == sharing.MemberStatusOwner {
+		// The owner's own instance has full access to its drive.
+		return nil
+	}
+	ea, err := sharing.NewAccessResolver(hostInst).ResolveForMember(targetID, member)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return jsonapi.NotFound(errors.New("shared drive target not found"))
+		}
+		return wrapErrors(err)
+	}
+	if !ea.CanRead {
+		return jsonapi.NotFound(errors.New("shared drive target not found"))
+	}
+	if !ea.Can(verb) {
+		return jsonapi.Forbidden(errors.New("insufficient access on the target file or folder"))
+	}
+	return nil
+}
+
+// sourceMoveVerb returns the effective verb required on the source: read for
+// a copy, write for a move.
+func sourceMoveVerb(copy bool) permission.Verb {
+	if copy {
+		return permission.GET
+	}
+	return permission.PATCH
+}
+
+// sourceTargetID returns the ID of the moved file or directory.
+func sourceTargetID(req moveRequest) string {
+	if req.Source.FileID != "" {
+		return req.Source.FileID
+	}
+	return req.Source.DirID
 }
 
 // remoteStatusTextCodes maps the English status texts a remote stack may

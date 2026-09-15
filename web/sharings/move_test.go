@@ -1,16 +1,21 @@
 package sharings_test
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/pkg/assets/dynamic"
 	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web"
@@ -201,6 +206,31 @@ func TestSharedDrivesMove(t *testing.T) {
 
 		// Verify the original file was deleted (both metadata and physical content)
 		verifyFileDeleted(t, env.betty, srcFileDoc)
+	})
+
+	t.Run("SuccessfulMove_WithinOwnSharedDrive_OwnerCanMove", func(t *testing.T) {
+		eA, _, _ := env.createClients(t)
+		// The owner has full access to its own drive: a move that stays inside
+		// the drive must be allowed (regression test for the owner bypass in
+		// checkMoveSidePermission).
+		responseObj := postMove(t, eA, env.acmeToken, `{
+				  "source": {
+				    "instance": "https://`+env.acme.Domain+`",
+				    "sharing_id": "`+env.firstSharingID+`",
+				    "file_id": "`+env.checklistID+`"
+				  },
+				  "dest": {
+				    "instance": "https://`+env.acme.Domain+`",
+				    "sharing_id": "`+env.firstSharingID+`",
+				    "dir_id": "`+env.productDirID+`"
+				  }
+				}`)
+
+		// Verify the response and get moved file ID
+		movedFileID := assertMoveResponseWithSharing(t, responseObj, "Checklist.txt", env.productDirID, env.firstSharingID)
+
+		// Verify the file was moved and content preserved
+		verifyFileMove(t, env.acme, movedFileID, "Checklist.txt", env.productDirID, "foo")
 	})
 
 	// Force the cross-stack path even if instances are on the same server
@@ -1149,10 +1179,12 @@ func TestSharedDrivesMove(t *testing.T) {
 			WithHeader("Authorization", "Bearer "+env.daveToken).
 			Expect().Status(200)
 
-		fileToMoveSameStack := createFile(t, eD, "", "file-to-upload.txt", env.daveToken)
+		// Cross-stack move: the upload goes through the shared-drive routes on
+		// the owner stack, which enforces Dave's read-only access.
+		fileToMoveDifferentStack := createFile(t, eD, "", "file-to-upload.txt", env.daveToken)
 		postMoveExpectStatus(t, eD, env.daveToken, `{
 				  "source": {
-				    "file_id": "`+fileToMoveSameStack+`"
+				    "file_id": "`+fileToMoveDifferentStack+`"
 				  },
 				  "dest": {
 				    "instance": "https://`+env.acme.Domain+`",
@@ -1167,7 +1199,7 @@ func TestSharedDrivesMove(t *testing.T) {
 		// Prepare: create a second shared drive with Dave as read-only recipient
 		secondSharingID, secondRootDirID, _ := createSharedDrive(t, DriveCreationMethodLegacy, env.acme, env.acmeToken, env.tsA.URL,
 			"ShareDrive"+strings.ReplaceAll(t.Name(), "/", "_"), "Drive used as destination for nested dir move", nil)
-		fileToMoveSameStack := createFile(t, eA, "", "file-to-upload.txt", env.acmeToken)
+		fileToMoveSameStack := createFile(t, eA, secondRootDirID, "file-to-upload.txt", env.acmeToken)
 		daveDirID := createDirectory(t, eD, "", "DaveDir", env.daveToken)
 
 		// Dave needs to accept the sharing invitation (read-only recipients still need to accept)
@@ -1196,7 +1228,8 @@ func TestSharedDrivesMove(t *testing.T) {
 		// Prepare: create a second shared drive with Dave as read-only recipient
 		secondSharingID, secondRootDirID, _ := createSharedDrive(t, DriveCreationMethodLegacy, env.acme, env.acmeToken, env.tsA.URL,
 			testify(t, "ShareDrive"), "Drive used as destination for nested dir move", nil)
-		fileToMoveSameStack := createFile(t, eA, "", testify(t, "file-to-upload.txt"), env.acmeToken)
+		fileName := testify(t, "file-to-upload.txt")
+		fileToMoveDifferentStack := createFile(t, eA, secondRootDirID, fileName, env.acmeToken)
 		daveDirID := createDirectory(t, eD, "", testify(t, "DaveDir"), env.daveToken)
 
 		// Dave needs to accept the sharing invitation (read-only recipients still need to accept)
@@ -1206,9 +1239,11 @@ func TestSharedDrivesMove(t *testing.T) {
 			WithHeader("Authorization", "Bearer "+env.daveToken).
 			Expect().Status(200)
 
+		// Cross-stack move: the source deletion goes through the shared-drive
+		// routes on the owner stack, which enforces Dave's read-only access.
 		postMoveExpectStatus(t, eD, env.daveToken, `{
 				  "source": {
-				    "file_id": "`+fileToMoveSameStack+`",
+				    "file_id": "`+fileToMoveDifferentStack+`",
 					"sharing_id": "`+secondSharingID+`",
 					"instance": "https://`+env.acme.Domain+`"
 				  },
@@ -1216,6 +1251,9 @@ func TestSharedDrivesMove(t *testing.T) {
 				    "dir_id": "`+daveDirID+`"
 				  }
 				}`, 403)
+
+		// Verify the file was not deleted from the drive
+		verifyFileExists(t, env.acme, fileToMoveDifferentStack, fileName, secondRootDirID, "foo")
 	})
 
 	// Dave is a read-only member; he must not be able to move files out of a shared drive
@@ -1266,6 +1304,311 @@ func TestSharedDrivesMove(t *testing.T) {
 		// Verify the file still exists (was not deleted)
 		verifyFileExists(t, env.acme, fileToDeleteID, testify(t, "file-to-delete.txt"), secondRootDirID, "foo")
 	})
+
+	// Dave is read-only on the root drive but read-write on a nested shared
+	// folder: he must be able to move files inside the nested scope.
+	t.Run("SuccessfulMove_NestedSharedFolder_RWChild_ROParent", func(t *testing.T) {
+		eA, _, eD := env.createClients(t)
+
+		// Create a root shared drive with Dave as read-only recipient
+		rootSharingID, rootDirID, _ := createSharedDrive(t, DriveCreationMethodLegacy, env.acme, env.acmeToken, env.tsA.URL,
+			testify(t, "RootDrive"), "Root drive with Dave read-only", nil)
+		acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, rootSharingID)
+
+		// Create a nested folder inside the root drive
+		nestedDirID := createDirectory(t, eA, rootDirID, testify(t, "NestedFolder"), env.acmeToken)
+
+		// Create a nested sharing on the subfolder with Dave as read-write
+		// recipient. We create it directly in DB to control the members.
+		now := time.Now()
+		nestedSharing := &sharing.Sharing{
+			Active:        true,
+			Owner:         true,
+			Drive:         true,
+			DriveRootType: sharing.DriveRootTypeDirectory,
+			AppSlug:       "test",
+			AccessMode:    sharing.AccessModeAdditive,
+			Members: []sharing.Member{
+				{
+					Status:   sharing.MemberStatusOwner,
+					Name:     "Acme",
+					Email:    "acme@example.net",
+					Instance: "https://" + env.acme.Domain,
+				},
+				{
+					Status:   sharing.MemberStatusReady,
+					Name:     "Dave",
+					Email:    "dave@example.net",
+					Instance: "https://" + env.dave.Domain,
+					ReadOnly: false,
+				},
+			},
+			Rules: []sharing.Rule{
+				{
+					Title:   "nested",
+					DocType: consts.Files,
+					Values:  []string{nestedDirID},
+				},
+			},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		require.NoError(t, couchdb.CreateDoc(env.acme, nestedSharing))
+		require.NoError(t, nestedSharing.AddReferenceForSharing(env.acme, &nestedSharing.Rules[0]))
+
+		// Create a file inside the nested folder
+		fileToMove := createFile(t, eA, nestedDirID, testify(t, "nested-file.txt"), env.acmeToken)
+
+		// Dave moves the file inside the nested folder (same instance, same
+		// sharing scope) → should succeed because he is RW on the nested scope
+		destDirID := createDirectory(t, eA, nestedDirID, testify(t, "DestDir"), env.acmeToken)
+		postMove(t, eD, env.daveToken, `{
+			  "source": {
+			    "instance": "https://`+env.acme.Domain+`",
+			    "sharing_id": "`+rootSharingID+`",
+			    "file_id": "`+fileToMove+`"
+			  },
+			  "dest": {
+			    "instance": "https://`+env.acme.Domain+`",
+			    "sharing_id": "`+rootSharingID+`",
+			    "dir_id": "`+destDirID+`"
+			  }
+			}`)
+	})
+
+	// Alice shares the parent drive with Bob, a nested drive inside it with
+	// Charlie, and the other drive with Bob. Moving the parent drive into the
+	// other drive is a metadata-only move and must not revoke any of the
+	// involved sharings.
+	t.Run("MoveRootDriveIntoAnotherSharedDrive_DoesNotRevokeSharings", func(t *testing.T) {
+		eA, _, _ := env.createClients(t)
+
+		// /parent is the drive from the env setup, already accepted by Bob
+		parentSharingID := env.firstSharingID
+		parentRootID := env.firstRootDirID
+
+		// Nested drive /parent/nested, accepted by Charlie
+		nestedDirID := createDirectory(t, eA, parentRootID, testify(t, "Nested"), env.acmeToken)
+		nestedSharingID := createDriveSharingOnDir(t, env.acme, env.acmeToken, env.tsA.URL,
+			nestedDirID, testify(t, "NestedDrive"), "Drive nested in the parent drive",
+			[]RecipientInfo{{Name: "Dave", Email: "dave@example.net"}})
+		acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, nestedSharingID)
+
+		// /other drive, accepted by Bob
+		otherSharingID, otherRootID, _ := createSharedDrive(t, DriveCreationMethodLegacy, env.acme, env.acmeToken, env.tsA.URL,
+			testify(t, "OtherDrive"), "Destination drive for the parent move",
+			[]RecipientInfo{{Name: "Betty", Email: "betty@example.net"}})
+		acceptSharedDriveForBetty(t, env.acme, env.betty, env.tsA.URL, env.tsB.URL, otherSharingID)
+
+		// Sanity: Bob and Charlie can browse their drives
+		_, eB, eD := env.createClients(t)
+		assertRecipientCanBrowseDrive(t, eB, env.bettyToken, parentSharingID, parentRootID)
+		assertRecipientCanBrowseDrive(t, eD, env.daveToken, nestedSharingID, nestedDirID)
+		assertRecipientCanBrowseDrive(t, eB, env.bettyToken, otherSharingID, otherRootID)
+
+		// Alice moves parent into other
+		postMove(t, eA, env.acmeToken, `{
+			  "source": {
+			    "instance": "https://`+env.acme.Domain+`",
+			    "sharing_id": "`+parentSharingID+`",
+			    "dir_id": "`+parentRootID+`"
+			  },
+			  "dest": {
+			    "instance": "https://`+env.acme.Domain+`",
+			    "sharing_id": "`+otherSharingID+`",
+			    "dir_id": "`+otherRootID+`"
+			  }
+			}`)
+
+		// Alice: the moved drive sits inside the other drive
+		otherRoot, err := env.acme.VFS().DirByID(otherRootID)
+		require.NoError(t, err)
+		parentRoot, err := env.acme.VFS().DirByID(parentRootID)
+		require.NoError(t, err)
+		require.Equal(t, otherRoot.Fullpath+"/"+parentRoot.DocName, parentRoot.Fullpath)
+
+		// Alice: the sharings are still active, with ready members, and the
+		// shared roots still reference their sharings
+		for _, tc := range []struct{ sharingID, dirID, email string }{
+			{parentSharingID, parentRootID, "betty@example.net"},
+			{nestedSharingID, nestedDirID, "dave@example.net"},
+		} {
+			s, err := sharing.FindSharing(env.acme, tc.sharingID)
+			require.NoError(t, err)
+			require.True(t, s.Active, "sharing %s should not be revoked", tc.sharingID)
+			member := findSharingMemberByEmail(t, env.acme, tc.sharingID, tc.email)
+			require.Equal(t, sharing.MemberStatusReady, member.Status)
+			dir, err := env.acme.VFS().DirByID(tc.dirID)
+			require.NoError(t, err)
+			require.Contains(t, dir.ReferencedBy, couchdb.DocReference{
+				ID:   tc.sharingID,
+				Type: consts.Sharings,
+			})
+		}
+
+		// Bob still sees both of his drives, Charlie still sees his, and
+		// their sharings are still active
+		assertRecipientCanBrowseDrive(t, eB, env.bettyToken, parentSharingID, parentRootID)
+		assertRecipientCanBrowseDrive(t, eD, env.daveToken, nestedSharingID, nestedDirID)
+		assertRecipientCanBrowseDrive(t, eB, env.bettyToken, otherSharingID, otherRootID)
+		s, err := sharing.FindSharing(env.betty, parentSharingID)
+		require.NoError(t, err)
+		require.True(t, s.Active, "Bob's sharing of parent should not be revoked")
+		s, err = sharing.FindSharing(env.betty, otherSharingID)
+		require.NoError(t, err)
+		require.True(t, s.Active, "Bob's sharing of other should not be revoked")
+		s, err = sharing.FindSharing(env.dave, nestedSharingID)
+		require.NoError(t, err)
+		require.True(t, s.Active, "Charlie's sharing of nested should not be revoked")
+	})
+
+	// Alice shares the parent drive with Bob, a nested drive inside it with
+	// Charlie, and the other drive with Bob. Moving the nested drive into the
+	// other drive is a metadata-only move and must not revoke any of the
+	// involved sharings.
+	t.Run("MoveNestedDriveIntoAnotherSharedDrive_DoesNotRevokeSharings", func(t *testing.T) {
+		eA, _, _ := env.createClients(t)
+
+		// /parent is the drive from the env setup, already accepted by Bob
+		parentSharingID := env.firstSharingID
+		parentRootID := env.firstRootDirID
+
+		// Nested drive /parent/nested, accepted by Charlie
+		nestedDirID := createDirectory(t, eA, parentRootID, testify(t, "Nested"), env.acmeToken)
+		nestedSharingID := createDriveSharingOnDir(t, env.acme, env.acmeToken, env.tsA.URL,
+			nestedDirID, testify(t, "NestedDrive"), "Drive nested in the parent drive",
+			[]RecipientInfo{{Name: "Dave", Email: "dave@example.net"}})
+		acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, nestedSharingID)
+
+		// /other drive, accepted by Bob
+		otherSharingID, otherRootID, _ := createSharedDrive(t, DriveCreationMethodLegacy, env.acme, env.acmeToken, env.tsA.URL,
+			testify(t, "OtherDrive"), "Destination drive for the nested move",
+			[]RecipientInfo{{Name: "Betty", Email: "betty@example.net"}})
+		acceptSharedDriveForBetty(t, env.acme, env.betty, env.tsA.URL, env.tsB.URL, otherSharingID)
+
+		// Sanity: Bob and Charlie can browse their drives
+		_, eB, eD := env.createClients(t)
+		assertRecipientCanBrowseDrive(t, eB, env.bettyToken, parentSharingID, parentRootID)
+		assertRecipientCanBrowseDrive(t, eD, env.daveToken, nestedSharingID, nestedDirID)
+		assertRecipientCanBrowseDrive(t, eB, env.bettyToken, otherSharingID, otherRootID)
+
+		// Alice moves nested into other
+		postMove(t, eA, env.acmeToken, `{
+			  "source": {
+			    "instance": "https://`+env.acme.Domain+`",
+			    "sharing_id": "`+parentSharingID+`",
+			    "dir_id": "`+nestedDirID+`"
+			  },
+			  "dest": {
+			    "instance": "https://`+env.acme.Domain+`",
+			    "sharing_id": "`+otherSharingID+`",
+			    "dir_id": "`+otherRootID+`"
+			  }
+			}`)
+
+		// Alice: the moved drive sits inside the other drive
+		otherRoot, err := env.acme.VFS().DirByID(otherRootID)
+		require.NoError(t, err)
+		nestedDir, err := env.acme.VFS().DirByID(nestedDirID)
+		require.NoError(t, err)
+		require.Equal(t, otherRoot.Fullpath+"/"+nestedDir.DocName, nestedDir.Fullpath)
+
+		// Alice: the sharings are still active, with ready members, and the
+		// shared roots still reference their sharings
+		for _, tc := range []struct{ sharingID, dirID, email string }{
+			{parentSharingID, parentRootID, "betty@example.net"},
+			{nestedSharingID, nestedDirID, "dave@example.net"},
+		} {
+			s, err := sharing.FindSharing(env.acme, tc.sharingID)
+			require.NoError(t, err)
+			require.True(t, s.Active, "sharing %s should not be revoked", tc.sharingID)
+			member := findSharingMemberByEmail(t, env.acme, tc.sharingID, tc.email)
+			require.Equal(t, sharing.MemberStatusReady, member.Status)
+			dir, err := env.acme.VFS().DirByID(tc.dirID)
+			require.NoError(t, err)
+			require.Contains(t, dir.ReferencedBy, couchdb.DocReference{
+				ID:   tc.sharingID,
+				Type: consts.Sharings,
+			})
+		}
+
+		// Bob still sees both of his drives, Charlie still sees his, and
+		// their sharings are still active
+		assertRecipientCanBrowseDrive(t, eB, env.bettyToken, parentSharingID, parentRootID)
+		assertRecipientCanBrowseDrive(t, eD, env.daveToken, nestedSharingID, nestedDirID)
+		assertRecipientCanBrowseDrive(t, eB, env.bettyToken, otherSharingID, otherRootID)
+		s, err := sharing.FindSharing(env.betty, parentSharingID)
+		require.NoError(t, err)
+		require.True(t, s.Active, "Bob's sharing of parent should not be revoked")
+		s, err = sharing.FindSharing(env.betty, otherSharingID)
+		require.NoError(t, err)
+		require.True(t, s.Active, "Bob's sharing of other should not be revoked")
+		s, err = sharing.FindSharing(env.dave, nestedSharingID)
+		require.NoError(t, err)
+		require.True(t, s.Active, "Charlie's sharing of nested should not be revoked")
+	})
+}
+
+// assertRecipientCanBrowseDrive checks that a recipient can still read the
+// root directory of a shared drive through the drive proxy.
+func assertRecipientCanBrowseDrive(t *testing.T, e *httpexpect.Expect, token, sharingID, rootDirID string) {
+	t.Helper()
+
+	e.GET("/sharings/drives/"+sharingID+"/"+rootDirID).
+		WithHeader("Authorization", "Bearer "+token).
+		Expect().Status(http.StatusOK)
+}
+
+// createDriveSharingOnDir creates a drive sharing on an existing directory,
+// like createSharedDrive with the legacy method, but without creating the
+// root directory itself. All recipients are read-write.
+func createDriveSharingOnDir(
+	t *testing.T,
+	inst *instance.Instance,
+	appToken string,
+	tsURL string,
+	dirID string,
+	driveName string,
+	description string,
+	recipients []RecipientInfo,
+) string {
+	t.Helper()
+
+	e := httpexpect.Default(t, tsURL)
+
+	var refs []string
+	for _, r := range recipients {
+		c := createContact(t, inst, r.Name, r.Email)
+		require.NotNil(t, c)
+		refs = append(refs, `{"id": "`+c.ID()+`", "type": "`+c.DocType()+`"}`)
+	}
+
+	sharingID := e.POST("/sharings/").
+		WithHeader("Authorization", "Bearer "+appToken).
+		WithHeader("Content-Type", "application/vnd.api+json").
+		WithBytes([]byte(`{
+			"data": {
+				"type": "` + consts.Sharings + `",
+				"attributes": {
+					"description": "` + description + `",
+					"drive": true,
+					"rules": [{
+						"title": "` + driveName + `",
+						"doctype": "` + consts.Files + `",
+						"values": ["` + dirID + `"]
+					}]
+				},
+				"relationships": {
+					"recipients": {
+						"data": [` + strings.Join(refs, ",") + `]
+					}
+				}
+			}
+		}`)).
+		Expect().Status(201).
+		JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+		Object().Path("$.data.id").String().NotEmpty().Raw()
+	return sharingID
 }
 
 func TestSharedDrivesCopy(t *testing.T) {
@@ -1594,6 +1937,51 @@ func TestSharedDrivesCopy(t *testing.T) {
 
 		// Verify the original directory still exists (not deleted)
 		verifyFileExists(t, env.acme, fileToMoveID, fileToMoveName, secondRootDirID, "foo")
+	})
+
+	t.Run("SuccessfulCopy_DirectoryFromSharedDriveToLocal_Readonly_DifferentStack", func(t *testing.T) {
+		eA, _, eD := env.createClients(t)
+		cleanup := forceCrossStack(t, env.tsA.URL)
+		defer cleanup()
+
+		// Prepare: create a second shared drive with Dave as read-only recipient
+		secondSharingID, secondRootDirID, _ := createSharedDrive(t, DriveCreationMethodLegacy, env.acme, env.acmeToken, env.tsA.URL,
+			testify(t, "ShareDrive"), "Drive used as read-only dir copy source", nil)
+		// Dave needs to accept the sharing invitation (read-only recipients still need to accept)
+		acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, secondSharingID)
+
+		dirToCopy := createDirectory(t, eA, secondRootDirID, testify(t, "SharedDirToCopy"), env.acmeToken)
+		_ = createFile(t, eA, dirToCopy, "shared-file1.txt", env.acmeToken)
+		subDirID := createDirectory(t, eA, dirToCopy, "SharedSubDir", env.acmeToken)
+		_ = createFile(t, eA, subDirID, "shared-file2.bin", env.acmeToken)
+
+		daveDirID := createDirectory(t, eD, "", testify(t, "DaveDir"), env.daveToken)
+
+		// Verify Dave can access the shared drive
+		eD.GET("/sharings/drives/"+secondSharingID+"/"+secondRootDirID).
+			WithHeader("Authorization", "Bearer "+env.daveToken).
+			Expect().Status(200)
+
+		responseObj := postMove(t, eD, env.daveToken, `{
+			  "source": {
+			    "dir_id": "`+dirToCopy+`",
+				"sharing_id": "`+secondSharingID+`",
+				"instance": "https://`+env.acme.Domain+`"
+			  },
+			  "dest": {
+			    "dir_id": "`+daveDirID+`"
+			  },
+			  "copy": true
+			}`)
+
+		// Verify the response and get copied directory ID
+		copiedDirID := assertDirectoryResponse(t, responseObj, testify(t, "SharedDirToCopy"), daveDirID)
+
+		// Verify the directory was copied with all its contents
+		verifyDirectoryCopy(t, env.dave, copiedDirID, testify(t, "SharedDirToCopy"), daveDirID)
+
+		// Verify the original directory still exists (not deleted)
+		verifyDirectoryExists(t, env.acme, dirToCopy, testify(t, "SharedDirToCopy"), secondRootDirID)
 	})
 
 	t.Run("Unprocessable_CopyFromFileRootSharedDriveWithNonRootFile", func(t *testing.T) {
