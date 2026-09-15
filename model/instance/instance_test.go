@@ -236,5 +236,29 @@ func TestInstance(t *testing.T) {
 
 		assert.False(t, (&instance.Instance{ContextName: "banner-malformed"}).BannerSettings().Enabled)
 		assert.False(t, (&instance.Instance{ContextName: "no-such-context"}).BannerSettings().Enabled)
+
+		t.Run("DefaultCTAHosts", func(t *testing.T) {
+			wasCSP, wasCSPPerContext := cfg.CSPAllowList, cfg.CSPPerContext
+			defer func() { cfg.CSPAllowList, cfg.CSPPerContext = wasCSP, wasCSPPerContext }()
+			cfg.CSPAllowList = map[string]string{
+				"font":    "https://Fonts.example.org:8443/ 'self' data: https: *.wild.example.org",
+				"connect": "http://plain.example.org wss://socket.example.org bare.example.org:443",
+			}
+			cfg.CSPPerContext = map[string]map[string]string{
+				"banner-listed": {"img": "img.example.org"},
+			}
+
+			listed := (&instance.Instance{ContextName: "banner-listed"}).BannerSettings()
+			for _, host := range []string{"manager.example.org", "fonts.example.org", "bare.example.org", "img.example.org"} {
+				assert.True(t, listed.AllowsCTAHost(host), host)
+			}
+			for _, host := range []string{"", "self", "data", "https", "wild.example.org", "*.wild.example.org", "plain.example.org", "socket.example.org"} {
+				assert.False(t, listed.AllowsCTAHost(host), host)
+			}
+
+			all := (&instance.Instance{ContextName: "banner-all"}).BannerSettings()
+			assert.True(t, all.AllowsCTAHost("fonts.example.org"))
+			assert.False(t, all.AllowsCTAHost("img.example.org"), "context CSP hosts stay in their context")
+		})
 	})
 }

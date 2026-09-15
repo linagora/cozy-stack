@@ -22,7 +22,9 @@ contexts:
 ```
 
 Set `command_categories` to `["*"]` to allow every category except `quota`.
-`cta_hosts` has no wildcard.
+The hosts of `csp_allowlist`, global and for the context, are always allowed as
+CTA hosts, so `cta_hosts` only lists the others. `cta_hosts` has no wildcard, and CSP
+wildcards, keywords, scheme sources and non-https URLs are ignored.
 
 Broker credentials, permissions and bindings control who can publish. Each
 category must have one owner and one addressing mode: the stack keeps one
@@ -94,7 +96,7 @@ and [shared fixtures](../model/banner/testdata) for complete examples.
 | `surface` | materialize | `banner` or `modal`. |
 | `text` | materialize | Locale map with nonempty `en`; at most 1024 bytes per locale. |
 | `title` | no | Locale map with nonempty `en` when supplied; at most 256 bytes per locale. |
-| `cta`, `secondaryCta` | no | Each has a locale-map `label` (nonempty `en`, at most 128 bytes per locale) and an absolute `https` `url` (at most 2048 bytes) whose host is in `banner.cta_hosts`. A secondary CTA requires a primary one. |
+| `cta`, `secondaryCta` | no | Each has a locale-map `label` (nonempty `en`, at most 128 bytes per locale) and an absolute `https` `url` (at most 2048 bytes) whose host is an allowed CTA host (see [Configuration](#configuration)). A secondary CTA requires a primary one. |
 | `dismissible` | no | Defaults to false. A modal without a CTA is made dismissible. |
 | `priority` | no | 0–1000; defaults to 0. Quota banners use 50 and 100. |
 | `startsAt`, `endsAt` | no | RFC3339. If both are supplied, `startsAt` must precede `endsAt`. An explicit start replaces the stored start; omission preserves it for the same occurrence when compatible with the end, otherwise defaults to the command's decision time. |

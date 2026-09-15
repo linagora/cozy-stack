@@ -898,8 +898,9 @@ type BannerSettings struct {
 	// CommandCategories are the categories the banner command queue may
 	// write. "*" allows every category the command validation accepts.
 	CommandCategories []string `mapstructure:"command_categories"`
-	// CTAHosts are the hosts a banner command's call to action may link to.
-	// There is no wildcard: it would let a command send users anywhere.
+	// CTAHosts are the hosts a banner command's call to action may link to,
+	// on top of the context's CSP hosts. There is no wildcard: it
+	// would let a command send users anywhere.
 	CTAHosts []string `mapstructure:"cta_hosts"`
 }
 
@@ -911,7 +912,43 @@ func (i *Instance) BannerSettings() BannerSettings {
 	if !ok || mapstructure.Decode(ctxSettings["banner"], &settings) != nil {
 		return BannerSettings{}
 	}
+	settings.CTAHosts = append(settings.CTAHosts, i.defaultCTAHosts()...)
 	return settings
+}
+
+// defaultCTAHosts are the hosts of the global and context CSP allowlists.
+func (i *Instance) defaultCTAHosts() []string {
+	var sources []string
+	cfg := config.GetConfig()
+	for _, list := range cfg.CSPAllowList {
+		sources = append(sources, strings.Fields(list)...)
+	}
+	for _, list := range cfg.CSPPerContext[i.ContextName] {
+		sources = append(sources, strings.Fields(list)...)
+	}
+	var hosts []string
+	for _, src := range sources {
+		if host := ctaHostOfSource(src); host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
+}
+
+// ctaHostOfSource returns the host of a URL or CSP host source, or "" for a
+// wildcard, a keyword ('self'), a scheme source (data:) or a non-https URL.
+func ctaHostOfSource(src string) string {
+	if strings.Contains(src, "*") || strings.HasPrefix(src, "'") || strings.HasSuffix(src, ":") {
+		return ""
+	}
+	if !strings.Contains(src, "://") {
+		src = "https://" + src
+	}
+	u, err := url.Parse(src)
+	if err != nil || u.Scheme != "https" {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }
 
 // AllowsCategory reports whether the banner command queue may write a category.
