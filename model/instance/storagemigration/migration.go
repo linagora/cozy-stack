@@ -20,6 +20,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/vfs"
+	"github.com/cozy/cozy-stack/model/vfs/vfsafero"
 	"github.com/cozy/cozy-stack/model/vfs/vfss3"
 	"github.com/cozy/cozy-stack/model/vfs/vfsswift"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -389,10 +390,10 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 		return nil, errors.New("storagemigration: flag-only migration requires Force: any write performed against the source since the previous cutover would be lost")
 	}
 
-	// Build the SOURCE from the instance's current backend before touching
-	// anything (the instance already knows how to build it for its current
-	// scheme).
-	src := inst.VFS()
+	src, err := buildSource(inst)
+	if err != nil {
+		return nil, err
+	}
 	srcAv := inst.AvatarFS()
 
 	if err := lifecycle.Block(inst, instance.BlockedMoving.Code); err != nil {
@@ -403,6 +404,12 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 	if err := waitForQuietStorage(inst, 5*time.Second); err != nil {
 		return nil, err
 	}
+	mutex := config.Lock().LongOperation(inst, "vfs")
+	if err := mutex.Lock(); err != nil {
+		return nil, fmt.Errorf("storagemigration: lock instance VFS: %w", err)
+	}
+	defer mutex.Unlock()
+
 	dst, dstAv, err := buildTarget(inst, opts.To)
 	if err != nil {
 		return nil, err
@@ -463,6 +470,24 @@ func waitForQuietStorage(db prefixer.Prefixer, quietPeriod time.Duration) error 
 		return errors.New("storagemigration: file storage changed during the quiet period; retry when the instance is idle")
 	}
 	return nil
+}
+
+// buildSource uses a separate mutex so migration can read while holding the
+// instance's VFS write lock.
+func buildSource(inst *instance.Instance) (vfs.VFS, error) {
+	index := vfs.NewCouchdbIndexer(inst)
+	disk := vfs.DiskThresholder(inst)
+	mutex := config.Lock().ReadWrite(inst, "vfs-migration-source")
+	switch inst.StorageScheme() {
+	case config.SchemeFile, config.SchemeMem:
+		return vfsafero.New(inst, index, disk, mutex, config.FsURL(), inst.DirName())
+	case config.SchemeSwift, config.SchemeSwiftSecure:
+		return vfsswift.NewV3(inst, index, disk, mutex)
+	case config.SchemeS3:
+		return vfss3.New(inst, index, disk, mutex)
+	default:
+		return nil, fmt.Errorf("storagemigration: unsupported source scheme %q", inst.StorageScheme())
+	}
 }
 
 // buildTarget constructs the VFS + Avatarer pair for the target scheme,

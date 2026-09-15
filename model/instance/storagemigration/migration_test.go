@@ -386,6 +386,67 @@ func TestWaitForQuietStorage(t *testing.T) {
 	}
 }
 
+type migrationTransport func(*http.Request) (*http.Response, error)
+
+func (f migrationTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestMigrateHoldsVFSLock(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failCopy bool
+	}{
+		{name: "success"},
+		{name: "copy failure", failCopy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inst := setupMigrateInstance(t)
+			mutex := config.Lock().ReadWrite(inst, "vfs")
+			probe, ok := mutex.(interface{ TryLock() bool })
+			require.True(t, ok, "the test must use an in-memory lock")
+
+			cfg := config.GetConfig()
+			previousClient := cfg.CouchDB.Client
+			defer func() { cfg.CouchDB.Client = previousClient }()
+			client := *previousClient
+			transport := client.Transport
+			if transport == nil {
+				transport = http.DefaultTransport
+			}
+			var enumerations atomic.Int32
+			client.Transport = migrationTransport(func(req *http.Request) (*http.Response, error) {
+				if path.Base(req.URL.Path) == "_all_docs" && path.Base(path.Dir(req.URL.Path)) == couchdb.EscapeCouchdbName(consts.Files) {
+					enumerations.Add(1)
+					if probe.TryLock() {
+						mutex.Unlock()
+						t.Error("the instance VFS must stay locked during copying and verification")
+					}
+					if tc.failCopy {
+						return nil, errors.New("injected copy failure")
+					}
+				}
+				return transport.RoundTrip(req)
+			})
+			cfg.CouchDB.Client = &client
+
+			_, err := Migrate(inst, Options{To: config.SchemeS3})
+			if tc.failCopy {
+				require.ErrorContains(t, err, "injected copy failure")
+				assert.EqualValues(t, 1, enumerations.Load())
+				assert.Empty(t, inst.FsScheme)
+			} else {
+				require.NoError(t, err)
+				assert.EqualValues(t, 2, enumerations.Load())
+				assert.Equal(t, config.SchemeS3, inst.FsScheme)
+			}
+			assert.False(t, inst.Blocked)
+			require.True(t, probe.TryLock(), "migration must release the VFS lock on return")
+			mutex.Unlock()
+		})
+	}
+}
+
 func TestMigrateFlipsSchemeAfterVerify(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
@@ -514,6 +575,11 @@ func TestMigratePurgeSourceRemovesSourceObjects(t *testing.T) {
 	// successful (and now unrevertable) flip.
 	_, _, err = config.GetSwiftConnection().Container(context.Background(), containerName)
 	assert.True(t, errors.Is(err, swiftv2.ContainerNotFound), "expected the swift container to be gone after purge, got err=%v", err)
+
+	// Exercise the S3 source under the same VFS lock by copying back to Swift.
+	_, err = Migrate(inst, Options{To: config.SchemeSwift})
+	require.NoError(t, err)
+	assert.Equal(t, config.SchemeSwift, inst.FsScheme)
 }
 
 // swiftContainerName builds the same per-instance swift V3 container that
