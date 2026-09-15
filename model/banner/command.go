@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -131,11 +130,13 @@ func (cmd Command) targets() ([]*instance.Instance, error) {
 }
 
 func (cmd Command) applyTo(inst *instance.Instance) error {
-	if !inst.BannerSettings().Enabled {
+	settings := inst.BannerSettings()
+	if !settings.Enabled {
 		return nil
 	}
-	if reason := cmd.refusal(inst); reason != "" {
-		log(inst).Warnf("%s: skipping revision %d, %s", cmd.Category, cmd.Revision, reason)
+	if !settings.AllowsCategory(cmd.Category) {
+		log(inst).Warnf("%s: skipping revision %d, category not in banner.command_categories",
+			cmd.Category, cmd.Revision)
 		return nil
 	}
 
@@ -158,32 +159,6 @@ func (cmd Command) applyTo(inst *instance.Instance) error {
 	}
 
 	return Materialize(inst, cmd.Category, cmd.banner(inst.Locale), time.Now())
-}
-
-// refusal says why the instance's context does not accept the command, or ""
-// when it does.
-func (cmd Command) refusal(inst *instance.Instance) string {
-	settings := inst.BannerSettings()
-	if !settings.AllowsCategory(cmd.Category) {
-		return "category not in banner.command_categories"
-	}
-	for _, cta := range []*CommandCTA{cmd.CTA, cmd.SecondaryCTA} {
-		if cta == nil {
-			continue
-		}
-		if host := ctaHost(cta.URL); !settings.AllowsCTAHost(host) {
-			return fmt.Sprintf("CTA host %q not in banner.cta_hosts", host)
-		}
-	}
-	return ""
-}
-
-func ctaHost(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return strings.ToLower(u.Hostname())
 }
 
 // banner keeps the accepted command with the localized presentation. Clears

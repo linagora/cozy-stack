@@ -112,7 +112,6 @@ func TestBannerCommandHandler(t *testing.T) {
 			"banner": map[string]interface{}{
 				"enabled":            true,
 				"command_categories": []interface{}{"billing"},
-				"cta_hosts":          []interface{}{"manager.example.org", "twake.app"},
 			},
 		},
 	}

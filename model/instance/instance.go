@@ -898,9 +898,6 @@ type BannerSettings struct {
 	// CommandCategories are the categories the banner command queue may
 	// write. "*" allows every category the command validation accepts.
 	CommandCategories []string `mapstructure:"command_categories"`
-	// CTAHosts are the hosts a banner command's call to action may link to.
-	// There is no wildcard: it would let a command send users anywhere.
-	CTAHosts []string `mapstructure:"cta_hosts"`
 }
 
 // BannerSettings returns the banner block of the instance's context. A missing
@@ -917,12 +914,6 @@ func (i *Instance) BannerSettings() BannerSettings {
 // AllowsCategory reports whether the banner command queue may write a category.
 func (s BannerSettings) AllowsCategory(category string) bool {
 	return slices.Contains(s.CommandCategories, "*") || slices.Contains(s.CommandCategories, category)
-}
-
-// AllowsCTAHost reports whether a banner command's call to action may link to
-// this host.
-func (s BannerSettings) AllowsCTAHost(host string) bool {
-	return slices.Contains(s.CTAHosts, host)
 }
 
 func (i *Instance) HasPremiumLinksEnabled() bool {

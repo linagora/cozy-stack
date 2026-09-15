@@ -209,14 +209,12 @@ func TestInstance(t *testing.T) {
 				"banner": map[string]interface{}{
 					"enabled":            true,
 					"command_categories": []interface{}{"*"},
-					"cta_hosts":          []interface{}{"*"},
 				},
 			},
 			"banner-listed": map[string]interface{}{
 				"banner": map[string]interface{}{
 					"enabled":            true,
 					"command_categories": []interface{}{"billing"},
-					"cta_hosts":          []interface{}{"manager.example.org"},
 				},
 			},
 			"banner-malformed": map[string]interface{}{
@@ -227,12 +225,10 @@ func TestInstance(t *testing.T) {
 		all := (&instance.Instance{ContextName: "banner-all"}).BannerSettings()
 		assert.True(t, all.Enabled)
 		assert.True(t, all.AllowsCategory("trial"))
-		assert.False(t, all.AllowsCTAHost("evil.example"), "CTA hosts have no wildcard")
 
 		listed := (&instance.Instance{ContextName: "banner-listed"}).BannerSettings()
 		assert.True(t, listed.AllowsCategory("billing"))
 		assert.False(t, listed.AllowsCategory("trial"))
-		assert.True(t, listed.AllowsCTAHost("manager.example.org"))
 
 		assert.False(t, (&instance.Instance{ContextName: "banner-malformed"}).BannerSettings().Enabled)
 		assert.False(t, (&instance.Instance{ContextName: "no-such-context"}).BannerSettings().Enabled)

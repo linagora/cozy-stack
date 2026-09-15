@@ -563,10 +563,6 @@ contexts:
       command_categories:
         - billing
         - trial
-      # The hosts a banner command's call to action may link to. There is no
-      # wildcard.
-      cta_hosts:
-        - manager.example.org
     # List of applications that can be automatically updated even if the
     # permissions have changed
     additional_platform_apps:
