@@ -97,11 +97,31 @@ type FilePatch struct {
 // listing directory children. Tests can override this to force pagination.
 var ListChildrenPageSize = "100"
 
+// InDrive scopes the client to the given shared drive: file operations go
+// through the /sharings/drives/<id> endpoints instead of /files, so the
+// stack hosting the drive enforces member authorization. All the operations
+// routed through filesPath have a drive-route equivalent (reads, creation,
+// metadata patch, upload, overwrite, trash, restore, destroy). It mutates
+// and returns the receiver for chaining.
+func (c *Client) InDrive(driveID string) *Client {
+	c.driveID = driveID
+	return c
+}
+
+// filesPath prefixes p with the files API root: the shared-drive endpoints
+// when the client is scoped to a drive (InDrive), /files otherwise.
+func (c *Client) filesPath(p string) string {
+	if c.driveID != "" {
+		return "/sharings/drives/" + url.PathEscape(c.driveID) + p
+	}
+	return "/files" + p
+}
+
 // GetFileByID returns a File given the specified ID
 func (c *Client) GetFileByID(id string) (*File, error) {
 	res, err := c.Req(&request.Options{
 		Method: "GET",
-		Path:   "/files/" + url.PathEscape(id),
+		Path:   c.filesPath("/" + url.PathEscape(id)),
 	})
 	if err != nil {
 		return nil, err
@@ -113,7 +133,7 @@ func (c *Client) GetFileByID(id string) (*File, error) {
 func (c *Client) GetFileByPath(name string) (*File, error) {
 	res, err := c.Req(&request.Options{
 		Method:  "GET",
-		Path:    "/files/metadata",
+		Path:    c.filesPath("/metadata"),
 		Queries: url.Values{"Path": {name}},
 	})
 	if err != nil {
@@ -126,7 +146,7 @@ func (c *Client) GetFileByPath(name string) (*File, error) {
 func (c *Client) GetDirByID(id string) (*Dir, error) {
 	res, err := c.Req(&request.Options{
 		Method: "GET",
-		Path:   "/files/" + url.PathEscape(id),
+		Path:   c.filesPath("/" + url.PathEscape(id)),
 	})
 	if err != nil {
 		return nil, err
@@ -138,7 +158,7 @@ func (c *Client) GetDirByID(id string) (*Dir, error) {
 func (c *Client) GetDirByPath(name string) (*Dir, error) {
 	res, err := c.Req(&request.Options{
 		Method:  "GET",
-		Path:    "/files/metadata",
+		Path:    c.filesPath("/metadata"),
 		Queries: url.Values{"Path": {name}},
 	})
 	if err != nil {
@@ -151,7 +171,7 @@ func (c *Client) GetDirByPath(name string) (*Dir, error) {
 func (c *Client) GetDirOrFileByPath(name string) (*DirOrFile, error) {
 	res, err := c.Req(&request.Options{
 		Method:  "GET",
-		Path:    "/files/metadata",
+		Path:    c.filesPath("/metadata"),
 		Queries: url.Values{"Path": {name}},
 	})
 	if err != nil {
@@ -175,7 +195,7 @@ func (c *Client) Mkdirall(name string) (*Dir, error) {
 func (c *Client) mkdir(name string, recur string) (*Dir, error) {
 	res, err := c.Req(&request.Options{
 		Method: "POST",
-		Path:   "/files/",
+		Path:   c.filesPath("/"),
 		Queries: url.Values{
 			"Path":      {name},
 			"Type":      {"directory"},
@@ -193,7 +213,7 @@ func (c *Client) mkdir(name string, recur string) (*Dir, error) {
 func (c *Client) DownloadByID(id string) (io.ReadCloser, error) {
 	res, err := c.Req(&request.Options{
 		Method: "GET",
-		Path:   "/files/download/" + url.PathEscape(id),
+		Path:   c.filesPath("/download/" + url.PathEscape(id)),
 	})
 	if err != nil {
 		return nil, err
@@ -206,7 +226,7 @@ func (c *Client) DownloadByID(id string) (io.ReadCloser, error) {
 func (c *Client) DownloadByPath(name string) (io.ReadCloser, error) {
 	res, err := c.Req(&request.Options{
 		Method:  "GET",
-		Path:    "/files/download",
+		Path:    c.filesPath("/download"),
 		Queries: url.Values{"Path": {name}},
 	})
 	if err != nil {
@@ -237,13 +257,13 @@ func (c *Client) Upload(u *Upload) (*File, error) {
 
 	if u.Overwrite {
 		opts.Method = "PUT"
-		opts.Path = "/files/" + url.PathEscape(u.FileID)
+		opts.Path = c.filesPath("/" + url.PathEscape(u.FileID))
 		if u.FileRev != "" {
 			headers["If-Match"] = u.FileRev
 		}
 	} else {
 		opts.Method = "POST"
-		opts.Path = "/files/" + url.PathEscape(u.DirID)
+		opts.Path = c.filesPath("/" + url.PathEscape(u.DirID))
 		opts.Queries = url.Values{
 			"Type": {"file"},
 			"Name": {u.Name},
@@ -269,7 +289,7 @@ func (c *Client) UpdateAttrsByID(id string, patch *FilePatch) (*DirOrFile, error
 	}
 	res, err := c.Req(&request.Options{
 		Method:  "PATCH",
-		Path:    "/files/" + id,
+		Path:    c.filesPath("/" + id),
 		Body:    body,
 		Headers: headers,
 	})
@@ -292,7 +312,7 @@ func (c *Client) UpdateAttrsByPath(name string, patch *FilePatch) (*DirOrFile, e
 	}
 	res, err := c.Req(&request.Options{
 		Method:  "PATCH",
-		Path:    "/files/metadata",
+		Path:    c.filesPath("/metadata"),
 		Headers: headers,
 		Body:    body,
 		Queries: url.Values{"Path": {name}},
@@ -325,7 +345,7 @@ func (c *Client) Move(from, to string) error {
 func (c *Client) TrashByID(id string) error {
 	_, err := c.Req(&request.Options{
 		Method:     "DELETE",
-		Path:       "/files/" + url.PathEscape(id),
+		Path:       c.filesPath("/" + url.PathEscape(id)),
 		NoResponse: true,
 	})
 	return err
@@ -346,7 +366,7 @@ func (c *Client) TrashByPath(name string) error {
 func (c *Client) RestoreByID(id string) error {
 	_, err := c.Req(&request.Options{
 		Method:     "POST",
-		Path:       "/files/trash/" + url.PathEscape(id),
+		Path:       c.filesPath("/trash/" + url.PathEscape(id)),
 		NoResponse: true,
 	})
 	return err
@@ -367,7 +387,7 @@ func (c *Client) RestoreByPath(name string) error {
 func (c *Client) PermanentDeleteByID(id string) error {
 	_, err := c.Req(&request.Options{
 		Method:     "PATCH",
-		Path:       "/files/" + url.PathEscape(id),
+		Path:       c.filesPath("/" + url.PathEscape(id)),
 		Body:       strings.NewReader(`{"data": {"attributes": {"permanent_delete": true}}}`),
 		NoResponse: true,
 	})
@@ -407,7 +427,7 @@ func (c *Client) getIncludedPage(reqPath string, reqQuery url.Values) ([]*DirOrF
 // of the directory identified by its ID. It transparently follows pagination
 // and returns the complete list.
 func (c *Client) ListChildrenByDirID(id string) ([]*DirOrFile, error) {
-	reqPath := "/files/" + url.PathEscape(id)
+	reqPath := c.filesPath("/" + url.PathEscape(id))
 	reqQuery := url.Values{"page[limit]": {ListChildrenPageSize}}
 	var all []*DirOrFile
 	for {
@@ -458,7 +478,7 @@ func walk(c *Client, name string, doc *DirOrFile, walkFn WalkFn) error {
 		return nil
 	}
 
-	reqPath := "/files/" + url.PathEscape(doc.ID)
+	reqPath := c.filesPath("/" + url.PathEscape(doc.ID))
 	reqQuery := url.Values{"page[limit]": {ListChildrenPageSize}}
 	for {
 		included, next, err := c.getIncludedPage(reqPath, reqQuery)
