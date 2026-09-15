@@ -347,6 +347,9 @@ type containerNamer interface {
 // purgeOnly. Without PurgeSource, opts.To == the current scheme is still an
 // error.
 func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
+	if opts.DryRun && opts.PurgeSource {
+		return nil, errors.New("storagemigration: dry-run cannot be combined with purge-source")
+	}
 	switch opts.To {
 	case config.SchemeS3, config.SchemeSwift:
 	default:
