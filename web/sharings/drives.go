@@ -1650,6 +1650,15 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	reqPath := c.Request().URL.Path
 	fileID := c.Param("file-id")
 
+	// Only the owner can trash or destroy the root of a shared drive: the VFS
+	// revocation hook would take the whole drive down with it. Deleting a
+	// version of the root file is neither: it leaves the drive in place.
+	if method == http.MethodDelete && c.Param("version-id") == "" {
+		if rootID, err := s.DriveRootID(); err == nil && fileID == rootID {
+			return jsonapi.Forbidden(errors.New("only the owner can trash or destroy the root of a shared drive"))
+		}
+	}
+
 	// Share-by-link routes keep their own authorization layer. Match the
 	// registered route pattern, not the raw URL, so a future route whose
 	// path contains "/permissions" cannot silently bypass this guard.
