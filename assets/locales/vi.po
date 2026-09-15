@@ -15,6 +15,9 @@ msgstr "Ảnh"
 msgid "Tree Notes"
 msgstr "Ghi chú"
 
+msgid "Tree Mail"
+msgstr "Thư"
+
 msgid "Tree Shared Drives"
 msgstr "Ổ đĩa được chia sẻ"
 

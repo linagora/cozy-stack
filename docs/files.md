@@ -745,6 +745,14 @@ A file is a binary content with some metadata.
 
 Upload a file in the directory identified by `:dir-id`.
 
+The `:dir-id` can be omitted when the `MagicFolder` parameter is given: the
+file is then uploaded in the directory referenced by the given application
+(like `io.cozy.apps/mail`). If no directory has this reference, it is created
+at the root of the instance with a name translated in the locale of the
+instance, or an existing directory with this name is reused. Only the
+references known by the stack are accepted, the others are rejected with a
+`422 Unprocessable Entity` error.
+
 The `created_at` field will be the first valid value in this list:
 
 - the datetime extracted from the EXIF for a photo
@@ -778,6 +786,7 @@ then the `updated_at` will be set with the value of the `created_at`.
 | UpdatedAt               | the modification date of the file                              |
 | SourceAccount           | the id of the source account used by a konnector               |
 | SourceAccountIdentifier | the unique identifier of the account targeted by the connector |
+| MagicFolder             | the reference of the parent directory, like `io.cozy.apps/mail` (only with `POST /files/`) |
 
 #### HTTP headers
 

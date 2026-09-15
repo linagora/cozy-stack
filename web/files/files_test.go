@@ -3792,6 +3792,84 @@ func TestFiles(t *testing.T) {
 		ref.ValueEqual("type", "io.cozy.photos.albums")
 	})
 
+	t.Run("UploadToMagicFolder", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		upload := func(name string) *httpexpect.Object {
+			return e.POST("/files/").
+				WithQuery("Type", "file").
+				WithQuery("Name", name).
+				WithQuery("MagicFolder", "io.cozy.apps/mail").
+				WithHeader("Content-Type", "text/plain").
+				WithHeader("Authorization", "Bearer "+token).
+				WithBytes([]byte("baz")).
+				Expect().Status(201).
+				JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+				Object()
+		}
+
+		// The first upload creates the folder at the root
+		dirID := upload("first.txt").Path("$.data.attributes.dir_id").String().NotEmpty().Raw()
+
+		obj := e.GET("/files/"+dirID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+		attrs := obj.Path("$.data.attributes").Object()
+		attrs.ValueEqual("name", "Mail")
+		attrs.ValueEqual("dir_id", consts.RootDirID)
+		ref := obj.Path("$.data.relationships.referenced_by.data").Array().First().Object()
+		ref.ValueEqual("id", "io.cozy.apps/mail")
+		ref.ValueEqual("type", consts.Apps)
+
+		// The next uploads reuse the folder, even after it has been renamed
+		upload("second.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
+
+		e.PATCH("/files/"+dirID).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithHeader("Authorization", "Bearer "+token).
+			WithBytes([]byte(`{"data":{"type":"io.cozy.files","id":"` + dirID + `","attributes":{"name":"Attachments"}}}`)).
+			Expect().Status(200)
+
+		upload("third.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
+
+		// A trashed folder is restored
+		e.DELETE("/files/"+dirID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
+
+		upload("fourth.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
+
+		attrs = e.GET("/files/"+dirID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.attributes").Object()
+		attrs.ValueEqual("dir_id", consts.RootDirID)
+		attrs.ValueEqual("path", "/Attachments")
+
+		// Only known references are accepted
+		e.POST("/files/").
+			WithQuery("Type", "file").
+			WithQuery("Name", "unknown.txt").
+			WithQuery("MagicFolder", "io.cozy.apps/unknown").
+			WithHeader("Content-Type", "text/plain").
+			WithHeader("Authorization", "Bearer "+token).
+			WithBytes([]byte("baz")).
+			Expect().Status(422)
+
+		// MagicFolder cannot be combined with a dir-id
+		e.POST("/files/"+dirID).
+			WithQuery("Type", "file").
+			WithQuery("Name", "both.txt").
+			WithQuery("MagicFolder", "io.cozy.apps/mail").
+			WithHeader("Content-Type", "text/plain").
+			WithHeader("Authorization", "Bearer "+token).
+			WithBytes([]byte("baz")).
+			Expect().Status(422)
+	})
+
 	t.Run("DirSize", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

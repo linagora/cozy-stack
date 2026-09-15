@@ -24,6 +24,9 @@ msgstr "Fotos"
 msgid "Tree Notes"
 msgstr "Notizen"
 
+msgid "Tree Mail"
+msgstr "E-Mail"
+
 msgid "Tree Shared Drives"
 msgstr "Drives"
 
