@@ -22,6 +22,35 @@ The root of the virtual file system is a special directory with id
 You can use it in any request where you would use a directory, except you cannot
 delete it.
 
+### Magic folders
+
+These endpoints accept a magic folder ID in the directory path parameter:
+
+- `POST /files/:dir-id` with `Type=file` or `Type=directory`
+- `GET /files/:dir-id`
+- `GET /files/:dir-id/relationships/contents`
+- `GET /files/:dir-id/size`
+
+The supported IDs are `io.cozy.apps/mail`, `io.cozy.apps/notes`, and
+`io.cozy.files.shared-drives-dir` (the container for shared drives).
+Encode the slash in application IDs, for example:
+
+```http
+POST /files/io.cozy.apps%2Fmail?Type=file&Name=attachment.txt HTTP/1.1
+```
+
+The stack resolves application IDs through the matching `referenced_by`, even
+after a rename or move. It uses the first match. If none exists, or the directory
+is trashed, it creates a directory at the root with a translated name, or reuses
+an existing directory with that name. Trashed directories are left untouched.
+The Shared Drives container is created with its fixed ID if missing.
+
+Requests must be authenticated. Creating a missing magic folder does not
+require directory-creation permission; the requested operation still requires
+its usual permissions on the resolved directory. Response resource IDs and
+stored parent IDs use concrete directory IDs. Other IDs follow the usual lookup
+behavior.
+
 ### POST /files/:dir-id
 
 Create a new directory. The `dir-id` parameter is optional. When it's not given,
@@ -745,13 +774,7 @@ A file is a binary content with some metadata.
 
 Upload a file in the directory identified by `:dir-id`.
 
-The `:dir-id` can be omitted when the `MagicFolder` parameter is given: the
-file is then uploaded in the directory referenced by the given application
-(like `io.cozy.apps/mail`). If no directory has this reference, it is created
-at the root of the instance with a name translated in the locale of the
-instance, or an existing directory with this name is reused. Only the
-references known by the stack are accepted, the others are rejected with a
-`422 Unprocessable Entity` error.
+The `:dir-id` can be a [magic folder ID](#magic-folders).
 
 The `created_at` field will be the first valid value in this list:
 
@@ -786,7 +809,6 @@ then the `updated_at` will be set with the value of the `created_at`.
 | UpdatedAt               | the modification date of the file                              |
 | SourceAccount           | the id of the source account used by a konnector               |
 | SourceAccountIdentifier | the unique identifier of the account targeted by the connector |
-| MagicFolder             | the reference of the parent directory, like `io.cozy.apps/mail` (only with `POST /files/`) |
 
 #### HTTP headers
 

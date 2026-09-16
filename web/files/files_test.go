@@ -3792,14 +3792,20 @@ func TestFiles(t *testing.T) {
 		ref.ValueEqual("type", "io.cozy.photos.albums")
 	})
 
-	t.Run("UploadToMagicFolder", func(t *testing.T) {
+	t.Run("MagicFolder", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
+		magicPath := "/files/" + url.PathEscape("io.cozy.apps/mail")
+
+		// WithURL preserves the encoded slash in the request path.
+		// Resolving a missing folder requires authentication.
+		e.GET("").WithURL(ts.URL + magicPath).Expect().Status(http.StatusUnauthorized)
+		_, err := testInstance.VFS().DirByPath("/Mail")
+		require.ErrorIs(t, err, os.ErrNotExist)
 
 		upload := func(name string) *httpexpect.Object {
-			return e.POST("/files/").
+			return e.POST("").WithURL(ts.URL+magicPath).
 				WithQuery("Type", "file").
 				WithQuery("Name", name).
-				WithQuery("MagicFolder", "io.cozy.apps/mail").
 				WithHeader("Content-Type", "text/plain").
 				WithHeader("Authorization", "Bearer "+token).
 				WithBytes([]byte("baz")).
@@ -3810,18 +3816,49 @@ func TestFiles(t *testing.T) {
 
 		// The first upload creates the folder at the root
 		dirID := upload("first.txt").Path("$.data.attributes.dir_id").String().NotEmpty().Raw()
+		require.NotEqual(t, "io.cozy.apps/mail", dirID)
 
-		obj := e.GET("/files/"+dirID).
+		obj := e.GET("").WithURL(ts.URL+magicPath).
 			WithHeader("Authorization", "Bearer "+token).
 			Expect().Status(200).
 			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
 			Object()
+		obj.Path("$.data.id").String().Equal(dirID)
 		attrs := obj.Path("$.data.attributes").Object()
 		attrs.ValueEqual("name", "Mail")
 		attrs.ValueEqual("dir_id", consts.RootDirID)
 		ref := obj.Path("$.data.relationships.referenced_by.data").Array().First().Object()
 		ref.ValueEqual("id", "io.cozy.apps/mail")
 		ref.ValueEqual("type", consts.Apps)
+
+		child := e.POST("").WithURL(ts.URL+magicPath).
+			WithQuery("Type", "directory").
+			WithQuery("Name", "Documents").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object()
+		child.Path("$.data.attributes.dir_id").String().Equal(dirID)
+
+		obj = e.GET("").WithURL(ts.URL+magicPath+"/relationships/contents").
+			WithQuery("page[limit]", "1").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+		obj.Value("data").Array().Length().Equal(1)
+		next := obj.Path("$.links.next").String().NotEmpty().Raw()
+		e.GET("").WithURL(ts.URL+next).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Value("data").Array().Length().Equal(1)
+
+		obj = e.GET("").WithURL(ts.URL+magicPath+"/size").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object()
+		obj.Path("$.data.id").String().Equal(dirID)
+		obj.Path("$.data.attributes.size").String().Equal("3")
 
 		// The next uploads reuse the folder, even after it has been renamed
 		upload("second.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
@@ -3834,40 +3871,52 @@ func TestFiles(t *testing.T) {
 
 		upload("third.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
 
-		// A trashed folder is restored
+		// A new Mail folder leaves the trashed one untouched.
 		e.DELETE("/files/"+dirID).
 			WithHeader("Authorization", "Bearer "+token).
 			Expect().Status(200)
 
-		upload("fourth.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
+		newDirID := upload("fourth.txt").Path("$.data.attributes.dir_id").String().NotEmpty().Raw()
+		require.NotEqual(t, dirID, newDirID)
 
 		attrs = e.GET("/files/"+dirID).
 			WithHeader("Authorization", "Bearer "+token).
 			Expect().Status(200).
 			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
 			Object().Path("$.data.attributes").Object()
-		attrs.ValueEqual("dir_id", consts.RootDirID)
-		attrs.ValueEqual("path", "/Attachments")
+		attrs.ValueEqual("dir_id", consts.TrashDirID)
 
-		// Only known references are accepted
-		e.POST("/files/").
+		// Unknown IDs follow the usual missing-parent behavior.
+		e.POST("").WithURL(ts.URL+"/files/"+url.PathEscape("io.cozy.apps/unknown")).
 			WithQuery("Type", "file").
 			WithQuery("Name", "unknown.txt").
-			WithQuery("MagicFolder", "io.cozy.apps/unknown").
 			WithHeader("Content-Type", "text/plain").
 			WithHeader("Authorization", "Bearer "+token).
 			WithBytes([]byte("baz")).
-			Expect().Status(422)
+			Expect().Status(404)
 
-		// MagicFolder cannot be combined with a dir-id
-		e.POST("/files/"+dirID).
-			WithQuery("Type", "file").
-			WithQuery("Name", "both.txt").
-			WithQuery("MagicFolder", "io.cozy.apps/mail").
+		// A read-only caller can create the missing Notes folder, but cannot upload into it.
+		_, readToken := setup.GetTestClient(consts.Files + ":GET")
+		notesPath := "/files/" + url.PathEscape("io.cozy.apps/"+consts.NotesSlug)
+		e.POST("").WithURL(ts.URL+notesPath).
+			WithQuery("Type", "file").WithQuery("Name", "denied.txt").
 			WithHeader("Content-Type", "text/plain").
-			WithHeader("Authorization", "Bearer "+token).
-			WithBytes([]byte("baz")).
-			Expect().Status(422)
+			WithHeader("Authorization", "Bearer "+readToken).
+			WithBytes([]byte("denied")).Expect().Status(403)
+		notesID := e.GET("").WithURL(ts.URL+notesPath).
+			WithHeader("Authorization", "Bearer "+readToken).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().NotEmpty().Raw()
+		_, err = testInstance.VFS().FileByPath("/Notes/denied.txt")
+		require.ErrorIs(t, err, os.ErrNotExist)
+		require.NotEqual(t, "io.cozy.apps/"+consts.NotesSlug, notesID)
+
+		e.GET("/files/"+consts.SharedDrivesDirID).
+			WithHeader("Authorization", "Bearer "+readToken).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().Equal(consts.SharedDrivesDirID)
 	})
 
 	t.Run("DirSize", func(t *testing.T) {

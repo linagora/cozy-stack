@@ -101,32 +101,26 @@ func CreationHandler(c echo.Context) error {
 	return Create(c, nil)
 }
 
-var magicFolders = map[string]string{
-	consts.Apps + "/" + consts.NotesSlug: "Tree Notes",
-	consts.Apps + "/mail":                "Tree Mail",
-}
-
-func ensureMagicFolder(inst *instance.Instance, refID string) (*vfs.DirDoc, error) {
-	key, ok := magicFolders[refID]
-	if !ok {
-		return nil, jsonapi.InvalidParameter("MagicFolder", errors.New("unknown reference"))
+func resolveDirID(c echo.Context) (string, error) {
+	if _, err := middlewares.GetPermission(c); err != nil {
+		return "", err
 	}
-	ref := couchdb.DocReference{Type: consts.Apps, ID: refID}
-	return vfs.EnsureReferencedDir(inst, inst.VFS(), ref, inst.Translate(key), inst.PageURL("/", nil))
+	id, err := url.PathUnescape(c.Param("file-id"))
+	if err != nil {
+		return "", jsonapi.InvalidParameter("file-id", err)
+	}
+	id, err = middlewares.GetInstance(c).ResolveDirID(id)
+	if err != nil {
+		return "", WrapVfsError(err)
+	}
+	return id, nil
 }
 
 func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing) (createdFile *file, err error) {
 	inst := middlewares.GetInstance(c)
-	dirID := c.Param("file-id")
-	if refID := c.QueryParam("MagicFolder"); refID != "" {
-		if dirID != "" || sharedDrive != nil {
-			return nil, jsonapi.InvalidParameter("MagicFolder", errors.New("cannot be combined with a dir-id"))
-		}
-		dir, err := ensureMagicFolder(inst, refID)
-		if err != nil {
-			return nil, err
-		}
-		dirID = dir.ID()
+	dirID, err := resolveDirID(c)
+	if err != nil {
+		return nil, err
 	}
 	name := c.QueryParam("Name")
 	doc, err := FileDocFromReq(c, name, dirID)
@@ -214,7 +208,10 @@ func createDirHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing) 
 		return NewDir(doc, sharedDrive), nil
 	}
 
-	dirID := c.Param("file-id")
+	dirID, err := resolveDirID(c)
+	if err != nil {
+		return nil, err
+	}
 	name := c.QueryParam("Name")
 	doc, err = vfs.NewDirDoc(fs, name, dirID, tags)
 	if err != nil {
@@ -859,7 +856,10 @@ func ReadMetadataFromIDHandler(c echo.Context) error {
 		return err
 	}
 
-	fileID := c.Param("file-id")
+	fileID, err := resolveDirID(c)
+	if err != nil {
+		return err
+	}
 
 	dir, file, err := instance.VFS().DirOrFileByID(fileID)
 	if err != nil {
@@ -888,7 +888,10 @@ func ReadMetadataFromIDHandler(c echo.Context) error {
 func GetChildrenHandler(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
 
-	fileID := c.Param("file-id")
+	fileID, err := resolveDirID(c)
+	if err != nil {
+		return err
+	}
 
 	dir, file, err := instance.VFS().DirOrFileByID(fileID)
 	if err != nil {
@@ -925,7 +928,10 @@ func (d *ApiDiskSize) Links() *jsonapi.LinksList              { return nil }
 // in this directory, including those in subdirectories).
 func GetDirSize(c echo.Context) error {
 	fs := middlewares.GetInstance(c).VFS()
-	fileID := c.Param("file-id")
+	fileID, err := resolveDirID(c)
+	if err != nil {
+		return err
+	}
 
 	dir, err := fs.DirByID(fileID)
 	if err != nil {

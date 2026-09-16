@@ -15,6 +15,15 @@ import (
 func TestInstance(t *testing.T) {
 	config.UseTestFile(t)
 
+	t.Run("ResolveOrdinaryDirID", func(t *testing.T) {
+		inst := &instance.Instance{}
+		for _, id := range []string{"", "existing-id", "io.cozy.apps/unknown"} {
+			resolved, err := inst.ResolveDirID(id)
+			require.NoError(t, err)
+			assert.Equal(t, id, resolved)
+		}
+	})
+
 	t.Run("Subdomain", func(t *testing.T) {
 		inst := &instance.Instance{
 			Domain: "foo.example.com",

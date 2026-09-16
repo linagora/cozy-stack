@@ -144,11 +144,11 @@ func (d *Document) GetDirID(inst *instance.Instance) (string, error) {
 	if d.DirID != "" {
 		return d.DirID, nil
 	}
-	parent, err := ensureNotesDir(inst)
+	dirID, err := inst.ResolveDirID(consts.Apps + "/" + consts.NotesSlug)
 	if err != nil {
 		return "", err
 	}
-	d.DirID = parent.ID()
+	d.DirID = dirID
 	return d.DirID, nil
 }
 
@@ -284,15 +284,6 @@ func titleToFilename(inst *instance.Instance, title string, updatedAt time.Time)
 		name = name[:240]
 	}
 	return name + ".cozy-note"
-}
-
-func ensureNotesDir(inst *instance.Instance) (*vfs.DirDoc, error) {
-	ref := couchdb.DocReference{
-		Type: consts.Apps,
-		ID:   consts.Apps + "/" + consts.NotesSlug,
-	}
-	dirname := inst.Translate("Tree Notes")
-	return vfs.EnsureReferencedDir(inst, inst.VFS(), ref, dirname, inst.PageURL("/", nil))
 }
 
 // DebounceMessage is used by the trigger for saving the note to the VFS with a

@@ -332,6 +332,32 @@ func (i *Instance) ThumbsFS() vfs.Thumbser {
 	}
 }
 
+var magicFolders = map[string]string{
+	consts.Apps + "/" + consts.NotesSlug: "Tree Notes",
+	consts.Apps + "/mail":                "Tree Mail",
+}
+
+// ResolveDirID resolves a known magic folder to its concrete directory ID.
+// Missing magic folders are created without checking caller permissions;
+// callers must authorize the requested operation on the resolved directory.
+// Ordinary IDs are returned unchanged, without accessing the VFS.
+func (i *Instance) ResolveDirID(id string) (string, error) {
+	var dir *vfs.DirDoc
+	var err error
+	if id == consts.SharedDrivesDirID {
+		dir, err = i.EnsureSharedDrivesDir()
+	} else if key, ok := magicFolders[id]; ok {
+		ref := couchdb.DocReference{Type: consts.Apps, ID: id}
+		dir, err = vfs.EnsureReferencedDir(i, i.VFS(), ref, i.Translate(key), i.PageURL("/", nil))
+	} else {
+		return id, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return dir.ID(), nil
+}
+
 // EnsureSharedDrivesDir returns the Shared Drives directory, and creates it if
 // it doesn't exist
 func (i *Instance) EnsureSharedDrivesDir() (*vfs.DirDoc, error) {

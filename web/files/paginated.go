@@ -259,7 +259,7 @@ func dirDataList(c echo.Context, statusCode int, doc *vfs.DirDoc) error {
 		if err != nil {
 			return err
 		}
-		next := c.Request().URL.Path + "?" + params.Encode()
+		next := c.Request().URL.EscapedPath() + "?" + params.Encode()
 		links.Next = next
 	}
 
