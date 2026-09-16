@@ -476,16 +476,85 @@ func TestMigrateFlipsSchemeAfterVerify(t *testing.T) {
 	assertFileContentOn(t, s3fs, doc2, []byte("hello from migrate file 2, a bit longer"))
 }
 
-func TestMigrateDryRunDoesNotFlip(t *testing.T) {
+func TestMigrateDryRunIsReadOnly(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	rep, err := Migrate(inst, Options{To: config.SchemeS3, DryRun: true})
+	file, err := inst.VFS().FileByPath("/migrate-file1.txt")
 	require.NoError(t, err)
-	require.NotNil(t, rep)
-	assert.Greater(t, rep.Files, 0)
+	versionPayload := []byte("an older revision of file 1")
+	sum := md5.Sum(versionPayload)
+	version := &vfs.Version{
+		DocID:    file.DocID + "/" + utils.RandomString(16),
+		ByteSize: int64(len(versionPayload)),
+		MD5Sum:   sum[:],
+	}
+	version.Rels.File.Data.ID = file.DocID
+	require.NoError(t, inst.VFS().ImportFileVersion(version, io.NopCloser(bytes.NewReader(versionPayload))))
 
-	assert.Equal(t, "", inst.FsScheme)
-	assert.False(t, inst.Blocked, "instance must be unblocked after a dry-run migration")
+	inst.Blocked = true
+	inst.BlockingReason = instance.BlockedLoginFailed.Code
+	require.NoError(t, instance.Update(inst))
+	revBefore := inst.Rev()
+	seqsBefore, err := storageSequences(inst)
+	require.NoError(t, err)
+
+	mutex := config.Lock().ReadWrite(inst, "vfs")
+	require.NoError(t, mutex.Lock())
+	defer mutex.Unlock()
+
+	for _, flagOnly := range []bool{false, true} {
+		for range 2 {
+			rep, err := Migrate(inst, Options{To: config.SchemeS3, DryRun: true, FlagOnly: flagOnly, Force: flagOnly})
+			require.NoError(t, err)
+			assert.Equal(t, &Report{
+				Files:        2,
+				Versions:     1,
+				Bytes:        int64(len("hello from migrate file 1") + len("hello from migrate file 2, a bit longer") + len(versionPayload)),
+				AvatarCopied: true,
+			}, rep)
+			assert.Empty(t, inst.FsScheme)
+			assert.True(t, inst.Blocked)
+			assert.Equal(t, instance.BlockedLoginFailed.Code, inst.BlockingReason)
+			assert.Equal(t, revBefore, inst.Rev())
+		}
+	}
+
+	reloaded, err := instance.Get(inst.Domain)
+	require.NoError(t, err)
+	assert.Equal(t, revBefore, reloaded.Rev())
+	seqsAfter, err := storageSequences(inst)
+	require.NoError(t, err)
+	assert.Equal(t, seqsBefore, seqsAfter)
+
+	storage := config.GetS3Storage(config.S3StorageFiles)
+	for obj := range storage.Client.ListObjects(context.Background(), storage.Bucket, minio.ListObjectsOptions{
+		Prefix: storage.Prefix + inst.DBPrefix() + "/", Recursive: true,
+	}) {
+		require.NoError(t, obj.Err)
+		t.Errorf("dry-run created target object %s", obj.Key)
+	}
+}
+
+func TestMigrateDryRunDoesNotCreateSwiftContainer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	setup := testutils.NewSetup(t, t.Name())
+	setup.SetupSwiftTest()
+	inst := setup.GetTestInstance()
+	revBefore := inst.Rev()
+
+	rep, err := Migrate(inst, Options{To: config.SchemeSwift, DryRun: true})
+	require.NoError(t, err)
+	assert.Equal(t, &Report{}, rep)
+	assert.Empty(t, inst.FsScheme)
+	assert.False(t, inst.Blocked)
+	assert.Equal(t, revBefore, inst.Rev())
+
+	_, _, err = config.GetSwiftConnection().Container(context.Background(), swiftContainerName(t, inst))
+	assert.ErrorIs(t, err, swiftv2.ContainerNotFound)
 }
 
 func TestMigrateFlagOnlyRequiresForce(t *testing.T) {
@@ -687,23 +756,6 @@ func TestMigratePurgeOnlyWithoutPurgeFlagStillErrors(t *testing.T) {
 	_, err = Migrate(inst, Options{To: config.SchemeS3})
 	require.Error(t, err)
 	assert.Equal(t, config.SchemeS3, inst.FsScheme)
-}
-
-func TestMigrateFlagOnlyDryRunDoesNotFlip(t *testing.T) {
-	inst := setupMigrateInstance(t)
-
-	_, err := Migrate(inst, Options{To: config.SchemeS3})
-	require.NoError(t, err)
-	require.Equal(t, config.SchemeS3, inst.FsScheme)
-
-	inst.FsScheme = ""
-
-	rep, err := Migrate(inst, Options{To: config.SchemeS3, FlagOnly: true, Force: true, DryRun: true})
-	require.NoError(t, err)
-	require.NotNil(t, rep)
-	assert.Equal(t, 2, rep.Files)
-	assert.Equal(t, "", inst.FsScheme)
-	assert.False(t, inst.Blocked, "instance must be unblocked after a dry-run flag-only migration")
 }
 
 func TestS3MigrationUsesConfiguredBucketAndScopesPurge(t *testing.T) {

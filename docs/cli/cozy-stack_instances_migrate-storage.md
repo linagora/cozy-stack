@@ -15,7 +15,7 @@ cozy-stack instances migrate-storage <domain> [flags]
 ### Options
 
 ```
-      --dry-run        Report what would be copied without writing or switching
+      --dry-run        Preview source content without copying, blocking, or switching
       --flag-only      Switch the backend pointer without copying (rollback to a retained source)
       --force          Required with --flag-only; writes since cutover are lost
   -h, --help           help for migrate-storage

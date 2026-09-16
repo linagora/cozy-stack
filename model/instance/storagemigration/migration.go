@@ -43,7 +43,7 @@ type contentStater interface {
 	StatContentAt(docID, internalID string) (int64, error)
 }
 
-// Report summarizes a content copy performed by CopyContent.
+// Report summarizes copied content, or source content for a dry-run or flag-only migration.
 type Report struct {
 	Files        int
 	Versions     int
@@ -108,8 +108,7 @@ func verify(db prefixer.Prefixer, dst vfs.VFS, dstAv vfs.Avatarer, expected *Rep
 	return nil
 }
 
-// sourceReport describes the source content that an already-populated target
-// must contain before a flag-only switch.
+// sourceReport inventories source content for a dry-run or flag-only switch.
 func sourceReport(db prefixer.Prefixer, srcAv vfs.Avatarer) (*Report, error) {
 	rep := &Report{}
 
@@ -120,6 +119,7 @@ func sourceReport(db prefixer.Prefixer, srcAv vfs.Avatarer) (*Report, error) {
 		}
 		if doc.Type != consts.DirType {
 			rep.Files++
+			rep.Bytes += doc.ByteSize
 		}
 		return nil
 	})
@@ -127,8 +127,13 @@ func sourceReport(db prefixer.Prefixer, srcAv vfs.Avatarer) (*Report, error) {
 		return nil, err
 	}
 
-	err = couchdb.ForeachDocs(db, consts.FilesVersions, func(_ string, _ json.RawMessage) error {
+	err = couchdb.ForeachDocs(db, consts.FilesVersions, func(_ string, raw json.RawMessage) error {
+		var ver vfs.Version
+		if err := json.Unmarshal(raw, &ver); err != nil {
+			return fmt.Errorf("storagemigration: decode version doc: %w", err)
+		}
 		rep.Versions++
+		rep.Bytes += ver.ByteSize
 		return nil
 	})
 	if err != nil {
@@ -305,9 +310,8 @@ func splitVersionID(versionDocID string) (fileID, internalID string) {
 type Options struct {
 	// To is the target storage scheme: config.SchemeS3 or config.SchemeSwift.
 	To string
-	// DryRun copies and verifies the content on the target backend but does
-	// not flip the instance's FsScheme. Combined with FlagOnly, it verifies
-	// the retained target without switching.
+	// DryRun reports source content without blocking the instance, copying,
+	// verifying the target, or switching backends, including with FlagOnly.
 	DryRun bool
 	// FlagOnly switches to an already-populated target without copying.
 	FlagOnly bool
@@ -341,8 +345,8 @@ type containerNamer interface {
 // (instance.BlockedMoving) for the duration of the copy/verify and unblocked
 // on every return path.
 //
-// FsScheme is updated ONLY after verification succeeds; a DryRun or failed
-// verification always leaves FsScheme unchanged.
+// FsScheme is updated ONLY after verification succeeds. A DryRun only reports
+// source content and leaves the instance unchanged.
 //
 // If opts.To already equals the instance's current storage scheme AND
 // opts.PurgeSource is set, Migrate runs in purge-only mode instead: see
@@ -395,6 +399,9 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 		return nil, err
 	}
 	srcAv := inst.AvatarFS()
+	if opts.DryRun {
+		return sourceReport(inst, srcAv)
+	}
 
 	if err := lifecycle.Block(inst, instance.BlockedMoving.Code); err != nil {
 		return nil, fmt.Errorf("storagemigration: block instance: %w", err)
@@ -423,9 +430,6 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 		if err := verify(inst, dst, dstAv, expected); err != nil {
 			return expected, err
 		}
-		if opts.DryRun {
-			return expected, nil
-		}
 		return flip(inst, opts, srcScheme, expected)
 	}
 
@@ -435,10 +439,6 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 	}
 	if err := verify(inst, dst, dstAv, rep); err != nil {
 		return rep, err
-	}
-
-	if opts.DryRun {
-		return rep, nil
 	}
 
 	return flip(inst, opts, srcScheme, rep)

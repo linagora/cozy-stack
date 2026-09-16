@@ -274,8 +274,12 @@ The source data is kept unless --purge-source is given.`,
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stdout, "migrated: %d files, %d versions, %d bytes, avatar=%v\n",
-			rep.Files, rep.Versions, rep.Bytes, rep.AvatarCopied)
+		action := "migrated"
+		if flagMigrateDryRun {
+			action = "dry-run"
+		}
+		fmt.Fprintf(os.Stdout, "%s: %d files, %d versions, %d bytes, avatar=%v\n",
+			action, rep.Files, rep.Versions, rep.Bytes, rep.AvatarCopied)
 		return nil
 	},
 }
@@ -1135,7 +1139,7 @@ func init() {
 	addInstanceCmd.Flags().StringVar(&flagSettings, "settings", "", "A list of settings (eg context:foo,offer:premium)")
 	addInstanceCmd.Flags().IntVar(&flagSwiftLayout, "swift-layout", -1, "Specify the layout to use for Swift (from 0 for layout V1 to 2 for layout V3, -1 means the default)")
 	migrateStorageCmd.Flags().StringVar(&flagMigrateTo, "to", "s3", "Target storage scheme")
-	migrateStorageCmd.Flags().BoolVar(&flagMigrateDryRun, "dry-run", false, "Report what would be copied without writing or switching")
+	migrateStorageCmd.Flags().BoolVar(&flagMigrateDryRun, "dry-run", false, "Preview source content without copying, blocking, or switching")
 	migrateStorageCmd.Flags().BoolVar(&flagMigrateFlagOnly, "flag-only", false, "Switch the backend pointer without copying (rollback to a retained source)")
 	migrateStorageCmd.Flags().BoolVar(&flagMigrateForce, "force", false, "Required with --flag-only; writes since cutover are lost")
 	migrateStorageCmd.Flags().BoolVar(&flagMigratePurgeSource, "purge-source", false, "Delete source objects after a successful switch")
