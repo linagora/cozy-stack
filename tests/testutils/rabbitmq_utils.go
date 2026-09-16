@@ -14,6 +14,7 @@ import (
 
 	"github.com/docker/go-connections/nat"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	c "github.com/docker/docker/api/types/container"
@@ -138,6 +139,7 @@ func StartRabbitMQ(t *testing.T, withVolume bool, enableTLS bool) *RabbitFixture
 		_ = exec.Command("docker", "volume", "rm", volName).Run()
 	})
 
+	fixture.waitForAMQP(60 * time.Second)
 	return fixture
 }
 
@@ -191,6 +193,21 @@ func (f *RabbitFixture) Restart(ctx context.Context, timeout time.Duration) {
 	if f.AMQPSURL != "" {
 		f.t.Logf("AMQPS: %s", f.AMQPSURL)
 	}
+	f.waitForAMQP(timeout)
+}
+
+func (f *RabbitFixture) waitForAMQP(timeout time.Duration) {
+	f.t.Helper()
+
+	// Open ports and the management API do not guarantee an AMQP handshake succeeds.
+	require.EventuallyWithT(f.t, func(t *assert.CollectT) {
+		conn, err := amqp.DialConfig(f.AMQPURL, amqp.Config{
+			Dial: amqp.DefaultDial(time.Second),
+		})
+		if assert.NoError(t, err) {
+			assert.NoError(t, conn.Close())
+		}
+	}, timeout, 100*time.Millisecond, "RabbitMQ did not become ready for AMQP connections")
 }
 
 func (f *RabbitFixture) Stop(ctx context.Context, timeout time.Duration) {
