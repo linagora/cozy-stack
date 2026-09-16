@@ -270,12 +270,15 @@ func copyVersions(db prefixer.Prefixer, src vfs.VFS, writer contentWriter, rep *
 }
 
 // copyAvatar copies the instance's avatar, if any, from srcAv to dstAv,
-// setting rep.AvatarCopied on success. The absence of an avatar
-// (os.ErrNotExist) is not an error.
+// setting rep.AvatarCopied on success, or removes a stale target avatar if
+// the source has none.
 func copyAvatar(srcAv, dstAv vfs.Avatarer, rep *Report) error {
 	ar, ctype, err := srcAv.OpenAvatar()
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		if err := dstAv.DeleteAvatar(); err != nil {
+			return fmt.Errorf("storagemigration: remove target avatar: %w", err)
+		}
 		return nil
 	case err != nil:
 		return fmt.Errorf("storagemigration: open source avatar: %w", err)

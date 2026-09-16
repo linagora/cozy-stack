@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path"
 	"sync/atomic"
 	"testing"
@@ -253,6 +254,26 @@ func TestVerifySucceedsAfterCopyAndFailsWhenObjectMissing(t *testing.T) {
 	require.NoError(t, fx.minioClient.RemoveObject(context.Background(), fx.bucket, objKey, minio.RemoveObjectOptions{}))
 
 	assert.Error(t, verify(fx.db, fx.dst, fx.dstAv, rep))
+}
+
+func TestCopyAvatarRemovesStaleTarget(t *testing.T) {
+	src := vfsafero.NewAvatarFs(afero.NewMemMapFs())
+	fs := afero.NewMemMapFs()
+	dst := vfsafero.NewAvatarFs(fs)
+	w, err := dst.CreateAvatar("image/png")
+	require.NoError(t, err)
+	_, err = w.Write([]byte("old avatar"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	rep := &Report{}
+	err = copyAvatar(src, vfsafero.NewAvatarFs(afero.NewReadOnlyFs(fs)), rep)
+	require.ErrorContains(t, err, "remove target avatar")
+	require.NoError(t, copyAvatar(src, dst, rep))
+	_, _, err = dst.OpenAvatar()
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.False(t, rep.AvatarCopied)
+	require.NoError(t, copyAvatar(src, dst, rep))
 }
 
 func assertFileContentOn(t *testing.T, fs vfs.VFS, doc *vfs.FileDoc, want []byte) {
