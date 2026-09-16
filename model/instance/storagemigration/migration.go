@@ -26,6 +26,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/s3util"
 )
@@ -59,12 +60,16 @@ func copyContent(db prefixer.Prefixer, src, dst vfs.VFS, srcAv, dstAv vfs.Avatar
 
 	rep := &Report{}
 
+	log := logger.WithDomain(db.DomainName()).WithNamespace("storagemigration")
+	log.Info("Copying files")
 	if err := copyFiles(db, src, writer, rep); err != nil {
 		return rep, err
 	}
+	log.Infof("Copying versions: files=%d bytes=%d", rep.Files, rep.Bytes)
 	if err := copyVersions(db, src, writer, rep); err != nil {
 		return rep, err
 	}
+	log.Infof("Copying avatar: files=%d versions=%d bytes=%d", rep.Files, rep.Versions, rep.Bytes)
 	if err := copyAvatar(srcAv, dstAv, rep); err != nil {
 		return rep, err
 	}
@@ -212,6 +217,7 @@ func verifyVersions(db prefixer.Prefixer, stater contentStater, got *Report) err
 // unfiltered, so trashed files are naturally included) and copies the
 // content of each file (skipping directories) from src to dst.
 func copyFiles(db prefixer.Prefixer, src vfs.VFS, writer contentWriter, rep *Report) error {
+	lastLog := time.Now()
 	return couchdb.ForeachDocs(db, consts.Files, func(_ string, raw json.RawMessage) error {
 		var doc vfs.FileDoc
 		if err := json.Unmarshal(raw, &doc); err != nil {
@@ -233,6 +239,7 @@ func copyFiles(db prefixer.Prefixer, src vfs.VFS, writer contentWriter, rep *Rep
 
 		rep.Files++
 		rep.Bytes += doc.ByteSize
+		logCopyProgress(db, rep, &lastLog)
 		return nil
 	})
 }
@@ -240,6 +247,7 @@ func copyFiles(db prefixer.Prefixer, src vfs.VFS, writer contentWriter, rep *Rep
 // copyVersions enumerates every io.cozy.files.versions document and copies
 // the content of each version from src to dst.
 func copyVersions(db prefixer.Prefixer, src vfs.VFS, writer contentWriter, rep *Report) error {
+	lastLog := time.Now()
 	return couchdb.ForeachDocs(db, consts.FilesVersions, func(_ string, raw json.RawMessage) error {
 		var ver vfs.Version
 		if err := json.Unmarshal(raw, &ver); err != nil {
@@ -265,8 +273,18 @@ func copyVersions(db prefixer.Prefixer, src vfs.VFS, writer contentWriter, rep *
 
 		rep.Versions++
 		rep.Bytes += ver.ByteSize
+		logCopyProgress(db, rep, &lastLog)
 		return nil
 	})
+}
+
+func logCopyProgress(db prefixer.Prefixer, rep *Report, lastLog *time.Time) {
+	if time.Since(*lastLog) < 30*time.Second {
+		return
+	}
+	logger.WithDomain(db.DomainName()).WithNamespace("storagemigration").
+		Infof("Copy progress: files=%d versions=%d bytes=%d", rep.Files, rep.Versions, rep.Bytes)
+	*lastLog = time.Now()
 }
 
 // copyAvatar copies the instance's avatar, if any, from srcAv to dstAv,
@@ -356,6 +374,20 @@ type containerNamer interface {
 // purgeOnly. Without PurgeSource, opts.To == the current scheme is still an
 // error.
 func Migrate(inst *instance.Instance, opts Options) (rep *Report, err error) {
+	log := inst.Logger().WithNamespace("storagemigration")
+	started := time.Now()
+	log.Infof("Starting migration: from=%s to=%s dry_run=%t flag_only=%t purge_source=%t",
+		inst.StorageScheme(), opts.To, opts.DryRun, opts.FlagOnly, opts.PurgeSource)
+	defer func() {
+		if err != nil {
+			log.Errorf("Migration failed after %s: %s", time.Since(started).Round(time.Second), err)
+		} else {
+			log.Infof("Migration completed: backend=%s dry_run=%t files=%d versions=%d bytes=%d avatar=%t elapsed=%s",
+				inst.StorageScheme(), opts.DryRun, rep.Files, rep.Versions, rep.Bytes, rep.AvatarCopied,
+				time.Since(started).Round(time.Second))
+		}
+	}()
+
 	if opts.DryRun && opts.PurgeSource {
 		return nil, errors.New("storagemigration: dry-run cannot be combined with purge-source")
 	}
@@ -411,27 +443,32 @@ func Migrate(inst *instance.Instance, opts Options) (rep *Report, err error) {
 		return nil, fmt.Errorf("storagemigration: block instance: %w", err)
 	}
 	defer func() {
+		log.Info("Restoring instance block state")
 		inst.Blocked, inst.BlockingReason = blocked, blockingReason
 		if restoreErr := instance.Update(inst); restoreErr != nil {
 			err = errors.Join(err, fmt.Errorf("storagemigration: restore instance block state: %w", restoreErr))
 		}
 	}()
 
+	log.Info("Waiting for the storage quiet period")
 	if err := waitForQuietStorage(inst, 5*time.Second); err != nil {
 		return nil, err
 	}
 	mutex := config.Lock().LongOperation(inst, "vfs")
+	log.Info("Waiting for the VFS lock")
 	if err := mutex.Lock(); err != nil {
 		return nil, fmt.Errorf("storagemigration: lock instance VFS: %w", err)
 	}
 	defer mutex.Unlock()
 
+	log.Info("Preparing target storage")
 	dst, dstAv, err := buildTarget(inst, opts.To)
 	if err != nil {
 		return nil, err
 	}
 
 	if opts.FlagOnly {
+		log.Info("Verifying retained target")
 		expected, err := sourceReport(inst, srcAv)
 		if err != nil {
 			return nil, err
@@ -446,6 +483,7 @@ func Migrate(inst *instance.Instance, opts Options) (rep *Report, err error) {
 	if err != nil {
 		return rep, err
 	}
+	log.Info("Verifying copied content")
 	if err := verify(inst, dst, dstAv, rep); err != nil {
 		return rep, err
 	}
@@ -543,6 +581,7 @@ func buildTarget(inst *instance.Instance, to string) (vfs.VFS, vfs.Avatarer, err
 // reverts the flip: once the instance points at the target, the target is
 // the source of truth for the instance's content.
 func flip(inst *instance.Instance, opts Options, srcScheme string, rep *Report) (*Report, error) {
+	inst.Logger().WithNamespace("storagemigration").Infof("Switching storage backend to %s", opts.To)
 	inst.FsScheme = opts.To
 	if err := instance.Update(inst); err != nil {
 		return rep, fmt.Errorf("storagemigration: persist storage scheme flip: %w", err)
@@ -562,6 +601,7 @@ func flip(inst *instance.Instance, opts Options, srcScheme string, rep *Report) 
 // target at this point, so a purge failure is reported but never reverts the
 // flip.
 func purgeSource(inst *instance.Instance, srcScheme string) error {
+	inst.Logger().WithNamespace("storagemigration").Infof("Purging source storage: backend=%s", srcScheme)
 	switch srcScheme {
 	case config.SchemeS3:
 		storage := config.GetS3Storage(config.S3StorageFiles)

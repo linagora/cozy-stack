@@ -264,6 +264,7 @@ The source data is kept unless --purge-source is given.`,
 			return cmd.Usage()
 		}
 		ac := newAdminClient()
+		ac.Client.Client.Timeout = 0
 		rep, err := ac.MigrateStorage(args[0], client.MigrateStorageOptions{
 			To:          flagMigrateTo,
 			DryRun:      flagMigrateDryRun,

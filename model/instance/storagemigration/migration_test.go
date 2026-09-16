@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +30,8 @@ import (
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/minio/minio-go/v7"
 	swiftv2 "github.com/ncw/swift/v2"
+	"github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -277,6 +280,32 @@ func TestCopyAvatarRemovesStaleTarget(t *testing.T) {
 	require.NoError(t, copyAvatar(src, dst, rep))
 }
 
+func captureMigrationLogs(t *testing.T) *logtest.Hook {
+	t.Helper()
+	oldHooks := logrus.StandardLogger().ReplaceHooks(make(logrus.LevelHooks))
+	t.Cleanup(func() { logrus.StandardLogger().ReplaceHooks(oldHooks) })
+	return logtest.NewGlobal()
+}
+
+func TestLogCopyProgress(t *testing.T) {
+	hook := captureMigrationLogs(t)
+	db := &migrationPrefixer{domain: "progress.cozy.local"}
+	rep := &Report{Files: 12, Versions: 3, Bytes: 456}
+	lastLog := time.Now().Add(-time.Minute)
+	logCopyProgress(db, rep, &lastLog)
+	logCopyProgress(db, rep, &lastLog)
+
+	var entries []*logrus.Entry
+	for _, entry := range hook.AllEntries() {
+		if entry.Data["nspace"] == "storagemigration" {
+			entries = append(entries, entry)
+		}
+	}
+	require.Len(t, entries, 1)
+	assert.Equal(t, db.DomainName(), entries[0].Data["domain"])
+	assert.Equal(t, "Copy progress: files=12 versions=3 bytes=456", entries[0].Message)
+}
+
 func assertFileContentOn(t *testing.T, fs vfs.VFS, doc *vfs.FileDoc, want []byte) {
 	t.Helper()
 	r, err := fs.OpenFile(doc)
@@ -433,6 +462,7 @@ func TestMigrateHoldsVFSLock(t *testing.T) {
 				require.NoError(t, instance.Update(inst))
 			}
 			blockingReason := inst.BlockingReason
+			hook := captureMigrationLogs(t)
 			mutex := config.Lock().ReadWrite(inst, "vfs")
 			probe, ok := mutex.(interface{ TryLock() bool })
 			require.True(t, ok, "the test must use an in-memory lock")
@@ -479,6 +509,23 @@ func TestMigrateHoldsVFSLock(t *testing.T) {
 			assert.Equal(t, blockingReason, reloaded.BlockingReason)
 			require.True(t, probe.TryLock(), "migration must release the VFS lock on return")
 			mutex.Unlock()
+
+			var messages []string
+			for _, entry := range hook.AllEntries() {
+				if entry.Data["nspace"] == "storagemigration" {
+					assert.Equal(t, inst.Domain, entry.Data["domain"])
+					messages = append(messages, entry.Message)
+				}
+			}
+			require.GreaterOrEqual(t, len(messages), 2)
+			assert.Equal(t, "Restoring instance block state", messages[len(messages)-2])
+			if tc.failCopy {
+				assert.Contains(t, messages[len(messages)-1], "Migration failed")
+			} else {
+				assert.Contains(t, messages[len(messages)-1], "Migration completed: backend=s3")
+				assert.Contains(t, messages, "Copying files")
+				assert.Contains(t, messages, "Verifying copied content")
+			}
 		})
 	}
 }
@@ -487,6 +534,7 @@ func TestMigrateReportsBlockRestorationFailure(t *testing.T) {
 	for _, failCopy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("copy_failure=%t", failCopy), func(t *testing.T) {
 			inst := setupMigrateInstance(t)
+			hook := captureMigrationLogs(t)
 			cfg := config.GetConfig()
 			previousClient := cfg.CouchDB.Client
 			defer func() { cfg.CouchDB.Client = previousClient }()
@@ -527,6 +575,18 @@ func TestMigrateReportsBlockRestorationFailure(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, reloaded.Blocked)
 			assert.Equal(t, instance.BlockedMoving.Code, reloaded.BlockingReason)
+			var failureLogged bool
+			for _, entry := range hook.AllEntries() {
+				if entry.Data["nspace"] == "storagemigration" {
+					assert.NotContains(t, entry.Message, "Migration completed")
+					if strings.HasPrefix(entry.Message, "Migration failed") {
+						failureLogged = true
+						assert.Equal(t, logrus.ErrorLevel, entry.Level)
+						assert.Contains(t, entry.Message, "injected restoration failure")
+					}
+				}
+			}
+			assert.True(t, failureLogged)
 		})
 	}
 }

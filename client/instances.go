@@ -45,6 +45,8 @@ type Instance struct {
 		AuthMode             int       `json:"auth_mode,omitempty"`
 		NoAutoUpdate         bool      `json:"no_auto_update,omitempty"`
 		Blocked              bool      `json:"blocked,omitempty"`
+		BlockingReason       string    `json:"blocking_reason,omitempty"`
+		FsScheme             string    `json:"fs_scheme,omitempty"`
 		OnboardingFinished   bool      `json:"onboarding_finished"`
 		PasswordDefined      *bool     `json:"password_defined"`
 		MagicLink            bool      `json:"magic_link,omitempty"`

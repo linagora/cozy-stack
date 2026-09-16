@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -118,6 +119,21 @@ func TestClientWithoutOAuth(t *testing.T) {
 		Body: body,
 	})
 	assert.Error(t, err)
+}
+
+func TestReadInstanceStorageState(t *testing.T) {
+	in, err := readInstance(&http.Response{Body: io.NopCloser(strings.NewReader(
+		`{"data":{"id":"alice.example","attributes":{"fs_scheme":"s3","blocked":true,"blocking_reason":"MOVING"}}}`,
+	))})
+	require.NoError(t, err)
+	assert.Equal(t, "s3", in.Attrs.FsScheme)
+	assert.True(t, in.Attrs.Blocked)
+	assert.Equal(t, "MOVING", in.Attrs.BlockingReason)
+
+	output, err := json.Marshal(in)
+	require.NoError(t, err)
+	assert.Contains(t, string(output), `"fs_scheme":"s3"`)
+	assert.Contains(t, string(output), `"blocking_reason":"MOVING"`)
 }
 
 // filesTestClient creates a minimal live files server and an authenticated
