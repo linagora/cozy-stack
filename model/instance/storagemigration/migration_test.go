@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -417,12 +418,21 @@ func TestMigrateHoldsVFSLock(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		failCopy bool
+		blocked  bool
 	}{
 		{name: "success"},
 		{name: "copy failure", failCopy: true},
+		{name: "already blocked", blocked: true},
+		{name: "already blocked copy failure", blocked: true, failCopy: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			inst := setupMigrateInstance(t)
+			if tc.blocked {
+				inst.Blocked = true
+				inst.BlockingReason = instance.BlockedLoginFailed.Code
+				require.NoError(t, instance.Update(inst))
+			}
+			blockingReason := inst.BlockingReason
 			mutex := config.Lock().ReadWrite(inst, "vfs")
 			probe, ok := mutex.(interface{ TryLock() bool })
 			require.True(t, ok, "the test must use an in-memory lock")
@@ -461,9 +471,62 @@ func TestMigrateHoldsVFSLock(t *testing.T) {
 				assert.EqualValues(t, 2, enumerations.Load())
 				assert.Equal(t, config.SchemeS3, inst.FsScheme)
 			}
-			assert.False(t, inst.Blocked)
+			assert.Equal(t, tc.blocked, inst.Blocked)
+			assert.Equal(t, blockingReason, inst.BlockingReason)
+			reloaded, err := instance.Get(inst.Domain)
+			require.NoError(t, err)
+			assert.Equal(t, tc.blocked, reloaded.Blocked)
+			assert.Equal(t, blockingReason, reloaded.BlockingReason)
 			require.True(t, probe.TryLock(), "migration must release the VFS lock on return")
 			mutex.Unlock()
+		})
+	}
+}
+
+func TestMigrateReportsBlockRestorationFailure(t *testing.T) {
+	for _, failCopy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("copy_failure=%t", failCopy), func(t *testing.T) {
+			inst := setupMigrateInstance(t)
+			cfg := config.GetConfig()
+			previousClient := cfg.CouchDB.Client
+			defer func() { cfg.CouchDB.Client = previousClient }()
+			client := *previousClient
+			transport := client.Transport
+			if transport == nil {
+				transport = http.DefaultTransport
+			}
+			client.Transport = migrationTransport(func(req *http.Request) (*http.Response, error) {
+				if failCopy && path.Base(req.URL.Path) == "_all_docs" && path.Base(path.Dir(req.URL.Path)) == couchdb.EscapeCouchdbName(consts.Files) {
+					return nil, errors.New("injected copy failure")
+				}
+				if req.Method == http.MethodPut && path.Base(req.URL.Path) == inst.ID() {
+					body, err := io.ReadAll(req.Body)
+					if err != nil {
+						return nil, err
+					}
+					req.Body = io.NopCloser(bytes.NewReader(body))
+					var doc instance.Instance
+					if err := json.Unmarshal(body, &doc); err != nil {
+						return nil, err
+					}
+					if !doc.Blocked {
+						return nil, errors.New("injected restoration failure")
+					}
+				}
+				return transport.RoundTrip(req)
+			})
+			cfg.CouchDB.Client = &client
+
+			_, err := Migrate(inst, Options{To: config.SchemeS3})
+			require.ErrorContains(t, err, "restore instance block state")
+			assert.ErrorContains(t, err, "injected restoration failure")
+			if failCopy {
+				assert.ErrorContains(t, err, "injected copy failure")
+			}
+			reloaded, err := instance.Get(inst.Domain)
+			require.NoError(t, err)
+			assert.True(t, reloaded.Blocked)
+			assert.Equal(t, instance.BlockedMoving.Code, reloaded.BlockingReason)
 		})
 	}
 }

@@ -345,8 +345,8 @@ type containerNamer interface {
 // Migrate moves an instance's object-storage content (files, versions,
 // avatar) from its current backend to opts.To, verifies the copy, and only
 // then flips the instance's FsScheme to the target. The instance is blocked
-// (instance.BlockedMoving) for the duration of the copy/verify and unblocked
-// on every return path.
+// (instance.BlockedMoving) for the duration of the copy/verify, then its
+// previous block state is restored on every return path.
 //
 // FsScheme is updated ONLY after verification succeeds. A DryRun only reports
 // source content and leaves the instance unchanged.
@@ -355,7 +355,7 @@ type containerNamer interface {
 // opts.PurgeSource is set, Migrate runs in purge-only mode instead: see
 // purgeOnly. Without PurgeSource, opts.To == the current scheme is still an
 // error.
-func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
+func Migrate(inst *instance.Instance, opts Options) (rep *Report, err error) {
 	if opts.DryRun && opts.PurgeSource {
 		return nil, errors.New("storagemigration: dry-run cannot be combined with purge-source")
 	}
@@ -406,10 +406,16 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 		return sourceReport(inst, srcAv)
 	}
 
+	blocked, blockingReason := inst.Blocked, inst.BlockingReason
 	if err := lifecycle.Block(inst, instance.BlockedMoving.Code); err != nil {
 		return nil, fmt.Errorf("storagemigration: block instance: %w", err)
 	}
-	defer lifecycle.Unblock(inst)
+	defer func() {
+		inst.Blocked, inst.BlockingReason = blocked, blockingReason
+		if restoreErr := instance.Update(inst); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("storagemigration: restore instance block state: %w", restoreErr))
+		}
+	}()
 
 	if err := waitForQuietStorage(inst, 5*time.Second); err != nil {
 		return nil, err
@@ -436,7 +442,7 @@ func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
 		return flip(inst, opts, srcScheme, expected)
 	}
 
-	rep, err := copyContent(inst, src, dst, srcAv, dstAv)
+	rep, err = copyContent(inst, src, dst, srcAv, dstAv)
 	if err != nil {
 		return rep, err
 	}
