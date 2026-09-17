@@ -20,13 +20,9 @@ func (i *InMemoryLockGetter) ReadWrite(_ prefixer.Prefixer, name string) ErrorRW
 	return lock.(*memLock)
 }
 
-// LongOperation returns a lock suitable for long operations. It will refresh
-// the lock in redis to avoid its automatic expiration.
+// LongOperation returns an in-memory lock, which does not expire.
 func (i *InMemoryLockGetter) LongOperation(db prefixer.Prefixer, name string) ErrorLocker {
-	return &longOperation{
-		lock:    i.ReadWrite(db, name).(*memLock),
-		timeout: LockTimeout,
-	}
+	return i.ReadWrite(db, name)
 }
 
 type memLock struct {
@@ -35,6 +31,5 @@ type memLock struct {
 
 func (ml *memLock) Lock() error  { ml.RWMutex.Lock(); return nil }
 func (ml *memLock) RLock() error { ml.RWMutex.RLock(); return nil }
-func (ml *memLock) Extend()      {}
 func (ml *memLock) Unlock()      { ml.RWMutex.Unlock() }
 func (ml *memLock) RUnlock()     { ml.RWMutex.RUnlock() }
