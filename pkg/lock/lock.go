@@ -49,7 +49,7 @@ type longOperationLocker interface {
 type longOperation struct {
 	lock    longOperationLocker
 	mu      sync.Mutex
-	tick    *time.Ticker
+	done    chan struct{}
 	timeout time.Duration
 }
 
@@ -57,23 +57,26 @@ func (l *longOperation) Lock() error {
 	if err := l.lock.Lock(); err != nil {
 		return err
 	}
-	l.tick = time.NewTicker(l.timeout / 3)
+	l.mu.Lock()
+	done := make(chan struct{})
+	l.done = done
+	l.mu.Unlock()
 	go func() {
-		defer l.mu.Unlock()
+		tick := time.NewTicker(l.timeout / 3)
+		defer tick.Stop()
 		for {
-			l.mu.Lock()
-			if l.tick == nil {
+			select {
+			case <-done:
 				return
+			case <-tick.C:
+				l.mu.Lock()
+				if l.done != done {
+					l.mu.Unlock()
+					return
+				}
+				l.lock.Extend()
+				l.mu.Unlock()
 			}
-			ch := l.tick.C
-			l.mu.Unlock()
-			<-ch
-			l.mu.Lock()
-			if l.tick == nil {
-				return
-			}
-			l.lock.Extend()
-			l.mu.Unlock()
 		}
 	}()
 	return nil
@@ -82,9 +85,9 @@ func (l *longOperation) Lock() error {
 func (l *longOperation) Unlock() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.tick != nil {
-		l.tick.Stop()
-		l.tick = nil
+	if l.done != nil {
+		close(l.done)
+		l.done = nil
 	}
 	l.lock.Unlock()
 }
