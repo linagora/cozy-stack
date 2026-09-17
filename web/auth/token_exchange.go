@@ -385,7 +385,7 @@ func findTokenExchangeOAuthClient(inst *instance.Instance, sessionID, softwareID
 	if err != nil {
 		return nil, err
 	}
-	// ponytail: scan this session's bindings; index by application if sessions hold many clients.
+	// Scan this session's bindings; index by application if sessions hold many clients.
 	for _, ref := range refs {
 		if ref.Domain != inst.Domain {
 			continue
