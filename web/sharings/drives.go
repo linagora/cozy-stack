@@ -38,6 +38,7 @@ type docPatch struct {
 	docID string
 
 	vfs.DocPatch
+	Delete bool `json:"permanent_delete,omitempty"`
 }
 
 // ListSharedDrives returns the list of the shared drives.
@@ -404,6 +405,13 @@ func ModifyMetadataByIDHandler(c echo.Context, inst *instance.Instance, s *shari
 	if err != nil {
 		return files.WrapVfsError(err)
 	}
+	if patch.Delete {
+		if rootID, err := s.DriveRootID(); err == nil && c.Param("file-id") == rootID {
+			if member := GetSharedDriveMember(c); member != nil {
+				return jsonapi.Forbidden(errors.New("only the owner can destroy the root of a shared drive"))
+			}
+		}
+	}
 	if patch.DirID != nil {
 		rootID, err := s.DriveRootID()
 		if err == nil && c.Param("file-id") == rootID {
@@ -467,6 +475,13 @@ func applyPatch(c echo.Context, fs vfs.VFS, patch *docPatch) (err error) {
 		if err = middlewares.AllowVFS(c, permission.PATCH, file); err != nil {
 			return err
 		}
+	}
+
+	if patch.Delete {
+		if dir != nil {
+			return fs.DestroyDirAndContent(dir, fs.EnsureErased)
+		}
+		return fs.DestroyFile(file)
 	}
 
 	if patch.DirID != nil {
@@ -1635,6 +1650,15 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	reqPath := c.Request().URL.Path
 	fileID := c.Param("file-id")
 
+	// Only the owner can trash or destroy the root of a shared drive: the VFS
+	// revocation hook would take the whole drive down with it. Deleting a
+	// version of the root file is neither: it leaves the drive in place.
+	if method == http.MethodDelete && c.Param("version-id") == "" {
+		if rootID, err := s.DriveRootID(); err == nil && fileID == rootID {
+			return jsonapi.Forbidden(errors.New("only the owner can trash or destroy the root of a shared drive"))
+		}
+	}
+
 	// Share-by-link routes keep their own authorization layer. Match the
 	// registered route pattern, not the raw URL, so a future route whose
 	// path contains "/permissions" cannot silently bypass this guard.
@@ -1816,9 +1840,8 @@ func sharedDrivePermissionCheck(method, path string) (shouldCheck bool, requireW
 // the specified shared drive. It verifies that:
 // 1. The sharing exists and is a drive
 // 2. The current user is a member of the sharing (by domain or email)
-// If requireWrite is true, it also checks that the user has write permission (not read-only).
 // Returns the sharing if the user has the required permissions.
-func checkSharedDrivePermission(inst *instance.Instance, sharingID string, requireWrite bool) (*sharing.Sharing, error) {
+func checkSharedDrivePermission(inst *instance.Instance, sharingID string) (*sharing.Sharing, error) {
 	// Find the sharing by ID
 	s, err := sharing.FindSharing(inst, sharingID)
 	if err != nil {
@@ -1844,12 +1867,10 @@ func checkSharedDrivePermission(inst *instance.Instance, sharingID string, requi
 	currEmail, _ := inst.SettingsEMail()
 
 	isMember := false
-	isReadOnly := false
 
 	// If this is the owner instance, they're a member with write access
 	if s.Owner {
 		isMember = true
-		isReadOnly = false
 	} else {
 		// On a recipient's instance, their own member entry is typically at index 1
 		// (index 0 is the owner). Check if there's a member with an Instance field set.
@@ -1861,13 +1882,11 @@ func checkSharedDrivePermission(inst *instance.Instance, sharingID string, requi
 			// Check by domain
 			if memberHost == inst.Domain || memberHost == currDomain {
 				isMember = true
-				isReadOnly = m.ReadOnly
 				break
 			}
 			// Check by email
 			if currEmail != "" && m.Email == currEmail {
 				isMember = true
-				isReadOnly = m.ReadOnly
 				break
 			}
 		}
@@ -1875,11 +1894,6 @@ func checkSharedDrivePermission(inst *instance.Instance, sharingID string, requi
 
 	if !isMember {
 		return nil, jsonapi.Forbidden(errors.New("not a member of this sharing"))
-	}
-
-	// If write permission is required, check that the user is not read-only
-	if requireWrite && isReadOnly {
-		return nil, jsonapi.Forbidden(errors.New("write access denied: read-only member"))
 	}
 
 	return s, nil

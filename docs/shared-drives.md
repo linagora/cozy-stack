@@ -732,6 +732,7 @@ Notes on behavior:
 - Cross-stack operations perform a remote download/upload and delete the remote source upon success (only for move operations).
 - When `copy: true`, source files and directories are preserved in their original location.
 - When `copy: false` (default), source files and directories are deleted after successful copy to destination.
+- Moves are not atomic: the source is deleted only after the copy succeeded. If that deletion fails, the request returns an error, but the copy remains at the destination (retrying the move creates a suffixed duplicate, e.g. `name (2)`).
 
 Additional rules for file-root shared drives:
 

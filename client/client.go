@@ -54,6 +54,10 @@ type Client struct {
 	initMu sync.Mutex
 	authMu sync.Mutex
 	auth   *auth.Request
+
+	// driveID, when set (see InDrive), routes file operations through the
+	// /sharings/drives/<id> endpoints instead of /files.
+	driveID string
 }
 
 func (c *Client) init() {

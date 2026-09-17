@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -151,15 +152,21 @@ func MoveHandler(c echo.Context) error {
 	moveDirectory := req.Source.DirID != ""
 
 	if req.Source.Instance != "" && req.Dest.Instance != "" {
-		sourceSharing, err := checkSharedDrivePermission(inst, req.Source.SharingID, !req.Copy)
+		sourceSharing, err := checkSharedDrivePermission(inst, req.Source.SharingID)
 		if err != nil {
 			return err
 		}
-		destSharing, err := checkSharedDrivePermission(inst, req.Dest.SharingID, true)
+		destSharing, err := checkSharedDrivePermission(inst, req.Dest.SharingID)
 		if err != nil {
 			return err
 		}
 		if err := validateFileBackedDriveMoveCopy(req, sourceSharing, destSharing); err != nil {
+			return err
+		}
+		if err := checkMoveSidePermission(inst, sourceInstance, sourceSharing, sourceTargetID(req), sourceMoveVerb(req.Copy)); err != nil {
+			return err
+		}
+		if err := checkMoveSidePermission(inst, destInstance, destSharing, req.Dest.DirID, permission.POST); err != nil {
 			return err
 		}
 		if sourceInstance != nil && destInstance != nil {
@@ -175,11 +182,14 @@ func MoveHandler(c echo.Context) error {
 			return moveFileBetweenSharedDrives(c, req.Source.Instance, req.Source.FileID, sourceSharing, req.Dest.Instance, req.Dest.DirID, destSharing, req.Copy)
 		}
 	} else if req.Source.Instance != "" && req.Dest.Instance == "" {
-		s, err := checkSharedDrivePermission(inst, req.Source.SharingID, !req.Copy)
+		s, err := checkSharedDrivePermission(inst, req.Source.SharingID)
 		if err != nil {
 			return err
 		}
 		if err := validateFileBackedDriveMoveCopy(req, s, nil); err != nil {
+			return err
+		}
+		if err := checkMoveSidePermission(inst, sourceInstance, s, sourceTargetID(req), sourceMoveVerb(req.Copy)); err != nil {
 			return err
 		}
 		if sourceInstance != nil && destInstance != nil {
@@ -195,11 +205,14 @@ func MoveHandler(c echo.Context) error {
 			return moveFileFromSharedDrive(c, inst, req.Source.Instance, req.Source.FileID, req.Dest.DirID, s, req.Copy)
 		}
 	} else if req.Source.Instance == "" && req.Dest.Instance != "" {
-		s, err := checkSharedDrivePermission(inst, req.Dest.SharingID, true)
+		s, err := checkSharedDrivePermission(inst, req.Dest.SharingID)
 		if err != nil {
 			return err
 		}
 		if err := validateFileBackedDriveMoveCopy(req, nil, s); err != nil {
+			return err
+		}
+		if err := checkMoveSidePermission(inst, destInstance, s, req.Dest.DirID, permission.POST); err != nil {
 			return err
 		}
 		if sourceInstance != nil && destInstance != nil {
@@ -217,6 +230,115 @@ func MoveHandler(c echo.Context) error {
 	} else {
 		return jsonapi.BadRequest(errors.New("to move files inside personal drive use patch function"))
 	}
+}
+
+// checkMoveSidePermission asserts the calling instance has effective access
+// on one shared-drive side of a move/copy. The resolver runs on hostInst
+// (which hosts the target docs) but membership is resolved for callerInst
+// (the instance performing the move). For a remote target nothing can be
+// decided locally: the remote stack is the only authority.
+func checkMoveSidePermission(callerInst, hostInst *instance.Instance, s *sharing.Sharing, targetID string, verb permission.Verb) error {
+	if hostInst == nil {
+		return nil
+	}
+	// Resolve the caller as a member of this sharing to follow it across
+	// nested sharings via MemberMatching (email or instance host).
+	member := s.MemberFor(callerInst)
+	if member == nil {
+		return jsonapi.NotFound(errors.New("shared drive target not found"))
+	}
+	if member.Status == sharing.MemberStatusOwner {
+		// The owner's own instance has full access to its drive.
+		return nil
+	}
+	ea, err := sharing.NewAccessResolver(hostInst).ResolveForMember(targetID, member)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return jsonapi.NotFound(errors.New("shared drive target not found"))
+		}
+		return wrapErrors(err)
+	}
+	if !ea.CanRead {
+		return jsonapi.NotFound(errors.New("shared drive target not found"))
+	}
+	if !ea.Can(verb) {
+		return jsonapi.Forbidden(errors.New("insufficient access on the target file or folder"))
+	}
+	return nil
+}
+
+// sourceMoveVerb returns the effective verb required on the source: read for
+// a copy, write for a move.
+func sourceMoveVerb(copy bool) permission.Verb {
+	if copy {
+		return permission.GET
+	}
+	return permission.PATCH
+}
+
+// sourceTargetID returns the ID of the moved file or directory.
+func sourceTargetID(req moveRequest) string {
+	if req.Source.FileID != "" {
+		return req.Source.FileID
+	}
+	return req.Source.DirID
+}
+
+// remoteStatusTextCodes maps the English status texts a remote stack may
+// return as an unparseable error body (e.g. an HTML error page from a proxy)
+// back to a numeric status code. Only the codes meaningful to a move are
+// listed.
+// We need this because request.Error keeps only strings. Drop this if
+// request.Error gains the numeric code
+// (.opencode/issues/client-request-error-loses-status-code.md).
+var remoteStatusTextCodes = map[string]int{
+	"Bad Request":          http.StatusBadRequest,
+	"Forbidden":            http.StatusForbidden,
+	"Not Found":            http.StatusNotFound,
+	"Conflict":             http.StatusConflict,
+	"Unprocessable Entity": http.StatusUnprocessableEntity,
+	"Bad Gateway":          http.StatusBadGateway,
+	"Service Unavailable":  http.StatusServiceUnavailable,
+	"Gateway Timeout":      http.StatusGatewayTimeout,
+}
+
+// wrapRemoteErr converts a remote client error into a jsonapi error that
+// preserves the remote status code, and logs the raw error for the server
+// side. request.Error carries the status only as a string: the numeric form
+// ("403") for structured jsonapi errors, the English status text as a last
+// resort. A remote 401 is mapped to 502: it means the member token was
+// rejected by the remote stack, not that the caller's credentials are bad.
+// Errors that cannot be classified (remote stack failure,
+// network-level error) yield a generic 500: the raw error may carry internal
+// URLs, it stays in the logs. `what` describes the failing remote operation
+// for the error detail.
+func wrapRemoteErr(inst *instance.Instance, err error, what string) error {
+	inst.Logger().WithNamespace("move").Warnf("%s: %v", what, err)
+	var reqErr *request.Error
+	if !errors.As(err, &reqErr) {
+		return jsonapi.Errorf(http.StatusInternalServerError, "%s", what)
+	}
+	code := http.StatusInternalServerError
+	numeric := false
+	if c, cerr := strconv.Atoi(reqErr.Status); cerr == nil {
+		code = c
+		numeric = true
+	} else if c, ok := remoteStatusTextCodes[reqErr.Status]; ok {
+		code = c
+	}
+	// A remote 401 means the member token was rejected by the remote stack
+	// (expired/revoked credentials), not that the caller's own credentials
+	// are bad: echoing 401 back could trigger a token refresh against the
+	// wrong stack. Surface it as a bad gateway instead.
+	if code == http.StatusUnauthorized {
+		code = http.StatusBadGateway
+	}
+	if numeric {
+		return jsonapi.Errorf(code, "%s: %s", what, reqErr.Error())
+	}
+	// The status text means the body could not be parsed (e.g. an HTML error
+	// page): only echo back the title, not the raw body.
+	return jsonapi.Errorf(code, "%s: %s", what, reqErr.Title)
 }
 
 // Same-stack moves (instance ↔ instance)
@@ -399,11 +521,11 @@ func moveFileFromSharedDriveCore(inst *instance.Instance, sourceInstanceURL stri
 	if err != nil {
 		return nil, err
 	}
-	srcClient := NewRemoteClient(u, bearer)
+	srcClient := NewRemoteClient(u, bearer).InDrive(s.ID())
 
 	srcFile, err := srcClient.GetFileByID(fileID)
 	if err != nil {
-		return nil, files.WrapVfsError(err)
+		return nil, wrapRemoteErr(inst, err, "could not read source file on the remote stack")
 	}
 
 	newFileDoc, err := createFileDocFromRemoteFile(srcFile, destDir.DocID)
@@ -431,7 +553,7 @@ func moveFileFromSharedDriveCore(inst *instance.Instance, sourceInstanceURL stri
 	if err != nil {
 		// Best-effort close to avoid leaking descriptors on error paths
 		_ = fd.Close()
-		return nil, files.WrapVfsError(err)
+		return nil, wrapRemoteErr(inst, err, "could not download source file on the remote stack")
 	}
 	defer rc.Close()
 
@@ -444,8 +566,11 @@ func moveFileFromSharedDriveCore(inst *instance.Instance, sourceInstanceURL stri
 		return nil, err
 	}
 	if delete {
+		// fail-after-copy: the destination copy is already in place, so a
+		// failed source delete reports an error but leaves the copy (a retry
+		// creates a suffixed duplicate).
 		if err := srcClient.PermanentDeleteByID(fileID); err != nil {
-			inst.Logger().WithNamespace("move").Warnf("Could not delete source file: %v", err)
+			return nil, wrapRemoteErr(inst, err, "could not delete source file on the remote stack")
 		}
 	}
 	return newFileDoc, nil
@@ -466,12 +591,12 @@ func moveDirFromSharedDrive(c echo.Context, inst *instance.Instance, sourceInsta
 	if err != nil {
 		return err
 	}
-	srcClient := NewRemoteClient(u, bearer)
+	srcClient := NewRemoteClient(u, bearer).InDrive(s.ID())
 
 	// Get the remote directory structure
 	dirs, filesToMove, err := remoteContentToMove(srcClient, sourceDirID)
 	if err != nil {
-		return files.WrapVfsError(err)
+		return wrapRemoteErr(inst, err, "could not read source directory on the remote stack")
 	}
 
 	// Map from source dirID to destination dirID
@@ -519,8 +644,11 @@ func moveDirFromSharedDrive(c echo.Context, inst *instance.Instance, sourceInsta
 
 	// Delete source directories bottom-up (reverse order) only if not copying
 	if !copy {
+		// fail-after-copy: the destination tree is already in place, so a
+		// failed source delete reports an error but leaves it (a retry
+		// creates suffixed duplicates).
 		if err := srcClient.PermanentDeleteByID(sourceDirID); err != nil {
-			inst.Logger().WithNamespace("move").Warnf("Could not delete source directory: %v", err)
+			return wrapRemoteErr(inst, err, "could not delete source directory on the remote stack")
 		}
 	}
 
@@ -568,11 +696,11 @@ func moveDirToSharedDrive(c echo.Context, srcInst *instance.Instance,
 		}
 		dstDir, err := dstClient.GetDirByID(parentDestID)
 		if err != nil {
-			return files.WrapVfsError(err)
+			return wrapRemoteErr(srcInst, err, "could not read destination directory on the remote stack")
 		}
 		newID, err := ensureRemoteChildDir(dstClient, dstDir, d.DocName)
 		if err != nil {
-			return files.WrapVfsError(err)
+			return wrapRemoteErr(srcInst, err, "could not create directory on the remote stack")
 		}
 		srcToDstDirID[d.DocID] = newID
 	}
@@ -599,11 +727,11 @@ func moveDirToSharedDrive(c echo.Context, srcInst *instance.Instance,
 
 	dstDir, err := dstClient.GetDirByID(destDirID)
 	if err != nil {
-		return files.WrapVfsError(err)
+		return wrapRemoteErr(srcInst, err, "could not read destination directory on the remote stack")
 	}
 	movedDir, err := dstClient.GetDirByPath(dstDir.Attrs.Fullpath + "/" + srcRoot.DocName)
 	if err != nil {
-		return files.WrapVfsError(err)
+		return wrapRemoteErr(srcInst, err, "could not read moved directory on the remote stack")
 	}
 
 	return respondRemoteUploadDir(c, movedDir, s.ID())
@@ -639,11 +767,11 @@ func moveFileToSharedDriveCore(inst *instance.Instance,
 	// Optimistic upload with conflict retry
 	dstParent, err := dstClient.GetDirByID(targetDirID)
 	if err != nil {
-		return nil, files.WrapVfsError(err)
+		return nil, wrapRemoteErr(inst, err, "could not read destination directory on the remote stack")
 	}
 	uploaded, err := uploadWithConflictRetry(dstClient, dstParent.Attrs.Fullpath, targetDirID, localSrcFile.DocName, localSrcFile.MD5Sum, srcHandle, localSrcFile.Mime, localSrcFile.ByteSize)
 	if err != nil {
-		return nil, files.WrapVfsError(err)
+		return nil, wrapRemoteErr(inst, err, "could not upload file to the remote stack")
 	}
 
 	if delete {
@@ -715,7 +843,7 @@ func moveDirBetweenSharedDrives(c echo.Context, sourceInstanceURL, sourceDirID s
 	if err != nil {
 		return err
 	}
-	sourceClient := NewRemoteClient(sourceURL, sourceBearer)
+	sourceClient := NewRemoteClient(sourceURL, sourceBearer).InDrive(sourceSharing.ID())
 
 	destURL, err := url.Parse(destInstanceURL)
 	if err != nil {
@@ -725,12 +853,12 @@ func moveDirBetweenSharedDrives(c echo.Context, sourceInstanceURL, sourceDirID s
 	if err != nil {
 		return err
 	}
-	destClient := NewRemoteClient(destURL, destBearer)
+	destClient := NewRemoteClient(destURL, destBearer).InDrive(destSharing.ID())
 
 	// Get the remote directory structure to move
 	dirs, filesToMove, err := remoteContentToMove(sourceClient, sourceDirID)
 	if err != nil {
-		return files.WrapVfsError(err)
+		return wrapRemoteErr(inst, err, "could not read source directory on the remote stack")
 	}
 
 	// Map from source dirID to destination dirID
@@ -752,11 +880,11 @@ func moveDirBetweenSharedDrives(c echo.Context, sourceInstanceURL, sourceDirID s
 		// Resolve parent path then create the directory remotely
 		dstParent, err := destClient.GetDirByID(parentDestID)
 		if err != nil {
-			return files.WrapVfsError(err)
+			return wrapRemoteErr(inst, err, "could not read destination directory on the remote stack")
 		}
 		newID, err := ensureRemoteChildDir(destClient, dstParent, d.Attrs.Name)
 		if err != nil {
-			return files.WrapVfsError(err)
+			return wrapRemoteErr(inst, err, "could not create directory on the remote stack")
 		}
 		srcToDstDirID[d.ID] = newID
 	}
@@ -771,34 +899,33 @@ func moveDirBetweenSharedDrives(c echo.Context, sourceInstanceURL, sourceDirID s
 		// Fetch source file metadata and content
 		srcFile, err := sourceClient.GetFileByID(f.ID)
 		if err != nil {
-			return files.WrapVfsError(err)
+			return wrapRemoteErr(inst, err, "could not read source file on the remote stack")
 		}
 		srcReader, err := sourceClient.DownloadByID(f.ID)
 		if err != nil {
-			return files.WrapVfsError(err)
+			return wrapRemoteErr(inst, err, "could not download source file on the remote stack")
 		}
 		defer srcReader.Close()
 		// Optimistic upload with conflict retry
 		dstParent, err := destClient.GetDirByID(destParentID)
 		if err != nil {
-			return files.WrapVfsError(err)
+			return wrapRemoteErr(inst, err, "could not read destination directory on the remote stack")
 		}
 		_, err = uploadWithConflictRetry(destClient, dstParent.Attrs.Fullpath, destParentID, srcFile.Attrs.Name, srcFile.Attrs.MD5Sum, srcReader, srcFile.Attrs.Mime, srcFile.Attrs.Size)
 		if err != nil {
-			return files.WrapVfsError(err)
-		}
-
-		if !copy {
-			if err := sourceClient.PermanentDeleteByID(f.ID); err != nil {
-				inst.Logger().WithNamespace("move").Warnf("Could not delete source file: %v", err)
-			}
+			return wrapRemoteErr(inst, err, "could not upload file to the remote stack")
 		}
 	}
 
-	// Delete source directory (remote) after files are moved only if not copying
+	// Delete source directory (remote) after files are moved only if not
+	// copying. The delete is recursive: per-file deletions during the copy
+	// loop would only risk aborting it midway on a transient error.
 	if !copy {
+		// fail-after-copy: the destination tree is already in place, so a
+		// failed source delete reports an error but leaves it (a retry
+		// creates suffixed duplicates).
 		if err := sourceClient.PermanentDeleteByID(sourceDirID); err != nil {
-			inst.Logger().WithNamespace("move").Warnf("Could not delete source directory: %v", err)
+			return wrapRemoteErr(inst, err, "could not delete source directory on the remote stack")
 		}
 	}
 
@@ -806,7 +933,7 @@ func moveDirBetweenSharedDrives(c echo.Context, sourceInstanceURL, sourceDirID s
 	newRootID := srcToDstDirID[sourceDirID]
 	dstRootDir, err := destClient.GetDirByID(newRootID)
 	if err != nil {
-		return files.WrapVfsError(err)
+		return wrapRemoteErr(inst, err, "could not read created directory on the remote stack")
 	}
 	return respondRemoteUploadDir(c, dstRootDir, destSharing.ID())
 }
@@ -821,7 +948,7 @@ func moveFileBetweenSharedDrives(c echo.Context, sourceInstanceURL, fileID strin
 	if err != nil {
 		return err
 	}
-	sourceClient := NewRemoteClient(sourceURL, sourceBearer)
+	sourceClient := NewRemoteClient(sourceURL, sourceBearer).InDrive(sourceSharing.ID())
 
 	destURL, err := url.Parse(destInstanceURL)
 	if err != nil {
@@ -831,26 +958,26 @@ func moveFileBetweenSharedDrives(c echo.Context, sourceInstanceURL, fileID strin
 	if err != nil {
 		return err
 	}
-	destClient := NewRemoteClient(destURL, destBearer)
+	destClient := NewRemoteClient(destURL, destBearer).InDrive(destSharing.ID())
 
 	srcFile, err := sourceClient.GetFileByID(fileID)
 	if err != nil {
-		return files.WrapVfsError(err)
+		return wrapRemoteErr(inst, err, "could not read source file on the remote stack")
 	}
 	srcReader, err := sourceClient.DownloadByID(fileID)
 	if err != nil {
-		return files.WrapVfsError(err)
+		return wrapRemoteErr(inst, err, "could not download source file on the remote stack")
 	}
 	defer srcReader.Close()
 
 	// Resolve destination parent fullpath for conflict checks
 	dstParent, err := destClient.GetDirByID(destDirID)
 	if err != nil {
-		return files.WrapVfsError(err)
+		return wrapRemoteErr(inst, err, "could not read destination directory on the remote stack")
 	}
 	uniqueName, err := ensureRemoteUniqueChildName(destClient, dstParent.Attrs.Fullpath, srcFile.Attrs.Name, true)
 	if err != nil {
-		return err
+		return wrapRemoteErr(inst, err, "could not resolve name conflict on the remote stack")
 	}
 	uploaded, err := destClient.Upload(&client.Upload{
 		Name:          uniqueName,
@@ -861,12 +988,15 @@ func moveFileBetweenSharedDrives(c echo.Context, sourceInstanceURL, fileID strin
 		ContentLength: srcFile.Attrs.Size,
 	})
 	if err != nil {
-		return files.WrapVfsError(err)
+		return wrapRemoteErr(inst, err, "could not upload file to the remote stack")
 	}
 
 	if !copy {
+		// fail-after-copy: the destination copy is already in place, so a
+		// failed source delete reports an error but leaves the copy (a retry
+		// creates a suffixed duplicate).
 		if err := sourceClient.PermanentDeleteByID(fileID); err != nil {
-			inst.Logger().WithNamespace("move").Warnf("Could not delete source file: %v", err)
+			return wrapRemoteErr(inst, err, "could not delete source file on the remote stack")
 		}
 	}
 
@@ -909,7 +1039,7 @@ var NewSharedDriveClient = func(s *sharing.Sharing) (*client.Client, error) {
 	if err != nil {
 		return nil, files.WrapVfsError(err)
 	}
-	return NewRemoteClient(destURL, bearer), nil
+	return NewRemoteClient(destURL, bearer).InDrive(s.ID()), nil
 }
 
 // respondRemoteUpload returns a minimal JSONAPI-like response for a file created

@@ -349,6 +349,9 @@ func (sfs *s3VFS) DissociateFile(src, dst *vfs.FileDoc) error {
 		return err
 	}
 
+	if err := sfs.Indexer.DeleteFileDoc(src); err != nil {
+		return err
+	}
 	return sfs.destroyFileLocked(src)
 }
 
@@ -413,6 +416,9 @@ func (sfs *s3VFS) DestroyFile(doc *vfs.FileDoc) error {
 		return lockerr
 	}
 	defer sfs.mu.Unlock()
+	if err := sfs.Indexer.DestroyFileDoc(doc); err != nil {
+		return err
+	}
 	return sfs.destroyFileLocked(doc)
 }
 
@@ -420,9 +426,6 @@ func (sfs *s3VFS) destroyFileLocked(doc *vfs.FileDoc) error {
 	diskUsage, _ := sfs.Indexer.DiskUsage()
 	objNames := []string{
 		MakeObjectKey(sfs.keyPrefix, doc.DocID, doc.InternalID),
-	}
-	if err := sfs.Indexer.DeleteFileDoc(doc); err != nil {
-		return err
 	}
 	destroyed := doc.ByteSize
 	if versions, errv := vfs.VersionsFor(sfs, doc.DocID); errv == nil {

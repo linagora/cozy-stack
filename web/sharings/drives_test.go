@@ -4059,19 +4059,8 @@ func TestFileRootSharedDriveMutationRoutes(t *testing.T) {
 			}`)).
 			Expect().Status(422)
 
+		// Only the owner can trash the root of a drive, file-root included.
 		eB.DELETE("/sharings/drives/"+sharingID+"/"+rootFileID).
-			WithHeader("Authorization", "Bearer "+env.bettyToken).
-			Expect().Status(200).
-			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
-			Object().
-			Path("$.data.attributes.trashed").Boolean().True()
-
-		require.Eventually(t, func() bool {
-			s, err := sharing.FindSharing(env.betty, sharingID)
-			return err == nil && !s.Active
-		}, 5*time.Second, 50*time.Millisecond)
-
-		eB.POST("/sharings/drives/"+sharingID+"/trash/"+rootFileID).
 			WithHeader("Authorization", "Bearer "+env.bettyToken).
 			Expect().Status(403)
 	})
@@ -4135,8 +4124,8 @@ func TestFileRootSharedDriveMutationRoutes(t *testing.T) {
 		)
 		acceptSharedDriveForBetty(t, env.acme, env.betty, env.tsA.URL, env.tsB.URL, sharingID)
 
-		eB.DELETE("/sharings/drives/"+sharingID+"/"+rootFileID).
-			WithHeader("Authorization", "Bearer "+env.bettyToken).
+		eA.DELETE("/sharings/drives/"+sharingID+"/"+rootFileID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
 			Expect().Status(200)
 
 		require.Eventually(t, func() bool {
@@ -6264,6 +6253,139 @@ func TestSharedDriveEffectiveAccessOnTrashRoutes(t *testing.T) {
 		eD.DELETE("/sharings/drives/"+d1ID+"/trash/"+outsideFileID).
 			WithHeader("Authorization", "Bearer "+env.daveToken).
 			Expect().Status(403)
+	})
+}
+
+func TestSharedDrivePermanentDeleteViaPatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	eA, _, eD := env.createClients(t)
+
+	// D1: Dave is a read-only member of the whole drive.
+	d1ID, d1RootID, _ := createSharedDrive(t, DriveCreationMethodFromFolder,
+		env.acme, env.acmeToken, env.tsA.URL, "PermanentDelete D1", "d1",
+		[]RecipientInfo{{Name: "Dave", Email: "dave@example.net", ReadOnly: true}})
+	roFileID := createFile(t, eA, d1RootID, "readonly.txt", env.acmeToken)
+	acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, d1ID)
+
+	// D2: Dave has write access.
+	d2ID, d2RootID, _ := createSharedDrive(t, DriveCreationMethodFromFolder,
+		env.acme, env.acmeToken, env.tsA.URL, "PermanentDelete D2", "d2",
+		[]RecipientInfo{{Name: "Dave", Email: "dave@example.net", ReadOnly: false}})
+	rwFileID := createFile(t, eA, d2RootID, "writable.txt", env.acmeToken)
+	acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, d2ID)
+
+	permanentDeleteBody := func(fileID string) []byte {
+		return []byte(`{
+			"data": {
+				"type": "io.cozy.files",
+				"id": "` + fileID + `",
+				"attributes": { "permanent_delete": true }
+			}
+		}`)
+	}
+
+	t.Run("ReadOnlyMemberDenied", func(t *testing.T) {
+		eD.PATCH("/sharings/drives/"+d1ID+"/"+roFileID).
+			WithHeader("Authorization", "Bearer "+env.daveToken).
+			WithHeader("Content-Type", "application/json").
+			WithBytes(permanentDeleteBody(roFileID)).
+			Expect().Status(403)
+
+		eA.GET("/files/"+roFileID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			Expect().Status(200)
+	})
+
+	t.Run("ReadWriteMemberAllowed", func(t *testing.T) {
+		eD.PATCH("/sharings/drives/"+d2ID+"/"+rwFileID).
+			WithHeader("Authorization", "Bearer "+env.daveToken).
+			WithHeader("Content-Type", "application/json").
+			WithBytes(permanentDeleteBody(rwFileID)).
+			Expect().Status(200)
+
+		eA.GET("/files/"+rwFileID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			Expect().Status(404)
+	})
+
+	t.Run("ReadWriteMemberRootDenied", func(t *testing.T) {
+		eD.PATCH("/sharings/drives/"+d2ID+"/"+d2RootID).
+			WithHeader("Authorization", "Bearer "+env.daveToken).
+			WithHeader("Content-Type", "application/json").
+			WithBytes(permanentDeleteBody(d2RootID)).
+			Expect().Status(403)
+
+		eA.GET("/files/"+d2RootID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			Expect().Status(200)
+	})
+
+	// The owner can destroy the root: the destroy-time hook revokes and
+	// deletes the drive sharing.
+	t.Run("OwnerRootAllowedRevokesSharing", func(t *testing.T) {
+		d3ID, d3RootID, _ := createSharedDrive(t, DriveCreationMethodFromFolder,
+			env.acme, env.acmeToken, env.tsA.URL, "PermanentDelete D3", "d3", nil)
+
+		eA.PATCH("/sharings/drives/"+d3ID+"/"+d3RootID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			WithHeader("Content-Type", "application/json").
+			WithBytes(permanentDeleteBody(d3RootID)).
+			Expect().Status(200)
+
+		eA.GET("/sharings/"+d3ID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			Expect().Status(404)
+	})
+}
+
+func TestSharedDriveRootProtection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	eA, _, eD := env.createClients(t)
+
+	// D1: Dave is a read-write member: trashing or destroying the root of the
+	// drive is owner-only, whatever the member's write access.
+	d1ID, d1RootID, _ := createSharedDrive(t, DriveCreationMethodFromFolder,
+		env.acme, env.acmeToken, env.tsA.URL, "RootProtection D1", "d1",
+		[]RecipientInfo{{Name: "Dave", Email: "dave@example.net", ReadOnly: false}})
+	acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, d1ID)
+
+	t.Run("MemberTrashRootDenied", func(t *testing.T) {
+		eD.DELETE("/sharings/drives/"+d1ID+"/"+d1RootID).
+			WithHeader("Authorization", "Bearer "+env.daveToken).
+			Expect().Status(403)
+
+		eA.GET("/files/"+d1RootID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			Expect().Status(200)
+	})
+
+	t.Run("MemberDestroyRootDenied", func(t *testing.T) {
+		eD.DELETE("/sharings/drives/"+d1ID+"/trash/"+d1RootID).
+			WithHeader("Authorization", "Bearer "+env.daveToken).
+			Expect().Status(403)
+	})
+
+	// The owner can trash the root: the trash hook revokes and deletes the
+	// drive sharing.
+	t.Run("OwnerTrashRootRevokesSharing", func(t *testing.T) {
+		d2ID, d2RootID, _ := createSharedDrive(t, DriveCreationMethodFromFolder,
+			env.acme, env.acmeToken, env.tsA.URL, "RootProtection D2", "d2", nil)
+
+		eA.DELETE("/sharings/drives/"+d2ID+"/"+d2RootID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			Expect().Status(200)
+
+		eA.GET("/sharings/"+d2ID).
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			Expect().Status(404)
 	})
 }
 

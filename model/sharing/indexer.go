@@ -294,6 +294,11 @@ func (s *sharingIndexer) DeleteFileDoc(doc *vfs.FileDoc) error {
 	return s.indexer.DeleteFileDoc(doc)
 }
 
+func (s *sharingIndexer) DestroyFileDoc(doc *vfs.FileDoc) error {
+	s.log.Errorf("Unexpected call to DestroyFileDoc")
+	return ErrInternalServerError
+}
+
 func (s *sharingIndexer) CreateDirDoc(doc *vfs.DirDoc) error {
 	s.log.Errorf("Unexpected call to CreateDirDoc")
 	return ErrInternalServerError
