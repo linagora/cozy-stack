@@ -873,7 +873,7 @@ func TestAuth(t *testing.T) {
 			ContentType("text/html", "utf-8").
 			Body()
 
-		resBody.Contains("would like permission to access your Twake")
+		resBody.Contains("would like to access the following data from your workplace")
 		matches := resBody.Match(`<input type="hidden" name="csrf_token" value="(\w+)"`)
 		matches.Length().Equal(2)
 		csrfToken = matches.Index(1).Raw()
@@ -927,7 +927,7 @@ func TestAuth(t *testing.T) {
 			Expect().Status(200).
 			ContentType("text/html", "utf-8").
 			Body().
-			NotContains("would like permission to access your Twake").
+			NotContains("would like to access the following data from your workplace").
 			Contains("The origin of this application is not certified.")
 	})
 
