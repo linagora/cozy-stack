@@ -401,8 +401,7 @@ func ValidateDriveRoot(inst *instance.Instance, rootID string) (*vfs.DirDoc, *vf
 	if rootID == consts.RootDirID ||
 		rootID == consts.TrashDirID ||
 		rootID == consts.SharedWithMeDirID ||
-		rootID == consts.NoLongerSharedDirID ||
-		rootID == consts.SharedDrivesDirID {
+		rootID == consts.NoLongerSharedDirID {
 		return nil, nil, ErrSystemFolder
 	}
 

@@ -1524,11 +1524,7 @@ func TestCreateDriveFromFolder(t *testing.T) {
 
 		createdDir, err := ownerInstance.VFS().DirByID(createdDirID)
 		require.NoError(t, err)
-		require.Equal(t, consts.SharedDrivesDirID, createdDir.DirID)
-
-		sharedDrivesDir, err := ownerInstance.EnsureSharedDrivesDir()
-		require.NoError(t, err)
-		require.Equal(t, sharedDrivesDir.ID(), createdDir.DirID)
+		require.Equal(t, consts.RootDirID, createdDir.DirID)
 	})
 
 	t.Run("FailOnMissingFolderIDFileIDAndName", func(t *testing.T) {
@@ -1732,8 +1728,12 @@ func TestCreateDriveFromFolder(t *testing.T) {
 			Object().Path("$.errors[0].detail").String().
 			Contains("Cannot share system folder")
 
-		// Try to share the shared-drives directory
-		resp = eOwner.POST("/sharings/drives").
+		// The legacy container follows the same sharing rules as other folders.
+		legacyDir, err := vfs.NewDirDocWithPath("Legacy drives", consts.RootDirID, "/", nil)
+		require.NoError(t, err)
+		legacyDir.DocID = consts.SharedDrivesDirID
+		require.NoError(t, ownerInstance.VFS().CreateDir(legacyDir))
+		eOwner.POST("/sharings/drives").
 			WithHeader("Authorization", "Bearer "+ownerAppToken).
 			WithHeader("Content-Type", "application/vnd.api+json").
 			WithBytes([]byte(fmt.Sprintf(`{
@@ -1744,12 +1744,7 @@ func TestCreateDriveFromFolder(t *testing.T) {
 					}
 				}
 			}`, consts.Sharings, consts.SharedDrivesDirID))).
-			Expect().Status(400)
-
-		// Verify error message
-		resp.JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
-			Object().Path("$.errors[0].detail").String().
-			Contains("Cannot share system folder")
+			Expect().Status(201)
 	})
 
 	t.Run("FailOnAlreadySharedFolder", func(t *testing.T) {

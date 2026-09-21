@@ -284,9 +284,10 @@ func TestIndexRootAndFolderAssistants(t *testing.T) {
 // too, so openRAG would refuse it as a workspace id.
 func TestIndexSharedDrivesAssistant(t *testing.T) {
 	r := newRAGTest(t)
-	drives, err := r.inst.EnsureSharedDrivesDir()
+	drives, err := vfs.NewDirDocWithPath("Drives", consts.RootDirID, "/", nil)
 	require.NoError(t, err)
-	require.Equal(t, consts.SharedDrivesDirID, drives.DocID)
+	drives.DocID = consts.SharedDrivesDirID
+	require.NoError(t, r.inst.VFS().CreateDir(drives))
 	doc := r.writeFile(drives.Fullpath+"/d.txt", "drive")
 	r.addAssistant("Shared drives", consts.SharedDrivesDirID)
 

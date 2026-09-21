@@ -58,9 +58,8 @@ const TagSeparator = ","
 // recognized
 var ErrDocTypeInvalid = errors.New("Invalid document type")
 
-// SharedDrivesCreationHandler is the handler for POST /files/drives. It
-// creates the directory where shared and external drives are saved if it
-// doesn't exist, and return information about this directory.
+// SharedDrivesCreationHandler supports legacy POST /files/shared-drives clients
+// by finding or creating an ordinary directory at the root.
 func SharedDrivesCreationHandler(c echo.Context) error {
 	inst := middlewares.GetInstance(c)
 	if err := middlewares.AllowWholeType(c, permission.POST, consts.Files); err != nil {

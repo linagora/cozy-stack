@@ -65,7 +65,7 @@ func ListSharedDrives(c echo.Context) error {
 }
 
 // CreateSharedDrive creates a new shared drive from an existing folder or
-// creates a new folder for it under Shared Drives.
+// creates a new folder for it at the instance root.
 // POST /sharings/drives
 func CreateSharedDrive(c echo.Context) error {
 	inst := middlewares.GetInstance(c)
@@ -91,11 +91,7 @@ func CreateSharedDrive(c echo.Context) error {
 	}
 
 	if attrs.Name != "" {
-		parent, err := inst.EnsureSharedDrivesDir()
-		if err != nil {
-			return wrapErrors(err)
-		}
-		newDir, err := vfs.Mkdir(inst.VFS(), path.Join(parent.Fullpath, attrs.Name), nil)
+		newDir, err := vfs.Mkdir(inst.VFS(), path.Join("/", attrs.Name), nil)
 		if err != nil {
 			return wrapDriveNameErrors(err)
 		}

@@ -181,7 +181,7 @@ func (s *Sharing) DriveTargetURL(inst *instance.Instance) *url.URL {
 
 	rootID, err := s.DriveRootID()
 	if err != nil {
-		u.Fragment = "/folder/" + consts.SharedDrivesDirID
+		u.Fragment = "/sharings"
 		return u
 	}
 

@@ -3914,9 +3914,71 @@ func TestFiles(t *testing.T) {
 
 		e.GET("/files/"+consts.SharedDrivesDirID).
 			WithHeader("Authorization", "Bearer "+readToken).
+			Expect().Status(404)
+	})
+
+	t.Run("LegacySharedDrivesFolder", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		legacyID := consts.SharedDrivesDirID
+		e.GET("/files/"+legacyID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(404)
+		_, err := testInstance.VFS().DirByID(legacyID)
+		require.ErrorIs(t, err, os.ErrNotExist)
+
+		dir, err := vfs.NewDirDocWithPath("Legacy drives", consts.RootDirID, "/", nil)
+		require.NoError(t, err)
+		dir.DocID = legacyID
+		require.NoError(t, testInstance.VFS().CreateDir(dir))
+
+		fileID := e.POST("/files/"+legacyID).
+			WithQuery("Type", "file").WithQuery("Name", "kept.txt").
+			WithHeader("Content-Type", "text/plain").
+			WithHeader("Authorization", "Bearer "+token).
+			WithBytes([]byte("keep this content")).
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().Raw()
+
+		parent, err := vfs.Mkdir(testInstance.VFS(), "/Legacy archive", nil)
+		require.NoError(t, err)
+		e.PATCH("/files/"+legacyID).
+			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes([]byte(fmt.Sprintf(`{"data":{"type":"io.cozy.files","id":"%s","attributes":{"name":"Recovered files","dir_id":"%s"}}}`, legacyID, parent.DocID))).
 			Expect().Status(200).
 			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
-			Object().Path("$.data.id").String().Equal(consts.SharedDrivesDirID)
+			Object().Path("$.data.attributes.path").String().Equal("/Legacy archive/Recovered files")
+
+		file, err := testInstance.VFS().FileByID(fileID)
+		require.NoError(t, err)
+		assert.Equal(t, legacyID, file.DirID)
+		e.DELETE("/files/"+legacyID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
+
+		newID := e.POST("/files/shared-drives").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().Raw()
+		assert.NotEqual(t, legacyID, newID)
+		e.POST("/files/shared-drives").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().Equal(newID)
+		e.GET("/files/"+legacyID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.attributes.dir_id").String().Equal(consts.TrashDirID)
+		e.DELETE("/files/trash/"+legacyID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(204)
+		e.GET("/files/"+legacyID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(404)
 	})
 
 	t.Run("DirSize", func(t *testing.T) {

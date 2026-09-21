@@ -325,18 +325,13 @@ func getDocumentType(inst *instance.Instance, s *Sharing) string {
 
 // CreateDriveShortcut will create a shortcut for a shared Drive.
 func (s *Sharing) CreateDriveShortcut(inst *instance.Instance, seen bool) error {
-	dir, err := inst.EnsureSharedDrivesDir()
-	if err != nil {
-		return err
-	}
-
 	filename := cleanFilename(s.Rules[0].Title) + ".url"
 	driveURL := s.driveShortcutURL(inst, seen)
 	body := shortcut.Generate(driveURL)
 	cm := vfs.NewCozyMetadata(s.Members[0].Instance)
 	fileDoc, err := vfs.NewFileDoc(
 		filename,
-		dir.DocID,
+		consts.RootDirID,
 		int64(len(body)),
 		nil, // Let the VFS compute the md5sum
 		consts.ShortcutMimeType,

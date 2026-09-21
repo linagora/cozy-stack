@@ -40,14 +40,14 @@ automatically.
 To create a shared drive manually (typically on the organization Cozy), follow
 these steps:
 
-1. Ensure that the `/Drives` folder exists in the cozy instance with the
-   [`POST /files/shared-drives`](https://docs.cozy.io/en/cozy-stack/files/#post-filesshared-drives)
-   route.
-2. Create the root resource to share:
-   - either a folder inside it, with the name of shared drive
+1. Create the root resource to share in the desired parent directory:
+   - either a folder with the name of the shared drive
    - or a file that will become the root of the shared drive
-3. Create a sharing with the `drive: true` attribute, and one rule for
+2. Create a sharing with the `drive: true` attribute, and one rule for
    the shared root (with `none` for `add`, `update` and `remove` attributes).
+
+New recipient shortcuts are created at the instance root. Updating an existing
+shortcut preserves its ID and location.
 
 ## Managing shared drives
 
@@ -137,7 +137,7 @@ modes:
 
 - pass `folder_id` to convert an existing file or directory into a shared drive
 - pass `file_id` to convert an existing file or directory into a shared drive
-- pass `name` to create a new directory under the Shared Drives root and share
+- pass `name` to create a new directory at the instance root and share
   it
 
 If the target Cozy is an organization instance, the created sharing is also
@@ -157,7 +157,7 @@ When an existing root is used through `folder_id` or `file_id`, that root must:
 Additional rules for directory roots:
 
 - Must not be a system folder (`root`, `trash`, `shared-with-me`,
-  `shared-drives`, `no-longer-shared`)
+  `no-longer-shared`)
 - Must not be inside the trash
 - Must not contain any subfolder that already has a sharing
 
@@ -232,7 +232,7 @@ Or create a file-root shared drive explicitly:
 |---------------|----------|-------------|
 | `folder_id`   | No       | Legacy root ID alias. Can reference an existing file or directory to convert into a shared drive |
 | `file_id`     | No       | Preferred root ID alias. Can reference an existing file or directory to convert into a shared drive |
-| `name`        | No       | The name of the directory to create under Shared Drives for a new directory-root shared drive |
+| `name`        | No       | The name of the directory to create at the instance root for a new directory-root shared drive |
 | `description` | No       | A description for the shared drive. If not provided, defaults to the root resource name |
 
 Exactly one of `folder_id`, `file_id`, or `name` must be provided.
@@ -310,7 +310,7 @@ Content-Type: application/vnd.api+json
 | 400    | Bad Request | Invalid JSON body |
 | 403    | Forbidden | Insufficient permissions to create a sharing |
 | 404    | Not Found | The file or directory with the given `folder_id` or `file_id` does not exist |
-| 409    | Conflict | The root already has a sharing, is inside a shared folder, contains a shared subfolder, or the new `name` already exists in Shared Drives |
+| 409    | Conflict | The root already has a sharing, is inside a shared folder, contains a shared subfolder, or the new `name` already exists at the instance root |
 | 400    | Bad Request | Invalid request: missing all of `folder_id`, `file_id`, and `name`, conflicting attributes, invalid root type, system folder, trashed root, or invalid `name` |
 
 **Example error (root already shared):**

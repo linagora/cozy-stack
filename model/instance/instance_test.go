@@ -17,7 +17,7 @@ func TestInstance(t *testing.T) {
 
 	t.Run("ResolveOrdinaryDirID", func(t *testing.T) {
 		inst := &instance.Instance{}
-		for _, id := range []string{"", "existing-id", "io.cozy.apps/unknown"} {
+		for _, id := range []string{"", "existing-id", "io.cozy.apps/unknown", "io.cozy.files.shared-drives-dir"} {
 			resolved, err := inst.ResolveDirID(id)
 			require.NoError(t, err)
 			assert.Equal(t, id, resolved)

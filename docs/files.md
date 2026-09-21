@@ -31,8 +31,7 @@ These endpoints accept a magic folder ID in the directory path parameter:
 - `GET /files/:dir-id/relationships/contents`
 - `GET /files/:dir-id/size`
 
-The supported IDs are `io.cozy.apps/mail`, `io.cozy.apps/notes`, and
-`io.cozy.files.shared-drives-dir` (the container for shared drives).
+The supported IDs are `io.cozy.apps/mail` and `io.cozy.apps/notes`.
 Encode the slash in application IDs, for example:
 
 ```http
@@ -43,7 +42,8 @@ The stack resolves application IDs through the matching `referenced_by`, even
 after a rename or move. It uses the first match. If none exists, or the directory
 is trashed, it creates a directory at the root with a translated name, or reuses
 an existing directory with that name. Trashed directories are left untouched.
-The Shared Drives container is created with its fixed ID if missing.
+The legacy `io.cozy.files.shared-drives-dir` is an ordinary directory ID.
+Reading it does not create a missing directory.
 
 Requests must be authenticated. Creating a missing magic folder does not
 require directory-creation permission; the requested operation still requires
@@ -154,8 +154,10 @@ more informations about the `not_synchronized_on` field.
 
 ### POST /files/shared-drives
 
-This endpoint returns the information about the Shared Drives directory. If the
-directory does not exist, it is created.
+This legacy endpoint finds or creates an ordinary directory named Drives
+(translated to the instance locale) at the root. New directories have generated
+IDs; clients must use the returned ID. Existing directories retain their IDs.
+Federated sharing creation and recipient shortcuts no longer use this container.
 
 #### Request
 
@@ -175,7 +177,7 @@ Content-Type: application/vnd.api+json
 {
   "data": {
     "type": "io.cozy.files",
-    "id": "io.cozy.files.shared-drives-dir",
+    "id": "92e29140-2b19-4a91-91a0-756c2a680091",
     "meta": {
       "rev": "1-e4abdb5a"
     },
@@ -206,7 +208,7 @@ Content-Type: application/vnd.api+json
       }
     },
     "links": {
-      "self": "/files/io.cozy.files.shared-drives-dir"
+      "self": "/files/92e29140-2b19-4a91-91a0-756c2a680091"
     }
   }
 }

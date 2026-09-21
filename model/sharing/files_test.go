@@ -53,7 +53,7 @@ func TestDriveURLHelpers(t *testing.T) {
 
 		u := s.DriveTargetURL(inst)
 		assert.Empty(t, u.RawQuery)
-		assert.Equal(t, "/folder/"+consts.SharedDrivesDirID, u.Fragment)
+		assert.Equal(t, "/sharings", u.Fragment)
 	})
 
 	t.Run("AuthorizeSharingURL", func(t *testing.T) {
@@ -204,12 +204,25 @@ func TestFiles(t *testing.T) {
 
 		shortcut, err := inst.VFS().FileByID(s.ShortcutID)
 		require.NoError(t, err)
+		assert.Equal(t, consts.RootDirID, shortcut.DirID)
 		target, ok := shortcut.Metadata["target"].(map[string]interface{})
 		require.True(t, ok)
 		assert.Equal(t, consts.Files, target["_type"])
 		assert.Equal(t, DriveRootTypeFile, target["drive_root_type"])
 		assert.Equal(t, "text/plain", target["mime"])
 		assert.Equal(t, "text", target["class"])
+
+		legacyDir, err := vfs.NewDirDocWithPath("Old drives", consts.RootDirID, "/", nil)
+		require.NoError(t, err)
+		legacyDir.DocID = consts.SharedDrivesDirID
+		require.NoError(t, inst.VFS().CreateDir(legacyDir))
+		_, err = vfs.ModifyFileMetadata(inst.VFS(), shortcut, &vfs.DocPatch{DirID: &legacyDir.DocID})
+		require.NoError(t, err)
+		require.NoError(t, s.CreateDriveShortcut(inst, true))
+		updated, err := inst.VFS().FileByID(s.ShortcutID)
+		require.NoError(t, err)
+		assert.Equal(t, shortcut.DocID, updated.DocID)
+		assert.Equal(t, legacyDir.DocID, updated.DirID)
 	})
 
 	t.Run("SharingDir", func(t *testing.T) {

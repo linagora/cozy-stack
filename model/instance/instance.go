@@ -355,40 +355,27 @@ var magicFolders = map[string]string{
 // callers must authorize the requested operation on the resolved directory.
 // Ordinary IDs are returned unchanged, without accessing the VFS.
 func (i *Instance) ResolveDirID(id string) (string, error) {
-	var dir *vfs.DirDoc
-	var err error
-	if id == consts.SharedDrivesDirID {
-		dir, err = i.EnsureSharedDrivesDir()
-	} else if key, ok := magicFolders[id]; ok {
-		ref := couchdb.DocReference{Type: consts.Apps, ID: id}
-		dir, err = vfs.EnsureReferencedDir(i, i.VFS(), ref, i.Translate(key), i.PageURL("/", nil))
-	} else {
+	key, ok := magicFolders[id]
+	if !ok {
 		return id, nil
 	}
+	ref := couchdb.DocReference{Type: consts.Apps, ID: id}
+	dir, err := vfs.EnsureReferencedDir(i, i.VFS(), ref, i.Translate(key), i.PageURL("/", nil))
 	if err != nil {
 		return "", err
 	}
 	return dir.ID(), nil
 }
 
-// EnsureSharedDrivesDir returns the Shared Drives directory, and creates it if
-// it doesn't exist
+// EnsureSharedDrivesDir supports the legacy creation endpoint with an ordinary
+// directory. Existing directories keep their IDs, including the legacy fixed ID.
 func (i *Instance) EnsureSharedDrivesDir() (*vfs.DirDoc, error) {
 	fs := i.VFS()
-	dir, err := fs.DirByID(consts.SharedDrivesDirID)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	if dir != nil {
-		return dir, nil
-	}
-
 	name := i.Translate("Tree Shared Drives")
-	dir, err = vfs.NewDirDocWithPath(name, consts.RootDirID, "/", nil)
+	dir, err := vfs.NewDirDocWithPath(name, consts.RootDirID, "/", nil)
 	if err != nil {
 		return nil, err
 	}
-	dir.DocID = consts.SharedDrivesDirID
 	dir.CozyMetadata = vfs.NewCozyMetadata(i.PageURL("/", nil))
 	err = fs.CreateDir(dir)
 	if errors.Is(err, os.ErrExist) {
