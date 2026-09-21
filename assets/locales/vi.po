@@ -262,7 +262,7 @@ msgid "Authorize Sharing Title Add"
 msgstr "Thêm vào Twake của tôi"
 
 msgid "Authorize Client presentation"
-msgstr "muốn được cấp quyền truy cập vào Twake của bạn"
+msgstr "muốn truy cập các dữ liệu sau trong workplace của bạn "
 
 msgid "Authorize Sharing Request"
 msgstr "Được chia sẻ bởi"

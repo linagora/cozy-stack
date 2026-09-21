@@ -303,7 +303,7 @@ msgid "Authorize Sharing Title Add"
 msgstr "Ajouter à mon Twake"
 
 msgid "Authorize Client presentation"
-msgstr "voudrait accéder aux données suivantes du cozy "
+msgstr "voudrait accéder aux données suivantes de votre workplace "
 
 msgid "Authorize Sharing Request"
 msgstr "Partagé par"

@@ -247,7 +247,7 @@ msgid "Authorize Sharing Title Add"
 msgstr "Meinem Twake hinzufügen"
 
 msgid "Authorize Client presentation"
-msgstr "möchte die Erlaubnis haben, auf dein Twake zuzugreifen"
+msgstr "möchte auf die folgenden Daten deines Workplace zugreifen "
 
 msgid "Authorize Sharing Request"
 msgstr "hat mit dir geteilt:"

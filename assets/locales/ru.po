@@ -287,7 +287,7 @@ msgid "Authorize Sharing Title Add"
 msgstr "Добавить в мой Twake"
 
 msgid "Authorize Client presentation"
-msgstr "хочет получить доступ к следующим данным cozy "
+msgstr "хочет получить доступ к следующим данным вашего workplace "
 
 msgid "Authorize Sharing Request"
 msgstr "Поделился"

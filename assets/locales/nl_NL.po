@@ -270,7 +270,7 @@ msgid "Authorize Sharing Title Add"
 msgstr "Toevoegen aan mijn Twake"
 
 msgid "Authorize Client presentation"
-msgstr "wil gemachtigd worden om toegang te krijgen tot je Twake"
+msgstr "wil toegang tot de volgende gegevens van je workplace "
 
 msgid "Authorize Sharing Request"
 msgstr "heeft iets met je gedeeld:"
