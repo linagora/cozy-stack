@@ -502,6 +502,9 @@ contexts:
     # regardless of this setting (it must go through POST /settings/email or the
     # CLI).
     signup_url: https://signup.example.org
+    # Write the contacts from the twake:contacts:common exchange: members on the
+    # organization instance, personal contacts on their owner's instance.
+    common_contacts: false
     # Redirect to a specific route of Cozy-Home after the onboarding
     # Format: appslug/#/path/to/route
     onboarded_redirection: home/#/discovery/?intro
@@ -795,3 +798,22 @@ rabbitmq:
           bindings:
             - banner.materialize
             - banner.clear
+    # twake:contacts:common is a fanout exchange owned by the contacts side
+    # service, so the binding key is empty. Only the contexts with
+    # common_contacts set write what it carries.
+    - name: twake:contacts:common
+      kind: fanout
+      durable: true
+      declare_exchange: false
+      queues:
+        - name: stack.contacts.common
+          declare: true
+          declare_dlx: true
+          declare_dlq: true
+          dlx_name: stack.contacts.dlx
+          dlq_name: stack.dead.letter.contacts.common
+          dl_routing_key: contacts.common.dead
+          prefetch: 8
+          delivery_limit: 5
+          bindings:
+            - ""
