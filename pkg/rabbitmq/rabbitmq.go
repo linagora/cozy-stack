@@ -277,6 +277,8 @@ func BuildExchangeSpecs(exchangesCfg []config.RabbitExchange) []ExchangeSpec {
 				handler = NewAppInstallHandler()
 			case QueueBannerCommands:
 				handler = NewBannerCommandHandler()
+			case QueueCommonContacts:
+				handler = NewCommonContactsHandler()
 			}
 
 			if handler == nil {
