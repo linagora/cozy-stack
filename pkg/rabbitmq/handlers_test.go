@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/banner"
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
@@ -98,6 +99,44 @@ func TestUserCreatedHandlerStoresMatrixID(t *testing.T) {
 		require.NoError(t, handle(t, domain, ""))
 		require.Empty(t, storedMatrixID(t, domain))
 	})
+}
+
+func TestUserCreatedHandlerStoresInternalEmail(t *testing.T) {
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	contextName := "internal-email-test"
+	conf := config.GetConfig()
+	conf.Authentication = map[string]interface{}{
+		contextName: map[string]interface{}{"disable_password_authentication": true},
+	}
+
+	domain := fmt.Sprintf("internal-email-%d.example", time.Now().UnixNano())
+	_, err := lifecycle.Create(&lifecycle.Options{
+		Domain:      domain,
+		Email:       "alice@example.org",
+		ContextName: contextName,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
+
+	email := fmt.Sprintf("Alice.%d@Acme.example", time.Now().UnixNano())
+	body, err := json.Marshal(rabbitmq.UserCreatedMessage{
+		TwakeID:       "alice",
+		WorkplaceFqdn: domain,
+		InternalEmail: " " + email + " ",
+	})
+	require.NoError(t, err)
+	require.NoError(t, rabbitmq.NewUserCreatedHandler().
+		Handle(context.Background(), amqp.Delivery{Body: body}))
+
+	found, err := lifecycle.GetInstanceByInternalEmail(strings.ToUpper(email))
+	require.NoError(t, err)
+	assert.Equal(t, domain, found.Domain)
+	assert.Equal(t, strings.ToLower(email), found.InternalEmail)
+
+	_, err = lifecycle.GetInstanceByInternalEmail("nobody@acme.example")
+	assert.ErrorIs(t, err, instance.ErrNotFound)
 }
 
 func TestBannerCommandHandler(t *testing.T) {

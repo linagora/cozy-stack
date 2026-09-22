@@ -89,6 +89,11 @@ func NormalizeDomain(domain string) string {
 	return domain
 }
 
+// NormalizeEmail lowercases and trims an email.
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
 // ExtractInstanceHost extracts and normalizes the host from an instance URL.
 // It handles full URLs (https://example.com) and plain hostnames (example.com:8080),
 // and strips the port from the result.
