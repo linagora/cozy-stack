@@ -2,7 +2,10 @@ package lifecycle
 
 import (
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 )
 
 // GetInstance retrieves the instance for a request by its host.
@@ -60,4 +63,36 @@ func ListOrgInstances(orgDomain string) ([]*instance.Instance, error) {
 // organization identifier.
 func ListOrgInstancesByID(orgID string) ([]*instance.Instance, error) {
 	return instance.ListByOrgID(orgID)
+}
+
+// GetOrgInstanceByOrgDomain retrieves the organization instance of an
+// organization domain, without listing every member instance.
+func GetOrgInstanceByOrgDomain(orgDomain string) (*instance.Instance, error) {
+	var members []*instance.Instance
+	err := couchdb.FindDocs(prefixer.GlobalPrefixer, consts.Instances, &couchdb.FindRequest{
+		UseIndex: "by-orgdomain",
+		Selector: mango.Equal("org_domain", orgDomain),
+		Limit:    1,
+	}, &members)
+	if err != nil {
+		return nil, err
+	}
+	if len(members) == 0 || members[0].OrgID == "" {
+		return nil, instance.ErrNotFound
+	}
+	orgID := members[0].OrgID
+
+	var docs []*instance.Instance
+	err = couchdb.FindDocs(prefixer.GlobalPrefixer, consts.Instances, &couchdb.FindRequest{
+		UseIndex: "by-orgid",
+		Selector: mango.And(mango.Equal("org_id", orgID), mango.StartWith("domain", orgID+".")),
+		Limit:    1,
+	}, &docs)
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, instance.ErrNotFound
+	}
+	return GetInstance(docs[0].Domain)
 }

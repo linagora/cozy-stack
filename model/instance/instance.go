@@ -965,6 +965,16 @@ func (i *Instance) HasPremiumLinksEnabled() bool {
 	return false
 }
 
+// HasCommonContacts reports whether the contacts of this instance come from
+// the twake:contacts:common feed.
+func (i *Instance) HasCommonContacts() bool {
+	if ctxSettings, ok := i.SettingsContext(); ok {
+		enabled, _ := ctxSettings["common_contacts"].(bool)
+		return enabled
+	}
+	return false
+}
+
 // ensure Instance implements couchdb.Doc
 var (
 	_ couchdb.Doc = &Instance{}

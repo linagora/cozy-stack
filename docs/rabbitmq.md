@@ -166,6 +166,22 @@ rabbitmq:
           bindings:
             - banner.materialize
             - banner.clear
+    - name: twake:contacts:common
+      kind: fanout
+      durable: true
+      declare_exchange: false
+      queues:
+        - name: stack.contacts.common
+          declare: true
+          declare_dlx: true
+          declare_dlq: true
+          dlx_name: stack.contacts.dlx
+          dlq_name: stack.dead.letter.contacts.common
+          dl_routing_key: contacts.common.dead
+          prefetch: 8
+          delivery_limit: 5
+          bindings:
+            - ""
 ```
 
 ### Dead Letter Exchange (DLX) and Dead Letter Queue (DLQ)
@@ -297,6 +313,7 @@ Queue names are mapped to handlers in the stack. For example:
 - `user.phone.updated` → updates the phone number stored in user settings.
 - `domain.user.deleted` on the `b2b` exchange → removes externally managed organization contacts.
 - `banner.materialize` and `banner.clear` on the `platform` exchange → materializes or clears a platform banner, see [Banners](banners.md).
+- every message of the `twake:contacts:common` fanout exchange → writes a contact, see below.
 
 Message schemas are JSON and validated in the handler. Example payload for `user.password.updated`:
 
@@ -391,6 +408,36 @@ Example payload for `user.phone.updated`:
   "workplaceFqdn": "example.twake.app"
 }
 ```
+
+Example message on `twake:contacts:common`, published by the contacts side
+service ([ADR 043](https://github.com/linagora/twake-workplace-private/pull/1608)):
+
+```json
+{
+  "audience": { "domain": "acme.com" },
+  "action": "ADD",
+  "path": "addressbooks/6740b0e4e0c5c1001f2ef9d1/domain-members/a1b2c3.vcf",
+  "uid": "a1b2c3",
+  "payload": {
+    "@type": "Card",
+    "name": { "full": "Alice Doe" },
+    "emails": { "e1": { "address": "alice@acme.com" } },
+    "vCardProps": [["x-twake-workplace-fqdn", {}, "unknown", "alice.twake.app"]]
+  }
+}
+```
+
+The feed carries every user and domain. The Stack writes a `domain` audience on
+the organization instance whose `org_domain` matches, and a `user` audience on
+the instance whose `internal_email` matches. A message for no instance, or for
+an instance whose context does not set `common_contacts`, is acked and dropped.
+
+The contact is found by its CardDAV `path`, stored as `carddavPath`. A contact
+written before the feed knew it, and so without a path, is found by email and
+takes the path. `ADD` and `UPDATE` overwrite the name, emails and phones, and
+keep the fields that belong to the Stack (`cozy`, `trustedForSharing`, the
+groups). `x-twake-workplace-fqdn` fills `cozy` when it is empty. A message that
+changes nothing writes nothing. `DELETE` removes the document.
 
 ### Lifecycle
 
