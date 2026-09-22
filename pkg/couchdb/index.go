@@ -14,7 +14,7 @@ import (
 
 // IndexViewsVersion is the version of current definition of views & indexes.
 // This number should be incremented when this file changes.
-const IndexViewsVersion int = 39
+const IndexViewsVersion int = 40
 
 // Indexes is the index list required by an instance to run properly.
 var Indexes = []*mango.Index{
@@ -69,6 +69,8 @@ var Indexes = []*mango.Index{
 
 	// Used to find the contacts in a group
 	mango.MakeIndex(consts.Contacts, "by-groups", mango.IndexDef{Fields: []string{"relationships.groups.data"}}),
+	// Used to find the contact a twake:contacts:common message is about
+	mango.MakeIndex(consts.Contacts, "by-carddav-path", mango.IndexDef{Fields: []string{"carddavPath"}}),
 
 	// Used to find the active sharings
 	mango.MakeIndex(consts.Sharings, "active", mango.IndexDef{Fields: []string{"active"}}),
