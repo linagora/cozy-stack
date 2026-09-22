@@ -1,6 +1,6 @@
 [Table of contents](README.md#table-of-contents)
 
-# Collaborative edition of Office documents
+# Collaborative edition of Office and PDF documents
 
 ## Diagrams
 
@@ -35,8 +35,8 @@ Reference: https://api.onlyoffice.com/editors/save
 
 ### GET /office/:id/open
 
-This route returns the parameters to open an office document. There are two
-cases:
+This route returns the parameters to open an office document or a PDF. There
+are two cases:
 
 1. The document is shared and should be opened on another instance (for
    collaborative edition)
@@ -46,8 +46,8 @@ In the first case, the response will contain the parameters of the other
 instance. In the second case, the parameters are for the document server of
 OnlyOffice.
 
-If the identifier doesn't give an office document or if there is no onlyoffice
-server configured, the response will be a `404 Page not found`.
+If the identifier doesn't give an office document or PDF, or if there is no
+OnlyOffice server configured, the response will be a `404 Page not found`.
 
 #### Request
 
@@ -107,12 +107,15 @@ Content-Type: application/vnd.api+json
           "key": "7c7ccc2e7137ba774b7e44de",
           "title": "Letter.docx",
           "url": "https://bob.cozy.example/files/downloads/735e6cf69af2db82/Letter.docx?Dl=1",
+          "permissions": {
+            "edit": true
+          },
           "info": {
             "owner": "Bob",
             "uploaded": "2010-07-07 3:46 PM"
           }
         },
-        "editor": {
+        "editorConfig": {
           "callbackUrl": "https://bob.cozy.example/office/callback",
           "lang": "en",
           "mode": "edit"
@@ -122,6 +125,10 @@ Content-Type: application/vnd.api+json
   }
 }
 ```
+
+PDF files use `documentType: "pdf"` and `document.filetype: "pdf"`. For all
+supported formats, `document.permissions.edit` is `true` only when the
+`editorConfig.mode` is `"edit"`; it is `false` in read-only mode.
 
 ### POST /office/keys/:key
 
@@ -187,6 +194,8 @@ Content-Type: application/vnd.api+json
 
 This is the callback handler for OnlyOffice. It is called when the document
 server wants to save the file.
+
+The same callback and VFS save path are used for Office documents and PDFs.
 
 See https://api.onlyoffice.com/editors/callback
 

@@ -149,6 +149,9 @@ func saveFile(inst *instance.Instance, detector ConflictDetector, downloadURL st
 		_, _ = io.Copy(io.Discard, res.Body)
 		_ = res.Body.Close()
 	}()
+	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("onlyoffice document server returned status %d", res.StatusCode)
+	}
 
 	instanceURL := inst.PageURL("/", nil)
 	newfile := file.Clone().(*vfs.FileDoc)

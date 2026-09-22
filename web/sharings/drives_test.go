@@ -4921,6 +4921,28 @@ func TestSharedDriveNotes(t *testing.T) {
 		attrs.Value("sharecode").String().NotEmpty()
 	})
 
+	t.Run("OpenPDFWithOnlyOfficeFromSharedDrive", func(t *testing.T) {
+		eA, eB, _ := env.createClients(t)
+		config.GetConfig().Office = map[string]config.Office{
+			config.DefaultInstanceContext: {OnlyOfficeURL: "https://documentserver.example"},
+		}
+		pdfID := createFileWithMime(t, eA, env.meetingsDirID, "shared.pdf", env.acmeToken, "application/pdf")
+
+		obj := eB.GET("/sharings/drives/"+env.firstSharingID+"/office/"+pdfID+"/open").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			Expect().Status(http.StatusOK).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		attrs := obj.Path("$.data.attributes").Object()
+		attrs.Value("instance").String().IsEqual(env.acme.Domain)
+		oo := attrs.Value("onlyoffice").Object()
+		oo.ValueEqual("documentType", "pdf")
+		document := oo.Value("document").Object()
+		document.ValueEqual("filetype", "pdf")
+		document.Value("permissions").Object().ValueEqual("edit", true)
+	})
+
 	t.Run("CreateNoteWithoutAuth", func(t *testing.T) {
 		_, eB, _ := env.createClients(t)
 

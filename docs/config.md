@@ -186,13 +186,14 @@ couchdb:
 ## OnlyOffice
 
 An integration between Cozy and OnlyOffice has been made. It allows the
-collaborative edition of office documents in the browser. There are some
-pre-requistes. OnlyOffice Docs must be installed on a server ([The community
+collaborative edition of office documents and PDFs in the browser. There are
+some pre-requistes. OnlyOffice Docs must be installed on a server ([The community
 edition](https://helpcenter.onlyoffice.com/installation.aspx) is free but
 limited to 20 connections and doesn't have the mobile mode). It can be the
 same server as the stack, but it is tricky as the default port of the stack
 and of the spellchecker of OnlyOffice is 8080 for both. The stack and the
 OnlyOffice components must be able to make HTTP requests to each other.
+PDF editing is validated with OnlyOffice Docs 9.2.1 build 8.
 And, for security, these requests can be signed via some shared secrets,
 called inbox and outbox secrets in OnlyOffice configuration.
 
@@ -215,8 +216,8 @@ office:
 ```
 
 Don't forget to restart all the services after having made the changes to the
-configuration files. And you should be able to edit office documents in your
-browser via the Drive application.
+configuration files. And you should be able to edit office documents and PDFs
+in your browser via the Drive application.
 
 ## Customizing a context
 
