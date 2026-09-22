@@ -244,3 +244,45 @@ data: [DONE]
 		assert.Len(t, events, 1)
 	})
 }
+
+func TestRAGMessages(t *testing.T) {
+	chat := &ChatConversation{Messages: []ChatMessage{
+		{Role: SystemRole, Content: "prompt saved when the conversation was created"},
+		{Role: UserRole, Content: "Hello"},
+		{Role: AssistantRole, Content: "Hi"},
+	}}
+	turns := []ragMessage{
+		{Role: UserRole, Content: "Hello"},
+		{Role: AssistantRole, Content: "Hi"},
+	}
+
+	t.Run("without assistant", func(t *testing.T) {
+		assert.Equal(t, turns, ragMessages(chat, nil))
+	})
+
+	t.Run("assistant without prompt", func(t *testing.T) {
+		assert.Equal(t, turns, ragMessages(chat, &chatAssistant{}))
+	})
+
+	t.Run("assistant with a blank prompt", func(t *testing.T) {
+		assert.Equal(t, turns, ragMessages(chat, &chatAssistant{Prompt: " \n"}))
+	})
+
+	t.Run("assistant with prompt", func(t *testing.T) {
+		assistant := &chatAssistant{Prompt: " Be terse.\n"}
+		expected := append([]ragMessage{{Role: SystemRole, Content: "Be terse."}}, turns...)
+		assert.Equal(t, expected, ragMessages(chat, assistant))
+	})
+
+	t.Run("only the leading system messages are skipped", func(t *testing.T) {
+		chat := &ChatConversation{Messages: []ChatMessage{
+			{Role: SystemRole, Content: "saved prompt"},
+			{Role: UserRole, Content: "Hello"},
+			{Role: SystemRole, Content: "a note in the middle"},
+		}}
+		assert.Equal(t, []ragMessage{
+			{Role: UserRole, Content: "Hello"},
+			{Role: SystemRole, Content: "a note in the middle"},
+		}, ragMessages(chat, nil))
+	})
+}
