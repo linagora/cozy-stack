@@ -93,7 +93,7 @@ func Allows(fs VFS, pset permission.Set, v permission.Verb, fd Fetcher) error {
 
 	// We have some rules on attributes, let's iterate over the current object
 	// ancestors and check if any match the rules
-	if len(otherRules) > 0 {
+	if len(otherRules) > 0 && fd.ID() != consts.RootDirID {
 		cur, err := fd.Parent(fs)
 		if err != nil {
 			return err
@@ -103,10 +103,10 @@ func Allows(fs VFS, pset permission.Set, v permission.Verb, fd Fetcher) error {
 				if rule.ValuesMatch(cur) {
 					return nil
 				}
-				cur, err = cur.Parent(fs)
-				if err != nil {
-					return err
-				}
+			}
+			cur, err = cur.Parent(fs)
+			if err != nil {
+				return err
 			}
 		}
 	}
