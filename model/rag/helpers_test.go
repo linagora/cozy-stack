@@ -105,11 +105,17 @@ type FakeOpenRAG struct {
 	//		return 0
 	//	}
 	Fail func(method, path string) int
+	// SupportedTypes is what GET /indexer/supported/types answers.
+	SupportedTypes []string
 }
+
+// DefaultSupportedTypes is a subset of openRAG's default loaders.
+var DefaultSupportedTypes = []string{"txt", "md", "pdf", "docx", "pptx", "doc", "eml", "html", "png", "jpeg", "mp3"}
 
 func NewFakeOpenRAG(t *testing.T) *FakeOpenRAG {
 	t.Helper()
 	f := &FakeOpenRAG{t: t, files: map[string]*FakeFile{}, workspaces: map[string]bool{}, pending: map[string]bool{}}
+	f.SupportedTypes = append([]string{}, DefaultSupportedTypes...)
 	f.Server, f.Rec = newRAGTestServer(t, f.handle)
 	return f
 }
@@ -191,6 +197,19 @@ func (f *FakeOpenRAG) fileWithContent(sha, exceptID string) string {
 	return ""
 }
 
+// supportsUpload is openRAG's format rule on the name of the file part.
+func (f *FakeOpenRAG) supportsUpload(req *http.Request) bool {
+	name := ""
+	if req.MultipartForm != nil && len(req.MultipartForm.File["file"]) > 0 {
+		name = req.MultipartForm.File["file"][0].Filename
+	}
+	ext := ""
+	if dot := strings.LastIndex(name, "."); dot >= 0 {
+		ext = strings.ToLower(name[dot+1:])
+	}
+	return slices.Contains(f.SupportedTypes, ext)
+}
+
 // validWorkspaceID is what openRAG accepts as a workspace id: it answers
 // 422 on anything else, so a folder id with a dot (the root folder id) can
 // never be a workspace id.
@@ -208,6 +227,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 //	DELETE /partition/{d}                          → 204, drops every file and workspace
 //	POST   /partition/{d}                          → 201
 //	GET    /partition/{d}/file/{id}                → {"metadata":{"md5sum":..}} | 404
+//	GET    /indexer/supported/types                → {"extensions":[..],"mimetypes":[..]}
 //	POST   /indexer/partition/{d}/file/{id}        → 201 (multipart, reads workspace_ids, md5sum from query)
 //	                                                 | 409 on a known or pending id
 //	                                                 | 409 DOCUMENT_CONTENT_EXISTS when another
@@ -257,6 +277,11 @@ func (f *FakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
 		} else {
 			writeJSON(w, 200, map[string]interface{}{"metadata": map[string]string{"md5sum": ff.MD5}})
 		}
+	case req.Method == http.MethodGet && len(segs) == 3 && segs[0] == "indexer" && segs[1] == "supported" && segs[2] == "types":
+		writeJSON(w, 200, map[string]interface{}{
+			"extensions": f.SupportedTypes,
+			"mimetypes":  []string{"text/plain", "text/markdown", "application/pdf"},
+		})
 	case len(segs) == 5 && segs[0] == "indexer" && segs[1] == "partition" && segs[3] == "file":
 		id := segs[4]
 		switch req.Method {
@@ -288,6 +313,12 @@ func (f *FakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
 			}
 			if err := req.ParseMultipartForm(1 << 20); err != nil {
 				writeJSON(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+			if !f.supportsUpload(req) {
+				writeJSON(w, 415, map[string]string{
+					"detail": "Unsupported file format: or file mimetype.",
+				})
 				return
 			}
 			sha, err := contentSha(req)
