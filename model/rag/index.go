@@ -655,10 +655,23 @@ func contentUnavailable(fileID string, err error) error {
 	return retryable(err)
 }
 
+// ragFilename is the filename given to the RAG server, which resolveContent
+// returns: a note is sent as markdown.
+func ragFilename(f fileInfo) string {
+	// See https://github.com/linagora/openrag/issues/1020
+	if f.Mime == consts.NoteMimeType {
+		return strings.TrimSuffix(f.Name, consts.NoteExtension) + consts.MarkdownExtension
+	}
+	if strings.HasSuffix(f.Name, consts.DocsExtension) {
+		return strings.TrimSuffix(f.Name, consts.DocsExtension) + consts.MarkdownExtension
+	}
+	return f.Name
+}
+
 // resolveContent returns what to send to the RAG server. A note is sent as the
 // markdown it renders to.
 func resolveContent(inst *instance.Instance, f fileInfo) (string, io.ReadCloser, error) {
-	name := f.Name
+	name := ragFilename(f)
 
 	if f.Mime == consts.NoteMimeType {
 		schema, _ := f.Metadata["schema"].(map[string]interface{})
@@ -672,8 +685,6 @@ func resolveContent(inst *instance.Instance, f fileInfo) (string, io.ReadCloser,
 		if err != nil {
 			return "", nil, err
 		}
-		// See https://github.com/OpenLLM-France/RAGondin/issues/88
-		name = strings.TrimSuffix(name, consts.NoteExtension) + consts.MarkdownExtension
 		return name, io.NopCloser(bytes.NewReader(md)), nil
 	}
 
@@ -681,15 +692,11 @@ func resolveContent(inst *instance.Instance, f fileInfo) (string, io.ReadCloser,
 		Type:       consts.FileType,
 		DocID:      f.ID,
 		DirID:      f.DirID,
-		DocName:    name,
+		DocName:    f.Name,
 		InternalID: f.InternalID,
 	})
 	if err != nil {
 		return "", nil, err
-	}
-	if strings.HasSuffix(name, consts.DocsExtension) {
-		// See https://github.com/OpenLLM-France/RAGondin/issues/88
-		name = strings.TrimSuffix(name, consts.DocsExtension) + consts.MarkdownExtension
 	}
 	return name, file, nil
 }
