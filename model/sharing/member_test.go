@@ -7,9 +7,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cozy/cozy-stack/client/auth"
 	"github.com/cozy/cozy-stack/client/request"
+	"github.com/cozy/cozy-stack/model/contact"
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -605,4 +609,46 @@ func TestMemberMatching(t *testing.T) {
 	assert.Nil(t, s.MemberMatching(&Member{Email: "stranger@example.net"}))
 	assert.Nil(t, s.MemberMatching(nil))
 	assert.Nil(t, s.MemberMatching(&Member{}))
+}
+
+func TestFindContactByEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	orgID := "fe" + suffix
+	orgDomain := "acme-" + suffix + ".example"
+	newInstance := func(domain string) *instance.Instance {
+		inst, err := lifecycle.Create(&lifecycle.Options{Domain: domain, OrgDomain: orgDomain, OrgID: orgID})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
+		return inst
+	}
+	org := newInstance(orgID + ".fe.localhost")
+	alice := newInstance("alice-" + suffix + ".fe.localhost")
+
+	bob, err := contact.Create(org, contact.CreateOptions{Email: "bob@acme.example", CozyURL: "https://bob.acme.example"})
+	require.NoError(t, err)
+	carol, err := contact.Create(alice, contact.CreateOptions{Email: "carol@friends.example"})
+	require.NoError(t, err)
+
+	c, err := FindContactByEmail(alice, "bob@acme.example")
+	require.NoError(t, err)
+	assert.Equal(t, bob.ID(), c.ID())
+	assert.Equal(t, "https://bob.acme.example", c.PrimaryCozyURL())
+	_, err = contact.FindByEmail(alice, "bob@acme.example")
+	assert.ErrorIs(t, err, contact.ErrNotFound)
+
+	c, err = FindContactByEmail(alice, "carol@friends.example")
+	require.NoError(t, err)
+	assert.Equal(t, carol.ID(), c.ID())
+
+	c, err = FindContactByEmail(alice, "dave@unknown.example")
+	require.NoError(t, err)
+	saved, err := contact.FindByEmail(alice, "dave@unknown.example")
+	require.NoError(t, err)
+	assert.Equal(t, c.ID(), saved.ID())
 }

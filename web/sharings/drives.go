@@ -124,8 +124,8 @@ func CreateSharedDrive(c echo.Context) error {
 	newSharing.OrgDrive = inst.IsOrganizationInstance()
 
 	// Extract recipient IDs from relationships
-	rwGroupIDs, rwContactIDs := extractRecipientIDs(obj, "recipients")
-	roGroupIDs, roContactIDs := extractRecipientIDs(obj, "read_only_recipients")
+	rwGroupIDs, rwContactIDs, rwEmails := extractRecipients(inst, obj, "recipients")
+	roGroupIDs, roContactIDs, roEmails := extractRecipients(inst, obj, "read_only_recipients")
 
 	// Create the sharing document first (drives can be created without recipients)
 	if _, err = newSharing.Create(inst); err != nil {
@@ -133,15 +133,15 @@ func CreateSharedDrive(c echo.Context) error {
 	}
 
 	// Add read-write recipients and send invitations
-	if len(rwGroupIDs) > 0 || len(rwContactIDs) > 0 {
-		if err = newSharing.AddGroupsAndContacts(inst, rwGroupIDs, rwContactIDs, false); err != nil {
+	if len(rwGroupIDs) > 0 || len(rwContactIDs) > 0 || len(rwEmails) > 0 {
+		if err = newSharing.AddGroupsAndContacts(inst, rwGroupIDs, rwContactIDs, rwEmails, false); err != nil {
 			return wrapErrors(err)
 		}
 	}
 
 	// Add read-only recipients and send invitations
-	if len(roGroupIDs) > 0 || len(roContactIDs) > 0 {
-		if err = newSharing.AddGroupsAndContacts(inst, roGroupIDs, roContactIDs, true); err != nil {
+	if len(roGroupIDs) > 0 || len(roContactIDs) > 0 || len(roEmails) > 0 {
+		if err = newSharing.AddGroupsAndContacts(inst, roGroupIDs, roContactIDs, roEmails, true); err != nil {
 			return wrapErrors(err)
 		}
 	}
@@ -181,14 +181,14 @@ func wrapDriveRootErrors(err error) error {
 }
 
 // extractRecipientIDs extracts group and contact IDs from a JSON:API relationship.
-func extractRecipientIDs(obj *jsonapi.ObjectMarshalling, relationshipName string) (groupIDs, contactIDs []string) {
+func extractRecipients(inst *instance.Instance, obj *jsonapi.ObjectMarshalling, relationshipName string) (groupIDs, contactIDs, emails []string) {
 	rel, ok := obj.GetRelationship(relationshipName)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	data, ok := rel.Data.([]interface{})
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for _, ref := range data {
 		refMap, ok := ref.(map[string]interface{})
@@ -197,6 +197,10 @@ func extractRecipientIDs(obj *jsonapi.ObjectMarshalling, relationshipName string
 		}
 		id, ok := refMap["id"].(string)
 		if !ok {
+			// Without common contacts, a ref without id is ignored as before.
+			if email, _ := refMap["email"].(string); email != "" && inst.HasCommonContacts() {
+				emails = append(emails, email)
+			}
 			continue
 		}
 		if t, _ := refMap["type"].(string); t == consts.Groups {
@@ -205,7 +209,7 @@ func extractRecipientIDs(obj *jsonapi.ObjectMarshalling, relationshipName string
 			contactIDs = append(contactIDs, id)
 		}
 	}
-	return groupIDs, contactIDs
+	return groupIDs, contactIDs, emails
 }
 
 // Load either a DirDoc or a FileDoc from the given `file-id` param. The
