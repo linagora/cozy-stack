@@ -695,6 +695,13 @@ func updateAppSet(db prefixer.Prefixer, doc *Permission, typ, docType, slug stri
 }
 
 func CheckSetPermissions(set Set, parent *Permission) error {
+	return CheckSetPermissionsWithFallback(set, parent, nil)
+}
+
+// CheckSetPermissionsWithFallback is like CheckSetPermissions, but a rule
+// rejected by the syntactic subset check is given to fallback, which can
+// accept it by returning nil. A nil fallback rejects it with ErrNotSubset.
+func CheckSetPermissionsWithFallback(set Set, parent *Permission, fallback func(Rule) error) error {
 	if parent.Type != TypeWebapp &&
 		parent.Type != TypeKonnector &&
 		parent.Type != TypeOauth &&
@@ -708,7 +715,20 @@ func CheckSetPermissions(set Set, parent *Permission) error {
 			return ErrNotSubset
 		}
 	} else if !set.IsSubSetOf(parent.Permissions) {
-		return ErrNotSubset
+		if set.IsMaximal() {
+			return ErrNotSubset
+		}
+		for _, rule := range set {
+			if parent.Permissions.RuleInSubset(rule) {
+				continue
+			}
+			if fallback == nil {
+				return ErrNotSubset
+			}
+			if err := fallback(rule); err != nil {
+				return err
+			}
+		}
 	}
 	for _, rule := range set {
 		// XXX io.cozy.files is allowed and handled with specific code for sharings
