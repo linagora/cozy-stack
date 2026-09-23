@@ -136,3 +136,13 @@ func TestClassifyConflict(t *testing.T) {
 		}
 	})
 }
+
+func TestRagFilename(t *testing.T) {
+	assert.Equal(t, "report.pdf", ragFilename(fileInfo{Name: "report.pdf"}))
+	assert.Equal(t, "LICENSE", ragFilename(fileInfo{Name: "LICENSE"}))
+
+	assert.Equal(t, "minutes.md", ragFilename(fileInfo{Name: "minutes" + consts.NoteExtension, Mime: consts.NoteMimeType}))
+	assert.Equal(t, "minutes.md", ragFilename(fileInfo{Name: "minutes" + consts.DocsExtension}))
+
+	assert.Equal(t, "minutes.txt.md", ragFilename(fileInfo{Name: "minutes.txt", Mime: consts.NoteMimeType}))
+}
