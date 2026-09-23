@@ -59,42 +59,22 @@ func CreateSharing(c echo.Context) error {
 		return wrapErrors(err)
 	}
 
-	if rel, ok := obj.GetRelationship("recipients"); ok {
-		if data, ok := rel.Data.([]interface{}); ok {
-			for _, ref := range data {
-				if t, _ := ref.(map[string]interface{})["type"].(string); t == consts.Groups {
-					if id, ok := ref.(map[string]interface{})["id"].(string); ok {
-						if err = s.AddGroup(inst, id, false); err != nil {
-							return err
-						}
-					}
-				} else {
-					if id, ok := ref.(map[string]interface{})["id"].(string); ok {
-						if err = s.AddContact(inst, id, false); err != nil {
-							return err
-						}
-					}
-				}
+	for _, rel := range []string{"recipients", "read_only_recipients"} {
+		readOnly := rel == "read_only_recipients"
+		groupIDs, contactIDs, emails := extractRecipients(inst, obj, rel)
+		for _, id := range contactIDs {
+			if err = s.AddContact(inst, id, readOnly); err != nil {
+				return err
 			}
 		}
-	}
-
-	if rel, ok := obj.GetRelationship("read_only_recipients"); ok {
-		if data, ok := rel.Data.([]interface{}); ok {
-			for _, ref := range data {
-				if t, _ := ref.(map[string]interface{})["type"].(string); t == consts.Groups {
-					if id, ok := ref.(map[string]interface{})["id"].(string); ok {
-						if err = s.AddGroup(inst, id, true); err != nil {
-							return err
-						}
-					}
-				} else {
-					if id, ok := ref.(map[string]interface{})["id"].(string); ok {
-						if err = s.AddContact(inst, id, true); err != nil {
-							return err
-						}
-					}
-				}
+		for _, email := range emails {
+			if err = s.AddEmail(inst, email, readOnly); err != nil {
+				return err
+			}
+		}
+		for _, id := range groupIDs {
+			if err = s.AddGroup(inst, id, readOnly); err != nil {
+				return err
 			}
 		}
 	}
@@ -365,26 +345,15 @@ func ChangeCozyAddress(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-func addRecipientsToSharing(inst *instance.Instance, s *sharing.Sharing, rel *jsonapi.Relationship, readOnly bool) error {
-	var err error
-	if data, ok := rel.Data.([]interface{}); ok {
-		var contactIDs, groupIDs []string
-		for _, ref := range data {
-			if id, ok := ref.(map[string]interface{})["id"].(string); ok {
-				if t, _ := ref.(map[string]interface{})["type"].(string); t == consts.Groups {
-					groupIDs = append(groupIDs, id)
-				} else {
-					contactIDs = append(contactIDs, id)
-				}
-			}
-		}
-		if s.Owner {
-			err = s.AddGroupsAndContacts(inst, groupIDs, contactIDs, readOnly)
-		} else {
-			err = s.DelegateAddContactsAndGroups(inst, groupIDs, contactIDs, readOnly)
-		}
+func addRecipientsToSharing(inst *instance.Instance, s *sharing.Sharing, obj *jsonapi.ObjectMarshalling, rel string, readOnly bool) error {
+	groupIDs, contactIDs, emails := extractRecipients(inst, obj, rel)
+	if len(groupIDs) == 0 && len(contactIDs) == 0 && len(emails) == 0 {
+		return nil
 	}
-	return err
+	if s.Owner {
+		return s.AddGroupsAndContacts(inst, groupIDs, contactIDs, emails, readOnly)
+	}
+	return s.DelegateAddContactsAndGroups(inst, groupIDs, contactIDs, emails, readOnly)
 }
 
 // AddRecipients is used to add a member to a sharing
@@ -403,15 +372,11 @@ func AddRecipients(c echo.Context) error {
 	if err != nil {
 		return jsonapi.BadJSON()
 	}
-	if rel, ok := obj.GetRelationship("recipients"); ok {
-		if err = addRecipientsToSharing(inst, s, rel, false); err != nil {
-			return wrapErrors(err)
-		}
+	if err = addRecipientsToSharing(inst, s, obj, "recipients", false); err != nil {
+		return wrapErrors(err)
 	}
-	if rel, ok := obj.GetRelationship("read_only_recipients"); ok {
-		if err = addRecipientsToSharing(inst, s, rel, true); err != nil {
-			return wrapErrors(err)
-		}
+	if err = addRecipientsToSharing(inst, s, obj, "read_only_recipients", true); err != nil {
+		return wrapErrors(err)
 	}
 	return jsonapiSharingWithDocs(c, s)
 }
