@@ -107,6 +107,12 @@ Content-Type: application/vnd.api+json
 }
 ```
 
+When the `common_contacts` context switch is on, a recipient can also be given
+by email, with `{"type": "io.cozy.contacts", "email": "bob@example.net"}`. The
+stack looks the email up in the contacts of the organization instance, then in
+the contacts of the instance, and creates the contact there when nothing
+matches. The routes that add recipients accept it too.
+
 #### Response
 
 ```http

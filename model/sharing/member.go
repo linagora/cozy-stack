@@ -16,6 +16,7 @@ import (
 	"github.com/cozy/cozy-stack/model/bitwarden"
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/permission"
 	csettings "github.com/cozy/cozy-stack/model/settings"
@@ -150,9 +151,14 @@ type Credentials struct {
 }
 
 // AddGroupsAndContacts adds a list of contacts on the sharer cozy
-func (s *Sharing) AddGroupsAndContacts(inst *instance.Instance, groupIDs, contactIDs []string, readOnly bool) error {
+func (s *Sharing) AddGroupsAndContacts(inst *instance.Instance, groupIDs, contactIDs, emails []string, readOnly bool) error {
 	for _, id := range contactIDs {
 		if err := s.AddContact(inst, id, readOnly); err != nil {
+			return err
+		}
+	}
+	for _, email := range emails {
+		if err := s.AddEmail(inst, email, readOnly); err != nil {
 			return err
 		}
 	}
@@ -189,6 +195,43 @@ func (s *Sharing) AddContact(inst *instance.Instance, contactID string, readOnly
 	}
 	_, _, err = s.addMember(inst, m)
 	return err
+}
+
+// AddEmail adds the person with the given email address
+func (s *Sharing) AddEmail(inst *instance.Instance, email string, readOnly bool) error {
+	c, err := FindContactByEmail(inst, email)
+	if err != nil {
+		return err
+	}
+	_, _, err = s.addMember(inst, buildMemberFromContact(c, readOnly))
+	return err
+}
+
+// FindContactByEmail looks the email up on the org instance, then on the
+// instance itself, and creates the contact there when nothing matches.
+func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact, error) {
+	if inst.OrgDomain != "" {
+		orgInst, err := lifecycle.GetOrgInstanceByOrgDomain(inst.OrgDomain)
+		if err == nil {
+			if c, err := findContactByEmail(orgInst, email); c != nil || err != nil {
+				return c, err
+			}
+		} else if err != instance.ErrNotFound {
+			return nil, err
+		}
+	}
+	if c, err := findContactByEmail(inst, email); c != nil || err != nil {
+		return c, err
+	}
+	return contact.Create(inst, contact.CreateOptions{Email: email})
+}
+
+func findContactByEmail(db prefixer.Prefixer, email string) (*contact.Contact, error) {
+	c, err := contact.FindByEmail(db, email)
+	if err == contact.ErrNotFound || couchdb.IsNoDatabaseError(err) {
+		return nil, nil
+	}
+	return c, err
 }
 
 func buildMemberFromContact(c *contact.Contact, readOnly bool) Member {
@@ -317,9 +360,17 @@ var _ jsonapi.Object = (*APIDelegateAddContacts)(nil)
 // DelegateAddContactsAndGroups adds a list of contacts and groups on a
 // recipient cozy. Part of the work is delegated to owner cozy, but the
 // invitation mail is still sent from the recipient cozy.
-func (s *Sharing) DelegateAddContactsAndGroups(inst *instance.Instance, groupIDs, contactIDs []string, readOnly bool) error {
+func (s *Sharing) DelegateAddContactsAndGroups(inst *instance.Instance, groupIDs, contactIDs, emails []string, readOnly bool) error {
 	api := &APIDelegateAddContacts{}
 	api.sid = s.SID
+
+	for _, email := range emails {
+		c, err := FindContactByEmail(inst, email)
+		if err != nil {
+			return err
+		}
+		api.members = append(api.members, buildMemberFromContact(c, readOnly))
+	}
 
 	for _, id := range contactIDs {
 		c, err := contact.Find(inst, id)
