@@ -265,6 +265,21 @@ func TestPermissions(t *testing.T) {
 			assert.NoError(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, a1.ID())))
 			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, f.ID(), B2.ID())), permission.ErrNotSubset)
 			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, "unknown-id")), permission.ErrNotSubset)
+			// every rule is checked on each ancestor, not one rule per ancestor
+			psetTwoSelectors := append(permission.Set{
+				permission.Rule{
+					Type:     consts.Files,
+					Verbs:    permission.Verbs(permission.GET),
+					Selector: "name",
+					Values:   []string{"Home"},
+				},
+			}, psetReferencedApp...)
+			assert.NoError(t, vfs.Allows(fs, psetTwoSelectors, permission.GET, f))
+			root, err := fs.DirByID(consts.RootDirID)
+			require.NoError(t, err)
+			assert.Error(t, vfs.Allows(fs, psetTwoSelectors, permission.GET, root))
+			assert.ErrorIs(t, vfs.AllowsRule(fs, psetTwoSelectors, byID(get, consts.RootDirID)), permission.ErrNotSubset)
+
 			withSelector := byID(get, "testtag")
 			withSelector.Selector = "tags"
 			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, withSelector), permission.ErrNotSubset)
