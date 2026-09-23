@@ -14,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
+	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/crypto"
@@ -269,9 +270,19 @@ func HandleCreateShareByLink(c echo.Context, inst *instance.Instance, opts Creat
 		}
 	}
 
+	// Files targeted by id are also accepted when the parent can access them,
+	// even if its rules use a selector (e.g. referenced_by).
+	if !opts.SkipValidation {
+		err := permission.CheckSetPermissionsWithFallback(subdoc.Permissions, parent, func(r permission.Rule) error {
+			return vfs.AllowsRule(inst.VFS(), parent.Permissions, r)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
 	// Use CreateShareSet which handles password hashing and doc creation.
-	// Pass skipValidation to control whether standard validation is performed.
-	pdoc, err := permission.CreateShareSet(inst, parent, sourceID, codes, shortcodes, subdoc, expiresAt, opts.SkipValidation)
+	pdoc, err := permission.CreateShareSet(inst, parent, sourceID, codes, shortcodes, subdoc, expiresAt, true)
 	if err != nil {
 		return err
 	}
@@ -492,8 +503,10 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 					return err
 				} else if current.Permissions.RuleInSubset(r) {
 					toPatch.AddRules(r)
+				} else if err := vfs.AllowsRule(instance.VFS(), current.Permissions, r); err != nil {
+					return err
 				} else {
-					return permission.ErrNotSubset
+					toPatch.AddRules(r)
 				}
 			}
 		}
