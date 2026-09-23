@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -17,7 +18,10 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/tests/testutils"
+	"github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1093,4 +1097,121 @@ func TestIndexMessageJSON(t *testing.T) {
 	raw, err = json.Marshal(rag.IndexMessage{Doctype: consts.Files, ReconcileDirID: "x"})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"doctype":"io.cozy.files","reconcile_dir_id":"x"}`, string(raw))
+}
+
+// requestsAbout counts the requests the fake openRAG received about the file.
+func (r *ragTest) requestsAbout(doc *vfs.FileDoc) int {
+	n := 0
+	for _, req := range r.fake.Rec.All() {
+		if strings.Contains(req.Path, doc.DocID) {
+			n++
+		}
+	}
+	return n
+}
+
+func (r *ragTest) indexStatus(doc *vfs.FileDoc) string {
+	r.t.Helper()
+	var status rag.IndexStatus
+	require.NoError(r.t, couchdb.GetDoc(r.inst, consts.ChatRAG, doc.DocID, &status))
+	return status.Status
+}
+
+// An unsupported file must cost no request at all, not even the GET.
+func TestIndexSkipsFormatsOpenRAGRefuses(t *testing.T) {
+	r := newRAGTest(t)
+	kb := r.mkdir("/KB")
+	doc := r.writeFile("/KB/a.md", "# alpha")
+	js := r.writeFile("/KB/bundle.js", "console.log(1)")
+	license := r.writeFile("/KB/LICENSE", "MIT")
+	r.addAssistant("KB assistant", kb.DocID)
+
+	r.runUntilSettled()
+
+	_, ok := r.fake.File(doc.DocID)
+	assert.True(t, ok, "a supported format is indexed")
+	for _, unsupported := range []*vfs.FileDoc{js, license} {
+		_, ok := r.fake.File(unsupported.DocID)
+		assert.False(t, ok, unsupported.DocName)
+		assert.Equal(t, 0, r.requestsAbout(unsupported), "no request at all about "+unsupported.DocName)
+		assert.Equal(t, rag.StatusNotSupported, r.indexStatus(unsupported), unsupported.DocName)
+	}
+}
+
+// A docs-note is uploaded as .md: the check judges that name.
+func TestIndexJudgesTheUploadedName(t *testing.T) {
+	r := newRAGTest(t)
+	kb := r.mkdir("/KB")
+	note := r.writeFile("/KB/minutes"+consts.DocsExtension, "# minutes")
+	report := r.writeFile("/KB/REPORT.PDF", "%PDF-1.4")
+	r.addAssistant("KB assistant", kb.DocID)
+
+	r.runUntilSettled()
+
+	_, ok := r.fake.File(note.DocID)
+	assert.True(t, ok, "a docs-note is judged as the .md it is uploaded as")
+	_, ok = r.fake.File(report.DocID)
+	assert.True(t, ok, "the extension is matched case-insensitively")
+}
+
+// An openRAG without the route gets every file, as before.
+func TestIndexSendsEverythingWithoutSupportedTypes(t *testing.T) {
+	r := newRAGTest(t)
+	kb := r.mkdir("/KB")
+	doc := r.writeFile("/KB/a.md", "# alpha")
+	js := r.writeFile("/KB/bundle.js", "console.log(1)")
+	r.addAssistant("KB assistant", kb.DocID)
+	r.fake.Fail = func(method, path string) int {
+		if path == "/indexer/supported/types" {
+			return http.StatusNotFound
+		}
+		return 0
+	}
+
+	r.runUntilSettled()
+
+	_, ok := r.fake.File(doc.DocID)
+	assert.True(t, ok)
+	assert.Positive(t, r.uploads(js), "the unsupported file is sent, and refused by openRAG")
+	_, ok = r.fake.File(js.DocID)
+	assert.False(t, ok)
+}
+
+func TestReconcileCountsUnsupportedFilesApart(t *testing.T) {
+	r := newRAGTest(t)
+	kb := r.mkdir("/KB")
+	r.writeFile("/KB/a.md", "# alpha")
+	r.writeFile("/KB/bundle.js", "console.log(1)")
+	r.writeFile("/KB/bundle.js.map", "{}")
+	r.addAssistant("KB assistant", kb.DocID)
+
+	log, entries := capturingLogger(t)
+	require.NoError(t, rag.Index(r.inst, log, rag.IndexMessage{
+		Doctype: consts.Files, ReconcileDirID: kb.DocID,
+	}))
+
+	summary := findLog(t, entries(), "reconcile: folder "+kb.DocID+" walked")
+	assert.Contains(t, summary, "1 file(s) indexed or up to date")
+	assert.Contains(t, summary, "2 unsupported format(s) skipped")
+	assert.Contains(t, summary, "0 refused")
+}
+
+// capturingLogger is a job logger whose entries can be read back.
+func capturingLogger(t *testing.T) (logger.Logger, func() []*logrus.Entry) {
+	t.Helper()
+	entry := logger.WithNamespace("rag-test")
+	hook := new(logtest.Hook)
+	entry.AddHook(hook)
+	return entry, hook.AllEntries
+}
+
+func findLog(t *testing.T, entries []*logrus.Entry, prefix string) string {
+	t.Helper()
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Message, prefix) {
+			return entry.Message
+		}
+	}
+	require.Failf(t, "log not found", "no log starting with %q", prefix)
+	return ""
 }
