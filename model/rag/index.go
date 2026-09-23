@@ -80,6 +80,12 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 	ctx := &indexContext{inst: inst, logger: logger, server: server}
 	// An error only means some sources were unreachable, the flags are usable.
 	ctx.flags, _ = feature.GetFlags(inst)
+	// Read once per run, never cached: openRAG's config can change. Optional.
+	if types, err := supportedTypes(server); err != nil {
+		logger.Warnf("cannot read the file formats openRAG indexes: %s (every file will be sent)", err)
+	} else {
+		ctx.types = types
+	}
 	sc, err := loadScopes(inst, logger)
 	if err != nil {
 		return err
@@ -132,6 +138,8 @@ type indexContext struct {
 	server config.RAGServer
 	flags  *feature.Flags
 	scopes *scopes
+	// types is nil when openRAG did not answer: every file is then sent.
+	types *ragTypes
 }
 
 // runBatch processes the (at most BatchSize) changes of the feed loaded after
@@ -145,9 +153,9 @@ func (ctx *indexContext) runBatch(cp checkpoint, feed *couchdb.ChangesResponse) 
 	retry := false
 	for _, change := range feed.Results {
 		if err := ctx.handleChange(change); err != nil {
-			if errors.Is(err, errDuplicateContent) {
-				// openRAG will never index that content twice: indexFile
-				// logged it, and the batch has nothing to report or replay.
+			if isSkipped(err) {
+				// openRAG will never index that file: indexFile logged it,
+				// and the batch has nothing to report or replay.
 				continue
 			}
 			ctx.logger.Warnf("Index error on %s: %s", change.DocID, err)
@@ -236,7 +244,7 @@ func (ctx *indexContext) handleDirChange(change couchdb.Change) error {
 		if file == nil || file.Trashed {
 			continue
 		}
-		if err := ctx.handleFile(fileInfoFromDoc(file)); err != nil && !errors.Is(err, errDuplicateContent) {
+		if err := ctx.handleFile(fileInfoFromDoc(file)); err != nil && !isSkipped(err) {
 			errj = errors.Join(errj, err)
 		}
 	}
@@ -278,6 +286,15 @@ func (ctx *indexContext) indexFile(f fileInfo, desired []string) error {
 	if !isClassAllowed(ctx.flags, f.Class) {
 		ctx.logger.Debugf("file %s (%s) has the class %q, not enabled for indexing: skipped", f.ID, f.Name, f.Class)
 		return SetIndexStatus(ctx.inst, f.ID, StatusNotSupported, f.Rev)
+	}
+	// Before needsIndexation, to save its GET too. A file indexed before
+	// openRAG stopped accepting its format stays there: not worth that GET.
+	if name := ragFilename(f); !ctx.types.accepts(name) {
+		ctx.logger.Debugf("file %s (%s) would be uploaded as %s, a format openRAG does not index: skipped", f.ID, f.Name, name)
+		if err := SetIndexStatus(ctx.inst, f.ID, StatusNotSupported, f.Rev); err != nil {
+			return err
+		}
+		return errUnsupportedFormat
 	}
 	needed, isNew, err := needsIndexation(ctx.inst, f.ID, f.MD5)
 	if err != nil {
@@ -385,6 +402,15 @@ const maxErrorBody = 4096
 // failure, and callers count it apart.
 var errDuplicateContent = errors.New("content already indexed under another file id")
 
+// errUnsupportedFormat is a file openRAG declares it cannot index: a
+// definitive skip like errDuplicateContent, counted apart by the walk.
+var errUnsupportedFormat = errors.New("format openRAG does not index")
+
+// isSkipped tells the definitive skips apart from failures.
+func isSkipped(err error) bool {
+	return errors.Is(err, errDuplicateContent) || errors.Is(err, errUnsupportedFormat)
+}
+
 // uploadConflict is what a 409 of the upload route means.
 type uploadConflict int
 
@@ -455,7 +481,7 @@ func (ctx *indexContext) reconcileFolder(dirID string) error {
 	// indexer refusing that file) is logged and skipped. Failing the job on
 	// the latter would only replay the same walk to the same refusal.
 	var firstTransient error
-	var indexed, transient, duplicates, skipped int
+	var indexed, transient, duplicates, unsupported, skipped int
 	err = vfs.WalkAlreadyLocked(ctx.inst.VFS(), dir, func(_ string, _ *vfs.DirDoc, file *vfs.FileDoc, err error) error {
 		if err != nil {
 			return err
@@ -470,6 +496,8 @@ func (ctx *indexContext) reconcileFolder(dirID string) error {
 			// A whole Drive holds hundreds of them: indexFile logged the
 			// file once, at info, and the walk only counts it here.
 			duplicates++
+		case errors.Is(err, errUnsupportedFormat):
+			unsupported++
 		case isRetryable(err):
 			ctx.logger.Warnf("reconcile: file %s failed on a transient error: %s", file.DocID, err)
 			transient++
@@ -486,8 +514,8 @@ func (ctx *indexContext) reconcileFolder(dirID string) error {
 		// The subtree was not walked entirely: nothing else replays it.
 		return retryable(err)
 	}
-	summary := fmt.Sprintf("reconcile: folder %s walked: %d file(s) indexed or up to date, %d duplicate(s) skipped, %d refused",
-		dirID, indexed, duplicates, skipped)
+	summary := fmt.Sprintf("reconcile: folder %s walked: %d file(s) indexed or up to date, %d duplicate(s) skipped, %d unsupported format(s) skipped, %d refused",
+		dirID, indexed, duplicates, unsupported, skipped)
 	if skipped > 0 {
 		ctx.logger.Warn(summary)
 	} else {
@@ -597,6 +625,64 @@ func deleteFromRAGHTTP(server config.RAGServer, domain, fileID string) error {
 	}
 	res.Body.Close()
 	return statusError("DELETE file", res.StatusCode, http.StatusNotFound)
+}
+
+// supportedTypesPath is the openRAG route declaring what it can index.
+const supportedTypesPath = "/indexer/supported/types"
+
+// ragTypes is the extensions openRAG indexes, lowercased, without the dot.
+// The route also lists mimetypes, ignored on purpose: openRAG picks its parser
+// from the extension alone, so a file accepted on its mimetype would be
+// parsed as plain text.
+type ragTypes struct {
+	extensions map[string]struct{}
+}
+
+// accepts judges the filename given to openRAG (see ragFilename). A nil
+// *ragTypes accepts everything.
+func (t *ragTypes) accepts(name string) bool {
+	if t == nil {
+		return true
+	}
+	_, ok := t.extensions[fileExtension(name)]
+	return ok
+}
+
+// fileExtension mirrors openRAG: after the last dot, lowercased, "" without.
+func fileExtension(name string) string {
+	dot := strings.LastIndex(name, ".")
+	if dot < 0 {
+		return ""
+	}
+	return strings.ToLower(name[dot+1:])
+}
+
+// supportedTypes asks openRAG what it indexes. Any failure is returned, the
+// caller falling back on sending every file.
+func supportedTypes(server config.RAGServer) (*ragTypes, error) {
+	res, err := callRAG(server, http.MethodGet, nil, supportedTypesPath, echo.MIMEApplicationJSON)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if err := statusError("GET supported types", res.StatusCode); err != nil {
+		return nil, err
+	}
+	var body struct {
+		Extensions []string `json:"extensions"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	if len(body.Extensions) == 0 {
+		// An empty set would skip every file: treat it as an unusable answer.
+		return nil, errors.New("GET supported types returned no extension")
+	}
+	types := &ragTypes{extensions: make(map[string]struct{}, len(body.Extensions))}
+	for _, ext := range body.Extensions {
+		types.extensions[strings.ToLower(strings.TrimPrefix(ext, "."))] = struct{}{}
+	}
+	return types, nil
 }
 
 // needsIndexation reports whether the file must be sent again. isNew tells

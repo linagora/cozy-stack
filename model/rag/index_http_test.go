@@ -152,3 +152,44 @@ func TestIndexedMD5Sum(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+func TestSupportedTypes(t *testing.T) {
+	t.Run("the declared extensions are read, lowercased and without their dot", func(t *testing.T) {
+		server, rec := newRAGTestServer(t, func(w http.ResponseWriter, req *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"extensions":["pdf",".MD","txt"],"mimetypes":["text/plain"]}`))
+		})
+		types, err := supportedTypes(server)
+		require.NoError(t, err)
+		assert.Equal(t, http.MethodGet, rec.All()[0].Method)
+		assert.Equal(t, "/indexer/supported/types", rec.All()[0].Path)
+
+		assert.True(t, types.accepts("a.pdf"))
+		assert.True(t, types.accepts("a.md"))
+		assert.False(t, types.accepts("a.js"))
+	})
+
+	t.Run("an unusable answer is an error", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			status int
+			body   string
+		}{
+			{"the route does not exist", http.StatusNotFound, `{"detail":"Not Found"}`},
+			{"the server fails", http.StatusInternalServerError, `{"detail":"boom"}`},
+			{"the body is not JSON", http.StatusOK, `<html>hello</html>`},
+			{"the body has no extension", http.StatusOK, `{"mimetypes":["text/plain"]}`},
+			{"the extensions are empty", http.StatusOK, `{"extensions":[]}`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				server, _ := newRAGTestServer(t, func(w http.ResponseWriter, req *http.Request) {
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(tc.body))
+				})
+				types, err := supportedTypes(server)
+				assert.Error(t, err)
+				assert.Nil(t, types)
+			})
+		}
+	})
+}

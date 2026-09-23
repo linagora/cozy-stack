@@ -146,3 +146,26 @@ func TestRagFilename(t *testing.T) {
 
 	assert.Equal(t, "minutes.txt.md", ragFilename(fileInfo{Name: "minutes.txt", Mime: consts.NoteMimeType}))
 }
+
+func TestFileExtension(t *testing.T) {
+	assert.Equal(t, "pdf", fileExtension("report.pdf"))
+	assert.Equal(t, "pdf", fileExtension("REPORT.PDF"))
+	assert.Equal(t, "gz", fileExtension("archive.tar.gz"))
+	assert.Equal(t, "bashrc", fileExtension(".bashrc"))
+	assert.Equal(t, "", fileExtension("LICENSE"))
+	assert.Equal(t, "", fileExtension("trailing."))
+	assert.Equal(t, "", fileExtension(""))
+}
+
+func TestRagTypesAccepts(t *testing.T) {
+	types := &ragTypes{extensions: map[string]struct{}{"pdf": {}, "md": {}}}
+
+	assert.True(t, types.accepts("report.pdf"))
+	assert.True(t, types.accepts("REPORT.PDF"), "openRAG lowercases the extension")
+	assert.False(t, types.accepts("bundle.js"))
+	assert.False(t, types.accepts("LICENSE"), "no dot, no extension, no indexing")
+
+	var unknown *ragTypes
+	assert.True(t, unknown.accepts("bundle.js"))
+	assert.True(t, unknown.accepts("LICENSE"))
+}
