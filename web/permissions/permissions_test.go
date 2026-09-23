@@ -9,6 +9,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -279,6 +280,84 @@ func TestPermissions(t *testing.T) {
 		e.GET("/permissions/self").
 			WithHeader("Authorization", "Bearer barbage").
 			Expect().Status(400)
+	})
+
+	t.Run("ShareLinkOnFilesReferencedByApp", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		fs := testInstance.VFS()
+		slug := "referenced-app"
+		appRef := couchdb.DocReference{Type: consts.Apps, ID: consts.Apps + "/" + slug}
+
+		dir, err := vfs.NewDirDoc(fs, "referenced-app-dir", "", nil)
+		require.NoError(t, err)
+		dir.ReferencedBy = []couchdb.DocReference{appRef}
+		require.NoError(t, fs.CreateDir(dir))
+		createFile := func(name, dirID string) string {
+			doc, err := vfs.NewFileDoc(name, dirID, 0, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+			require.NoError(t, err)
+			f, err := fs.CreateFile(doc, nil)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			return doc.ID()
+		}
+		inside := createFile("inside.txt", dir.ID())
+		inside2 := createFile("inside2.txt", dir.ID())
+		outside := createFile("outside-referenced-app.txt", consts.RootDirID)
+
+		_, err = permission.CreateWebappSet(testInstance, slug, permission.Set{
+			permission.Rule{
+				Type:     consts.Files,
+				Verbs:    permission.Verbs(permission.GET),
+				Selector: "referenced_by",
+				Values:   []string{appRef.ID},
+			},
+		}, "1.0.0")
+		require.NoError(t, err)
+		appToken, err := testInstance.MakeJWT(consts.AppAudience, slug, "", "", time.Now())
+		require.NoError(t, err)
+
+		shareLink := func(id, verb string) *httpexpect.Response {
+			return e.POST("/permissions").
+				WithQuery("codes", "email").
+				WithHeader("Authorization", "Bearer "+appToken).
+				WithHeader("Content-Type", "application/json").
+				WithBytes([]byte(fmt.Sprintf(`{
+          "data": {
+            "type": "io.cozy.permissions",
+            "attributes": {
+              "permissions": {
+                "files": {"type": "io.cozy.files", "verbs": [%q], "values": [%q]}
+              }
+            }
+          }
+        }`, verb, id))).
+				Expect()
+		}
+
+		shareLink(outside, "GET").Status(403)
+		shareLink(inside, "PUT").Status(403)
+		permID := shareLink(inside, "GET").Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().NotEmpty().Raw()
+
+		patchLink := func(id string) *httpexpect.Response {
+			return e.PATCH("/permissions/"+permID).
+				WithHeader("Authorization", "Bearer "+appToken).
+				WithHeader("Content-Type", "application/json").
+				WithBytes([]byte(fmt.Sprintf(`{
+          "data": {
+            "attributes": {
+              "permissions": {
+                "other": {"type": "io.cozy.files", "verbs": ["GET"], "values": [%q]}
+              }
+            }
+          }
+        }`, id))).
+				Expect()
+		}
+
+		patchLink(inside2).Status(200)
+		patchLink(outside).Status(403)
 	})
 
 	t.Run("CreateSubPermission", func(t *testing.T) {
