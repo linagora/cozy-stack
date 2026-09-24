@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/instance"
-	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/rag"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/model/vfs/vfsafero"
@@ -23,14 +22,7 @@ import (
 )
 
 func init() {
-	// The real worker lives in worker/rag, which model/rag cannot import.
-	// Register a no-op worker of the same name so triggers and jobs can be
-	// created in these tests.
-	job.AddWorker(&job.WorkerConfig{
-		WorkerType:  "rag-index",
-		Concurrency: 1,
-		WorkerFunc:  func(*job.TaskContext) error { return nil },
-	})
+	rag.RegisterNoopWorkers("rag-index", "rag-query")
 }
 
 // ragTest wires a test instance to a fake openRAG.

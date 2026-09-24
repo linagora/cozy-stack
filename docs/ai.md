@@ -308,6 +308,12 @@ Content-Type: application/json
   that folder's workspace. The assistant's folder must have been indexed at
   least once by the `rag-index` worker; otherwise the query fails with an
   error event saying the knowledge base is not indexed.
+  When the assistant has a `prompt`, it is sent to openRAG with every query
+  of the conversation, as a leading `system` message that openRAG splices
+  into its own system prompt (flagged as untrusted instructions). The prompt
+  is read from the assistant document at query time, not saved in the
+  conversation: editing it on the assistant applies to its existing
+  conversations as well.
 - `attachmentIDs` (optional) array of ids, specifying which documents should be leveraged by the RAG.
   
 

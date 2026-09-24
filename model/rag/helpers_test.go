@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/logger"
 )
@@ -56,6 +57,19 @@ func (r *RequestRecorder) Count(method, p string) int {
 		}
 	}
 	return n
+}
+
+// RegisterNoopWorkers registers no-op workers of the given names, so jobs
+// and triggers on them can be pushed in tests: the real workers live in
+// worker/rag, which model/rag cannot import.
+func RegisterNoopWorkers(names ...string) {
+	for _, name := range names {
+		job.AddWorker(&job.WorkerConfig{
+			WorkerType:  name,
+			Concurrency: 1,
+			WorkerFunc:  func(*job.TaskContext) error { return nil },
+		})
+	}
 }
 
 func TestingLogger() logger.Logger {
@@ -426,6 +440,17 @@ func (f *FakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
 		}
 		ff.Workspaces = slices.DeleteFunc(ff.Workspaces, func(s string) bool { return s == ws })
 		writeJSON(w, 200, map[string]string{})
+	case req.Method == http.MethodPost && len(segs) == 3 && segs[0] == "v1" && segs[1] == "chat" && segs[2] == "completions":
+		// A non-streamed completion, enough for the stack to save an answer.
+		writeJSON(w, 200, map[string]interface{}{
+			"object": "chat.completion",
+			"choices": []map[string]interface{}{{
+				"index":         0,
+				"finish_reason": "stop",
+				"message":       map[string]string{"role": "assistant", "content": "fake answer"},
+			}},
+			"extra": `{"sources": []}`,
+		})
 	default:
 		f.t.Logf("fake openRAG: unhandled %s %s", req.Method, req.URL.Path)
 		writeJSON(w, 404, map[string]string{"error": "unhandled " + req.Method + " " + path.Clean(req.URL.Path)})

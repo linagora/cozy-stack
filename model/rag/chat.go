@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/account"
@@ -193,16 +194,6 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 						Type: consts.ChatAssistants,
 					},
 				},
-			}
-			var assistant chatAssistant
-			if err := couchdb.GetDoc(inst, consts.ChatAssistants, payload.AssistantID, &assistant); err == nil && assistant.Prompt != "" {
-				promptID, _ := uuid.NewV7()
-				chat.Messages = append(chat.Messages, ChatMessage{
-					ID:        promptID.String(),
-					Role:      SystemRole,
-					Content:   assistant.Prompt,
-					CreatedAt: time.Now().UTC(),
-				})
 			}
 		}
 	} else if err != nil {
@@ -414,24 +405,39 @@ func buildLLMOverride(inst *instance.Instance, assistant *chatAssistant) map[str
 	return override
 }
 
+// ragMessage is one entry of the messages array sent to openRAG.
+type ragMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// ragMessages builds the messages sent to openRAG: the assistant's prompt as
+// a leading system message (openRAG pins it as a custom instruction), then
+// the conversation turns. The prompt is read on every query so an edit of the
+// assistant applies at once; the leading system messages an older stack saved
+// in the conversation are skipped, so the current prompt replaces them.
+func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage {
+	messages := make([]ragMessage, 0, len(chat.Messages)+1)
+	if assistant != nil {
+		if prompt := strings.TrimSpace(assistant.Prompt); prompt != "" {
+			messages = append(messages, ragMessage{Role: SystemRole, Content: prompt})
+		}
+	}
+	turns := chat.Messages
+	for len(turns) > 0 && turns[0].Role == SystemRole {
+		turns = turns[1:]
+	}
+	for _, msg := range turns {
+		messages = append(messages, ragMessage{Role: msg.Role, Content: msg.Content})
+	}
+	return messages
+}
+
 func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) error {
 	var chat ChatConversation
 	err := couchdb.GetDoc(inst, consts.ChatConversations, query.DocID, &chat)
 	if err != nil {
 		return err
-	}
-
-	type RAGMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-
-	chatHistory := make([]RAGMessage, 0, len(chat.Messages))
-	for _, msg := range chat.Messages {
-		chatHistory = append(chatHistory, RAGMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
 	}
 
 	metadata := map[string]interface{}{
@@ -473,7 +479,7 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	}
 	payload := map[string]interface{}{
 		"model":       fmt.Sprintf("ragondin-%s", inst.Domain),
-		"messages":    chatHistory,
+		"messages":    ragMessages(&chat, assistant),
 		"stream":      query.Stream,
 		"metadata":    metadata,
 		"temperature": Temperature,
