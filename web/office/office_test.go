@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestOffice(t *testing.T) {
 	var key string
 
 	config.UseTestFile(t)
-	ooURL := fakeOOServer()
+	ooURL := fakeOOServer(t)
 	config.GetConfig().Office = map[string]config.Office{
 		"default": {OnlyOfficeURL: ooURL},
 	}
@@ -80,6 +81,9 @@ func TestOffice(t *testing.T) {
 		legacyEditor.Value("callbackUrl").String().HasSuffix("/office/callback")
 
 		document := oo.Value("document").Object()
+		document.ValueEqual("filetype", "docx")
+		document.NotContainsKey("fileType")
+		document.Value("permissions").Object().ValueEqual("edit", true)
 		key = document.Value("key").String().NotEmpty().Raw()
 	})
 
@@ -226,6 +230,92 @@ func TestOffice(t *testing.T) {
 		assert.Equal(t, "onlyoffice-server", conflict.CozyMetadata.UpdatedByApps[0].Slug)
 		assert.NotEqual(t, conflictRev, conflict.Rev())
 	})
+
+	pdfID := createPDFFile(t, inst)
+	var pdfKey string
+
+	t.Run("OpenPDF", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		obj := e.GET("/office/"+pdfID+"/open").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(http.StatusOK).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		oo := obj.Path("$.data.attributes.onlyoffice").Object()
+		oo.ValueEqual("documentType", "pdf")
+		document := oo.Value("document").Object()
+		document.ValueEqual("filetype", "pdf")
+		document.NotContainsKey("fileType")
+		document.Value("permissions").Object().ValueEqual("edit", true)
+		pdfKey = document.Value("key").String().NotEmpty().Raw()
+		oo.Value("editorConfig").Object().ValueEqual("mode", "edit")
+		oo.Value("editor").Object().ValueEqual("mode", "edit")
+	})
+
+	t.Run("OpenPDFReadOnly", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		obj := e.GET("/office/"+pdfID+"/open").
+			WithQuery("ReadOnly", "true").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(http.StatusOK).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		oo := obj.Path("$.data.attributes.onlyoffice").Object()
+		oo.Value("document").Object().Value("permissions").Object().ValueEqual("edit", false)
+		oo.Value("editorConfig").Object().ValueEqual("mode", "view")
+		oo.Value("editor").Object().ValueEqual("mode", "view")
+	})
+
+	t.Run("RejectPDFCallbackDownloadError", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		before := readFile(t, inst, pdfID)
+
+		e.POST("/office/callback").
+			WithHeader("Content-Type", "application/json").
+			WithBytes([]byte(fmt.Sprintf(`{
+      "key": "%s",
+      "status": 2,
+      "url": "%s/error"
+    }`, pdfKey, ooURL))).
+			Expect().Status(http.StatusInternalServerError)
+
+		assert.Equal(t, before, readFile(t, inst, pdfID))
+	})
+
+	t.Run("SavePDFConflict", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		updateFile(t, inst, pdfID)
+
+		obj := e.POST("/office/keys/"+pdfKey).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(http.StatusOK).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+		conflictID := obj.Path("$.data.id").String().NotEmpty().Raw()
+		assert.NotEqual(t, pdfID, conflictID)
+		obj.Path("$.data.attributes.name").String().IsEqual("document (2).PDF")
+
+		e.POST("/office/callback").
+			WithHeader("Content-Type", "application/json").
+			WithBytes([]byte(fmt.Sprintf(`{
+      "key": "%s",
+      "status": 2,
+      "url": "%s/pdf"
+    }`, pdfKey, ooURL))).
+			Expect().Status(http.StatusOK).
+			JSON().Object().ValueEqual("error", 0.0)
+
+		conflict, err := inst.VFS().FileByID(conflictID)
+		require.NoError(t, err)
+		assert.Equal(t, "pdf", conflict.Class)
+		assert.Equal(t, "application/pdf", conflict.Mime)
+		assert.Equal(t, "onlyoffice-server", conflict.CozyMetadata.UploadedBy.Slug)
+		assert.Equal(t, []byte(updatedPDF), readFile(t, inst, conflictID))
+	})
 }
 
 func createFile(t *testing.T, inst *instance.Instance) string {
@@ -239,6 +329,36 @@ func createFile(t *testing.T, inst *instance.Instance) string {
 	require.NoError(t, f.Close())
 
 	return filedoc.ID()
+}
+
+func createPDFFile(t *testing.T, inst *instance.Instance) string {
+	rawPDF, err := os.ReadFile("../../tests/fixtures/dev-desktop.pdf")
+	require.NoError(t, err)
+
+	filedoc, err := vfs.NewFileDoc("document.PDF", consts.RootDirID, -1, nil,
+		"application/pdf", "pdf", time.Now(), false, false, false, nil)
+	filedoc.CozyMetadata = vfs.NewCozyMetadata(inst.PageURL("/", nil))
+	require.NoError(t, err)
+
+	f, err := inst.VFS().CreateFile(filedoc, nil)
+	require.NoError(t, err)
+	_, err = f.Write(rawPDF)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	return filedoc.ID()
+}
+
+func readFile(t *testing.T, inst *instance.Instance, fileID string) []byte {
+	t.Helper()
+	doc, err := inst.VFS().FileByID(fileID)
+	require.NoError(t, err)
+	f, err := inst.VFS().OpenFile(doc)
+	require.NoError(t, err)
+	defer f.Close()
+	content, err := io.ReadAll(f)
+	require.NoError(t, err)
+	return content
 }
 
 func updateFile(t *testing.T, inst *instance.Instance, fileID string) {
@@ -261,13 +381,26 @@ func updateFile(t *testing.T, inst *instance.Instance, fileID string) {
 }
 
 func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/error" {
+		http.Error(w, "document unavailable", http.StatusBadGateway)
+		return
+	}
+	if r.URL.Path == "/pdf" {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte(updatedPDF))
+		return
+	}
 	f.count++
 	body := fmt.Sprintf("version %d", f.count)
 	_, _ = w.Write([]byte(body))
 }
 
-func fakeOOServer() string {
+const updatedPDF = "%PDF-1.7\n% updated by OnlyOffice\n"
+
+func fakeOOServer(t *testing.T) string {
+	t.Helper()
 	handler := &fakeServer{}
 	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
 	return server.URL
 }

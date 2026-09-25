@@ -3,6 +3,8 @@ package sharing
 import (
 	"bytes"
 	"net/url"
+	"path"
+	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/office"
@@ -36,11 +38,14 @@ type onlyOffice struct {
 }
 
 type onlyOfficeDoc struct {
-	Filetype string `json:"filetype,omitempty"`
-	Key      string `json:"key"`
-	Title    string `json:"title,omitempty"`
-	URL      string `json:"url"`
-	Info     struct {
+	FileType    string `json:"filetype,omitempty"`
+	Key         string `json:"key"`
+	Title       string `json:"title,omitempty"`
+	URL         string `json:"url"`
+	Permissions struct {
+		Edit bool `json:"edit"`
+	} `json:"permissions"`
+	Info struct {
 		Owner    string `json:"owner,omitempty"`
 		Uploaded string `json:"uploaded,omitempty"`
 	} `json:"info"`
@@ -92,7 +97,7 @@ func (o *apiOfficeURL) sign(cfg *config.Office) (string, error) {
 
 	claims := *o.OO
 	claims.URL = ""
-	claims.Doc.Filetype = ""
+	claims.Doc.FileType = ""
 	claims.Doc.Title = ""
 	claims.Doc.Info.Owner = ""
 	claims.Doc.Info.Uploaded = ""
@@ -217,7 +222,8 @@ func (o *OfficeOpener) openLocalDocument(memberIndex int, readOnly bool) (*apiOf
 		URL:  cfg.OnlyOfficeURL,
 		Type: documentType(o.File),
 	}
-	doc.OO.Doc.Filetype = o.File.Mime
+	doc.OO.Doc.FileType = fileType(o.File)
+	doc.OO.Doc.Permissions.Edit = mode == "edit"
 	doc.OO.Doc.Key = key
 	doc.OO.Doc.Title = o.File.DocName
 	doc.OO.Doc.URL = download
@@ -296,6 +302,8 @@ func uploadedDate(f *vfs.FileDoc) string {
 // Cf https://api.onlyoffice.com/editors/config/#documentType
 func documentType(f *vfs.FileDoc) string {
 	switch f.Class {
+	case "pdf":
+		return "pdf"
 	case "spreadsheet":
 		return "cell"
 	case "slide":
@@ -305,9 +313,14 @@ func documentType(f *vfs.FileDoc) string {
 	}
 }
 
+// fileType returns the extension expected by the OnlyOffice document config.
+func fileType(f *vfs.FileDoc) string {
+	return strings.ToLower(strings.TrimPrefix(path.Ext(f.DocName), "."))
+}
+
 func isOfficeDocument(f *vfs.FileDoc) bool {
 	switch f.Class {
-	case "spreadsheet", "slide", "text":
+	case "pdf", "spreadsheet", "slide", "text":
 		return true
 	default:
 		return false
