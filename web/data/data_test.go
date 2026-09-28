@@ -9,6 +9,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/tests/testutils"
@@ -68,8 +69,10 @@ func TestData(t *testing.T) {
 			{"WrongDoctype", "io.cozy.anothertype", 403},
 			{"WriteOnly", Type + ":PUT", 403},
 			{"WrongDocument", Type + ":GET:another-id", 403},
+			{"WrongSelectorValue", Type + ":GET:anothervalue:test", 403},
 			{"WholeDoctype", Type + ":GET", 200},
 			{"DocumentID", Type + ":GET:" + ID, 200},
+			{"SelectorValue", Type + ":GET:testvalue:test", 200},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				e := testutils.CreateTestClient(t, ts.URL)
@@ -86,6 +89,34 @@ func TestData(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	t.Run("GetBitwardenSettingsWithRevisions", func(t *testing.T) {
+		require.NoError(t, couchdb.EnsureDBExist(testInstance, consts.Settings))
+		_ = couchdb.CreateNamedDocWithDB(testInstance, &couchdb.JSONDoc{
+			Type: consts.Settings,
+			M: map[string]interface{}{
+				"_id": consts.BitwardenSettingsID,
+				"key": "bitwarden-vault-key",
+			},
+		})
+
+		// A client holding only a permission on the bitwarden organizations
+		// doctype can read the bitwarden settings document, with or without
+		// the revisions.
+		_, bitwardenToken := setup.GetTestClient(consts.BitwardenOrganizations + ":GET")
+
+		e := testutils.CreateTestClient(t, ts.URL)
+		e.GET("/data/"+consts.Settings+"/"+consts.BitwardenSettingsID).
+			WithHeader("Authorization", "Bearer "+bitwardenToken).
+			Expect().Status(200).
+			JSON().Object().ValueEqual("key", "bitwarden-vault-key")
+
+		e.GET("/data/"+consts.Settings+"/"+consts.BitwardenSettingsID).
+			WithQuery("revs", "true").
+			WithHeader("Authorization", "Bearer "+bitwardenToken).
+			Expect().Status(200).
+			JSON().Object().ValueEqual("key", "bitwarden-vault-key")
 	})
 
 	t.Run("GetForMissingDoc", func(t *testing.T) {

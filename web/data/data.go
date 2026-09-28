@@ -103,6 +103,23 @@ func allDoctypes(c echo.Context) error {
 	return c.JSON(http.StatusOK, doctypes)
 }
 
+// allowGetDoc validates that the context permission set can read the given
+// document.
+func allowGetDoc(c echo.Context, doctype, docid string, doc *couchdb.JSONDoc) error {
+	err := middlewares.Allow(c, permission.GET, doc)
+	if err == nil {
+		return nil
+	}
+
+	// Allow to read the bitwarden settings document with only a permission
+	// bitwarden organizations doctype
+	if doctype == consts.Settings && docid == consts.BitwardenSettingsID {
+		return middlewares.AllowWholeType(c, permission.GET, consts.BitwardenOrganizations)
+	}
+
+	return err
+}
+
 // GetDoc get a doc by its type and id
 func getDoc(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
@@ -122,11 +139,11 @@ func getDoc(c echo.Context) error {
 		return dbStatus(c)
 	}
 
-	if paramIsTrue(c, "revs") {
-		if err := middlewares.AllowTypeAndID(c, permission.GET, doctype, docid); err != nil {
-			return err
-		}
-		return proxy(c, docid)
+	// Reject a request that carries no credential before it reaches the
+	// database. The document itself is needed to check the permission rules on
+	// its fields, so the fine-grained check is done below.
+	if _, err := middlewares.GetPermission(c); err != nil {
+		return err
 	}
 
 	var out couchdb.JSONDoc
@@ -134,22 +151,22 @@ func getDoc(c echo.Context) error {
 	out.Type = doctype
 	if err != nil {
 		if couchdb.IsNotFoundError(err) {
-			if err := middlewares.Allow(c, permission.GET, &out); err != nil {
+			if err := allowGetDoc(c, doctype, docid, &out); err != nil {
 				return err
 			}
 		}
 		return fixErrorNoDatabaseIsWrongDoctype(err)
 	}
 
-	if err := middlewares.Allow(c, permission.GET, &out); err != nil {
-		// Allow to read the bitwarden settings document with only a permission
-		// bitwarden organizations doctype
-		if doctype == consts.Settings && docid == consts.BitwardenSettingsID {
-			err = middlewares.AllowWholeType(c, permission.GET, consts.BitwardenOrganizations)
-		}
-		if err != nil {
-			return err
-		}
+	if err := allowGetDoc(c, doctype, docid, &out); err != nil {
+		return err
+	}
+
+	// The revisions are not kept by GetDoc, so the request is forwarded to
+	// CouchDB. It must be done after the permission check, as the proxy uses
+	// the admin credentials.
+	if paramIsTrue(c, "revs") {
+		return proxy(c, docid)
 	}
 
 	return c.JSON(http.StatusOK, out.ToMapWithType())
