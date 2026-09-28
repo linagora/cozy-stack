@@ -1,10 +1,13 @@
 package rag
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/account"
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -243,4 +246,98 @@ data: [DONE]
 		require.NoError(t, err)
 		assert.Len(t, events, 1)
 	})
+}
+
+func TestGetSources(t *testing.T) {
+	expected := []Source{
+		{
+			SourceType: "document",
+			ID:         "file-1",
+			DocType:    "io.cozy.files",
+			Filename:   "report.pdf",
+			Page:       3,
+			FileURL:    "https://rag/static/c1",
+			ChunkURL:   "https://rag/extract/c1",
+		},
+		{
+			SourceType: "web",
+			DocType:    "io.cozy.urls",
+			URL:        "https://example.org",
+			Title:      "Example",
+			Snippet:    "snippet",
+		},
+	}
+	web := `{"source_type": "web", "url": "https://example.org", "title": "Example", "snippet": "snippet"}`
+
+	t.Run("extra object with the chunk metadata nested", func(t *testing.T) {
+		event := parseEvent(t, `{"extra": {"sources": [
+			{"source_type": "document", "rerank_score": 0.64,
+			 "chunk": {"file_id": "file-1", "doctype": "io.cozy.files", "filename": "report.pdf", "page": 3},
+			 "chunk_url": "https://rag/extract/c1", "file_url": "https://rag/static/c1"},
+			`+web+`]}}`)
+		sources, err := getSources(event)
+		require.NoError(t, err)
+		assert.Equal(t, expected, sources)
+	})
+
+	t.Run("legacy: extra JSON string with flat sources", func(t *testing.T) {
+		extra := `{"sources": [
+			{"source_type": "document", "file_id": "file-1", "doctype": "io.cozy.files", "filename": "report.pdf", "page": 3,
+			 "chunk_url": "https://rag/extract/c1", "file_url": "https://rag/static/c1"},
+			` + web + `]}`
+		raw, err := json.Marshal(map[string]string{"extra": extra})
+		require.NoError(t, err)
+		sources, err := getSources(parseEvent(t, string(raw)))
+		require.NoError(t, err)
+		assert.Equal(t, expected, sources)
+	})
+
+	t.Run("no sources", func(t *testing.T) {
+		for _, body := range []string{`{}`, `{"extra": {}}`, `{"extra": "{}"}`, `{"extra": ""}`, `{"extra": null}`} {
+			sources, err := getSources(parseEvent(t, body))
+			require.NoError(t, err, body)
+			assert.Nil(t, sources, body)
+		}
+	})
+
+	t.Run("legacy: invalid extra string", func(t *testing.T) {
+		_, err := getSources(parseEvent(t, `{"extra": "not json"}`))
+		require.Error(t, err)
+	})
+}
+
+func TestHandleStreamResponseExtraFormats(t *testing.T) {
+	config.UseTestFile(t)
+	inst := &instance.Instance{Domain: "rag-stream.example.net"}
+	msg := ChatMessage{ID: "msg-1"}
+	source := `{"source_type": "document", "chunk": {"file_id": "file-1", "filename": "a.pdf"}}`
+
+	for name, extras := range map[string][2]string{
+		"extra object":         {`{}`, `{"sources": [` + source + `]}`},
+		"legacy: extra string": {`"{}"`, strconv.Quote(`{"sources": [` + source + `]}`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `data: {"object": "chat.completion.chunk", "choices": [{"delta": {"content": "Hello "}}], "extra": ` + extras[0] + `}
+
+data: {"object": "chat.completion.chunk", "choices": [{"delta": {"content": "world"}}], "extra": ` + extras[1] + `}
+
+data: {"object": "chat.completion.chunk", "choices": [{"delta": {}, "finish_reason": "stop"}], "extra": ` + extras[1] + `}
+
+data: [DONE]
+`
+			completion, sources, err := handleStreamResponse(inst, msg, strings.NewReader(body))
+			require.NoError(t, err)
+			assert.Equal(t, "Hello world", completion)
+			require.Len(t, sources, 1)
+			assert.Equal(t, "file-1", sources[0].ID)
+			assert.Equal(t, "a.pdf", sources[0].Filename)
+		})
+	}
+}
+
+func parseEvent(t *testing.T, body string) map[string]interface{} {
+	t.Helper()
+	var event map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(body), &event))
+	return event
 }

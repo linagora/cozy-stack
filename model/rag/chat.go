@@ -255,15 +255,39 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 	return &chat, nil
 }
 
-func getSources(event map[string]interface{}) ([]Source, error) {
-	extraStr, ok := event["extra"].(string)
-	if !ok {
-		return nil, nil
+// decodeExtra returns the extra payload of an openRAG response. It is a JSON
+// object, or a JSON-encoded string for openRAG <= v2.2.0 (legacy).
+func decodeExtra(raw interface{}) (map[string]interface{}, error) {
+	switch extra := raw.(type) {
+	case map[string]interface{}:
+		return extra, nil
+	case string:
+		if extra == "" {
+			return nil, nil
+		}
+		var decoded map[string]interface{}
+		if err := json.Unmarshal([]byte(extra), &decoded); err != nil {
+			return nil, err
+		}
+		return decoded, nil
 	}
+	return nil, nil
+}
 
-	var extra map[string]interface{}
-	err := json.Unmarshal([]byte(extraStr), &extra)
-	if err != nil {
+// chunkField reads a field of the chunk metadata of a document source. It is
+// nested under "chunk", or flat in the source for openRAG <= v2.2.0 (legacy).
+func chunkField(src map[string]interface{}, key string) interface{} {
+	if chunk, ok := src["chunk"].(map[string]interface{}); ok {
+		if v, ok := chunk[key]; ok {
+			return v
+		}
+	}
+	return src[key]
+}
+
+func getSources(event map[string]interface{}) ([]Source, error) {
+	extra, err := decodeExtra(event["extra"])
+	if err != nil || extra == nil {
 		return nil, err
 	}
 	sourcesRaw, ok := extra["sources"].([]interface{})
@@ -290,18 +314,19 @@ func getSources(event map[string]interface{}) ([]Source, error) {
 				Snippet:    snippet,
 			})
 		} else {
-			subject, _ := src["email.subject"].(string)
-			datetime, _ := src["datetime"].(string)
-			emailPreview, _ := src["email.preview"].(string)
-			relationshipID, _ := src["relationship_id"].(string)
-			parentID, _ := src["parent_id"].(string)
-			doctype, _ := src["doctype"].(string)
-			fileID, _ := src["file_id"].(string)
-			fileName, _ := src["filename"].(string)
+			subject, _ := chunkField(src, "email.subject").(string)
+			datetime, _ := chunkField(src, "datetime").(string)
+			emailPreview, _ := chunkField(src, "email.preview").(string)
+			relationshipID, _ := chunkField(src, "relationship_id").(string)
+			parentID, _ := chunkField(src, "parent_id").(string)
+			doctype, _ := chunkField(src, "doctype").(string)
+			fileID, _ := chunkField(src, "file_id").(string)
+			fileName, _ := chunkField(src, "filename").(string)
 			page := 0
-			if p, ok := src["page"].(float64); ok {
+			if p, ok := chunkField(src, "page").(float64); ok {
 				page = int(p)
 			}
+			// The URLs are computed by openRAG and always at the top level.
 			fileURL, _ := src["file_url"].(string)
 			chunkURL, _ := src["chunk_url"].(string)
 			sources = append(sources, Source{
@@ -626,7 +651,7 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 				completion += content
 				position++
 
-				if event["extra"].(string) != "" && sources == nil {
+				if sources == nil {
 					// Sources are included in all delta messages, but should be sent once
 					sources, sseErr = getSources(event)
 					if sseErr != nil {

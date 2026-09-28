@@ -232,9 +232,13 @@ Content-Type: application/json
   },
   "service_tier": null,
   "prompt_logprobs": null,
-  "extra": "{\"sources\": []}"
+  "extra": { "sources": [] }
 }
 ```
+
+The response is openRAG's own: up to openRAG v2.2.0 (legacy), `extra` is a
+JSON-encoded string (`"{\"sources\": []}"`) and the metadata of a document
+source is flat instead of nested under `chunk`.
 
 ### POST /ai/v1/tools/execute
 
