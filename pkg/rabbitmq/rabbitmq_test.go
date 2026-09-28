@@ -337,31 +337,19 @@ func TestHandlers(t *testing.T) {
 		require.Equal(t, prevPriv, bw.PrivateKey)
 	})
 
-	t.Run("CreateUserWithoutHashInForcedOIDCContext", func(t *testing.T) {
-		setup := setUpRabbitMQConfig(t, MQ, "CreateUserWithoutHashInForcedOIDCContext")
-		cfg := config.GetConfig()
-		prevAuthentication := cfg.Authentication
-		const oidcContext = "oidc-no-password-context"
-		cfg.Authentication = map[string]interface{}{
-			oidcContext: map[string]interface{}{
-				"disable_password_authentication": true,
-			},
-		}
-		t.Cleanup(func() {
-			cfg.Authentication = prevAuthentication
-		})
+	t.Run("CreateUserWithoutHashThenFirstPassphrase", func(t *testing.T) {
+		setup := setUpRabbitMQConfig(t, MQ, "CreateUserWithoutHashThenFirstPassphrase")
 
 		suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 		orgDomain := "no-hash-org-" + suffix + ".example"
 		orgID := "org-no-hash-" + suffix
 		targetEmail := "target-" + suffix + "@example.com"
 		target := setup.GetTestInstance(&lifecycle.Options{
-			Domain:      "no-hash-target-" + suffix + ".local",
-			ContextName: oidcContext,
-			OrgDomain:   orgDomain,
-			OrgID:       orgID,
-			Email:       targetEmail,
-			PublicName:  "Target User",
+			Domain:     "no-hash-target-" + suffix + ".local",
+			OrgDomain:  orgDomain,
+			OrgID:      orgID,
+			Email:      targetEmail,
+			PublicName: "Target User",
 		})
 		other := createInstanceInOrg(
 			t,
@@ -373,7 +361,6 @@ func TestHandlers(t *testing.T) {
 		)
 
 		initialHash := string(target.PassphraseHash)
-		require.NotEmpty(t, initialHash)
 		require.NotNil(t, target.PasswordDefined)
 		require.False(t, *target.PasswordDefined)
 
@@ -426,6 +413,35 @@ func TestHandlers(t *testing.T) {
 		require.Equal(t, initialHash, string(updated.PassphraseHash))
 		require.NotNil(t, updated.PasswordDefined)
 		require.False(t, *updated.PasswordDefined)
+
+		hashText, hashB64 := hashPassphrase(t)
+		body, err = json.Marshal(rabbitmq.PasswordChangeMessage{
+			TwakeID:       slug,
+			Iterations:    100000,
+			Hash:          hashB64,
+			WorkplaceFqdn: target.Domain,
+		})
+		require.NoError(t, err)
+		err = ch.PublishWithContext(
+			testCtx(t),
+			"auth",
+			"password.updated",
+			false,
+			false,
+			amqp.Publishing{
+				DeliveryMode: amqp.Persistent,
+				ContentType:  "application/json",
+				Body:         body,
+				MessageId:    fmt.Sprintf("%d", time.Now().UnixNano()),
+			},
+		)
+		require.NoError(t, err)
+
+		testutils.WaitForOrFail(t, 10*time.Second, func() bool {
+			updated, err := lifecycle.GetInstance(target.Domain)
+			return err == nil && string(updated.PassphraseHash) == hashText &&
+				updated.PasswordDefined != nil && *updated.PasswordDefined
+		})
 	})
 
 	t.Run("DeleteUserHandler", func(t *testing.T) {

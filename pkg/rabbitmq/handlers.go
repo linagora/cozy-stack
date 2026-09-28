@@ -190,11 +190,9 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 	}
 	log.Debugf("user.created: message validation passed for TwakeID: %s", msg.TwakeID)
 
+	// Without a hash, the first passphrase comes later from user.password.updated.
 	if msg.Hash == "" {
-		if !inst.HasForcedOIDC() {
-			return fmt.Errorf("user.created: missing passphrase hash")
-		}
-		log.Infof("user.created: skipping passphrase update for instance %s (forced OIDC context: %s)", inst.Domain, inst.ContextName)
+		log.Infof("user.created: no passphrase hash for instance %s, keeping the current passphrase", inst.Domain)
 	} else {
 		if msg.Iterations <= 0 {
 			return fmt.Errorf("user.created: missing iterations")

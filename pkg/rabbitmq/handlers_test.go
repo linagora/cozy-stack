@@ -26,21 +26,12 @@ func TestUserCreatedHandlerStoresMatrixID(t *testing.T) {
 	config.UseTestFile(t)
 	testutils.NeedCouchdb(t)
 
-	// A forced OIDC context lets a message through without a passphrase hash,
-	// which is not what this test is about.
-	contextName := "matrix-id-test"
-	conf := config.GetConfig()
-	conf.Authentication = map[string]interface{}{
-		contextName: map[string]interface{}{"disable_password_authentication": true},
-	}
-
 	newInstance := func(t *testing.T) string {
 		t.Helper()
 		domain := fmt.Sprintf("matrix-id-%d.example", time.Now().UnixNano())
 		inst, err := lifecycle.Create(&lifecycle.Options{
-			Domain:      domain,
-			Email:       "alice@example.org",
-			ContextName: contextName,
+			Domain: domain,
+			Email:  "alice@example.org",
 		})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
