@@ -35,7 +35,7 @@ func StartMinio(t *testing.T) *MinioFixture {
 	hostPort := getFreePort(t)
 
 	req := tc.ContainerRequest{
-		Image:        "quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z",
+		Image:        "cgr.dev/chainguard/minio@sha256:6a1d0b45c8669726bba580ced0bfa4cb9fdeed1ed636dfabd81d1577beb6937b",
 		ExposedPorts: []string{"9000/tcp"},
 		Env: map[string]string{
 			"MINIO_ROOT_USER":     accessKey,
