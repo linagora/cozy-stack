@@ -19,6 +19,8 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/tests/testutils"
+	"github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -568,6 +570,50 @@ func TestLifecycle(t *testing.T) {
 		assert.Len(t, report.Errors, 1)
 		assert.Equal(t, 0, report.Updated)
 		assert.Empty(t, emailOf(dave))
+	})
+
+	t.Run("CheckInternalEmails", func(t *testing.T) {
+		suffix := fmt.Sprintf("%d.example", time.Now().UnixNano())
+		create := func(slug, email string) *instance.Instance {
+			t.Helper()
+			inst, err := lifecycle.Create(&lifecycle.Options{Domain: slug + "-" + suffix, Email: email})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
+			return inst
+		}
+		synced := create("synced", "Synced@"+suffix)
+		require.NoError(t, lifecycle.SetInternalEmail(synced, "synced@"+suffix))
+		drifted := create("drifted", "new@"+suffix)
+		require.NoError(t, lifecycle.SetInternalEmail(drifted, "old@"+suffix))
+
+		oldHooks := logrus.StandardLogger().ReplaceHooks(make(logrus.LevelHooks))
+		t.Cleanup(func() { logrus.StandardLogger().ReplaceHooks(oldHooks) })
+		hook := logtest.NewGlobal()
+
+		check, err := lifecycle.CheckInternalEmails()
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, check.Drifts, 1)
+
+		logged, summary := map[string]logrus.Fields{}, false
+		for _, entry := range hook.AllEntries() {
+			if entry.Data["nspace"] != "internal-email" {
+				continue
+			}
+			if entry.Level == logrus.ErrorLevel {
+				logged[entry.Data["domain"].(string)] = entry.Data
+			}
+			summary = summary || strings.HasPrefix(entry.Message, "internal emails checked:")
+		}
+		assert.NotContains(t, logged, synced.Domain)
+		require.Contains(t, logged, drifted.Domain)
+		assert.Equal(t, "old@"+suffix, logged[drifted.Domain]["internal_email"])
+		assert.Equal(t, "new@"+suffix, logged[drifted.Domain]["settings_email"])
+		assert.Equal(t, drifted.ID(), logged[drifted.Domain]["instance_id"])
+		assert.True(t, summary)
+
+		got, err := lifecycle.GetInstance(drifted.Domain)
+		require.NoError(t, err)
+		assert.Equal(t, "old@"+suffix, got.InternalEmail, "the check must not write")
 	})
 
 	t.Run("InstanceDestroy", func(t *testing.T) {
