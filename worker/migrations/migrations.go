@@ -125,34 +125,17 @@ func backfillInternalEmails(inst *instance.Instance) error {
 	if err != nil {
 		return err
 	}
+	report := lifecycle.BackfillInternalEmails(members, false)
 	log := inst.Logger().WithNamespace("migration")
-
-	var errm error
-	byEmail := make(map[string][]*instance.Instance)
-	for _, member := range members {
-		if member.IsOrganizationInstance() {
-			continue
-		}
-		email := member.InternalEmail
-		if email == "" {
-			if email, err = member.SettingsEMail(); err != nil {
-				errm = multierror.Append(errm, fmt.Errorf("%s: %w", member.Domain, err))
-				continue
-			}
-		}
-		if email = utils.NormalizeEmail(email); email != "" {
-			byEmail[email] = append(byEmail[email], member)
-		}
+	for email, domains := range report.Duplicates {
+		log.Warnf("internal email %s is on %d instances, skipped", email, len(domains))
 	}
-
-	for email, owners := range byEmail {
-		if len(owners) > 1 {
-			log.Warnf("internal email %s is on %d instances, skipped", email, len(owners))
-			continue
-		}
-		if err := lifecycle.SetInternalEmail(owners[0], email); err != nil {
-			errm = multierror.Append(errm, fmt.Errorf("%s: %w", owners[0].Domain, err))
-		}
+	var errm error
+	for _, domain := range report.MissingSettings {
+		errm = multierror.Append(errm, fmt.Errorf("%s: no instance settings", domain))
+	}
+	for _, e := range report.Errors {
+		errm = multierror.Append(errm, errors.New(e))
 	}
 	return errm
 }

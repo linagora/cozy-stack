@@ -425,6 +425,48 @@ Delete the accounts which are not linked to a konnector
 POST /instances/alice.cozy.localhost/fixers/orphan-account HTTP/1.1
 ```
 
+### POST /instances/fixers/internal-emails
+
+Set the internal email of every instance from its settings email. Organization
+instances are skipped, and an internal email already set is kept. Emails found
+on several instances are listed in `duplicates` and left unset, for manual
+resolution. If a settings email can't be read, nothing is updated, since
+duplicates can't be ruled out. Each scanned instance is counted once in
+`missing_settings`, `empty_emails`, `updated`, `skipped` or `errors`.
+
+#### Query-String
+
+| Parameter | Description                                          |
+| --------- | ---------------------------------------------------- |
+| dry_run   | `true` to report what would be updated, but not save |
+
+#### Request
+
+```http
+POST /instances/fixers/internal-emails?dry_run=true HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "scanned": 4,
+  "missing_settings": [],
+  "empty_emails": 0,
+  "duplicates": {
+    "bob@example.com": ["bob.cozy.localhost", "bob2.cozy.localhost"]
+  },
+  "updated": 1,
+  "skipped": 3,
+  "errors": []
+}
+```
+
 ### POST /instances/:domain/export
 
 Starts an export for the given instance. The CouchDB documents will be saved in

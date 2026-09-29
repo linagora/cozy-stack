@@ -16,6 +16,7 @@ import (
 	"github.com/cozy/cozy-stack/client"
 	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/contact"
+	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 
@@ -427,10 +428,69 @@ this instance are correctly set.
 	},
 }
 
+var internalEmailsFixer = &cobra.Command{
+	Use:   "internal-emails",
+	Short: "Backfill the internal email of all the instances",
+	Long: `
+This fixer sets the internal email of each instance from its settings email.
+It skips organization instances and keeps an internal email already set. Emails
+found on several instances are listed for manual resolution and left unset.
+If a settings email can't be read, nothing is written and the command fails.
+`,
+	Example: `$ cozy-stack fix internal-emails --dry-run`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if !dryRunFlag && !forceFlag {
+			if err := askForConfirmation("Set the internal email on all instances?"); err != nil {
+				return err
+			}
+		}
+		c := newAdminClient()
+		q := url.Values{}
+		if dryRunFlag {
+			q.Set("dry_run", "true")
+		}
+		res, err := c.Req(&request.Options{
+			Method:  "POST",
+			Path:    "/instances/fixers/internal-emails",
+			Queries: q,
+		})
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		var report lifecycle.InternalEmailsReport
+		if err := json.NewDecoder(res.Body).Decode(&report); err != nil {
+			return err
+		}
+		for email, domains := range report.Duplicates {
+			fmt.Fprintf(os.Stdout, "Duplicate %s: %s\n", email, strings.Join(domains, ", "))
+		}
+		for _, domain := range report.MissingSettings {
+			fmt.Fprintf(os.Stdout, "Missing settings: %s\n", domain)
+		}
+		for _, e := range report.Errors {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", e)
+		}
+		updated := "Updated"
+		if dryRunFlag {
+			updated = "Would update"
+		}
+		fmt.Fprintf(os.Stdout, "Scanned: %d\nMissing settings: %d\nEmpty emails: %d\nDuplicate groups: %d\n%s: %d\nSkipped: %d\nErrors: %d\n",
+			report.Scanned, len(report.MissingSettings), report.EmptyEmails, len(report.Duplicates),
+			updated, report.Updated, report.Skipped, len(report.Errors))
+		if len(report.Errors) > 0 {
+			return fmt.Errorf("%d errors, see above", len(report.Errors))
+		}
+		return nil
+	},
+}
+
 func init() {
 	thumbnailsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Dry run")
 	thumbnailsFixer.Flags().BoolVar(&withMetadataFlag, "with-metadata", false, "Recalculate images metadata")
 	redisFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before fixing redis on all instances")
+	internalEmailsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would change without writing")
+	internalEmailsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before writing")
 
 	fixerCmdGroup.AddCommand(jobsFixer)
 	fixerCmdGroup.AddCommand(mimeFixerCmd)
@@ -442,6 +502,7 @@ func init() {
 	fixerCmdGroup.AddCommand(serviceTriggersFixer)
 	fixerCmdGroup.AddCommand(sharingsMovedFixer)
 	fixerCmdGroup.AddCommand(indexesFixer)
+	fixerCmdGroup.AddCommand(internalEmailsFixer)
 
 	RootCmd.AddCommand(fixerCmdGroup)
 }

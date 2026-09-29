@@ -355,3 +355,12 @@ func indexesFixer(c echo.Context) error {
 
 	return c.NoContent(http.StatusNoContent)
 }
+
+func internalEmailsFixer(c echo.Context) error {
+	insts, err := instance.List()
+	if err != nil {
+		return wrapError(err)
+	}
+	dryRun := c.QueryParam("dry_run") == "true"
+	return c.JSON(http.StatusOK, lifecycle.BackfillInternalEmails(insts, dryRun))
+}
