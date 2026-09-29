@@ -167,15 +167,14 @@ func TestRedisScheduler(t *testing.T) {
 			}
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		// Workers can finish before the scheduler deletes their triggers.
+		assert.EventuallyWithT(t, func(c *assert.CollectT) {
+			_, err := sch.GetTrigger(testInstance, atID)
+			assert.ErrorIs(c, err, job.ErrNotFoundTrigger)
 
-		_, err = sch.GetTrigger(testInstance, atID)
-		assert.Error(t, err)
-		assert.Equal(t, job.ErrNotFoundTrigger, err)
-
-		_, err = sch.GetTrigger(testInstance, inID)
-		assert.Error(t, err)
-		assert.Equal(t, job.ErrNotFoundTrigger, err)
+			_, err = sch.GetTrigger(testInstance, inID)
+			assert.ErrorIs(c, err, job.ErrNotFoundTrigger)
+		}, 2*time.Second, 10*time.Millisecond)
 	})
 
 	t.Run("RedisSchedulerWithCronTriggers", func(t *testing.T) {
