@@ -4,7 +4,7 @@
 
 Draft
 
-Related to ADR 008: server-side file search.
+Related to [server-side file search](https://github.com/linagora/cozy-stack/pull/4950).
 
 ## Context
 
@@ -255,7 +255,7 @@ write to every employee's recents. Document unsupported write paths before rollo
 
 ## References
 
-- ADR 008: server-side file search,
+- [Server-side search](https://github.com/linagora/cozy-stack/pull/4950),
   [sharing member provenance](../../model/sharing/member.go),
   [request actor resolution](../../web/middlewares/actor.go),
   [file attribution metadata](../../model/vfs/cozy_metadata.go),
