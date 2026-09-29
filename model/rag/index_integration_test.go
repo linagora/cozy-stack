@@ -146,6 +146,18 @@ func (r *ragTest) seedCheckpoint(lastSeq string, retries int) {
 func (r *ragTest) addAssistant(name, dirID string) string {
 	r.t.Helper()
 	doc := couchdb.JSONDoc{Type: consts.ChatAssistants, M: map[string]interface{}{
+		"name":          name,
+		"relationships": knowledgeBaseRelationships(dirID),
+	}}
+	require.NoError(r.t, couchdb.CreateDoc(r.inst, &doc))
+	return doc.ID()
+}
+
+// addLegacyAssistant creates an assistant with the deprecated knowledgeBase
+// attribute.
+func (r *ragTest) addLegacyAssistant(name, dirID string) string {
+	r.t.Helper()
+	doc := couchdb.JSONDoc{Type: consts.ChatAssistants, M: map[string]interface{}{
 		"name": name,
 		"knowledgeBase": []map[string]interface{}{
 			{"doctype": consts.Files, "dirId": dirID},
@@ -155,6 +167,14 @@ func (r *ragTest) addAssistant(name, dirID string) string {
 	return doc.ID()
 }
 
+func knowledgeBaseRelationships(dirID string) map[string]interface{} {
+	data := []map[string]interface{}{}
+	if dirID != "" {
+		data = append(data, map[string]interface{}{"_id": dirID, "_type": consts.Files})
+	}
+	return map[string]interface{}{"knowledgeBase": map[string]interface{}{"data": data}}
+}
+
 // setAssistantFolder replaces the knowledge base folder of an assistant
 // (dirID empty: no folder at all).
 func (r *ragTest) setAssistantFolder(assistantID, dirID string) {
@@ -162,11 +182,7 @@ func (r *ragTest) setAssistantFolder(assistantID, dirID string) {
 	var doc couchdb.JSONDoc
 	require.NoError(r.t, couchdb.GetDoc(r.inst, consts.ChatAssistants, assistantID, &doc))
 	doc.Type = consts.ChatAssistants
-	if dirID == "" {
-		doc.M["knowledgeBase"] = []map[string]interface{}{}
-	} else {
-		doc.M["knowledgeBase"] = []map[string]interface{}{{"doctype": consts.Files, "dirId": dirID}}
-	}
+	doc.M["relationships"] = knowledgeBaseRelationships(dirID)
 	require.NoError(r.t, couchdb.UpdateDoc(r.inst, &doc))
 }
 

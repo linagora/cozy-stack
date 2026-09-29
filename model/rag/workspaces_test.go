@@ -36,6 +36,16 @@ func TestReconcileWorkspacesCreatesAndRemoves(t *testing.T) {
 	assert.Equal(t, 1, r.fake.Rec.Count(http.MethodPost, "/partition/"+r.inst.Domain+"/workspaces"))
 }
 
+func TestReconcileWorkspacesLegacyKnowledgeBase(t *testing.T) {
+	r := newRAGTest(t)
+	kb := r.mkdir("/KB")
+	r.fake.AddWorkspace(kb.DocID)
+	r.addLegacyAssistant("KB assistant", kb.DocID)
+
+	require.NoError(t, rag.ReconcileWorkspacesForTest(r.inst, kb.DocID, func(string) error { return nil }))
+	assert.True(t, r.fake.HasWorkspace(kb.DocID), "workspace of the knowledgeBase attribute kept")
+}
+
 func TestReconcileWorkspacesRootDisplayName(t *testing.T) {
 	r := newRAGTest(t)
 	r.addAssistant("Everything", consts.RootDirID)
