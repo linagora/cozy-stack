@@ -132,7 +132,7 @@ func Test_StartEmailUpdate_with_a_missing_public_name(t *testing.T) {
 }
 
 func TestConfirmEmailUpdate_success(t *testing.T) {
-	_, _, tokenSvc, clouderySvc, storage, svc := setupTest(t)
+	_, instSvc, tokenSvc, clouderySvc, storage, svc := setupTest(t)
 
 	inst := instance.Instance{
 		Domain: "foo.mycozy.cloud",
@@ -158,6 +158,8 @@ func TestConfirmEmailUpdate_success(t *testing.T) {
 		},
 	}).Return(nil).Once()
 
+	instSvc.On("Update", &inst).Return(nil).Once()
+
 	clouderySvc.On("SaveInstance", &inst, &cloudery.SaveCmd{
 		Locale:     "fr/FR",
 		Email:      "some@email.com",
@@ -166,6 +168,7 @@ func TestConfirmEmailUpdate_success(t *testing.T) {
 
 	err := svc.ConfirmEmailUpdate(&inst, "some-token")
 	assert.NoError(t, err)
+	assert.Equal(t, "some@email.com", inst.InternalEmail)
 }
 
 func TestConfirmEmailUpdate_with_an_invalid_token(t *testing.T) {

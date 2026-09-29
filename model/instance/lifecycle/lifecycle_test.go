@@ -505,6 +505,8 @@ func TestLifecycle(t *testing.T) {
 			inst, err := lifecycle.Create(&lifecycle.Options{Domain: domain, Email: email})
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
+			inst.InternalEmail = ""
+			require.NoError(t, instance.Update(inst))
 			return inst
 		}
 		emailOf := func(inst *instance.Instance) string {
@@ -568,6 +570,35 @@ func TestLifecycle(t *testing.T) {
 		assert.Len(t, report.Errors, 1)
 		assert.Equal(t, 0, report.Updated)
 		assert.Empty(t, emailOf(dave))
+	})
+
+	t.Run("SyncInternalEmail", func(t *testing.T) {
+		suffix := fmt.Sprintf("%d.example", time.Now().UnixNano())
+		domain := "sync-" + suffix
+		inst, err := lifecycle.Create(&lifecycle.Options{Domain: domain, Email: " Sync@" + suffix})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
+		assert.Equal(t, "sync@"+suffix, inst.InternalEmail)
+
+		require.NoError(t, lifecycle.SetInternalEmail(inst, "internal@"+suffix))
+		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{PublicName: "Sync", FromCloudery: true}))
+		inst, err = lifecycle.GetInstance(domain)
+		require.NoError(t, err)
+		assert.Equal(t, "internal@"+suffix, inst.InternalEmail)
+
+		settings, err := inst.SettingsDocument()
+		require.NoError(t, err)
+		settings.M["email"] = "New@" + suffix
+		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{SettingsObj: settings, FromCloudery: true}))
+		found, err := lifecycle.GetInstanceByInternalEmail("new@" + suffix)
+		require.NoError(t, err)
+		assert.Equal(t, domain, found.Domain)
+
+		orgSlug := "syncorg-" + strings.TrimSuffix(suffix, ".example")
+		org, err := lifecycle.Create(&lifecycle.Options{Domain: orgSlug + ".example", OrgID: orgSlug, Email: "admin@" + suffix})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(org.Domain) })
+		assert.Empty(t, org.InternalEmail)
 	})
 
 	t.Run("InstanceDestroy", func(t *testing.T) {
