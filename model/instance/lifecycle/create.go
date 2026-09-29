@@ -120,6 +120,8 @@ func Create(opts *Options) (*instance.Instance, error) {
 	}
 	i.OrgDomain = opts.OrgDomain
 	i.OrgID = opts.OrgID
+	email, _ := settings.M["email"].(string)
+	i.SyncInternalEmail(email)
 	i.OldDomain = opts.OldDomain
 	i.Prefix = "cozy" + hex.EncodeToString(prefix[:16])
 	i.Locale = locale

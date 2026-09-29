@@ -207,6 +207,12 @@ func (s *SettingsService) ConfirmEmailUpdate(inst *instance.Instance, tok string
 		return fmt.Errorf("failed to save the settings changes: %w", err)
 	}
 
+	if inst.SyncInternalEmail(pendingEmail) {
+		if err := s.instance.Update(inst); err != nil {
+			return fmt.Errorf("failed to update the instance: %w", err)
+		}
+	}
+
 	publicName, _ := settings.M["public_name"].(string)
 	// if the public name is not defined, use the instance's domain
 	if publicName == "" {

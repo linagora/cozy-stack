@@ -31,6 +31,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/realtime"
+	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/spf13/afero"
@@ -425,6 +426,17 @@ func (i *Instance) SettingsEMail() (string, error) {
 	}
 	email, _ := settings.M["email"].(string)
 	return email, nil
+}
+
+// SyncInternalEmail sets the internal email and tells if it changed. Skips
+// organization instances.
+func (i *Instance) SyncInternalEmail(settingsEmail string) bool {
+	email := utils.NormalizeEmail(settingsEmail)
+	if email == "" || email == i.InternalEmail || i.IsOrganizationInstance() {
+		return false
+	}
+	i.InternalEmail = email
+	return true
 }
 
 // SettingsPublicName returns the public name defined in the settings of this
