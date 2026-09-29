@@ -71,22 +71,19 @@ func loadScopes(inst *instance.Instance, logger logger.Logger) (*scopes, error) 
 		if err := json.Unmarshal(doc, &assistant); err != nil {
 			return err
 		}
-		for _, entry := range assistant.KnowledgeBase {
-			if entry.Doctype != consts.Files || entry.DirID == "" {
+		for _, dirID := range assistant.knowledgeBaseFolders() {
+			if _, seen := sc.folders[dirID]; seen {
 				continue
 			}
-			if _, seen := sc.folders[entry.DirID]; seen {
-				continue
-			}
-			p, err := sc.dirs.path(inst.VFS(), entry.DirID)
+			p, err := sc.dirs.path(inst.VFS(), dirID)
 			if errors.Is(err, os.ErrNotExist) {
-				logger.Warnf("knowledge base folder %s of assistant %s does not exist: ignored", entry.DirID, assistant.DocID)
+				logger.Warnf("knowledge base folder %s of assistant %s does not exist: ignored", dirID, assistant.DocID)
 				continue
 			}
 			if err != nil {
 				return err
 			}
-			sc.folders[entry.DirID] = p
+			sc.folders[dirID] = p
 		}
 		return nil
 	})
