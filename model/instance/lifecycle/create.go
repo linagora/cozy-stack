@@ -120,8 +120,6 @@ func Create(opts *Options) (*instance.Instance, error) {
 	}
 	i.OrgDomain = opts.OrgDomain
 	i.OrgID = opts.OrgID
-	email, _ := settings.M["email"].(string)
-	i.SyncEmail(email)
 	i.OldDomain = opts.OldDomain
 	i.Prefix = "cozy" + hex.EncodeToString(prefix[:16])
 	i.Locale = locale
@@ -247,6 +245,10 @@ func Create(opts *Options) (*instance.Instance, error) {
 	}
 
 	if err = couchdb.CreateDoc(prefixer.GlobalPrefixer, i); err != nil {
+		return nil, err
+	}
+	email, _ := settings.M["email"].(string)
+	if err = instance.SyncEmail(i, email); err != nil {
 		return nil, err
 	}
 

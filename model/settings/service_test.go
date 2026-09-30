@@ -158,7 +158,7 @@ func TestConfirmEmailUpdate_success(t *testing.T) {
 		},
 	}).Return(nil).Once()
 
-	instSvc.On("Update", &inst).Return(nil).Once()
+	instSvc.On("SyncEmail", &inst, "some@email.com").Return(nil).Once()
 
 	clouderySvc.On("SaveInstance", &inst, &cloudery.SaveCmd{
 		Locale:     "fr/FR",
@@ -168,7 +168,6 @@ func TestConfirmEmailUpdate_success(t *testing.T) {
 
 	err := svc.ConfirmEmailUpdate(&inst, "some-token")
 	assert.NoError(t, err)
-	assert.Equal(t, "some@email.com", inst.Email)
 }
 
 func TestConfirmEmailUpdate_with_an_invalid_token(t *testing.T) {

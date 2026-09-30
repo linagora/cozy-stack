@@ -216,10 +216,8 @@ func Patch(i *instance.Instance, opts *Options) error {
 		}
 
 		email, _ := settings.M["email"].(string)
-		if i.SyncEmail(email) {
-			if err := update(i); err != nil {
-				return err
-			}
+		if err := instance.SyncEmail(i, email); err != nil {
+			return err
 		}
 
 		if !opts.FromCloudery {
