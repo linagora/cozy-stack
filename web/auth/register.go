@@ -53,7 +53,11 @@ func updateClient(c echo.Context) error {
 	}
 
 	clientID := c.Param("client-id")
-	defer LockOAuthClient(instance, clientID)()
+	unlock, err := LockOAuthClient(instance, clientID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	oldClient, err := oauth.FindClient(instance, clientID)
 	if err != nil {
@@ -80,7 +84,11 @@ func updateClient(c echo.Context) error {
 func deleteClient(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
 	clientID := c.Param("client-id")
-	defer LockOAuthClient(instance, clientID)()
+	unlock, err := LockOAuthClient(instance, clientID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	client, err := oauth.FindClient(instance, clientID)
 	if err != nil {

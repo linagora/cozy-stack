@@ -81,25 +81,68 @@ func executeTokenExchange(c echo.Context, inst *instance.Instance, req tokenExch
 		return nil, echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	var client *oauth.Client
+	var params *tokenExchangeOAuthClientParams
 	var scope string
 	if req.ExchangeType == tokenExchangeTypeApp {
 		if validated.AppConfig == nil {
 			return nil, echo.NewHTTPError(http.StatusBadRequest, "invalid token audience")
 		}
-		client, scope, err = executeTokenExchangeApp(c, inst, req, *validated.AppConfig)
+		params, scope, err = tokenExchangeAppClientParams(inst, req, *validated.AppConfig)
 	} else {
-		client, scope, err = executeTokenExchangeAdmin(c, inst, req)
+		params, scope, err = tokenExchangeAdminClientParams(req)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	defer LockOAuthClient(inst, client.ClientID)()
+	// Two locks guard the exchange. This session-scoped lock serialises all
+	// exchanges for the same OIDC session, so concurrent requests reuse a single
+	// client instead of each creating their own. The per-client LockOAuthClient
+	// below then serialises this exchange against client refresh/revoke/update.
+	// The lock getter already namespaces by instance (DBPrefix), so the session
+	// id is the only discriminator needed here.
+	sessionID, _ := tokenExchangeClaimString(validated.Claims, "sid")
+	mu := config.Lock().ReadWrite(inst, fmt.Sprintf("token-exchange/%q", sessionID))
+	if err := mu.Lock(); err != nil {
+		return nil, err
+	}
+	defer mu.Unlock()
+
+	client, err := findTokenExchangeOAuthClient(inst, sessionID, params.SoftwareID)
+	if err != nil {
+		return nil, err
+	}
+	created := client == nil
+	if created {
+		client, err = createTokenExchangeOAuthClient(c, inst, *params)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	unlock, err := LockOAuthClient(inst, client.ClientID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	if !created {
+		// Re-read the reused client under its own lock to pick up the current
+		// revision and reject it if it changed since we looked it up.
+		client, err = oauth.FindClient(inst, client.ClientID)
+		if err != nil {
+			return nil, err
+		}
+		if !isTokenExchangeOAuthClient(client, sessionID, params.SoftwareID) {
+			return nil, echo.NewHTTPError(http.StatusConflict, "OAuth client changed during token exchange")
+		}
+	}
 
 	if err := bindTokenExchangeOIDCSession(inst, client, validated.Claims); err != nil {
-		if delErr := client.Delete(inst); delErr != nil {
-			inst.Logger().WithNamespace("oidc").Warnf("Cannot delete orphaned OAuth client %s: %s", client.CouchID, delErr.Description)
+		if created {
+			if delErr := client.Delete(inst); delErr != nil {
+				inst.Logger().WithNamespace("oidc").Warnf("Cannot delete orphaned OAuth client %s: %s", client.CouchID, delErr.Description)
+			}
 		}
 		return nil, err
 	}
@@ -107,22 +150,18 @@ func executeTokenExchange(c echo.Context, inst *instance.Instance, req tokenExch
 	return buildTokenExchangeResponse(inst, client, scope)
 }
 
-func executeTokenExchangeAdmin(c echo.Context, inst *instance.Instance, req tokenExchangeRequest) (*oauth.Client, string, error) {
+func tokenExchangeAdminClientParams(req tokenExchangeRequest) (*tokenExchangeOAuthClientParams, string, error) {
 	if err := validateTokenExchangeScope(req.Scope); err != nil {
 		return nil, "", echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	client, err := createTokenExchangeOAuthClient(c, inst, tokenExchangeOAuthClientParams{
+	return &tokenExchangeOAuthClientParams{
 		ClientName: tokenExchangeOAuthClientName,
 		SoftwareID: tokenExchangeOAuthClientSoftwareID,
-	})
-	if err != nil {
-		return nil, "", err
-	}
-	return client, req.Scope, nil
+	}, req.Scope, nil
 }
 
-func executeTokenExchangeApp(c echo.Context, inst *instance.Instance, req tokenExchangeRequest, appConfig config.OIDCAppTokenExchangeAppConfig) (*oauth.Client, string, error) {
+func tokenExchangeAppClientParams(inst *instance.Instance, req tokenExchangeRequest, appConfig config.OIDCAppTokenExchangeAppConfig) (*tokenExchangeOAuthClientParams, string, error) {
 	if req.Scope != "" {
 		return nil, "", echo.NewHTTPError(http.StatusBadRequest, "scope is not allowed for app token exchange")
 	}
@@ -138,17 +177,12 @@ func executeTokenExchangeApp(c echo.Context, inst *instance.Instance, req tokenE
 	if err := tokenExchangeAssertManifestTrusted(manifest, slug); err != nil {
 		return nil, "", err
 	}
-	client, err := createTokenExchangeOAuthClient(c, inst, tokenExchangeOAuthClientParams{
+	return &tokenExchangeOAuthClientParams{
 		AppSlug:                slug,
 		ClientName:             tokenExchangeLinkedAppClientName(manifest, slug),
 		SoftwareID:             appConfig.SoftwareID,
 		SoftwareIDPrevalidated: true,
-	})
-	if err != nil {
-		return nil, "", err
-	}
-
-	return client, oauth.BuildLinkedAppScope(slug), nil
+	}, oauth.BuildLinkedAppScope(slug), nil
 }
 
 // tokenExchangeAssertManifestTrusted confirms the locally installed manifest
@@ -349,6 +383,37 @@ func tokenExchangeCheckAppInstance(conf *oidcprovider.Config, inst *instance.Ins
 	return nil
 }
 
+func findTokenExchangeOAuthClient(inst *instance.Instance, sessionID, softwareID string) (*oauth.Client, error) {
+	refs, err := oidcbinding.ListOAuthClients(inst.ContextName, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	// Scan this session's bindings; index by application if sessions hold many clients.
+	for _, ref := range refs {
+		if ref.Domain != inst.Domain {
+			continue
+		}
+		client, err := oauth.FindClient(inst, ref.OAuthClientID)
+		if couchdb.IsNotFoundError(err) {
+			if err := oidcbinding.UnbindOAuthClient(inst.ContextName, inst.Domain, sessionID, ref.OAuthClientID); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if isTokenExchangeOAuthClient(client, sessionID, softwareID) {
+			return client, nil
+		}
+	}
+	return nil, nil
+}
+
+func isTokenExchangeOAuthClient(client *oauth.Client, sessionID, softwareID string) bool {
+	return !client.Pending && client.OIDCSessionID == sessionID && client.SoftwareID == softwareID
+}
+
 func createTokenExchangeOAuthClient(c echo.Context, inst *instance.Instance, params tokenExchangeOAuthClientParams) (*oauth.Client, error) {
 	redirectURI, err := tokenExchangeRedirectURI(c, inst, params.AppSlug)
 	if err != nil {
@@ -417,6 +482,13 @@ func bindTokenExchangeOIDCSession(inst *instance.Instance, client *oauth.Client,
 }
 
 func buildTokenExchangeResponse(inst *instance.Instance, client *oauth.Client, scope string) (*tokenExchangeResponse, error) {
+	if client.RegistrationToken == "" {
+		registrationToken, err := client.CreateJWT(inst, consts.RegistrationTokenAudience, "")
+		if err != nil {
+			return nil, echo.NewHTTPError(http.StatusInternalServerError, "Can't generate registration token")
+		}
+		client.RegistrationToken = registrationToken
+	}
 	out := &tokenExchangeResponse{
 		AccessTokenReponse: AccessTokenReponse{
 			Type:  "bearer",
@@ -510,8 +582,7 @@ func tokenExchangeClaimString(claims jwt.MapClaims, key string) (string, bool) {
 //
 // For app exchanges (appSlug != ""), the redirect URI is always the app's
 // own subdomain on this instance: callers cannot influence it via the
-// Origin header because executeTokenExchangeApp has already enforced that
-// the Origin (if any) is exactly that subdomain.
+// Origin header; the request handler has already checked that Origin is allowed.
 //
 // For admin exchanges, the Origin header is honoured when it points
 // somewhere other than the instance itself, which lets the admin panel host
