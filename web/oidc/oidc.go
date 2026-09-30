@@ -207,7 +207,7 @@ func BitwardenExchange(c echo.Context) error {
 	codeData, err := validateDelegatedCode(inst, code)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, echo.Map{
-			"error": err.Error(),
+			"error": "invalid code",
 		})
 	}
 	if codeData.Provider != oidcprovider.GenericProvider {
@@ -1015,7 +1015,7 @@ func AccessToken(c echo.Context) error {
 		codeData, err := validateDelegatedCode(inst, reqBody.Code)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, echo.Map{
-				"error": err.Error(),
+				"error": "invalid code",
 			})
 		}
 		codeSessionID = codeData.SessionID
