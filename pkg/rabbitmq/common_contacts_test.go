@@ -48,10 +48,10 @@ func TestCommonContactsHandler(t *testing.T) {
 	org := newInstance(t, orgID+".cc.localhost", enabledCtx)
 	alice := newInstance(t, "alice-"+suffix+".cc.localhost", enabledCtx)
 	aliceEmail := "alice-" + suffix + "@acme.example"
-	require.NoError(t, lifecycle.SetInternalEmail(alice, aliceEmail))
+	require.NoError(t, lifecycle.SetEmail(alice, aliceEmail))
 	bob := newInstance(t, "bob-"+suffix+".cc.localhost", disabledCtx)
 	bobEmail := "bob-" + suffix + "@acme.example"
-	require.NoError(t, lifecycle.SetInternalEmail(bob, bobEmail))
+	require.NoError(t, lifecycle.SetEmail(bob, bobEmail))
 
 	handle := func(t *testing.T, msg map[string]interface{}) {
 		t.Helper()
