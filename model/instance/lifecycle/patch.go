@@ -210,14 +210,13 @@ func Patch(i *instance.Instance, opts *Options) error {
 	}
 
 	// Update the settings doc
-	if oldEmail, ok := needsSettingsUpdate(i, settings.M); ok {
+	if ok := needsSettingsUpdate(i, settings.M); ok {
 		if err := couchdb.UpdateDoc(i, settings); err != nil {
 			return err
 		}
 
-		// Don't overwrite a user.created email on unrelated updates.
 		email, _ := settings.M["email"].(string)
-		if email != oldEmail && i.SyncInternalEmail(email) {
+		if i.SyncEmail(email) {
 			if err := update(i); err != nil {
 				return err
 			}
@@ -267,17 +266,16 @@ func Patch(i *instance.Instance, opts *Options) error {
 }
 
 // needsSettingsUpdate compares the old instance io.cozy.settings with the new
-// bunch of settings and tells if it needs an update, with the old email.
-func needsSettingsUpdate(inst *instance.Instance, newSettings map[string]interface{}) (oldEmail string, needed bool) {
+// bunch of settings and tells if it needs an update
+func needsSettingsUpdate(inst *instance.Instance, newSettings map[string]interface{}) bool {
 	oldSettings, err := inst.SettingsDocument()
 	if err != nil {
-		return "", false
+		return false
 	}
 
 	if oldSettings.M == nil {
-		return "", true
+		return true
 	}
-	oldEmail, _ = oldSettings.M["email"].(string)
 
 	for k, newValue := range newSettings {
 		if k == "_id" || k == "_rev" {
@@ -286,7 +284,7 @@ func needsSettingsUpdate(inst *instance.Instance, newSettings map[string]interfa
 		// Check if we have the key in old settings and the value is different,
 		// or if we don't have the key at all
 		if oldValue, ok := oldSettings.M[k]; !ok || !reflect.DeepEqual(oldValue, newValue) {
-			return oldEmail, true
+			return true
 		}
 	}
 
@@ -294,11 +292,11 @@ func needsSettingsUpdate(inst *instance.Instance, newSettings map[string]interfa
 	// settings, and therefore needs an update
 	for oldKey := range oldSettings.M {
 		if _, ok := newSettings[oldKey]; !ok {
-			return oldEmail, true
+			return true
 		}
 	}
 
-	return oldEmail, false
+	return false
 }
 
 // Block function blocks an instance with an optional reason parameter

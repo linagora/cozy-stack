@@ -505,7 +505,7 @@ func TestLifecycle(t *testing.T) {
 			inst, err := lifecycle.Create(&lifecycle.Options{Domain: domain, Email: email})
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
-			inst.InternalEmail = ""
+			inst.Email = ""
 			require.NoError(t, instance.Update(inst))
 			return inst
 		}
@@ -572,25 +572,26 @@ func TestLifecycle(t *testing.T) {
 		assert.Empty(t, emailOf(dave))
 	})
 
-	t.Run("SyncInternalEmail", func(t *testing.T) {
+	t.Run("SyncEmail", func(t *testing.T) {
 		suffix := fmt.Sprintf("%d.example", time.Now().UnixNano())
 		domain := "sync-" + suffix
 		inst, err := lifecycle.Create(&lifecycle.Options{Domain: domain, Email: " Sync@" + suffix})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
-		assert.Equal(t, "sync@"+suffix, inst.InternalEmail)
+		assert.Equal(t, "sync@"+suffix, inst.Email)
 
-		require.NoError(t, lifecycle.SetInternalEmail(inst, "internal@"+suffix))
+		// Any settings update brings back a drifted email.
+		require.NoError(t, lifecycle.SetEmail(inst, "drifted@"+suffix))
 		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{PublicName: "Sync", FromCloudery: true}))
 		inst, err = lifecycle.GetInstance(domain)
 		require.NoError(t, err)
-		assert.Equal(t, "internal@"+suffix, inst.InternalEmail)
+		assert.Equal(t, "sync@"+suffix, inst.Email)
 
 		settings, err := inst.SettingsDocument()
 		require.NoError(t, err)
 		settings.M["email"] = "New@" + suffix
 		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{SettingsObj: settings, FromCloudery: true}))
-		found, err := lifecycle.GetInstanceByInternalEmail("new@" + suffix)
+		found, err := lifecycle.GetInstanceByEmail("new@" + suffix)
 		require.NoError(t, err)
 		assert.Equal(t, domain, found.Domain)
 
@@ -598,7 +599,7 @@ func TestLifecycle(t *testing.T) {
 		org, err := lifecycle.Create(&lifecycle.Options{Domain: orgSlug + ".example", OrgID: orgSlug, Email: "admin@" + suffix})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = lifecycle.Destroy(org.Domain) })
-		assert.Empty(t, org.InternalEmail)
+		assert.Empty(t, org.Email)
 	})
 
 	t.Run("InstanceDestroy", func(t *testing.T) {

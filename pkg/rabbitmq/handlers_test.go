@@ -125,6 +125,9 @@ func TestUserCreatedHandlerStoresEmail(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain, found.Domain)
 	assert.Equal(t, strings.ToLower(email), found.Email)
+	settingsEmail, err := found.SettingsEMail()
+	require.NoError(t, err)
+	assert.Equal(t, email, settingsEmail)
 
 	_, err = lifecycle.GetInstanceByEmail("nobody@acme.example")
 	assert.ErrorIs(t, err, instance.ErrNotFound)
