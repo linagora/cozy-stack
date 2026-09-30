@@ -933,15 +933,15 @@ Content-Type: application/json
 ]
 ```
 
-### POST /instances/checks/internal-emails
+### POST /instances/checks/emails
 
-Compare the internal email of every instance with its settings email. Drifts
+Compare the email of every instance with its settings email. Drifts
 are logged as errors and counted in the response, never fixed.
 
 #### Request
 
 ```http
-POST /instances/checks/internal-emails HTTP/1.1
+POST /instances/checks/emails HTTP/1.1
 ```
 
 #### Response

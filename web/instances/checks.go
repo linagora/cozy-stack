@@ -246,8 +246,8 @@ func checkSharings(c echo.Context) error {
 	return c.JSON(http.StatusOK, results)
 }
 
-func checkInternalEmails(c echo.Context) error {
-	check, err := lifecycle.CheckInternalEmails()
+func checkEmails(c echo.Context) error {
+	check, err := lifecycle.CheckEmails()
 	if err != nil {
 		return wrapError(err)
 	}

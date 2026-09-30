@@ -1,22 +1,22 @@
-## cozy-stack check internal-emails
+## cozy-stack check emails
 
-Check the internal emails of all the instances
+Check the emails of all the instances
 
 ### Synopsis
 
 
-This command checks that the internal email of each instance matches its
+This command checks that the email of each instance matches its
 settings email. The drifts are logged by the stack, not fixed.
 
 
 ```
-cozy-stack check internal-emails [flags]
+cozy-stack check emails [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for internal-emails
+  -h, --help   help for emails
 ```
 
 ### Options inherited from parent commands
