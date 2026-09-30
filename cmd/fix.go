@@ -428,19 +428,19 @@ this instance are correctly set.
 	},
 }
 
-var internalEmailsFixer = &cobra.Command{
-	Use:   "internal-emails",
-	Short: "Backfill the internal email of all the instances",
+var emailsFixer = &cobra.Command{
+	Use:   "emails",
+	Short: "Backfill the email of all the instances",
 	Long: `
-This fixer sets the internal email of each instance from its settings email.
-It skips organization instances and keeps an internal email already set. Emails
+This fixer sets the email of each instance from its settings email.
+It skips organization instances and keeps an email already set. Emails
 found on several instances are listed for manual resolution and left unset.
 If a settings email can't be read, nothing is written and the command fails.
 `,
-	Example: `$ cozy-stack fix internal-emails --dry-run`,
+	Example: `$ cozy-stack fix emails --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !dryRunFlag && !forceFlag {
-			if err := askForConfirmation("Set the internal email on all instances?"); err != nil {
+			if err := askForConfirmation("Set the email on all instances?"); err != nil {
 				return err
 			}
 		}
@@ -451,14 +451,14 @@ If a settings email can't be read, nothing is written and the command fails.
 		}
 		res, err := c.Req(&request.Options{
 			Method:  "POST",
-			Path:    "/instances/fixers/internal-emails",
+			Path:    "/instances/fixers/emails",
 			Queries: q,
 		})
 		if err != nil {
 			return err
 		}
 		defer res.Body.Close()
-		var report lifecycle.InternalEmailsReport
+		var report lifecycle.EmailsReport
 		if err := json.NewDecoder(res.Body).Decode(&report); err != nil {
 			return err
 		}
@@ -489,8 +489,8 @@ func init() {
 	thumbnailsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Dry run")
 	thumbnailsFixer.Flags().BoolVar(&withMetadataFlag, "with-metadata", false, "Recalculate images metadata")
 	redisFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before fixing redis on all instances")
-	internalEmailsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would change without writing")
-	internalEmailsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before writing")
+	emailsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would change without writing")
+	emailsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before writing")
 
 	fixerCmdGroup.AddCommand(jobsFixer)
 	fixerCmdGroup.AddCommand(mimeFixerCmd)
@@ -502,7 +502,7 @@ func init() {
 	fixerCmdGroup.AddCommand(serviceTriggersFixer)
 	fixerCmdGroup.AddCommand(sharingsMovedFixer)
 	fixerCmdGroup.AddCommand(indexesFixer)
-	fixerCmdGroup.AddCommand(internalEmailsFixer)
+	fixerCmdGroup.AddCommand(emailsFixer)
 
 	RootCmd.AddCommand(fixerCmdGroup)
 }

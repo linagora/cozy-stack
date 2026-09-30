@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBackfillInternalEmails(t *testing.T) {
+func TestBackfillEmails(t *testing.T) {
 	config.UseTestFile(t)
 	testutils.NeedCouchdb(t)
 
@@ -26,11 +26,11 @@ func TestBackfillInternalEmails(t *testing.T) {
 		t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
 		return inst
 	}
-	internalEmail := func(inst *instance.Instance) string {
+	emailOf := func(inst *instance.Instance) string {
 		t.Helper()
 		got, err := lifecycle.GetInstance(inst.Domain)
 		require.NoError(t, err)
-		return got.InternalEmail
+		return got.Email
 	}
 
 	org := create(orgID, "admin@"+orgID+".example")
@@ -38,17 +38,17 @@ func TestBackfillInternalEmails(t *testing.T) {
 	bob := create("bob-"+orgID, "bob@"+orgID+".example")
 	bobAgain := create("bob2-"+orgID, "bob@"+orgID+".example")
 	carol := create("carol-"+orgID, "carol.old@"+orgID+".example")
-	require.NoError(t, lifecycle.SetInternalEmail(carol, "carol@"+orgID+".example"))
+	require.NoError(t, lifecycle.SetEmail(carol, "carol@"+orgID+".example"))
 
-	require.NoError(t, backfillInternalEmails(org))
+	require.NoError(t, backfillEmails(org))
 
-	assert.Equal(t, "alice@"+orgID+".example", internalEmail(alice))
-	assert.Empty(t, internalEmail(org))
-	assert.Empty(t, internalEmail(bob))
-	assert.Empty(t, internalEmail(bobAgain))
-	assert.Equal(t, "carol@"+orgID+".example", internalEmail(carol))
+	assert.Equal(t, "alice@"+orgID+".example", emailOf(alice))
+	assert.Empty(t, emailOf(org))
+	assert.Empty(t, emailOf(bob))
+	assert.Empty(t, emailOf(bobAgain))
+	assert.Equal(t, "carol@"+orgID+".example", emailOf(carol))
 
-	found, err := lifecycle.GetInstanceByInternalEmail("ALICE@" + orgID + ".example")
+	found, err := lifecycle.GetInstanceByEmail("ALICE@" + orgID + ".example")
 	require.NoError(t, err)
 	assert.Equal(t, alice.Domain, found.Domain)
 }

@@ -497,7 +497,7 @@ func TestLifecycle(t *testing.T) {
 		assert.Equal(t, instance.TOSNone, deadline)
 	})
 
-	t.Run("BackfillInternalEmails", func(t *testing.T) {
+	t.Run("BackfillEmails", func(t *testing.T) {
 		suffix := fmt.Sprintf("%d.example", time.Now().UnixNano())
 		create := func(slug, email string) *instance.Instance {
 			t.Helper()
@@ -507,11 +507,11 @@ func TestLifecycle(t *testing.T) {
 			t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
 			return inst
 		}
-		internalEmail := func(inst *instance.Instance) string {
+		emailOf := func(inst *instance.Instance) string {
 			t.Helper()
 			got, err := lifecycle.GetInstance(inst.Domain)
 			require.NoError(t, err)
-			return got.InternalEmail
+			return got.Email
 		}
 
 		insts := []*instance.Instance{
@@ -521,31 +521,31 @@ func TestLifecycle(t *testing.T) {
 			create("nobody", ""),
 		}
 
-		report := lifecycle.BackfillInternalEmails(insts, true)
+		report := lifecycle.BackfillEmails(insts, true)
 		assert.Equal(t, 4, report.Scanned)
 		assert.Equal(t, 1, report.Updated)
 		assert.Equal(t, 2, report.Skipped)
 		assert.Equal(t, 1, report.EmptyEmails)
 		assert.ElementsMatch(t, []string{insts[1].Domain, insts[2].Domain}, report.Duplicates["bob@"+suffix])
 		assert.Empty(t, report.Errors)
-		assert.Empty(t, internalEmail(insts[0]), "dry run must not write")
+		assert.Empty(t, emailOf(insts[0]), "dry run must not write")
 
-		report = lifecycle.BackfillInternalEmails(insts, false)
+		report = lifecycle.BackfillEmails(insts, false)
 		assert.Equal(t, 1, report.Updated)
-		assert.Equal(t, "alice@"+suffix, internalEmail(insts[0]))
-		assert.Empty(t, internalEmail(insts[1]))
-		assert.Empty(t, internalEmail(insts[2]))
+		assert.Equal(t, "alice@"+suffix, emailOf(insts[0]))
+		assert.Empty(t, emailOf(insts[1]))
+		assert.Empty(t, emailOf(insts[2]))
 
 		orgSlug := "org-" + strings.TrimSuffix(suffix, ".example")
 		org, err := lifecycle.Create(&lifecycle.Options{Domain: orgSlug + ".example", OrgID: orgSlug})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = lifecycle.Destroy(org.Domain) })
 		require.True(t, org.IsOrganizationInstance())
-		require.NoError(t, lifecycle.SetInternalEmail(org, "erin@"+suffix))
+		require.NoError(t, lifecycle.SetEmail(org, "erin@"+suffix))
 		erin := create("erin", "erin@"+suffix)
-		report = lifecycle.BackfillInternalEmails([]*instance.Instance{org, erin}, false)
+		report = lifecycle.BackfillEmails([]*instance.Instance{org, erin}, false)
 		assert.Len(t, report.Duplicates["erin@"+suffix], 2)
-		assert.Empty(t, internalEmail(erin))
+		assert.Empty(t, emailOf(erin))
 
 		// A failed settings read blocks every write.
 		clusters := config.GetConfig().CouchDB.Clusters
@@ -554,10 +554,10 @@ func TestLifecycle(t *testing.T) {
 		config.GetConfig().CouchDB.Clusters = append(clusters[:len(clusters):len(clusters)], config.CouchDBCluster{URL: unreachable})
 		broken := &instance.Instance{Domain: "broken-" + suffix, CouchCluster: len(clusters)}
 		dave := create("dave", "dave@"+suffix)
-		report = lifecycle.BackfillInternalEmails([]*instance.Instance{dave, broken}, false)
+		report = lifecycle.BackfillEmails([]*instance.Instance{dave, broken}, false)
 		assert.Len(t, report.Errors, 1)
 		assert.Equal(t, 0, report.Updated)
-		assert.Empty(t, internalEmail(dave))
+		assert.Empty(t, emailOf(dave))
 	})
 
 	t.Run("InstanceDestroy", func(t *testing.T) {

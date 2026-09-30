@@ -92,17 +92,17 @@ func TestUserCreatedHandlerStoresMatrixID(t *testing.T) {
 	})
 }
 
-func TestUserCreatedHandlerStoresInternalEmail(t *testing.T) {
+func TestUserCreatedHandlerStoresEmail(t *testing.T) {
 	config.UseTestFile(t)
 	testutils.NeedCouchdb(t)
 
-	contextName := "internal-email-test"
+	contextName := "email-test"
 	conf := config.GetConfig()
 	conf.Authentication = map[string]interface{}{
 		contextName: map[string]interface{}{"disable_password_authentication": true},
 	}
 
-	domain := fmt.Sprintf("internal-email-%d.example", time.Now().UnixNano())
+	domain := fmt.Sprintf("email-%d.example", time.Now().UnixNano())
 	_, err := lifecycle.Create(&lifecycle.Options{
 		Domain:      domain,
 		Email:       "alice@example.org",
@@ -121,12 +121,12 @@ func TestUserCreatedHandlerStoresInternalEmail(t *testing.T) {
 	require.NoError(t, rabbitmq.NewUserCreatedHandler().
 		Handle(context.Background(), amqp.Delivery{Body: body}))
 
-	found, err := lifecycle.GetInstanceByInternalEmail(strings.ToUpper(email))
+	found, err := lifecycle.GetInstanceByEmail(strings.ToUpper(email))
 	require.NoError(t, err)
 	assert.Equal(t, domain, found.Domain)
-	assert.Equal(t, strings.ToLower(email), found.InternalEmail)
+	assert.Equal(t, strings.ToLower(email), found.Email)
 
-	_, err = lifecycle.GetInstanceByInternalEmail("nobody@acme.example")
+	_, err = lifecycle.GetInstanceByEmail("nobody@acme.example")
 	assert.ErrorIs(t, err, instance.ErrNotFound)
 }
 

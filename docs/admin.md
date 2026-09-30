@@ -425,10 +425,10 @@ Delete the accounts which are not linked to a konnector
 POST /instances/alice.cozy.localhost/fixers/orphan-account HTTP/1.1
 ```
 
-### POST /instances/fixers/internal-emails
+### POST /instances/fixers/emails
 
-Set the internal email of every instance from its settings email. Organization
-instances are skipped, and an internal email already set is kept. Emails found
+Set the email of every instance from its settings email. Organization
+instances are skipped, and an email already set is kept. Emails found
 on several instances are listed in `duplicates` and left unset, for manual
 resolution. If a settings email can't be read, nothing is updated, since
 duplicates can't be ruled out. Each scanned instance is counted once in
@@ -443,7 +443,7 @@ duplicates can't be ruled out. Each scanned instance is counted once in
 #### Request
 
 ```http
-POST /instances/fixers/internal-emails?dry_run=true HTTP/1.1
+POST /instances/fixers/emails?dry_run=true HTTP/1.1
 ```
 
 #### Response

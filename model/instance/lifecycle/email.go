@@ -11,22 +11,22 @@ import (
 	"github.com/cozy/cozy-stack/pkg/utils"
 )
 
-// SetInternalEmail stores the internal email of the instance owner.
-func SetInternalEmail(inst *instance.Instance, email string) error {
+// SetEmail stores the email of the instance owner.
+func SetEmail(inst *instance.Instance, email string) error {
 	email = utils.NormalizeEmail(email)
-	if email == "" || email == inst.InternalEmail {
+	if email == "" || email == inst.Email {
 		return nil
 	}
-	inst.InternalEmail = email
+	inst.Email = email
 	return update(inst)
 }
 
-// GetInstanceByInternalEmail retrieves an instance by its internal email.
-func GetInstanceByInternalEmail(email string) (*instance.Instance, error) {
+// GetInstanceByEmail retrieves an instance by its email.
+func GetInstanceByEmail(email string) (*instance.Instance, error) {
 	var docs []*instance.Instance
 	err := couchdb.FindDocs(prefixer.GlobalPrefixer, consts.Instances, &couchdb.FindRequest{
-		UseIndex: "by-internalemail",
-		Selector: mango.Equal("internal_email", utils.NormalizeEmail(email)),
+		UseIndex: "by-email",
+		Selector: mango.Equal("email", utils.NormalizeEmail(email)),
 		Limit:    2,
 	}, &docs)
 	if err != nil {
@@ -38,12 +38,12 @@ func GetInstanceByInternalEmail(email string) (*instance.Instance, error) {
 	case 1:
 		return GetInstance(docs[0].Domain)
 	default:
-		return nil, fmt.Errorf("internal email %s is on several instances", email)
+		return nil, fmt.Errorf("email %s is on several instances", email)
 	}
 }
 
-// InternalEmailsReport sums up a backfill of internal emails.
-type InternalEmailsReport struct {
+// EmailsReport sums up a backfill of emails.
+type EmailsReport struct {
 	Scanned         int                 `json:"scanned"`
 	MissingSettings []string            `json:"missing_settings"`
 	EmptyEmails     int                 `json:"empty_emails"`
@@ -53,10 +53,10 @@ type InternalEmailsReport struct {
 	Errors          []string            `json:"errors"`
 }
 
-// BackfillInternalEmails sets the internal email from the settings email. It
+// BackfillEmails sets the email from the settings email. It
 // writes nothing if a settings read fails, as it may hide a duplicate.
-func BackfillInternalEmails(insts []*instance.Instance, dryRun bool) *InternalEmailsReport {
-	report := &InternalEmailsReport{
+func BackfillEmails(insts []*instance.Instance, dryRun bool) *EmailsReport {
+	report := &EmailsReport{
 		MissingSettings: []string{},
 		Duplicates:      map[string][]string{},
 		Errors:          []string{},
@@ -64,11 +64,11 @@ func BackfillInternalEmails(insts []*instance.Instance, dryRun bool) *InternalEm
 	byEmail := make(map[string][]*instance.Instance)
 	for _, inst := range insts {
 		report.Scanned++
-		if inst.IsOrganizationInstance() && inst.InternalEmail == "" {
+		if inst.IsOrganizationInstance() && inst.Email == "" {
 			report.Skipped++
 			continue
 		}
-		email := inst.InternalEmail
+		email := inst.Email
 		if email == "" {
 			var err error
 			email, err = inst.SettingsEMail()
@@ -98,12 +98,12 @@ func BackfillInternalEmails(insts []*instance.Instance, dryRun bool) *InternalEm
 			continue
 		}
 		inst := owners[0]
-		if inst.InternalEmail == email || scanFailed {
+		if inst.Email == email || scanFailed {
 			report.Skipped++
 			continue
 		}
 		if !dryRun {
-			if err := SetInternalEmail(inst, email); err != nil {
+			if err := SetEmail(inst, email); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("%s: %s", inst.Domain, err))
 				continue
 			}

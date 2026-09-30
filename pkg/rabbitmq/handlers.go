@@ -227,8 +227,8 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 		log.Infof("user.created: successfully updated passphrase for instance: %s (PasswordDefined: %v)", inst.Domain, inst.PasswordDefined)
 	}
 
-	if err := lifecycle.SetInternalEmail(inst, msg.InternalEmail); err != nil {
-		return fmt.Errorf("user.created: store internal email: %w", err)
+	if err := lifecycle.SetEmail(inst, msg.InternalEmail); err != nil {
+		return fmt.Errorf("user.created: store email: %w", err)
 	}
 
 	if matrixID := strings.TrimSpace(msg.MatrixID); matrixID != "" {

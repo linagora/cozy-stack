@@ -41,7 +41,7 @@ const (
 	accountsToOrganization = "accounts-to-organization"
 	notesMimeType          = "notes-mime-type"
 	unwantedFolders        = "remove-unwanted-folders"
-	internalEmail          = "internal-email"
+	instanceEmail          = "email"
 )
 
 // maxSimultaneousCalls is the maximal number of simultaneous calls to Swift
@@ -84,8 +84,8 @@ func worker(ctx *job.TaskContext) error {
 		return migrateNotesMimeType(ctx.Instance.Domain)
 	case unwantedFolders:
 		return removeUnwantedFolders(ctx.Instance.Domain)
-	case internalEmail:
-		return backfillInternalEmails(ctx.Instance)
+	case instanceEmail:
+		return backfillEmails(ctx.Instance)
 	default:
 		return fmt.Errorf("unknown migration type %q", msg.Type)
 	}
@@ -116,8 +116,8 @@ func pushTrashJob(fs vfs.VFS) func(vfs.TrashJournal) error {
 	}
 }
 
-// backfillInternalEmails skips emails found on several instances.
-func backfillInternalEmails(inst *instance.Instance) error {
+// backfillEmails skips emails found on several instances.
+func backfillEmails(inst *instance.Instance) error {
 	if inst.OrgID == "" {
 		return errors.New("the instance has no organization")
 	}
@@ -125,10 +125,10 @@ func backfillInternalEmails(inst *instance.Instance) error {
 	if err != nil {
 		return err
 	}
-	report := lifecycle.BackfillInternalEmails(members, false)
+	report := lifecycle.BackfillEmails(members, false)
 	log := inst.Logger().WithNamespace("migration")
 	for email, domains := range report.Duplicates {
-		log.Warnf("internal email %s is on %d instances, skipped", email, len(domains))
+		log.Warnf("email %s is on %d instances, skipped", email, len(domains))
 	}
 	var errm error
 	for _, domain := range report.MissingSettings {

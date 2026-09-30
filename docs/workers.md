@@ -414,7 +414,7 @@ has a single option, `type`, with two supported values:
 * `notes-mime-type`: update the notes mime-type to
   `text/vnd.cozy.note+markdown` to allow them to be listed in the cozy-notes
   application.
-* `internal-email`: backfill the internal email of the organization members
+* `email`: backfill the email of the organization members
   from their settings email.
 
 ### Example

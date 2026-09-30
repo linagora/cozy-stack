@@ -27,7 +27,7 @@ cozy-stack fix <command> [flags]
 * [cozy-stack](cozy-stack.md)	 - cozy-stack is the main command
 * [cozy-stack fix contact-emails](cozy-stack_fix_contact-emails.md)	 - Detect and try to fix invalid emails on contacts
 * [cozy-stack fix indexes](cozy-stack_fix_indexes.md)	 - Rebuild the CouchDB views and indexes
-* [cozy-stack fix internal-emails](cozy-stack_fix_internal-emails.md)	 - Backfill the internal email of all the instances
+* [cozy-stack fix emails](cozy-stack_fix_emails.md)	 - Backfill the email of all the instances
 * [cozy-stack fix jobs](cozy-stack_fix_jobs.md)	 - Take a look at the consistency of the jobs
 * [cozy-stack fix mime](cozy-stack_fix_mime.md)	 - Fix the class computed from the mime-type
 * [cozy-stack fix orphan-account](cozy-stack_fix_orphan-account.md)	 - Remove the orphan accounts
