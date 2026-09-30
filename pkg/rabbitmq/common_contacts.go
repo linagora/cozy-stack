@@ -79,7 +79,7 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 	case msg.Audience.Domain != "":
 		inst, err = lifecycle.GetOrgInstanceByOrgDomain(utils.NormalizeDomain(msg.Audience.Domain))
 	case msg.Audience.User != "":
-		inst, err = lifecycle.GetInstanceByInternalEmail(msg.Audience.User)
+		inst, err = lifecycle.GetInstanceByEmail(msg.Audience.User)
 	default:
 		log.Infof("contacts.common: dropping %s without audience", msg.Path)
 		return nil
