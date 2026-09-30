@@ -7,6 +7,8 @@ const (
 	ExchangeMigration = "migration"
 	// ExchangePlatform carries the banner commands.
 	ExchangePlatform = "platform"
+	// ExchangeContactsCollected carries the contacts collected by the stack.
+	ExchangeContactsCollected = "twake:contacts:collected"
 )
 
 const (
@@ -70,4 +72,10 @@ type NextcloudMigrationCanceledMessage struct {
 	MigrationID   string `json:"migrationId"`
 	WorkplaceFqdn string `json:"workplaceFqdn"`
 	Timestamp     int64  `json:"timestamp"`
+}
+
+// CollectedContactsMessage is published on twake:contacts:collected.
+type CollectedContactsMessage struct {
+	UserEmail         string                   `json:"userEmail"`
+	CollectedContacts []map[string]interface{} `json:"collectedContacts"`
 }
