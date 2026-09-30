@@ -46,3 +46,8 @@ func (m *Mock) Delete(inst *Instance) error {
 func (m *Mock) CheckPassphrase(inst *Instance, pass []byte) error {
 	return m.Called(inst, pass).Error(0)
 }
+
+// SyncEmail mock method.
+func (m *Mock) SyncEmail(inst *Instance, settingsEmail string) error {
+	return m.Called(inst, settingsEmail).Error(0)
+}

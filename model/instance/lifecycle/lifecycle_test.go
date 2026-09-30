@@ -543,7 +543,7 @@ func TestLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = lifecycle.Destroy(org.Domain) })
 		require.True(t, org.IsOrganizationInstance())
-		require.NoError(t, lifecycle.SetEmail(org, "erin@"+suffix))
+		require.NoError(t, instance.SetEmail(org, "erin@"+suffix))
 		erin := create("erin", "erin@"+suffix)
 		report = lifecycle.BackfillEmails([]*instance.Instance{org, erin}, false)
 		assert.Len(t, report.Duplicates["erin@"+suffix], 2)
@@ -551,8 +551,8 @@ func TestLifecycle(t *testing.T) {
 
 		// SetEmail refuses an email held by another instance, even when the
 		// holder is not in the batch.
-		assert.ErrorIs(t, lifecycle.SetEmail(erin, "Alice@"+suffix), lifecycle.ErrEmailTaken)
-		require.NoError(t, lifecycle.SetEmail(insts[0], "alice@"+suffix))
+		assert.ErrorIs(t, instance.SetEmail(erin, "Alice@"+suffix), instance.ErrEmailTaken)
+		require.NoError(t, instance.SetEmail(insts[0], "alice@"+suffix))
 		alice2 := create("alice2", "alice@"+suffix)
 		report = lifecycle.BackfillEmails([]*instance.Instance{alice2}, false)
 		assert.Equal(t, []string{alice2.Domain}, report.Duplicates["alice@"+suffix])
@@ -581,7 +581,7 @@ func TestLifecycle(t *testing.T) {
 		assert.Equal(t, "sync@"+suffix, inst.Email)
 
 		// Any settings update brings back a drifted email.
-		require.NoError(t, lifecycle.SetEmail(inst, "drifted@"+suffix))
+		require.NoError(t, instance.SetEmail(inst, "drifted@"+suffix))
 		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{PublicName: "Sync", FromCloudery: true}))
 		inst, err = lifecycle.GetInstance(domain)
 		require.NoError(t, err)
@@ -594,6 +594,12 @@ func TestLifecycle(t *testing.T) {
 		found, err := lifecycle.GetInstanceByEmail("new@" + suffix)
 		require.NoError(t, err)
 		assert.Equal(t, domain, found.Domain)
+
+		// A settings email held by another instance is not copied.
+		other, err := lifecycle.Create(&lifecycle.Options{Domain: "other-" + domain, Email: "new@" + suffix})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(other.Domain) })
+		assert.Empty(t, other.Email)
 
 		orgSlug := "syncorg-" + strings.TrimSuffix(suffix, ".example")
 		org, err := lifecycle.Create(&lifecycle.Options{Domain: orgSlug + ".example", OrgID: orgSlug, Email: "admin@" + suffix})

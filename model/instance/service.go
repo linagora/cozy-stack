@@ -96,6 +96,11 @@ func (s *InstanceService) listByOrgField(indexName, fieldName, value string) ([]
 	}
 }
 
+// SyncEmail copies the settings email to the instance.
+func (s *InstanceService) SyncEmail(inst *Instance, settingsEmail string) error {
+	return SyncEmail(inst, settingsEmail)
+}
+
 // Update saves the changes in CouchDB.
 func (s *InstanceService) Update(inst *Instance) error {
 	return couchdb.UpdateDoc(prefixer.GlobalPrefixer, inst)
