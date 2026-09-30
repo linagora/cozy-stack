@@ -2,6 +2,7 @@ package sharing
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/mail"
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/labstack/echo/v4"
 )
 
@@ -210,6 +212,7 @@ func (s *Sharing) AddEmail(inst *instance.Instance, email string, readOnly bool)
 // FindContactByEmail looks the email up on the org instance, then on the
 // instance itself, and creates the contact there when nothing matches.
 func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact, error) {
+	email = strings.TrimSpace(email)
 	if inst.OrgDomain != "" {
 		orgInst, err := lifecycle.GetOrgInstanceByOrgDomain(inst.OrgDomain)
 		if err == nil {
@@ -223,7 +226,42 @@ func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact
 	if c, err := findContactByEmail(inst, email); c != nil || err != nil {
 		return c, err
 	}
-	return contact.Create(inst, contact.CreateOptions{Email: email})
+	c, err := contact.Create(inst, contact.CreateOptions{Email: email})
+	if err == nil {
+		publishCollected(inst, email)
+	}
+	return c, err
+}
+
+// RabbitMQ is the service used to publish the collected contacts.
+var RabbitMQ rabbitmq.Service = new(rabbitmq.NoopService)
+
+// publishCollected sends a contact created by a sharing to Sabre, in the
+// background.
+func publishCollected(inst *instance.Instance, email string) {
+	if !inst.HasCommonContacts() || inst.Email == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		card := map[string]interface{}{
+			"@type":  "Card",
+			"emails": map[string]interface{}{"e1": map[string]interface{}{"address": email}},
+		}
+		err := RabbitMQ.Publish(ctx, rabbitmq.PublishRequest{
+			ContextName: inst.ContextName,
+			Exchange:    rabbitmq.ExchangeContactsCollected,
+			Payload: rabbitmq.CollectedContactsMessage{
+				UserEmail:         inst.Email,
+				CollectedContacts: []map[string]interface{}{card},
+			},
+		})
+		if err != nil {
+			inst.Logger().WithNamespace("sharing").
+				Warnf("Cannot publish the collected contact %s: %s", email, err)
+		}
+	}()
 }
 
 func findContactByEmail(db prefixer.Prefixer, email string) (*contact.Contact, error) {

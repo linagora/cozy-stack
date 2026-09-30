@@ -115,8 +115,11 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 func upsertCommonContact(inst *instance.Instance, path string, card *jsContact) error {
 	emails := byPref(card.Emails)
 	c, err := findContactByPath(inst, path)
-	if err == nil && c == nil && len(emails) > 0 {
-		c, err = findContactWithoutPath(inst, emails[0])
+	for _, email := range emails {
+		if err != nil || c != nil {
+			break
+		}
+		c, err = findContactWithoutPath(inst, email)
 	}
 	if err != nil {
 		return err

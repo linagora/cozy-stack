@@ -439,6 +439,19 @@ keep the fields that belong to the Stack (`cozy`, `trustedForSharing`, the
 groups). `x-twake-workplace-fqdn` fills `cozy` when it is empty. A message that
 changes nothing writes nothing. `DELETE` removes the document.
 
+When a sharing by email creates a contact, and `common_contacts` is set, the
+Stack publishes it on the `twake:contacts:collected` fanout exchange without
+waiting. It comes back on `twake:contacts:common` and takes its path.
+
+```json
+{
+  "userEmail": "alice@acme.com",
+  "collectedContacts": [
+    { "@type": "Card", "emails": { "e1": { "address": "dave@example.org" } } }
+  ]
+}
+```
+
 ### Lifecycle
 
 On startup, if `rabbitmq.enabled` is true:
