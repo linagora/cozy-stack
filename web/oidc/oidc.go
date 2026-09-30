@@ -40,6 +40,7 @@ var (
 	ErrFranceConnectFailed  = errors.New("the FranceConnect authentication has failed")
 	ErrIdentityProvider     = errors.New("error from the identity provider")
 	ErrAmbiguousLogout      = errors.New("ambiguous logout context")
+	ErrContextMismatch      = errors.New("OIDC context mismatch")
 )
 
 // DomainMismatchError is returned when the user tries to connect to an
@@ -203,14 +204,13 @@ func BitwardenExchange(c echo.Context) error {
 		})
 	}
 
-	sub := getStorage().GetSub(code)
-	invalidCode := sub == ""
-	if sub != inst.OIDCID && sub != inst.Domain {
-		invalidCode = true
+	codeData, err := validateDelegatedCode(inst, code)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": err.Error(),
+		})
 	}
-	if invalidCode {
-		inst.Logger().WithNamespace("oidc").Infof("BitwardenExchange invalid code: %s (%s - %s)",
-			sub, inst.OIDCID, inst.Domain)
+	if codeData.Provider != oidcprovider.GenericProvider {
 		return c.JSON(http.StatusBadRequest, echo.Map{
 			"error": "invalid code",
 		})
@@ -282,7 +282,7 @@ func Redirect(c echo.Context) error {
 
 		// Extract session ID from id_token for OIDC logout support
 		sessionID := extractSessionID(tokenResp.IDToken)
-		code := getStorage().CreateCodeData(sub, sessionID)
+		code := getStorage().CreateCodeData(sub, sessionID, state.OIDCContext, conf.Provider)
 		u, err := url.Parse(state.Redirect)
 		if err != nil {
 			return renderError(c, nil, http.StatusNotFound, "Sorry, an error occurred.")
@@ -936,22 +936,36 @@ func audienceContains(audiences []string, clientID string) bool {
 	return false
 }
 
-// validateDelegatedCode validates a delegated code and returns the associated session ID.
+// validateDelegatedCode validates a delegated code and returns the associated identity.
 // Returns an error if the code is invalid or doesn't match the instance.
-func validateDelegatedCode(inst *instance.Instance, code string) (string, error) {
+func validateDelegatedCode(inst *instance.Instance, code string) (*DelegatedCodeData, error) {
 	codeData := getStorage().GetCodeData(code)
-	if codeData == nil || codeData.Sub == "" {
-		return "", errors.New("invalid code")
+	if codeData == nil || codeData.Sub == "" || codeData.ContextName == "" {
+		return nil, errors.New("invalid code")
+	}
+	if codeData.ContextName != inst.ContextName {
+		inst.Logger().WithNamespace("oidc").Warnf("Delegated code context mismatch: %s != %s", codeData.ContextName, inst.ContextName)
+		return nil, ErrContextMismatch
+	}
+
+	var expectedSub string
+	switch codeData.Provider {
+	case oidcprovider.GenericProvider:
+		expectedSub = inst.OIDCID
+	case oidcprovider.FranceConnectProvider:
+		expectedSub = inst.FranceConnectID
+	default:
+		return nil, errors.New("invalid code")
 	}
 
 	sub := codeData.Sub
-	if sub != inst.OIDCID && sub != inst.FranceConnectID && sub != inst.Domain {
+	if sub != expectedSub && (codeData.Provider != oidcprovider.GenericProvider || sub != inst.Domain) {
 		inst.Logger().WithNamespace("oidc").Infof("AccessToken invalid code: %s (%s - %s - %s)",
 			sub, inst.OIDCID, inst.FranceConnectID, inst.Domain)
-		return "", errors.New("invalid code")
+		return nil, errors.New("invalid code")
 	}
 
-	return codeData.SessionID, nil
+	return codeData, nil
 }
 
 // validateOIDCToken validates an OIDC token (id_token or access_token) for the instance.
@@ -998,13 +1012,13 @@ func AccessToken(c echo.Context) error {
 	// Validate the delegated code or OIDC token
 	var codeSessionID string
 	if reqBody.Code != "" {
-		sessionID, err := validateDelegatedCode(inst, reqBody.Code)
+		codeData, err := validateDelegatedCode(inst, reqBody.Code)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, echo.Map{
-				"error": "invalid code",
+				"error": err.Error(),
 			})
 		}
-		codeSessionID = sessionID
+		codeSessionID = codeData.SessionID
 	} else {
 		if err := validateOIDCToken(inst, reqBody.IDToken, reqBody.OIDCToken); err != nil {
 			return c.JSON(http.StatusBadRequest, echo.Map{
@@ -1510,7 +1524,7 @@ func GetDelegatedCode(c echo.Context) error {
 	sessionID := extractSessionID(reqBody.IDToken)
 
 	logger.WithNamespace("oidc").Infof("GetDelegatedCode for %s", s)
-	params["delegated_code"] = getStorage().CreateCodeData(s, sessionID)
+	params["delegated_code"] = getStorage().CreateCodeData(s, sessionID, contextName, conf.Provider)
 	return c.JSON(http.StatusOK, params)
 }
 

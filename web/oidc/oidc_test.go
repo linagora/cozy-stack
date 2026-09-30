@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,9 +32,156 @@ import (
 	"github.com/gavv/httpexpect/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type delegatedCodeRedis struct {
+	values map[string]string
+}
+
+func (r *delegatedCodeRedis) Get(_ context.Context, key string) *redis.StringCmd {
+	return redis.NewStringResult(r.values[key], nil)
+}
+
+func (r *delegatedCodeRedis) Set(_ context.Context, key string, value interface{}, _ time.Duration) *redis.StatusCmd {
+	r.values[key] = string(value.([]byte))
+	return redis.NewStatusResult("OK", nil)
+}
+
+func TestDelegatedCodeIsolation(t *testing.T) {
+	config.UseTestFile(t)
+	previousStorage := globalStorage
+	t.Cleanup(func() { globalStorage = previousStorage })
+	inst := &instance.Instance{
+		Domain:          "alice.twake.linagora.com",
+		ContextName:     "linagora_default",
+		OIDCID:          "shared-sub",
+		FranceConnectID: "fc-sub",
+	}
+	stores := map[string]stateStorage{
+		"memory": &memStateStorage{codes: make(map[string]*DelegatedCodeData)},
+		"redis": &redisStateStorage{
+			cl:  &delegatedCodeRedis{values: make(map[string]string)},
+			ctx: context.Background(),
+		},
+	}
+	for name, store := range stores {
+		t.Run(name, func(t *testing.T) {
+			globalStorage = store
+			for _, tc := range []struct {
+				name     string
+				sub      string
+				context  string
+				provider oidcprovider.Kind
+				error    string
+			}{
+				{"oidc", inst.OIDCID, inst.ContextName, oidcprovider.GenericProvider, ""},
+				{"domain", inst.Domain, inst.ContextName, oidcprovider.GenericProvider, ""},
+				{"franceconnect", inst.FranceConnectID, inst.ContextName, oidcprovider.FranceConnectProvider, ""},
+				{"same subject in another context", inst.OIDCID, "cozy_twake_default", oidcprovider.GenericProvider, ErrContextMismatch.Error()},
+				{"same domain in another context", inst.Domain, "cozy_twake_default", oidcprovider.GenericProvider, ErrContextMismatch.Error()},
+				{"unbound legacy code", inst.OIDCID, "", oidcprovider.GenericProvider, "invalid code"},
+				{"different subject", "other-sub", inst.ContextName, oidcprovider.GenericProvider, "invalid code"},
+				{"missing subject", "", inst.ContextName, oidcprovider.GenericProvider, "invalid code"},
+				{"oidc code for franceconnect subject", inst.FranceConnectID, inst.ContextName, oidcprovider.GenericProvider, "invalid code"},
+				{"franceconnect code for oidc subject", inst.OIDCID, inst.ContextName, oidcprovider.FranceConnectProvider, "invalid code"},
+				{"franceconnect code for domain", inst.Domain, inst.ContextName, oidcprovider.FranceConnectProvider, "invalid code"},
+				{"unknown provider", inst.OIDCID, inst.ContextName, oidcprovider.Kind(99), "invalid code"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					code := store.CreateCodeData(tc.sub, "session-id", tc.context, tc.provider)
+					data, err := validateDelegatedCode(inst, code)
+					if tc.error != "" {
+						require.EqualError(t, err, tc.error)
+						require.Nil(t, data)
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, &DelegatedCodeData{
+						Sub: tc.sub, SessionID: "session-id", ContextName: tc.context, Provider: tc.provider,
+					}, data)
+				})
+			}
+			_, err := validateDelegatedCode(inst, "unknown-code")
+			require.EqualError(t, err, "invalid code")
+		})
+	}
+	legacyRedis := &delegatedCodeRedis{values: map[string]string{
+		"raw-code":  inst.OIDCID,
+		"json-code": `{"sub":"shared-sub","session_id":"legacy-session"}`,
+	}}
+	globalStorage = &redisStateStorage{cl: legacyRedis, ctx: context.Background()}
+	for _, code := range []string{"raw-code", "json-code"} {
+		_, err := validateDelegatedCode(inst, code)
+		require.EqualError(t, err, "invalid code")
+	}
+}
+
+func TestDelegatedCodeContextMismatch(t *testing.T) {
+	config.UseTestFile(t)
+	previousStorage := globalStorage
+	t.Cleanup(func() { globalStorage = previousStorage })
+	globalStorage = &memStateStorage{codes: make(map[string]*DelegatedCodeData)}
+	userinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer external-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"sub":"shared-sub"}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(userinfo.Close)
+	config.GetConfig().Authentication = map[string]interface{}{
+		"linagora_default": map[string]interface{}{
+			"oidc": map[string]interface{}{
+				"userinfo_url": userinfo.URL, "allow_custom_instance": true,
+			},
+		},
+	}
+	e := echo.New()
+	mintRequest := httptest.NewRequest(http.MethodPost, "/admin-oidc/linagora_default/generic/code",
+		strings.NewReader(`{"access_token":"external-token"}`))
+	mintRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	mintResponse := httptest.NewRecorder()
+	c := e.NewContext(mintRequest, mintResponse)
+	c.SetParamNames("context", "provider")
+	c.SetParamValues("linagora_default", "generic")
+	require.NoError(t, GetDelegatedCode(c))
+	require.Equal(t, http.StatusOK, mintResponse.Code)
+	var minted struct {
+		Code string `json:"delegated_code"`
+	}
+	require.NoError(t, json.Unmarshal(mintResponse.Body.Bytes(), &minted))
+	require.NotEmpty(t, minted.Code)
+	_, err := validateDelegatedCode(&instance.Instance{
+		Domain: "alice.twake.linagora.com", ContextName: "linagora_default", OIDCID: "shared-sub",
+	}, minted.Code)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		path        string
+		contentType string
+		body        string
+		handler     echo.HandlerFunc
+	}{
+		{"/oidc/access_token", echo.MIMEApplicationJSON, `{"code":"` + minted.Code + `","scope":"*"}`, AccessToken},
+		{"/oidc/bitwarden/cozy_twake_default", echo.MIMEApplicationForm, url.Values{"code": {minted.Code}}.Encode(), BitwardenExchange},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set(echo.HeaderContentType, tc.contentType)
+			res := httptest.NewRecorder()
+			c := e.NewContext(req, res)
+			middlewares.SetInstance(c, &instance.Instance{
+				Domain: "alice.twake.app", ContextName: "cozy_twake_default", OIDCID: "shared-sub",
+			})
+			require.NoError(t, tc.handler(c))
+			require.Equal(t, http.StatusBadRequest, res.Code)
+			require.JSONEq(t, `{"error":"OIDC context mismatch"}`, res.Body.String())
+			require.Empty(t, res.Header().Values(echo.HeaderSetCookie))
+		})
+	}
+}
 
 func TestOidc(t *testing.T) {
 	if testing.Short() {
@@ -952,8 +1101,8 @@ func TestOIDCLogout(t *testing.T) {
 		targetClient := createFlagshipOAuthClient(t, firstInst)
 		otherClient := createFlagshipOAuthClient(t, secondInst)
 
-		issueOIDCAccessTokenWithDelegatedCode(t, env.client, firstInst, targetClient, getStorage().CreateCodeData(firstInst.OIDCID, targetSID))
-		issueOIDCAccessTokenWithDelegatedCode(t, env.client, secondInst, otherClient, getStorage().CreateCodeData(secondInst.OIDCID, targetSID))
+		issueOIDCAccessTokenWithDelegatedCode(t, env.client, firstInst, targetClient, getStorage().CreateCodeData(firstInst.OIDCID, targetSID, firstInst.ContextName, oidcprovider.GenericProvider))
+		issueOIDCAccessTokenWithDelegatedCode(t, env.client, secondInst, otherClient, getStorage().CreateCodeData(secondInst.OIDCID, targetSID, secondInst.ContextName, oidcprovider.GenericProvider))
 
 		boundClients, err := oidcbinding.ListOAuthClients("", targetSID)
 		require.NoError(t, err)
