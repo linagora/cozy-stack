@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
-	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/note"
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -41,7 +40,6 @@ const (
 	accountsToOrganization = "accounts-to-organization"
 	notesMimeType          = "notes-mime-type"
 	unwantedFolders        = "remove-unwanted-folders"
-	instanceEmail          = "email"
 )
 
 // maxSimultaneousCalls is the maximal number of simultaneous calls to Swift
@@ -84,8 +82,6 @@ func worker(ctx *job.TaskContext) error {
 		return migrateNotesMimeType(ctx.Instance.Domain)
 	case unwantedFolders:
 		return removeUnwantedFolders(ctx.Instance.Domain)
-	case instanceEmail:
-		return backfillEmails(ctx.Instance)
 	default:
 		return fmt.Errorf("unknown migration type %q", msg.Type)
 	}
@@ -114,30 +110,6 @@ func pushTrashJob(fs vfs.VFS) func(vfs.TrashJournal) error {
 	return func(journal vfs.TrashJournal) error {
 		return fs.EnsureErased(journal)
 	}
-}
-
-// backfillEmails skips emails found on several instances.
-func backfillEmails(inst *instance.Instance) error {
-	if inst.OrgID == "" {
-		return errors.New("the instance has no organization")
-	}
-	members, err := lifecycle.ListOrgInstancesByID(inst.OrgID)
-	if err != nil {
-		return err
-	}
-	report := lifecycle.BackfillEmails(members, false)
-	log := inst.Logger().WithNamespace("migration")
-	for email, domains := range report.Duplicates {
-		log.Warnf("email %s is on %d instances, skipped", email, len(domains))
-	}
-	var errm error
-	for _, domain := range report.MissingSettings {
-		errm = multierror.Append(errm, fmt.Errorf("%s: no instance settings", domain))
-	}
-	for _, e := range report.Errors {
-		errm = multierror.Append(errm, errors.New(e))
-	}
-	return errm
 }
 
 func removeUnwantedFolders(domain string) error {
