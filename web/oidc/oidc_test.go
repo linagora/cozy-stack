@@ -177,7 +177,7 @@ func TestDelegatedCodeContextMismatch(t *testing.T) {
 			})
 			require.NoError(t, tc.handler(c))
 			require.Equal(t, http.StatusBadRequest, res.Code)
-			require.JSONEq(t, `{"error":"OIDC context mismatch"}`, res.Body.String())
+			require.JSONEq(t, `{"error":"invalid code"}`, res.Body.String())
 			require.Empty(t, res.Header().Values(echo.HeaderSetCookie))
 		})
 	}
