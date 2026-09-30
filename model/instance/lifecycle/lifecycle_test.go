@@ -547,6 +547,16 @@ func TestLifecycle(t *testing.T) {
 		assert.Len(t, report.Duplicates["erin@"+suffix], 2)
 		assert.Empty(t, emailOf(erin))
 
+		// SetEmail refuses an email held by another instance, even when the
+		// holder is not in the batch.
+		assert.ErrorIs(t, lifecycle.SetEmail(erin, "Alice@"+suffix), lifecycle.ErrEmailTaken)
+		require.NoError(t, lifecycle.SetEmail(insts[0], "alice@"+suffix))
+		alice2 := create("alice2", "alice@"+suffix)
+		report = lifecycle.BackfillEmails([]*instance.Instance{alice2}, false)
+		assert.Equal(t, []string{alice2.Domain}, report.Duplicates["alice@"+suffix])
+		assert.Empty(t, report.Errors)
+		assert.Empty(t, emailOf(alice2))
+
 		// A failed settings read blocks every write.
 		clusters := config.GetConfig().CouchDB.Clusters
 		t.Cleanup(func() { config.GetConfig().CouchDB.Clusters = clusters })

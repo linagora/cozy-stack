@@ -1,9 +1,11 @@
 package lifecycle
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
@@ -11,11 +13,30 @@ import (
 	"github.com/cozy/cozy-stack/pkg/utils"
 )
 
-// SetEmail stores the email of the instance owner.
+// ErrEmailTaken is returned when the email is already on another instance.
+var ErrEmailTaken = errors.New("email is already on another instance")
+
+// SetEmail stores the email of the instance owner. The lock on the email
+// keeps two instances from taking it at the same time.
 func SetEmail(inst *instance.Instance, email string) error {
 	email = utils.NormalizeEmail(email)
 	if email == "" || email == inst.Email {
 		return nil
+	}
+	mu := config.Lock().ReadWrite(prefixer.GlobalPrefixer, "instance-email/"+email)
+	if err := mu.Lock(); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+
+	docs, err := findByEmail(email)
+	if err != nil {
+		return err
+	}
+	for _, doc := range docs {
+		if doc.Domain != inst.Domain {
+			return fmt.Errorf("%w: %s", ErrEmailTaken, doc.Domain)
+		}
 	}
 	inst.Email = email
 	return update(inst)
@@ -23,12 +44,7 @@ func SetEmail(inst *instance.Instance, email string) error {
 
 // GetInstanceByEmail retrieves an instance by its email.
 func GetInstanceByEmail(email string) (*instance.Instance, error) {
-	var docs []*instance.Instance
-	err := couchdb.FindDocs(prefixer.GlobalPrefixer, consts.Instances, &couchdb.FindRequest{
-		UseIndex: "by-email",
-		Selector: mango.Equal("email", utils.NormalizeEmail(email)),
-		Limit:    2,
-	}, &docs)
+	docs, err := findByEmail(utils.NormalizeEmail(email))
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +56,17 @@ func GetInstanceByEmail(email string) (*instance.Instance, error) {
 	default:
 		return nil, fmt.Errorf("email %s is on several instances", email)
 	}
+}
+
+// findByEmail returns at most two instances, enough to spot a duplicate.
+func findByEmail(email string) ([]*instance.Instance, error) {
+	var docs []*instance.Instance
+	err := couchdb.FindDocs(prefixer.GlobalPrefixer, consts.Instances, &couchdb.FindRequest{
+		UseIndex: "by-email",
+		Selector: mango.Equal("email", email),
+		Limit:    2,
+	}, &docs)
+	return docs, err
 }
 
 // EmailsReport sums up a backfill of emails.
@@ -103,7 +130,13 @@ func BackfillEmails(insts []*instance.Instance, dryRun bool) *EmailsReport {
 			continue
 		}
 		if !dryRun {
-			if err := SetEmail(inst, email); err != nil {
+			err := SetEmail(inst, email)
+			if errors.Is(err, ErrEmailTaken) {
+				report.Duplicates[email] = append(report.Duplicates[email], inst.Domain)
+				report.Skipped++
+				continue
+			}
+			if err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("%s: %s", inst.Domain, err))
 				continue
 			}

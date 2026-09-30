@@ -128,6 +128,23 @@ func TestUserCreatedHandlerStoresEmail(t *testing.T) {
 
 	_, err = lifecycle.GetInstanceByEmail("nobody@acme.example")
 	assert.ErrorIs(t, err, instance.ErrNotFound)
+
+	// A taken email is acked and left out, not redelivered forever.
+	other := "other-" + domain
+	_, err = lifecycle.Create(&lifecycle.Options{Domain: other, ContextName: contextName})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lifecycle.Destroy(other) })
+	body, err = json.Marshal(rabbitmq.UserCreatedMessage{
+		TwakeID:       "alice2",
+		WorkplaceFqdn: other,
+		InternalEmail: email,
+	})
+	require.NoError(t, err)
+	require.NoError(t, rabbitmq.NewUserCreatedHandler().
+		Handle(context.Background(), amqp.Delivery{Body: body}))
+	got, err := lifecycle.GetInstance(other)
+	require.NoError(t, err)
+	assert.Empty(t, got.Email)
 }
 
 func TestBannerCommandHandler(t *testing.T) {
