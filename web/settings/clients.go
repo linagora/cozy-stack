@@ -86,7 +86,11 @@ func (h *HTTPHandler) revokeClient(c echo.Context) error {
 	}
 
 	clientID := c.Param("id")
-	defer auth.LockOAuthClient(instance, clientID)()
+	unlock, err := auth.LockOAuthClient(instance, clientID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	client, err := oauth.FindClient(instance, clientID)
 	if err != nil {
@@ -112,7 +116,11 @@ func (h *HTTPHandler) synchronized(c echo.Context) error {
 		return err
 	}
 
-	defer auth.LockOAuthClient(instance, claims.Subject)()
+	unlock, err := auth.LockOAuthClient(instance, claims.Subject)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	client, err := oauth.FindClient(instance, claims.Subject)
 	if err != nil {
