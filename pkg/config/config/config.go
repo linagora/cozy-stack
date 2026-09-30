@@ -1482,7 +1482,8 @@ func makeOffice(v *viper.Viper) (map[string]Office, error) {
 		inbox, _ := ctx["onlyoffice_inbox_secret"].(string)
 		outbox, _ := ctx["onlyoffice_outbox_secret"].(string)
 		office[k] = Office{
-			OnlyOfficeURL: url,
+			// Trim trailing "/" so path concatenation can't produce "//" (some proxies 403 on it).
+			OnlyOfficeURL: strings.TrimRight(url, "/"),
 			InboxSecret:   inbox,
 			OutboxSecret:  outbox,
 		}
@@ -1490,7 +1491,7 @@ func makeOffice(v *viper.Viper) (map[string]Office, error) {
 
 	if url := v.GetString("office.default.onlyoffice_url"); url != "" {
 		office[DefaultInstanceContext] = Office{
-			OnlyOfficeURL: url,
+			OnlyOfficeURL: strings.TrimRight(url, "/"),
 			InboxSecret:   v.GetString("office.default.onlyoffice_inbox_secret"),
 			OutboxSecret:  v.GetString("office.default.onlyoffice_outbox_secret"),
 		}

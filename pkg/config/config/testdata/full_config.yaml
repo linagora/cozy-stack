@@ -101,7 +101,7 @@ registries:
 
 office:
   foo:
-    onlyoffice_url: https://onlyoffice-url
+    onlyoffice_url: https://onlyoffice-url/
     onlyoffice_inbox_secret: inbox_secret
     onlyoffice_outbox_secret: outbox_secret
 
