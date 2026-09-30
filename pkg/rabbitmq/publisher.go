@@ -26,6 +26,7 @@ type PublishRequest struct {
 	// Exchange is the AMQP exchange name to publish to.
 	Exchange string
 	// RoutingKey is the AMQP routing key used by the exchange to route the
+	// message. It is empty for a fanout exchange.
 	RoutingKey string
 	// Payload is the application message body.
 	Payload any
@@ -74,8 +75,6 @@ func (r PublishRequest) validate() error {
 	switch {
 	case r.Exchange == "":
 		return errors.New("rabbitmq publish: exchange is required")
-	case r.RoutingKey == "":
-		return errors.New("rabbitmq publish: routing key is required")
 	case r.Payload == nil:
 		return errors.New("rabbitmq publish: payload is required")
 	default:

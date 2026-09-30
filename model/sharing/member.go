@@ -30,6 +30,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/mail"
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/labstack/echo/v4"
 )
 
@@ -235,7 +236,42 @@ func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact
 		return c, false, err
 	}
 	c, err := contact.Create(inst, contact.CreateOptions{Email: email, External: true})
-	return c, err == nil, err
+	if err != nil {
+		return nil, false, err
+	}
+	publishCollected(inst, email)
+	return c, true, nil
+}
+
+// RabbitMQ is the service used to publish the collected contacts.
+var RabbitMQ rabbitmq.Service = new(rabbitmq.NoopService)
+
+// publishCollected sends a contact created by a sharing to Sabre, in the
+// background.
+func publishCollected(inst *instance.Instance, email string) {
+	if !inst.HasCommonContacts() || inst.Email == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		card := map[string]interface{}{
+			"@type":  "Card",
+			"emails": map[string]interface{}{"e1": map[string]interface{}{"address": email}},
+		}
+		err := RabbitMQ.Publish(ctx, rabbitmq.PublishRequest{
+			ContextName: inst.ContextName,
+			Exchange:    rabbitmq.ExchangeContactsCollected,
+			Payload: rabbitmq.CollectedContactsMessage{
+				UserEmail:         inst.Email,
+				CollectedContacts: []map[string]interface{}{card},
+			},
+		})
+		if err != nil {
+			inst.Logger().WithNamespace("sharing").
+				Warnf("Cannot publish the collected contact %s: %s", email, err)
+		}
+	}()
 }
 
 func findContactByEmail(db prefixer.Prefixer, email string) (*contact.Contact, error) {

@@ -1,6 +1,7 @@
 package sharing
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
+	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -667,4 +669,65 @@ func TestFindContactByEmail(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTooManyMembers)
 	_, err = contact.FindByEmail(alice, "erin@unknown.example")
 	assert.ErrorIs(t, err, contact.ErrNotFound, "the contact created for a failed add must be removed")
+}
+
+type fakeRabbitMQ struct {
+	rabbitmq.NoopService
+	published chan rabbitmq.PublishRequest
+}
+
+func (f *fakeRabbitMQ) Publish(_ context.Context, req rabbitmq.PublishRequest) error {
+	f.published <- req
+	return nil
+}
+
+func TestPublishCollected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	config.GetConfig().Contexts = map[string]interface{}{
+		"collected-on": map[string]interface{}{"common_contacts": true},
+	}
+	fake := &fakeRabbitMQ{published: make(chan rabbitmq.PublishRequest, 1)}
+	RabbitMQ = fake
+	t.Cleanup(func() { RabbitMQ = new(rabbitmq.NoopService) })
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	newInstance := func(name, contextName string) *instance.Instance {
+		inst, err := lifecycle.Create(&lifecycle.Options{Domain: name + "-" + suffix + ".fe.localhost", ContextName: contextName})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
+		require.NoError(t, lifecycle.SetEmail(inst, name+"-"+suffix+"@acme.example"))
+		return inst
+	}
+
+	alice := newInstance("alice", "collected-on")
+	_, _, err := FindContactByEmail(alice, "dave@unknown.example")
+	require.NoError(t, err)
+	select {
+	case req := <-fake.published:
+		assert.Equal(t, rabbitmq.ExchangeContactsCollected, req.Exchange)
+		assert.Empty(t, req.RoutingKey)
+		msg := req.Payload.(rabbitmq.CollectedContactsMessage)
+		assert.Equal(t, alice.Email, msg.UserEmail)
+		require.Len(t, msg.CollectedContacts, 1)
+		assert.Equal(t, "dave@unknown.example", msg.CollectedContacts[0]["emails"].(map[string]interface{})["e1"].(map[string]interface{})["address"])
+	case <-time.After(5 * time.Second):
+		t.Fatal("the collected contact was not published")
+	}
+
+	// An existing contact is not published again, and standalone publishes nothing.
+	_, _, err = FindContactByEmail(alice, "dave@unknown.example")
+	require.NoError(t, err)
+	standalone := newInstance("bob", "")
+	_, _, err = FindContactByEmail(standalone, "erin@unknown.example")
+	require.NoError(t, err)
+	select {
+	case req := <-fake.published:
+		t.Fatalf("unexpected publish: %v", req.Payload)
+	case <-time.After(200 * time.Millisecond):
+	}
 }

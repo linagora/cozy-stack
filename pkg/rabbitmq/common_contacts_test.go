@@ -193,6 +193,23 @@ func TestCommonContactsHandler(t *testing.T) {
 		require.Equal(t, "https://dave.cc.localhost", docs[0].PrimaryCozyURL())
 	})
 
+	t.Run("a contact is taken over by a secondary email too", func(t *testing.T) {
+		email := "ivy-" + suffix + "@other.example"
+		collected, err := contact.Create(alice, contact.CreateOptions{Email: email, External: true})
+		require.NoError(t, err)
+		path := "addressbooks/alice/collected/ivy-" + suffix + ".vcf"
+		payload := card("Ivy", "", "", "")
+		payload["emails"] = map[string]interface{}{
+			"e1": map[string]interface{}{"address": "a-ivy-" + suffix + "@other.example", "pref": 1},
+			"e2": map[string]interface{}{"address": email, "pref": 2},
+		}
+		handle(t, message("ADD", map[string]interface{}{"user": aliceEmail}, path, payload))
+
+		docs := byPath(t, alice, path)
+		require.Len(t, docs, 1)
+		require.Equal(t, collected.ID(), docs[0].ID())
+	})
+
 	t.Run("a personal contact is written on its owner's instance", func(t *testing.T) {
 		path := "addressbooks/alice/collected/erin-" + suffix + ".vcf"
 		handle(t, message("ADD", map[string]interface{}{"user": aliceEmail}, path, card("Erin", "erin@other.example", "", "")))
