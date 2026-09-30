@@ -62,7 +62,7 @@ type Instance struct {
 	Locale          string   `json:"locale"`                     // The locale used on the server
 	UUID            string   `json:"uuid,omitempty"`             // UUID associated with the instance
 	OIDCID          string   `json:"oidc_id,omitempty"`          // An identifier to check authentication from OIDC
-	Email           string   `json:"email,omitempty"`            // The owner's email
+	Email           string   `json:"email,omitempty"`            // The settings email, normalized
 	FranceConnectID string   `json:"franceconnect_id,omitempty"` // An identifier to check authentication from FranceConnect
 	ContextName     string   `json:"context,omitempty"`          // The context attached to the instance
 	Sponsorships    []string `json:"sponsorships,omitempty"`     // The list of sponsorships for the instance
@@ -428,14 +428,14 @@ func (i *Instance) SettingsEMail() (string, error) {
 	return email, nil
 }
 
-// SyncInternalEmail sets the internal email and tells if it changed. Skips
-// organization instances.
-func (i *Instance) SyncInternalEmail(settingsEmail string) bool {
+// SyncEmail copies the settings email to the instance and tells if it
+// changed. Skips organization instances.
+func (i *Instance) SyncEmail(settingsEmail string) bool {
 	email := utils.NormalizeEmail(settingsEmail)
-	if email == "" || email == i.InternalEmail || i.IsOrganizationInstance() {
+	if email == i.Email || i.IsOrganizationInstance() {
 		return false
 	}
-	i.InternalEmail = email
+	i.Email = email
 	return true
 }
 

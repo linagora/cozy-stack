@@ -168,7 +168,7 @@ func TestConfirmEmailUpdate_success(t *testing.T) {
 
 	err := svc.ConfirmEmailUpdate(&inst, "some-token")
 	assert.NoError(t, err)
-	assert.Equal(t, "some@email.com", inst.InternalEmail)
+	assert.Equal(t, "some@email.com", inst.Email)
 }
 
 func TestConfirmEmailUpdate_with_an_invalid_token(t *testing.T) {

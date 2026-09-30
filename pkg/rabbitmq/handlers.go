@@ -227,10 +227,11 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 		log.Infof("user.created: successfully updated passphrase for instance: %s (PasswordDefined: %v)", inst.Domain, inst.PasswordDefined)
 	}
 
-	// A taken email never frees itself, so requeuing would loop forever.
-	if err := lifecycle.SetEmail(inst, msg.InternalEmail); errors.Is(err, lifecycle.ErrEmailTaken) {
-		log.Warnf("user.created: %s not stored for %s: %s", msg.InternalEmail, inst.Domain, err)
-	} else if err != nil {
+	// The settings email is the source of the instance email.
+	if err := lifecycle.Patch(inst, &lifecycle.Options{
+		Email:        strings.TrimSpace(msg.InternalEmail),
+		FromCloudery: true,
+	}); err != nil {
 		return fmt.Errorf("user.created: store email: %w", err)
 	}
 
