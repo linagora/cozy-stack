@@ -266,7 +266,7 @@ func TestConfigUnmarshal(t *testing.T) {
 		},
 	}, cfg.Authentication)
 
-	// Office
+	// Office (onlyoffice_url has a trailing slash in testdata; it must be trimmed)
 	assert.EqualValues(t, map[string]Office{
 		"foo": {
 			OnlyOfficeURL: "https://onlyoffice-url",
