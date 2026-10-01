@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -31,6 +32,11 @@ const (
 	routerTimeout = 20 * time.Second
 	// fillTimeout bounds the generation of the params.
 	fillTimeout = 2 * time.Minute
+	// searchTimeout bounds the search of documents relevant to a message.
+	searchTimeout = 10 * time.Second
+	// searchThreshold is the similarity a chunk must have to be relevant,
+	// the one of openRAG's retrieval for the chat.
+	searchThreshold = "0.6"
 	// writingHistoryChars bounds the conversation given to write a content
 	// or fill params: the context of a small LLM is short.
 	writingHistoryChars = 12000
@@ -79,6 +85,11 @@ type actionSpec struct {
 	// Writing is set for the actions whose content is written as the
 	// answer, and saved by the action: the only param is its title.
 	Writing *writing
+	// Grounded marks the actions whose content may come from the user's
+	// documents: when the router says they do not need them, the documents
+	// are searched anyway, as a small LLM would otherwise make up the facts
+	// of the user's organization.
+	Grounded bool
 	// Instructions tell the LLM how to fill the params of the others.
 	Instructions string
 	Params       []actionParam
@@ -95,6 +106,7 @@ var chatActions = []actionSpec{
 			{Message: "Fais-en une note", NeedsDocuments: false},
 			{Message: "Résume cette conversation dans une note", NeedsDocuments: false},
 			{Message: "Crée une note qui résume les documents du projet Atlas", NeedsDocuments: true},
+			{Message: "Fais une note avec les points à retenir de la politique de télétravail", NeedsDocuments: true},
 		},
 		Writing: &writing{
 			Kind: "note",
@@ -102,6 +114,7 @@ var chatActions = []actionSpec{
 				"Keep what matters, nothing more.",
 			MaxTokens: 1024,
 		},
+		Grounded: true,
 	},
 	{
 		Name: "create_document",
@@ -118,6 +131,7 @@ var chatActions = []actionSpec{
 				"developed in full sentences, with lists where they help, and a short conclusion.",
 			MaxTokens: 2048,
 		},
+		Grounded: true,
 	},
 	{
 		Name:        "draft_email",
@@ -133,6 +147,7 @@ var chatActions = []actionSpec{
 			{Name: "subject", Description: "the subject of the email", Required: true},
 			{Name: "body", Description: "the text of the email", Required: true},
 		},
+		Grounded: true,
 	},
 	{
 		Name:        "start_meeting",
@@ -141,9 +156,10 @@ var chatActions = []actionSpec{
 			{Message: "Lance une visio avec Marie", NeedsDocuments: false},
 			{Message: "Start a video call", NeedsDocuments: false},
 		},
-		Instructions: "The title says what the meeting is about, \"\" when the user did not say it.",
+		Instructions: "The title is a short noun phrase starting with a capital letter, like \"Préparation du comité Atlas\", " +
+			"\"\" when the user did not say what the meeting is about.",
 		Params: []actionParam{
-			{Name: "title", Description: "what the meeting is about"},
+			{Name: "title", Description: "a short title saying what the meeting is about"},
 			{Name: "attendees", Description: "the people to invite, as the user named them", List: true, Recipient: true},
 		},
 		available: meet.IsConfigured,
@@ -215,9 +231,10 @@ func routerPrompt(actions []actionSpec) string {
 	if actionSpecFor(actions, "create_note").Name != "" && actionSpecFor(actions, "create_document").Name != "" {
 		b.WriteString("A note is short and goes to Notes. Choose \"create_document\" when the user asks for a document, a doc, a report, Word or OnlyOffice.\n")
 	}
-	b.WriteString("\nneeds_documents is true only when the action needs information from the user's documents ")
-	b.WriteString("(their projects, clients, internal files) that is not already in the conversation, or when the user asks to use their files. ")
-	b.WriteString("It is false for \"search\", for an action made from the conversation or the message itself, and for a general subject.\n\n")
+	b.WriteString("\nneeds_documents is true when the action may need information from the user's documents: anything about their organization, ")
+	b.WriteString("its rules and policies, their projects, clients, colleagues, meetings or files, even when the user does not say \"from my files\". ")
+	b.WriteString("It is false for \"search\", for an action made from the conversation or from the message itself, ")
+	b.WriteString("and for a general subject that does not depend on the user's organization, like general best practices.\n\n")
 	b.WriteString("Examples:\n")
 	examples := []struct {
 		routeExample
@@ -322,6 +339,61 @@ func routeQuery(ctx context.Context, inst *instance.Instance, messages []ragMess
 	return search, fmt.Errorf("unknown intent %q", decision.Intent)
 }
 
+// checkDocuments makes sure that an action whose content may come from the
+// user's documents uses them when they are relevant to the message, whatever
+// the router said: the decision does not rest on the LLM alone.
+func checkDocuments(ctx context.Context, inst *instance.Instance, actions []actionSpec, d routeDecision, message, workspace string) (routeDecision, error) {
+	spec := actionSpecFor(actions, d.action())
+	if !spec.Grounded || d.NeedsDocuments {
+		return d, nil
+	}
+	relevant, err := hasRelevantDocuments(ctx, inst, message, workspace)
+	if err != nil || relevant {
+		// Without an answer from the search, the documents are used: an
+		// answer saying they do not cover the subject is better than a
+		// made up one.
+		d.NeedsDocuments = true
+	}
+	return d, err
+}
+
+// hasRelevantDocuments asks openRAG whether the user's documents, in the
+// workspace of the assistant if any, have chunks relevant to the text.
+func hasRelevantDocuments(ctx context.Context, inst *instance.Instance, text, workspace string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+	server := inst.RAGServer()
+	if server.URL == "" {
+		return false, errors.New("no RAG server configured")
+	}
+	query := url.Values{"text": {text}, "top_k": {"3"}, "similarity_threshold": {searchThreshold}}
+	if workspace != "" {
+		query.Set("workspace", workspace)
+	}
+	u := strings.TrimSuffix(server.URL, "/") + "/search/partition/" + url.PathEscape(inst.Domain) + "?" + query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Add(echo.HeaderAuthorization, "Bearer "+server.APIKey)
+	res, err := ragHTTPClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, res.Body)
+		return false, fmt.Errorf("GET search status code: %d", res.StatusCode)
+	}
+	var found struct {
+		Documents []json.RawMessage `json:"documents"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&found); err != nil {
+		return false, err
+	}
+	return len(found.Documents) > 0, nil
+}
+
 // writingPrompt is the instructions to write the content of a note or a
 // document, from the user's documents or from the conversation and what the
 // LLM knows of a general subject.
@@ -339,10 +411,13 @@ func writingPrompt(w *writing, fromDocuments bool, now time.Time) string {
 	b.WriteString("its key points, decisions, figures and open questions, in a logical order.\n")
 	if fromDocuments {
 		b.WriteString("- When the user gives a subject, write about it from the user's documents only.\n")
+		b.WriteString("- Never invent facts, names or figures about the user, their work or their documents.\n")
 	} else {
-		b.WriteString("- When the user gives a subject, write about it from what you know.\n")
+		b.WriteString("- When the user gives a general subject, write about it from what you know.\n")
+		b.WriteString("- You do not know the user's organization: its rules, projects, clients and people. ")
+		b.WriteString("When the content needs them and they are not in the conversation, do not invent them: ")
+		b.WriteString("answer in one sentence, without a title, that you need to search the user's documents for it.\n")
 	}
-	b.WriteString("- Never invent facts, names or figures about the user, their work or their documents.\n")
 	return b.String()
 }
 

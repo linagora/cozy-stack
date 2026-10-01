@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/rag"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/metadata"
@@ -249,6 +250,99 @@ func TestQueryWritesADocumentFromTheDocuments(t *testing.T) {
 	assert.Equal(t, "# Rapport Atlas\n\n## Avancement\nLe projet avance.", answer.Content)
 	require.NotNil(t, answer.Action)
 	assert.Equal(t, map[string]interface{}{"title": "Rapport Atlas"}, answer.Action.Params)
+}
+
+func TestQueryWritesFromTheDocumentsTheyCover(t *testing.T) {
+	r := newRAGTest(t)
+	var searched string
+	r.fake.Search = func(text string) bool {
+		searched = text
+		return true
+	}
+	r.fake.RAG = func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		if strings.Contains(string(body), "write a document") {
+			rag.WriteCompletion(w, "# Compte rendu du comité Atlas\n\nLe basculement de Lyon est reporté.")
+			return
+		}
+		rag.WriteCompletion(w, "fake answer")
+	}
+	r.fake.LLM = func(call rag.LLMCall) string {
+		if call.Step() == "route" {
+			// The router misses that the documents are needed
+			return `{"intent": "create_document", "needs_documents": false}`
+		}
+		t.Errorf("the document is not written without the documents")
+		return "# Compte rendu inventé"
+	}
+	query := newConversation(t, r, "conversation-covered", "Fais un compte rendu Word du comité Atlas", allActions)
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
+
+	assert.Equal(t, "Fais un compte rendu Word du comité Atlas", searched)
+	for _, req := range r.fake.Rec.All() {
+		if strings.HasPrefix(req.Path, "/search/partition/") {
+			assert.Equal(t, "/search/partition/"+r.inst.Domain, req.Path)
+			assert.Equal(t, "3", req.Query.Get("top_k"))
+			assert.Equal(t, "0.6", req.Query.Get("similarity_threshold"))
+		}
+	}
+	answer := lastMessage(t, r, query.DocID)
+	assert.Equal(t, "# Compte rendu du comité Atlas\n\nLe basculement de Lyon est reporté.", answer.Content)
+	require.NotNil(t, answer.Action)
+	assert.Equal(t, "Compte rendu du comité Atlas", answer.Action.Params["title"])
+}
+
+func TestQueryUsesTheDocumentsWhenTheSearchFails(t *testing.T) {
+	r := newRAGTest(t)
+	r.fake.Fail = func(method, path string) int {
+		if strings.HasPrefix(path, "/search/") {
+			return http.StatusServiceUnavailable
+		}
+		return 0
+	}
+	r.fake.RAG = func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		if strings.Contains(string(body), "write a note") {
+			rag.WriteCompletion(w, "# Télétravail\n\n- 3 jours par semaine")
+			return
+		}
+		rag.WriteCompletion(w, "fake answer")
+	}
+	r.fake.LLM = func(call rag.LLMCall) string {
+		if call.Step() == "route" {
+			return `{"intent": "create_note", "needs_documents": false}`
+		}
+		t.Errorf("the note is not written without the documents")
+		return "# Télétravail inventé"
+	}
+	query := newConversation(t, r, "conversation-search-fails", "Fais une note sur la politique de télétravail", allActions)
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
+
+	answer := lastMessage(t, r, query.DocID)
+	assert.Equal(t, "# Télétravail\n\n- 3 jours par semaine", answer.Content)
+	require.NotNil(t, answer.Action)
+}
+
+func TestQueryDoesNotSearchTheDocumentsForAMeeting(t *testing.T) {
+	r := newRAGTest(t)
+	config.GetConfig().MeetServers = map[string]config.MeetServer{
+		config.DefaultInstanceContext: {URL: "https://meet.example.net", ClientID: "app-1", ClientSecret: "s3cr3t"},
+	}
+	t.Cleanup(func() { config.GetConfig().MeetServers = nil })
+	r.fake.LLM = func(call rag.LLMCall) string {
+		if call.Step() == "route" {
+			return `{"intent": "start_meeting", "needs_documents": false}`
+		}
+		return `{"title": "Point Atlas", "attendees": []}`
+	}
+	query := newConversation(t, r, "conversation-meeting", "Lance une visio sur le projet Atlas", append(allActions, "start_meeting"))
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
+
+	assert.Equal(t, 0, r.fake.Rec.Count(http.MethodGet, "/search/partition/"+r.inst.Domain))
+	answer := lastMessage(t, r, query.DocID)
+	require.NotNil(t, answer.Action)
+	assert.Equal(t, "start_meeting", answer.Action.Name)
+	assert.Equal(t, "Point Atlas", answer.Action.Params["title"])
 }
 
 func TestQueryProposesNothingWhenTheDocumentsDoNotCoverTheSubject(t *testing.T) {

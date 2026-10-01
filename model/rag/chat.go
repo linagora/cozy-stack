@@ -547,6 +547,14 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 		} else {
 			logger.Infof("chat router: intent=%s needs_documents=%t in %s", decision.Intent, decision.NeedsDocuments, time.Since(started))
 		}
+		workspace, _ := metadata["workspace"].(string)
+		checked, err := checkDocuments(ctx, inst, actions, decision, msg.Content, workspace)
+		if err != nil {
+			logger.Warnf("chat router: cannot search the documents, using them: %s", err)
+		} else if checked.NeedsDocuments != decision.NeedsDocuments {
+			logger.Infof("chat router: the documents are relevant to the message, using them")
+		}
+		decision = checked
 		if !keepsAnswer(actions, decision) {
 			cancelRAG()
 		}

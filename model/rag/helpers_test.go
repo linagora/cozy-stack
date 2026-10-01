@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path"
 	"regexp"
 	"slices"
@@ -24,6 +25,7 @@ import (
 type RecordedRequest struct {
 	Method string
 	Path   string
+	Query  url.Values
 	Body   []byte
 }
 
@@ -37,7 +39,7 @@ func (r *RequestRecorder) record(req *http.Request) {
 	req.Body.Close()
 	req.Body = io.NopCloser(bytes.NewReader(body))
 	r.mu.Lock()
-	r.requests = append(r.requests, RecordedRequest{Method: req.Method, Path: req.URL.Path, Body: body})
+	r.requests = append(r.requests, RecordedRequest{Method: req.Method, Path: req.URL.Path, Query: req.URL.Query(), Body: body})
 	r.mu.Unlock()
 }
 
@@ -128,6 +130,9 @@ type FakeOpenRAG struct {
 	// RAG, when set, answers the completions of a partition in place of
 	// the canned non-streamed answer.
 	RAG http.HandlerFunc
+	// Search, when set, tells whether the documents have chunks relevant to
+	// the text of a search. Without it, a search finds nothing.
+	Search func(text string) bool
 }
 
 // LLMCall is a direct call to the LLM: the JSON schema its answer must
@@ -301,6 +306,14 @@ func (f *FakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
 	// lock: the router and a slow answer run at the same time.
 	if req.Method == http.MethodPost && path.Clean(req.URL.Path) == "/v1/chat/completions" {
 		f.handleCompletion(w, req)
+		return
+	}
+	if req.Method == http.MethodGet && strings.HasPrefix(req.URL.Path, "/search/partition/") {
+		documents := []map[string]interface{}{}
+		if f.Search != nil && f.Search(req.URL.Query().Get("text")) {
+			documents = append(documents, map[string]interface{}{"content": "a relevant chunk", "metadata": map[string]string{"file_id": "file-1"}})
+		}
+		writeJSON(w, 200, map[string]interface{}{"documents": documents})
 		return
 	}
 	f.mu.Lock()

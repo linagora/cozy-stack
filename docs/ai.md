@@ -470,6 +470,14 @@ The router and the params use the LLM of the assistant, without retrieval,
 with a JSON schema. When the router fails, the message is answered from the
 documents.
 
+A small LLM cannot be trusted to tell whether a note, a document or an
+email needs the user's documents, and makes up the facts of the user's
+organization when it writes without them. So when the router says such an
+action does not need them, the stack searches them anyway with
+`GET /search/partition/:domain` of openRAG (in the workspace of the
+assistant, with the similarity threshold of the chat): when they have chunks
+relevant to the message, or when the search fails, the action uses them.
+
 The proposed action is saved in the `action` field of the assistant message
 of the conversation. The content of a note or a document is the `content` of
 the message, which is empty when the action replaces the answer:

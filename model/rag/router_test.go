@@ -171,8 +171,11 @@ func TestWritingPrompt(t *testing.T) {
 	assert.Contains(t, prompt, `Start with one line "# " followed by its title`)
 	assert.Contains(t, prompt, document.Instructions)
 	assert.Contains(t, prompt, "from what you know")
+	assert.Contains(t, prompt, "do not invent them", "a general writing does not make up the user's organization")
 
-	assert.Contains(t, writingPrompt(document, true, now), "from the user's documents only")
+	fromDocuments := writingPrompt(document, true, now)
+	assert.Contains(t, fromDocuments, "from the user's documents only")
+	assert.NotContains(t, fromDocuments, "from what you know")
 }
 
 func TestWritingRequest(t *testing.T) {
