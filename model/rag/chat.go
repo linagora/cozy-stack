@@ -3,6 +3,7 @@ package rag
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -536,7 +537,7 @@ func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]in
 	return payload
 }
 
-func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) error {
+func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, query QueryMessage) error {
 	var chat ChatConversation
 	err := couchdb.GetDoc(inst, consts.ChatConversations, query.DocID, &chat)
 	if err != nil {
@@ -604,14 +605,14 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	if err != nil {
 		return err
 	}
-	res, err := CallRAGQuery(inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
+	res, err := CallRAGQueryContext(ctx, inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 	if err != nil {
 		publishError(inst, msg.ID, err)
 		return err
 	}
 	if res.StatusCode == http.StatusNotFound {
 		res.Body.Close()
-		checkRes, err := CallRAGQuery(inst, http.MethodGet, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
+		checkRes, err := CallRAGQueryContext(ctx, inst, http.MethodGet, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
 		if err != nil {
 			publishError(inst, msg.ID, err)
 			return err
@@ -620,7 +621,7 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 		if checkRes.StatusCode == http.StatusNotFound {
 			logger.Warnf("RAG partition not found, attempting creation")
 			createRAGPartition(inst.RAGServer(), inst.Domain, logger)
-			res, err = CallRAGQuery(inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
+			res, err = CallRAGQueryContext(ctx, inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 			if err != nil {
 				publishError(inst, msg.ID, err)
 				return err
@@ -820,6 +821,12 @@ var ragHTTPClient = &http.Client{
 // callRAG is the instance-free part of CallRAGQuery, split out so the openRAG
 // HTTP mechanics can be unit-tested against an httptest server.
 func callRAG(server config.RAGServer, method string, payload []byte, path string, contentType string) (*http.Response, error) {
+	return callRAGContext(context.Background(), server, method, payload, path, contentType)
+}
+
+// callRAGContext is callRAG bound to a context: cancelling it closes the
+// connection to openRAG, which stops the work in progress on its side.
+func callRAGContext(ctx context.Context, server config.RAGServer, method string, payload []byte, path string, contentType string) (*http.Response, error) {
 	if server.URL == "" {
 		return nil, errors.New("no RAG server configured")
 	}
@@ -842,7 +849,7 @@ func callRAG(server config.RAGServer, method string, payload []byte, path string
 	if payload != nil {
 		body = bytes.NewReader(payload)
 	}
-	req, err := http.NewRequest(method, u.String(), body)
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -853,6 +860,11 @@ func callRAG(server config.RAGServer, method string, payload []byte, path string
 
 func CallRAGQuery(inst *instance.Instance, method string, payload []byte, path string, contentType string) (*http.Response, error) {
 	return callRAG(inst.RAGServer(), method, payload, path, contentType)
+}
+
+// CallRAGQueryContext is CallRAGQuery bound to a context.
+func CallRAGQueryContext(ctx context.Context, inst *instance.Instance, method string, payload []byte, path string, contentType string) (*http.Response, error) {
+	return callRAGContext(ctx, inst.RAGServer(), method, payload, path, contentType)
 }
 
 // createdOrExists tells whether an openRAG create endpoint reported success,
