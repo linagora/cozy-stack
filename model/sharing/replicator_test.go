@@ -33,8 +33,7 @@ func TestReplicator(t *testing.T) {
 
 	t.Run("SequenceNumber", func(t *testing.T) {
 		// Start with an empty io.cozy.shared database
-		_ = couchdb.DeleteDB(inst, consts.Shared)
-		_ = couchdb.CreateDB(inst, consts.Shared)
+		_ = couchdb.ResetDB(inst, consts.Shared)
 
 		s := &Sharing{SID: uuidv7(), Members: []Member{
 			{Status: MemberStatusOwner, Name: "Alice"},
@@ -79,11 +78,7 @@ func TestReplicator(t *testing.T) {
 
 	t.Run("InitialIndex", func(t *testing.T) {
 		// Start with an empty io.cozy.shared database
-		_ = couchdb.DeleteDB(inst, consts.Shared)
-		if err := couchdb.CreateDB(inst, consts.Shared); err != nil {
-			time.Sleep(1 * time.Second)
-			_ = couchdb.CreateDB(inst, consts.Shared)
-		}
+		_ = couchdb.ResetDB(inst, consts.Shared)
 
 		// Create some documents that are not shared
 		for i := 0; i < 10; i++ {
@@ -226,8 +221,7 @@ func TestReplicator(t *testing.T) {
 
 	t.Run("CallChangesFeed", func(t *testing.T) {
 		// Start with an empty io.cozy.shared database
-		_ = couchdb.DeleteDB(inst, consts.Shared)
-		_ = couchdb.CreateDB(inst, consts.Shared)
+		_ = couchdb.ResetDB(inst, consts.Shared)
 
 		foobars := "io.cozy.tests.foobars"
 		id1 := uuidv7()
@@ -364,8 +358,7 @@ func TestReplicator(t *testing.T) {
 
 	t.Run("ApplyBulkDocs", func(t *testing.T) {
 		// Start with an empty io.cozy.shared database
-		_ = couchdb.DeleteDB(inst, consts.Shared)
-		_ = couchdb.CreateDB(inst, consts.Shared)
+		_ = couchdb.ResetDB(inst, consts.Shared)
 		_ = couchdb.CreateDB(inst, foos)
 
 		s := Sharing{

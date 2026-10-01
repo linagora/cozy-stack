@@ -37,9 +37,9 @@ func TestUpdateSelfMemberInstance(t *testing.T) {
 	setup := testutils.NewSetup(t, t.Name())
 	inst := setup.GetTestInstance()
 
-	// Clean up sharings database
-	_ = couchdb.DeleteDB(inst, consts.Sharings)
-	err := couchdb.CreateDB(inst, consts.Sharings)
+	// Reset the sharings database. ResetDB retries CreateDB on the CouchDB
+	// file_exists race that makes a plain DeleteDB+CreateDB flaky.
+	err := couchdb.ResetDB(inst, consts.Sharings)
 	require.NoError(t, err)
 
 	newInstance := inst.PageURL("", nil)
