@@ -1,10 +1,14 @@
 package rag
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/account"
 	"github.com/cozy/cozy-stack/model/instance"
@@ -382,4 +386,30 @@ func TestRAGMessages(t *testing.T) {
 			{Role: SystemRole, Content: "a note in the middle"},
 		}, ragMessages(chat, nil))
 	})
+}
+
+func TestCallRAGContextCancelClosesTheConnection(t *testing.T) {
+	disconnected := make(chan struct{})
+	server, _ := newRAGTestServer(t, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {}\n\n")
+		w.(http.Flusher).Flush()
+		// A long generation: openRAG only stops when the stack goes away.
+		<-req.Context().Done()
+		close(disconnected)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	res, err := callRAGContext(ctx, server, http.MethodPost, []byte(`{}`), "v1/chat/completions", "application/json")
+	require.NoError(t, err)
+	defer res.Body.Close()
+
+	cancel()
+	_, err = io.ReadAll(res.Body)
+	require.ErrorIs(t, err, context.Canceled)
+	select {
+	case <-disconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("openRAG did not see the stack closing the connection")
+	}
 }
