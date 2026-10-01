@@ -43,6 +43,8 @@ var (
 	ErrContextMismatch      = errors.New("OIDC context mismatch")
 )
 
+const invalidDelegatedCode = "invalid code"
+
 // DomainMismatchError is returned when the user tries to connect to an
 // instance but has an active OIDC session for a different instance/account.
 type DomainMismatchError = oidcprovider.InstanceMismatchError
@@ -207,12 +209,12 @@ func BitwardenExchange(c echo.Context) error {
 	codeData, err := validateDelegatedCode(inst, code)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, echo.Map{
-			"error": "invalid code",
+			"error": invalidDelegatedCode,
 		})
 	}
 	if codeData.Provider != oidcprovider.GenericProvider {
 		return c.JSON(http.StatusBadRequest, echo.Map{
-			"error": "invalid code",
+			"error": invalidDelegatedCode,
 		})
 	}
 	if err := instance.CheckPassphrase(inst, []byte(pass)); err != nil {
@@ -941,7 +943,7 @@ func audienceContains(audiences []string, clientID string) bool {
 func validateDelegatedCode(inst *instance.Instance, code string) (*DelegatedCodeData, error) {
 	codeData := getStorage().GetCodeData(code)
 	if codeData == nil || codeData.Sub == "" || codeData.ContextName == "" {
-		return nil, errors.New("invalid code")
+		return nil, errors.New(invalidDelegatedCode)
 	}
 	if codeData.ContextName != inst.ContextName {
 		inst.Logger().WithNamespace("oidc").Warnf("Delegated code context mismatch: %s != %s", codeData.ContextName, inst.ContextName)
@@ -955,14 +957,16 @@ func validateDelegatedCode(inst *instance.Instance, code string) (*DelegatedCode
 	case oidcprovider.FranceConnectProvider:
 		expectedSub = inst.FranceConnectID
 	default:
-		return nil, errors.New("invalid code")
+		return nil, errors.New(invalidDelegatedCode)
 	}
 
 	sub := codeData.Sub
-	if sub != expectedSub && (codeData.Provider != oidcprovider.GenericProvider || sub != inst.Domain) {
+	validSub := sub == expectedSub ||
+		(codeData.Provider == oidcprovider.GenericProvider && sub == inst.Domain)
+	if !validSub {
 		inst.Logger().WithNamespace("oidc").Infof("AccessToken invalid code: %s (%s - %s - %s)",
 			sub, inst.OIDCID, inst.FranceConnectID, inst.Domain)
-		return nil, errors.New("invalid code")
+		return nil, errors.New(invalidDelegatedCode)
 	}
 
 	return codeData, nil
@@ -1015,7 +1019,7 @@ func AccessToken(c echo.Context) error {
 		codeData, err := validateDelegatedCode(inst, reqBody.Code)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, echo.Map{
-				"error": "invalid code",
+				"error": invalidDelegatedCode,
 			})
 		}
 		codeSessionID = codeData.SessionID
