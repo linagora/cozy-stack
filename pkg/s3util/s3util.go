@@ -37,17 +37,20 @@ func CheckBucket(ctx context.Context, client *minio.Client, bucket string) error
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	endpoint := client.EndpointURL().Host
 	creds, err := client.GetCreds()
 	if err != nil || creds.AccessKeyID == "" || creds.SecretAccessKey == "" {
-		return fmt.Errorf("s3: no usable credentials for bucket %q", bucket)
+		return fmt.Errorf("s3: no usable credentials for bucket %q at %q", bucket, endpoint)
 	}
 	exists, err := client.BucketExists(ctx, bucket)
 	if err != nil {
-		// Provider errors can echo credentials or signed request details.
-		return fmt.Errorf("s3: bucket %q is inaccessible; check endpoint, credentials and permissions", bucket)
+		// Report only the S3 response status/code; raw errors may carry credentials.
+		resp := minio.ToErrorResponse(err)
+		return fmt.Errorf("s3: bucket %q at %q is inaccessible (status=%d code=%s)",
+			bucket, endpoint, resp.StatusCode, resp.Code)
 	}
 	if !exists {
-		return fmt.Errorf("s3: expected bucket %q does not exist", bucket)
+		return fmt.Errorf("s3: expected bucket %q does not exist at %q", bucket, endpoint)
 	}
 	return nil
 }

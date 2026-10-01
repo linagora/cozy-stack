@@ -102,7 +102,9 @@ func InitS3Connection(fs Fs) error {
 			// MinIO uses the client's configured region when this region is empty.
 			err = s3util.EnsureBucket(ctx, storage.Client, storage.Bucket, "")
 			if err != nil {
-				err = fmt.Errorf("s3: could not create bucket %q; check endpoint, credentials and permissions", storage.Bucket)
+				resp := minio.ToErrorResponse(err)
+				err = fmt.Errorf("s3: could not create bucket %q at %q (status=%d code=%s)",
+					storage.Bucket, storage.Client.EndpointURL().Host, resp.StatusCode, resp.Code)
 			}
 		} else {
 			err = s3util.CheckBucket(ctx, storage.Client, storage.Bucket)

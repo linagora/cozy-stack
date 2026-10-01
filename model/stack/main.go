@@ -15,6 +15,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/emailer"
+	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/google/gops/agent"
@@ -102,7 +103,10 @@ security features. Please do not use this binary as your production server.
 		target := config.GetConfig().Fs
 		target.URL = config.MigrationTargetURL()
 		if err := config.InitS3Connection(target); err != nil {
-			return nil, nil, fmt.Errorf("failed to init the S3 migration target connection: %w", err)
+			// Migration target is auxiliary: log and continue instead of aborting startup; the worker guards on config.HasS3Client and refuses to run until it is reachable.
+			logger.WithNamespace("stack").Errorf(
+				"Could not init the S3 migration target connection; storage "+
+					"migrations to S3 are disabled until this is fixed: %s", err)
 		}
 	}
 
