@@ -1,9 +1,11 @@
 package ai
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
+	"github.com/cozy/cozy-stack/model/meet"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/rag"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -73,10 +75,32 @@ func ExecuteTool(c echo.Context) error {
 	return c.Stream(res.StatusCode, "application/json", res.Body)
 }
 
+// CreateMeeting is the route the assistant uses to create a video meeting
+// room, once the user has confirmed the start_meeting action.
+func CreateMeeting(c echo.Context) error {
+	if err := middlewares.AllowWholeType(c, permission.POST, consts.ChatConversations); err != nil {
+		return middlewares.ErrForbidden
+	}
+	inst := middlewares.GetInstance(c)
+	room, err := meet.CreateRoom(c.Request().Context(), inst)
+	if errors.Is(err, meet.ErrNotConfigured) {
+		return jsonapi.NotFound(err)
+	}
+	if errors.Is(err, meet.ErrNoEmail) {
+		return jsonapi.PreconditionFailed("email", err)
+	}
+	if err != nil {
+		inst.Logger().WithNamespace("ai").Warnf("cannot create a meeting room: %s", err)
+		return jsonapi.NewError(http.StatusBadGateway, err.Error())
+	}
+	return c.JSON(http.StatusCreated, room)
+}
+
 // Routes sets the routing for the AI tasks.
 func Routes(router *echo.Group) {
 	router.POST("/chat/conversations/:id", Chat)
 	router.POST("/v1/chat/completions", OpenAICompletion)
 	router.POST("/v1/tools/execute", ExecuteTool)
+	router.POST("/meetings", CreateMeeting)
 	router.POST("/index/status", IndexStatus)
 }

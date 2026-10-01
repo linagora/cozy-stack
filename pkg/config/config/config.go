@@ -147,6 +147,7 @@ type Config struct {
 	Contexts       map[string]interface{}
 	Authentication map[string]interface{}
 	RAGServers     map[string]RAGServer
+	MeetServers    map[string]MeetServer
 	CommonSettings map[string]CommonSettings
 	Office         map[string]Office
 	Registries     map[string][]*url.URL
@@ -306,6 +307,15 @@ type Office struct {
 type RAGServer struct {
 	URL    string
 	APIKey string
+}
+
+// MeetServer contains the configuration for a LaSuite Meet server, where the
+// assistant creates video meeting rooms with the credentials of an
+// application of its external API.
+type MeetServer struct {
+	URL          string
+	ClientID     string
+	ClientSecret string
 }
 
 // CommonSettings contains the configuration for common settings for a context
@@ -934,6 +944,11 @@ func UseViper(v *viper.Viper) error {
 		return err
 	}
 
+	meet, err := makeMeetServers(v)
+	if err != nil {
+		return err
+	}
+
 	regs, err := makeRegistries(v)
 	if err != nil {
 		return err
@@ -1233,6 +1248,7 @@ func UseViper(v *viper.Viper) error {
 			Cmd: v.GetString("konnectors.cmd"),
 		},
 		RAGServers:     rag,
+		MeetServers:    meet,
 		CommonSettings: commonSettings,
 		Move: Move{
 			URL: v.GetString("move.url"),
@@ -1414,6 +1430,27 @@ func makeRAGServers(v *viper.Viper) (map[string]RAGServer, error) {
 		servers[k] = RAGServer{
 			URL:    url,
 			APIKey: key,
+		}
+	}
+	return servers, nil
+}
+
+func makeMeetServers(v *viper.Viper) (map[string]MeetServer, error) {
+	servers := make(map[string]MeetServer)
+	for k, v := range v.GetStringMap("meet") {
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf(
+				"Bad format in the meet section of the configuration file: "+
+					"should be a map, got %#v", v)
+		}
+		url, _ := m["url"].(string)
+		clientID, _ := m["client_id"].(string)
+		clientSecret, _ := m["client_secret"].(string)
+		servers[k] = MeetServer{
+			URL:          url,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
 		}
 	}
 	return servers, nil

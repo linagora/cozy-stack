@@ -558,6 +558,18 @@ func (i *Instance) RAGServer() config.RAGServer {
 	return contexts[config.DefaultInstanceContext]
 }
 
+// MeetServer returns the LaSuite Meet server for the context of the instance,
+// whose URL is empty when there is none.
+func (i *Instance) MeetServer() config.MeetServer {
+	contexts := config.GetConfig().MeetServers
+	if i.ContextName != "" {
+		if server, ok := contexts[i.ContextName]; ok {
+			return server
+		}
+	}
+	return contexts[config.DefaultInstanceContext]
+}
+
 // HasForcedOIDC returns true only if the instance is in a context where the
 // config says that the stack shouldn't allow to authenticate with the
 // password.

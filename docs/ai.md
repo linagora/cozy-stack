@@ -402,3 +402,39 @@ server > {"event": "CREATED",
                       "type": "io.cozy.ai.chat.events",
                       "doc": {"object": "error", "message": "I don't want to talk today"}}}
 ```
+
+### POST /ai/meetings
+
+Creates a video meeting room on the LaSuite Meet server of the context of the
+instance, owned by the email address of the instance: the client calls it
+once the user has confirmed a `start_meeting` action. The stack uses the
+external API of Meet, with the credentials of an application authorized for
+the domain of this email address, configured in the `meet` section of the
+configuration file. It needs the permission to POST on
+`io.cozy.ai.chat.conversations`.
+
+#### Request
+
+```http
+POST /ai/meetings HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 201 Created
+Content-Type: application/json
+```
+
+```json
+{
+  "id": "4a6e5b1c-3f2d-4b8a-9c7e-1d2f3a4b5c6d",
+  "slug": "abc-defg-hij",
+  "url": "https://meet.example.com/abc-defg-hij",
+  "access_level": "restricted"
+}
+```
+
+The response is a `404` when no Meet server is configured for the context of
+the instance, a `412` when the instance has no email address, and a `502`
+when Meet refuses to create the room.

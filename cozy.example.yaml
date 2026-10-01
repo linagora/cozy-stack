@@ -227,6 +227,17 @@ rag:
     url: http://localhost:8001
     api_key: $3cr3t
 
+# LaSuite Meet servers where the assistant creates video meeting rooms, on
+# behalf of the email address of the instance, with an application of the
+# external API of Meet, authorized for the domain of this email address.
+meet:
+  # A cozy will use the meet server for its context, or if the context is not
+  # declared, for default.
+  default:
+    url: https://meet.example.com
+    client_id: 0b5fd5e1-6a31-4b61-a6a4-3c5c3c4a2f7e
+    client_secret: $3cr3t
+
 # mail service parameters for sending email via SMTP
 mail:
   # mail noreply address - flags: --mail-noreply-address
