@@ -18,6 +18,8 @@ import (
 
 	"github.com/cozy/cozy-stack/client"
 	"github.com/cozy/cozy-stack/client/request"
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/oauth"
 	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -70,6 +72,7 @@ var flagOnboardingApp string
 var flagOnboardingPermissions string
 var flagOnboardingState string
 var flagPath string
+var flagCleanOAuthClientsDryRun bool
 
 // instanceCmdGroup represents the instances command
 var instanceCmdGroup = &cobra.Command{
@@ -922,6 +925,85 @@ var findOauthClientCmd = &cobra.Command{
 	},
 }
 
+var cleanOAuthClientsCmd = &cobra.Command{
+	Use:     "clean-oauth-clients <software_id>",
+	Short:   "Delete OAuth clients by software ID",
+	Example: "$ cozy-stack instances clean-oauth-clients twake-admin-panel --dry-run",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) != 1 || args[0] == "" {
+			return cmd.Usage()
+		}
+		return cleanOAuthClients(args[0], flagCleanOAuthClientsDryRun)
+	},
+}
+
+type oauthClientCleanupReport struct {
+	User   string
+	Domain string
+	Count  int
+}
+
+func cleanOAuthClients(softwareID string, dryRun bool) error {
+	var reports []oauthClientCleanupReport
+	total := 0
+	err := instance.ForeachInstances(func(inst *instance.Instance) error {
+		clients, err := findOAuthClientsBySoftwareID(inst, softwareID)
+		if err != nil {
+			return fmt.Errorf("%s: %w", inst.Domain, err)
+		}
+		if len(clients) == 0 {
+			return nil
+		}
+		if !dryRun {
+			for _, client := range clients {
+				if rerr := client.Delete(inst); rerr != nil {
+					return fmt.Errorf("%s: cannot delete OAuth client %s: %s", inst.Domain, client.CouchID, rerr.Error)
+				}
+			}
+		}
+		user, err := inst.SettingsEMail()
+		if err != nil || user == "" {
+			user = inst.Domain
+		}
+		reports = append(reports, oauthClientCleanupReport{User: user, Domain: inst.Domain, Count: len(clients)})
+		total += len(clients)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	action := "deleted"
+	if dryRun {
+		action = "would delete"
+	}
+	fmt.Fprintf(os.Stdout, "software_id: %s\n", softwareID)
+	for _, report := range reports {
+		fmt.Fprintf(os.Stdout, "%s (%s): %d clients\n", report.User, report.Domain, report.Count)
+	}
+	fmt.Fprintf(os.Stdout, "total: %d clients %s\n", total, action)
+	return nil
+}
+
+// findOAuthClientsBySoftwareID collects all matching clients before any deletion so mutations don't disturb ForeachDocs pagination; a missing database yields no clients rather than an error.
+func findOAuthClientsBySoftwareID(inst *instance.Instance, softwareID string) ([]*oauth.Client, error) {
+	var clients []*oauth.Client
+	err := couchdb.ForeachDocs(inst, consts.OAuthClients, func(_ string, raw json.RawMessage) error {
+		client := &oauth.Client{}
+		if err := json.Unmarshal(raw, client); err != nil {
+			return err
+		}
+		if client.SoftwareID == softwareID {
+			clients = append(clients, client)
+		}
+		return nil
+	})
+	if err != nil && !couchdb.IsNoDatabaseError(err) {
+		return nil, err
+	}
+	return clients, nil
+}
+
 var exportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "Export an instance",
@@ -1116,6 +1198,7 @@ func init() {
 	instanceCmdGroup.AddCommand(oauthRefreshTokenInstanceCmd)
 	instanceCmdGroup.AddCommand(oauthClientInstanceCmd)
 	instanceCmdGroup.AddCommand(findOauthClientCmd)
+	instanceCmdGroup.AddCommand(cleanOAuthClientsCmd)
 	instanceCmdGroup.AddCommand(exportCmd)
 	instanceCmdGroup.AddCommand(importCmd)
 	instanceCmdGroup.AddCommand(showSwiftPrefixInstanceCmd)
@@ -1179,6 +1262,7 @@ func init() {
 	fsckInstanceCmd.Flags().BoolVar(&flagCheckFSFailFast, "fail-fast", false, "Stop the FSCK on the first error")
 	fsckInstanceCmd.Flags().BoolVar(&flagJSON, "json", false, "Output more informations in JSON format")
 	oauthClientInstanceCmd.Flags().BoolVar(&flagJSON, "json", false, "Output more informations in JSON format")
+	cleanOAuthClientsCmd.Flags().BoolVar(&flagCleanOAuthClientsDryRun, "dry-run", false, "Only report matching clients")
 	oauthClientInstanceCmd.Flags().BoolVar(&flagAllowLoginScope, "allow-login-scope", false, "Allow login scope")
 	oauthClientInstanceCmd.Flags().StringVar(&flagOnboardingSecret, "onboarding-secret", "", "Specify an OnboardingSecret")
 	oauthClientInstanceCmd.Flags().StringVar(&flagOnboardingApp, "onboarding-app", "", "Specify an OnboardingApp")
