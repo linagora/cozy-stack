@@ -651,7 +651,7 @@ Pushes a reconcile job per knowledge base folder: the job walks the subtree
 of the folder and indexes every file it holds. With the `dir_id` query
 parameter, only that folder is reconciled. It is how an initial indexing that
 did not finish is restarted. `dir_id` is the folder id, the one the
-assistant's `knowledgeBase` carries (`io.cozy.files.root-dir` for the whole
+assistant's `knowledgeBase` relationship carries (`io.cozy.files.root-dir` for the whole
 Drive), not the id of its openRAG workspace.
 
 #### Request

@@ -116,8 +116,10 @@ type chatAssistant struct {
 	DocID         string                 `json:"_id,omitempty"`
 	DocRev        string                 `json:"_rev,omitempty"`
 	Relationships chatAssistantRelations `json:"relationships,omitempty"`
-	KnowledgeBase []knowledgeBaseEntry   `json:"knowledgeBase,omitempty"`
-	Prompt        string                 `json:"prompt,omitempty"`
+	// Deprecated: replaced by Relationships.KnowledgeBase, still read for the
+	// assistants saved by older versions of the app.
+	KnowledgeBase []knowledgeBaseEntry `json:"knowledgeBase,omitempty"`
+	Prompt        string               `json:"prompt,omitempty"`
 }
 
 type knowledgeBaseEntry struct {
@@ -137,6 +139,12 @@ type chatAssistantRelations struct {
 			} `json:"metadata"`
 		} `json:"data"`
 	} `json:"provider"`
+	KnowledgeBase struct {
+		Data []struct {
+			ID   string `json:"_id"`
+			Type string `json:"_type"`
+		} `json:"data"`
+	} `json:"knowledgeBase"`
 }
 
 func (a *chatAssistant) ID() string         { return a.DocID }
@@ -146,23 +154,41 @@ func (a *chatAssistant) SetID(id string)    { a.DocID = id }
 func (a *chatAssistant) SetRev(rev string)  { a.DocRev = rev }
 func (a *chatAssistant) Clone() couchdb.Doc { c := *a; return &c }
 
+// knowledgeBaseFolders returns the ids of the assistant's knowledge base
+// folders: from the relationships when they have one, else from the
+// deprecated knowledgeBase attribute.
+func (a *chatAssistant) knowledgeBaseFolders() []string {
+	var ids []string
+	for _, ref := range a.Relationships.KnowledgeBase.Data {
+		if ref.Type == consts.Files && ref.ID != "" {
+			ids = append(ids, ref.ID)
+		}
+	}
+	if len(ids) > 0 {
+		return ids
+	}
+	for _, entry := range a.KnowledgeBase {
+		if entry.Doctype == consts.Files && entry.DirID != "" {
+			ids = append(ids, entry.DirID)
+		}
+	}
+	return ids
+}
+
 // knowledgeBaseDirID returns the Drive folder scoping the assistant's
 // retrieval, or "" when the assistant has no knowledge base. Only a single
-// folder per assistant is supported: extra io.cozy.files entries are ignored,
+// folder per assistant is supported: extra folders are ignored,
 // with a warning so the truncation is at least visible in the logs.
 func (a *chatAssistant) knowledgeBaseDirID(logger logger.Logger) string {
 	if a == nil {
 		return ""
 	}
 	dirID := ""
-	for _, entry := range a.KnowledgeBase {
-		if entry.Doctype != consts.Files || entry.DirID == "" {
-			continue
-		}
+	for _, id := range a.knowledgeBaseFolders() {
 		if dirID == "" {
-			dirID = entry.DirID
-		} else if entry.DirID != dirID {
-			logger.Warnf("assistant %s: multiple knowledge base folders are not supported, ignoring %s", a.DocID, entry.DirID)
+			dirID = id
+		} else if id != dirID {
+			logger.Warnf("assistant %s: multiple knowledge base folders are not supported, ignoring %s", a.DocID, id)
 		}
 	}
 	return dirID

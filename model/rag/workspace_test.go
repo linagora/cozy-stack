@@ -1,11 +1,13 @@
 package rag
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestKnowledgeBaseDirID(t *testing.T) {
@@ -26,6 +28,29 @@ func TestKnowledgeBaseDirID(t *testing.T) {
 			{Doctype: "io.cozy.files", DirID: "folder-2"},
 		}}
 		assert.Equal(t, "folder-1", a.knowledgeBaseDirID(TestingLogger()))
+	})
+	t.Run("reads the folder from the relationships", func(t *testing.T) {
+		var a chatAssistant
+		require.NoError(t, json.Unmarshal([]byte(`{
+			"relationships": {"knowledgeBase": {"data": [{"_id": "folder-1", "_type": "io.cozy.files"}]}}
+		}`), &a))
+		assert.Equal(t, "folder-1", a.knowledgeBaseDirID(TestingLogger()))
+	})
+	t.Run("the relationships win over the knowledgeBase attribute", func(t *testing.T) {
+		var a chatAssistant
+		require.NoError(t, json.Unmarshal([]byte(`{
+			"relationships": {"knowledgeBase": {"data": [{"_id": "folder-new", "_type": "io.cozy.files"}]}},
+			"knowledgeBase": [{"doctype": "io.cozy.files", "dirId": "folder-old"}]
+		}`), &a))
+		assert.Equal(t, "folder-new", a.knowledgeBaseDirID(TestingLogger()))
+	})
+	t.Run("falls back to the knowledgeBase attribute without a files relationship", func(t *testing.T) {
+		var a chatAssistant
+		require.NoError(t, json.Unmarshal([]byte(`{
+			"relationships": {"knowledgeBase": {"data": []}},
+			"knowledgeBase": [{"doctype": "io.cozy.files", "dirId": "folder-old"}]
+		}`), &a))
+		assert.Equal(t, "folder-old", a.knowledgeBaseDirID(TestingLogger()))
 	})
 }
 

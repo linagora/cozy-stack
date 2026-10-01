@@ -17,10 +17,24 @@ not mandatory to install them on the same servers as the cozy-stack. And the
 URL of RAG must be filled in cozy-stack configuration file (in `rag`).
 
 The indexing follows the assistants: every `io.cozy.ai.chat.assistants`
-document whose `knowledgeBase` has an `io.cozy.files` entry defines a folder
-to index. The files of that folder (recursively) are sent to the openRAG
-server and attached to the workspace named after the folder id; the
-assistant's retrieval is scoped to that workspace.
+document with an `io.cozy.files` entry in its `knowledgeBase` relationship
+defines a folder to index. The files of that folder (recursively) are sent to
+the openRAG server and attached to the workspace named after the folder id;
+the assistant's retrieval is scoped to that workspace.
+
+```json
+{
+  "relationships": {
+    "knowledgeBase": {
+      "data": [{ "_id": "6c36a9ee", "_type": "io.cozy.files" }]
+    }
+  }
+}
+```
+
+The deprecated `knowledgeBase` attribute
+(`[{ "doctype": "io.cozy.files", "dirId": "6c36a9ee" }]`) is still read when
+the relationship has no `io.cozy.files` entry.
 
 openRAG indexes an upload asynchronously: while the task runs, it still
 answers 404 on the file but refuses a second POST with a 409. The worker then
