@@ -80,6 +80,12 @@ type EmailsReport struct {
 	Errors          []string            `json:"errors"`
 }
 
+// isOrgWithoutEmail skips org instances that have no email; one that already
+// holds an email stays in the scan so it can still block a member sharing it.
+func isOrgWithoutEmail(inst *instance.Instance) bool {
+	return inst.IsOrganizationInstance() && inst.Email == ""
+}
+
 // BackfillEmails sets the email from the settings email. It
 // writes nothing if a settings read fails, as it may hide a duplicate.
 func BackfillEmails(insts []*instance.Instance, dryRun bool) *EmailsReport {
@@ -91,7 +97,7 @@ func BackfillEmails(insts []*instance.Instance, dryRun bool) *EmailsReport {
 	byEmail := make(map[string][]*instance.Instance)
 	for _, inst := range insts {
 		report.Scanned++
-		if inst.IsOrganizationInstance() && inst.Email == "" {
+		if isOrgWithoutEmail(inst) {
 			report.Skipped++
 			continue
 		}
