@@ -227,6 +227,13 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 		log.Infof("user.created: successfully updated passphrase for instance: %s (PasswordDefined: %v)", inst.Domain, inst.PasswordDefined)
 	}
 
+	// A taken email never frees itself, so requeuing would loop forever.
+	if err := lifecycle.SetEmail(inst, msg.InternalEmail); errors.Is(err, lifecycle.ErrEmailTaken) {
+		log.Warnf("user.created: %s not stored for %s: %s", msg.InternalEmail, inst.Domain, err)
+	} else if err != nil {
+		return fmt.Errorf("user.created: store email: %w", err)
+	}
+
 	if matrixID := strings.TrimSpace(msg.MatrixID); matrixID != "" {
 		if err := storeMatrixID(inst, matrixID); err != nil {
 			return err

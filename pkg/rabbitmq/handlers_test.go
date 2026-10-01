@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/banner"
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
@@ -89,6 +90,61 @@ func TestUserCreatedHandlerStoresMatrixID(t *testing.T) {
 		require.NoError(t, handle(t, domain, ""))
 		require.Empty(t, storedMatrixID(t, domain))
 	})
+}
+
+func TestUserCreatedHandlerStoresEmail(t *testing.T) {
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	contextName := "email-test"
+	conf := config.GetConfig()
+	conf.Authentication = map[string]interface{}{
+		contextName: map[string]interface{}{"disable_password_authentication": true},
+	}
+
+	domain := fmt.Sprintf("email-%d.example", time.Now().UnixNano())
+	_, err := lifecycle.Create(&lifecycle.Options{
+		Domain:      domain,
+		Email:       "alice@example.org",
+		ContextName: contextName,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
+
+	email := fmt.Sprintf("Alice.%d@Acme.example", time.Now().UnixNano())
+	body, err := json.Marshal(rabbitmq.UserCreatedMessage{
+		TwakeID:       "alice",
+		WorkplaceFqdn: domain,
+		InternalEmail: " " + email + " ",
+	})
+	require.NoError(t, err)
+	require.NoError(t, rabbitmq.NewUserCreatedHandler().
+		Handle(context.Background(), amqp.Delivery{Body: body}))
+
+	found, err := lifecycle.GetInstanceByEmail(strings.ToUpper(email))
+	require.NoError(t, err)
+	assert.Equal(t, domain, found.Domain)
+	assert.Equal(t, strings.ToLower(email), found.Email)
+
+	_, err = lifecycle.GetInstanceByEmail("nobody@acme.example")
+	assert.ErrorIs(t, err, instance.ErrNotFound)
+
+	// A taken email is acked and left out, not redelivered forever.
+	other := "other-" + domain
+	_, err = lifecycle.Create(&lifecycle.Options{Domain: other, ContextName: contextName})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lifecycle.Destroy(other) })
+	body, err = json.Marshal(rabbitmq.UserCreatedMessage{
+		TwakeID:       "alice2",
+		WorkplaceFqdn: other,
+		InternalEmail: email,
+	})
+	require.NoError(t, err)
+	require.NoError(t, rabbitmq.NewUserCreatedHandler().
+		Handle(context.Background(), amqp.Delivery{Body: body}))
+	got, err := lifecycle.GetInstance(other)
+	require.NoError(t, err)
+	assert.Empty(t, got.Email)
 }
 
 func TestBannerCommandHandler(t *testing.T) {

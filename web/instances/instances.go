@@ -825,4 +825,5 @@ func Routes(router *echo.Group) {
 	router.POST("/:domain/fixers/sharings-moved", sharingsMovedFixer)
 	router.POST("/:domain/fixers/service-triggers", serviceTriggersFixer)
 	router.POST("/:domain/fixers/indexes", indexesFixer)
+	router.POST("/fixers/emails", emailsFixer)
 }
