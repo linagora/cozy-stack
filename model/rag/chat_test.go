@@ -329,7 +329,7 @@ data: {"object": "chat.completion.chunk", "choices": [{"delta": {}, "finish_reas
 
 data: [DONE]
 `
-			completion, sources, err := handleStreamResponse(inst, msg, strings.NewReader(body))
+			completion, sources, err := handleStreamResponse(inst, msg, strings.NewReader(body), nil)
 			require.NoError(t, err)
 			assert.Equal(t, "Hello world", completion)
 			require.Len(t, sources, 1)

@@ -299,7 +299,8 @@ Content-Type: application/json
   "stream": true,
   "websearch": false,
   "assistantID": "abc123",
-  "attachmentIDs": ["827f0fbb928b375cc457c732a4013aa7", "9a3b1c2d3e4f5a6b7c8d9e0f1a2b3c4d"]
+  "attachmentIDs": ["827f0fbb928b375cc457c732a4013aa7", "9a3b1c2d3e4f5a6b7c8d9e0f1a2b3c4d"],
+  "actions": ["create_note", "create_document", "draft_email", "start_meeting"]
 }
 ```
 
@@ -319,7 +320,10 @@ Content-Type: application/json
   conversation: editing it on the assistant applies to its existing
   conversations as well.
 - `attachmentIDs` (optional) array of ids, specifying which documents should be leveraged by the RAG.
-  
+- `actions` (optional) the names of the [chat actions](#chat-actions) the
+  client can run. Without it, the message is always answered from the
+  documents.
+
 
 #### Response
 
@@ -391,6 +395,27 @@ server > {"event": "CREATED",
                       "doc": {"object": "done"}}}
 ```
 
+#### Action message
+
+When the stack proposes a [chat action](#chat-actions), an `action` event
+comes before the `done` one. When the action replaces the answer, there is no
+`delta` nor `sources` event. `message_id` is the id of the assistant message
+the action is saved on:
+
+```
+server > {"event": "CREATED",
+          "payload": {"id": "eb17c3205bf1013ddea018c04daba326",
+                      "type": "io.cozy.ai.chat.events",
+                      "doc": {"object": "action",
+                              "message_id": "0192f0a5-4d8b-7c1e-9a3f-1b2c3d4e5f60",
+                              "action": {"name": "draft_email",
+                                         "params": {"to": ["Paul"], "subject": "Groceries", "body": "Hi Paul, ..."}}}}}
+server > {"event": "CREATED",
+          "payload": {"id": "eb17c3205bf1013ddea018c04daba326",
+                      "type": "io.cozy.ai.chat.events",
+                      "doc": {"object": "done"}}}
+```
+
 #### Error message
 
 If an error occurs while processing the AI response (e.g. the LLM is
@@ -402,6 +427,74 @@ server > {"event": "CREATED",
                       "type": "io.cozy.ai.chat.events",
                       "doc": {"object": "error", "message": "I don't want to talk today"}}}
 ```
+
+### Chat actions
+
+The assistant can propose an action of a Twake app instead of a plain answer
+from the documents, like writing a note or starting a video meeting. The
+stack never runs the action: the client shows it to the user, who can edit
+it, and runs it once the user has confirmed it.
+
+| Name              | What the client does                                   | Params                          |
+| ----------------- | ------------------------------------------------------ | ------------------------------- |
+| `create_note`     | creates a note in Notes with the content               | `title`                         |
+| `create_document` | creates an OnlyOffice text document with the content   | `title`                         |
+| `draft_email`     | opens an email draft                                   | `to` (list), `subject`, `body`  |
+| `start_meeting`   | creates a room with [`POST /ai/meetings`](#post-aimeetings) | `title`, `attendees` (list) |
+
+`start_meeting` is only offered when a Meet server is configured for the
+context of the instance.
+
+When the request has `actions`, a router asks the LLM, in the same time as
+the answer starts on openRAG, whether the message is a search or one of these
+actions, and whether the action needs the user's documents:
+
+- For a search, the answer is published as usual. It is held back until the
+  router has decided, which happens before its first token in practice.
+- For a note or a document, the answer is cancelled, which stops it on
+  openRAG, and the content is written as the answer, with instructions to
+  write a note or a document: by openRAG from the user's documents when it
+  needs them ("write a report on project X from my files"), or else by the
+  LLM from the conversation ("summarize this conversation in a note") or
+  what it knows of a general subject. Its title is the `# ` heading it
+  starts with. A content without a heading, like an answer saying the
+  documents do not cover the subject, is given without an action.
+- For another action, the answer is cancelled and the LLM fills the params
+  of the action from the conversation. If they cannot be filled, the message
+  is answered from the documents.
+- For another action that needs the documents ("email the team the status of
+  project X"), the answer is published as usual, then the params are filled
+  from it and the action comes after it.
+
+The router and the params use the LLM of the assistant, without retrieval,
+with a JSON schema. When the router fails, the message is answered from the
+documents.
+
+The proposed action is saved in the `action` field of the assistant message
+of the conversation. The content of a note or a document is the `content` of
+the message, which is empty when the action replaces the answer:
+
+```json
+{
+  "id": "0192f0a5-4d8b-7c1e-9a3f-1b2c3d4e5f60",
+  "role": "assistant",
+  "content": "# Groceries\n\n- milk\n- bread",
+  "action": {
+    "name": "create_note",
+    "params": { "title": "Groceries" }
+  },
+  "createdAt": "2024-09-24T13:24:09.123Z"
+}
+```
+
+Once the user has handled the action, the client writes its outcome in the
+`action` of the message: `status` is `done`, with the `url` of what it
+created if any, or `cancelled`. The stack keeps them.
+
+Every param is present, `""` or `[]` when unknown. The people an action
+reaches (`to`, `attendees`) are kept only when the user wrote them in the
+conversation, so that the content of a document cannot add one: they are
+names or email addresses as the user wrote them, for the client to resolve.
 
 ### POST /ai/meetings
 

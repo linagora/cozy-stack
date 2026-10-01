@@ -35,6 +35,8 @@ type ChatPayload struct {
 	WebSearch          *bool    `json:"websearch"`
 	AssistantID        string   `json:"assistantID,omitempty"`
 	AttachmentIDs      []string `json:"attachmentIDs,omitempty"`
+	// Actions are the names of the chat actions the client can run.
+	Actions []string `json:"actions,omitempty"`
 }
 
 type ChatConversation struct {
@@ -46,12 +48,13 @@ type ChatConversation struct {
 }
 
 type ChatMessage struct {
-	ID            string    `json:"id"`
-	Role          string    `json:"role"`
-	Content       string    `json:"content"`
-	Sources       []Source  `json:"sources,omitempty"`
-	AttachmentIDs []string  `json:"attachmentIDs,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	ID            string      `json:"id"`
+	Role          string      `json:"role"`
+	Content       string      `json:"content"`
+	Sources       []Source    `json:"sources,omitempty"`
+	AttachmentIDs []string    `json:"attachmentIDs,omitempty"`
+	Action        *ChatAction `json:"action,omitempty"`
+	CreatedAt     time.Time   `json:"createdAt"`
 }
 
 const (
@@ -91,6 +94,7 @@ type QueryMessage struct {
 	Stream        bool     `json:"stream"`
 	WebSearch     bool     `json:"websearch"`
 	AttachmentIDs []string `json:"attachmentIDs,omitempty"`
+	Actions       []string `json:"actions,omitempty"`
 }
 
 type Source struct {
@@ -233,6 +237,7 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 		Stream:        stream,
 		WebSearch:     websearch,
 		AttachmentIDs: payload.AttachmentIDs,
+		Actions:       payload.Actions,
 	})
 	if err != nil {
 		return nil, err
@@ -454,7 +459,11 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 		turns = turns[1:]
 	}
 	for _, msg := range turns {
-		messages = append(messages, ragMessage{Role: msg.Role, Content: msg.Content})
+		content := msg.Content
+		if msg.Action != nil {
+			content = strings.TrimSpace(content + "\n\n" + describeAction(msg.Action))
+		}
+		messages = append(messages, ragMessage{Role: msg.Role, Content: content})
 	}
 	return messages
 }
@@ -503,31 +512,178 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 		}
 		metadata["workspace"] = workspaceID
 	}
+	messages := ragMessages(&chat, assistant)
+	body, err := ragRequest(inst, messages, query.Stream, metadata, 0)
+	if err != nil {
+		return err
+	}
+
+	actions := supportedActions(inst, query.Actions)
+	if len(actions) == 0 {
+		completion, sources, err := askRAG(ctx, inst, logger, msg, body, query.Stream, nil)
+		if err != nil {
+			publishError(inst, msg.ID, err)
+			return err
+		}
+		publishDone(inst, msg.ID)
+		return saveAnswer(inst, &chat, newMessageID(), completion, sources, nil)
+	}
+
+	// The router and the answer from the documents start together, so that
+	// a search does not wait for the router. The router answers long before
+	// the first token of the answer, which follows the query rewriting, the
+	// retrieval and the reranking: the answer is held back until the router
+	// has decided, and when it is not the one to give, it is cancelled,
+	// which stops openRAG.
+	override, _ := metadata["llm_override"].(map[string]interface{})
+	ragCtx, cancelRAG := context.WithCancel(ctx)
+	defer cancelRAG()
+	decided := make(chan routeDecision, 1)
+	go func() {
+		started := time.Now()
+		decision, err := routeQuery(ctx, inst, messages, actions, override)
+		if err != nil {
+			logger.Warnf("chat router failed, answering from the documents: %s", err)
+		} else {
+			logger.Infof("chat router: intent=%s needs_documents=%t in %s", decision.Intent, decision.NeedsDocuments, time.Since(started))
+		}
+		if !keepsAnswer(actions, decision) {
+			cancelRAG()
+		}
+		decided <- decision
+	}()
+	var decision *routeDecision
+	waitDecision := func() routeDecision {
+		if decision == nil {
+			d := <-decided
+			decision = &d
+		}
+		return *decision
+	}
+	answerAllowed := func() bool { return keepsAnswer(actions, waitDecision()) }
+
+	completion, sources, err := askRAG(ragCtx, inst, logger, msg, body, query.Stream, answerAllowed)
+	answerID := newMessageID()
+	spec := actionSpecFor(actions, waitDecision().action())
+	now := time.Now().UTC()
+	var action *ChatAction
+	switch {
+	case spec.Name == "":
+		// A search: the answer is the one to give.
+
+	case spec.Writing != nil:
+		// The note or the document is written as the answer, with its own
+		// instructions, and the action saves it.
+		var written bool
+		completion, sources, written, err = writeContent(ctx, inst, logger, msg, spec.Writing, messages, query.Stream, metadata, override, waitDecision().NeedsDocuments, now)
+		if err == nil && written {
+			if title := contentTitle(completion); title != "" {
+				action = &ChatAction{Name: spec.Name, Params: map[string]interface{}{"title": title}}
+			} else {
+				logger.Infof("chat router: the written %s has no title, no action proposed", spec.Writing.Kind)
+			}
+		}
+
+	case !waitDecision().NeedsDocuments:
+		action, err = fillAction(ctx, inst, spec, messages, "", override, now)
+		if err == nil {
+			publishAction(inst, msg.ID, answerID, action)
+			publishDone(inst, msg.ID)
+			return saveAnswer(inst, &chat, answerID, "", nil, action)
+		}
+		// The user still gets an answer when the action cannot be prepared.
+		logger.Warnf("chat router: cannot prepare %s, answering from the documents: %s", spec.Name, err)
+		action = nil
+		completion, sources, err = askRAG(ctx, inst, logger, msg, body, query.Stream, nil)
+
+	case err == nil:
+		// An action that needs the documents is prepared from the answer,
+		// and shown below it.
+		var fillErr error
+		action, fillErr = fillAction(ctx, inst, spec, messages, completion, override, now)
+		if fillErr != nil {
+			logger.Warnf("chat router: cannot prepare %s after the answer: %s", spec.Name, fillErr)
+			action = nil
+		}
+	}
+	if err != nil {
+		publishError(inst, msg.ID, err)
+		return err
+	}
+	if action != nil {
+		publishAction(inst, msg.ID, answerID, action)
+	}
+	publishDone(inst, msg.ID)
+	return saveAnswer(inst, &chat, answerID, completion, sources, action)
+}
+
+// ragRequest is the body of a query to openRAG for an answer from the
+// documents. maxTokens is 0 for the default of openRAG.
+func ragRequest(inst *instance.Instance, messages []ragMessage, stream bool, metadata map[string]interface{}, maxTokens int) ([]byte, error) {
 	payload := map[string]interface{}{
 		"model":       fmt.Sprintf("ragondin-%s", inst.Domain),
-		"messages":    ragMessages(&chat, assistant),
-		"stream":      query.Stream,
+		"messages":    messages,
+		"stream":      stream,
 		"metadata":    metadata,
 		"temperature": Temperature,
 		"top_p":       TopP,
 		"logprobs":    LogProbs,
 	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
+	if maxTokens > 0 {
+		payload["max_tokens"] = maxTokens
 	}
+	return json.Marshal(payload)
+}
+
+// writeContent writes a note or a document as the answer, published as it
+// comes: from the user's documents with openRAG, or else by the LLM from the
+// conversation. written is false when it could not be written before
+// anything was published, and the answer from the documents is given
+// instead.
+func writeContent(ctx context.Context, inst *instance.Instance, logger logger.Logger, msg ChatMessage, w *writing, messages []ragMessage, stream bool, metadata, override map[string]interface{}, fromDocuments bool, now time.Time) (completion string, sources []Source, written bool, err error) {
+	var body []byte
+	if fromDocuments {
+		body, err = ragRequest(inst, withWritingInstructions(messages, w, now), stream, metadata, w.MaxTokens)
+	} else {
+		body, err = writingRequest(w, messages, stream, override, now)
+	}
+	if err != nil {
+		return "", nil, false, err
+	}
+	published := false
+	completion, sources, err = askRAG(ctx, inst, logger, msg, body, stream, func() bool {
+		published = true
+		return true
+	})
+	if err == nil && strings.TrimSpace(completion) != "" {
+		return completion, sources, true, nil
+	}
+	if published {
+		// A part of the content has reached the user: another answer would
+		// be mixed with it.
+		return "", nil, false, err
+	}
+	logger.Warnf("chat router: cannot write the %s, answering from the documents: %v", w.Kind, err)
+	if body, err = ragRequest(inst, messages, stream, metadata, 0); err != nil {
+		return "", nil, false, err
+	}
+	completion, sources, err = askRAG(ctx, inst, logger, msg, body, stream, nil)
+	return completion, sources, false, err
+}
+
+// askRAG asks openRAG for the answer from the documents, publishing it on the
+// realtime as it comes. allowed, when set, is called before the first event
+// is published: when it returns false, nothing is published.
+func askRAG(ctx context.Context, inst *instance.Instance, logger logger.Logger, msg ChatMessage, body []byte, stream bool, allowed func() bool) (string, []Source, error) {
 	res, err := CallRAGQueryContext(ctx, inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 	if err != nil {
-		publishError(inst, msg.ID, err)
-		return err
+		return "", nil, err
 	}
 	if res.StatusCode == http.StatusNotFound {
 		res.Body.Close()
 		checkRes, err := CallRAGQueryContext(ctx, inst, http.MethodGet, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
 		if err != nil {
-			publishError(inst, msg.ID, err)
-			return err
+			return "", nil, err
 		}
 		checkRes.Body.Close()
 		if checkRes.StatusCode == http.StatusNotFound {
@@ -535,42 +691,37 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 			createRAGPartition(inst.RAGServer(), inst.Domain, logger)
 			res, err = CallRAGQueryContext(ctx, inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 			if err != nil {
-				publishError(inst, msg.ID, err)
-				return err
+				return "", nil, err
 			}
 		}
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
-		ragErr := fmt.Errorf("POST status code: %d", res.StatusCode)
-		publishError(inst, msg.ID, ragErr)
-		return ragErr
+		return "", nil, fmt.Errorf("POST status code: %d", res.StatusCode)
 	}
-	var completion string
-	var sources []Source
+	if stream {
+		return handleStreamResponse(inst, msg, res.Body, allowed)
+	}
+	return handleNonStreamResponse(inst, msg, res.Body, allowed)
+}
 
-	if query.Stream {
-		completion, sources, err = handleStreamResponse(inst, msg, res.Body)
-	} else {
-		completion, sources, err = handleNonStreamResponse(inst, msg, res.Body)
-	}
-	if err != nil {
-		// Send error event to client
-		publishError(inst, msg.ID, err)
-		return err
-	}
-
+func newMessageID() string {
 	uuidv7, _ := uuid.NewV7()
+	return uuidv7.String()
+}
+
+func saveAnswer(inst *instance.Instance, chat *ChatConversation, id, completion string, sources []Source, action *ChatAction) error {
 	answer := ChatMessage{
-		ID:        uuidv7.String(),
+		ID:        id,
 		Role:      AssistantRole,
 		Content:   completion,
 		Sources:   sources,
+		Action:    action,
 		CreatedAt: time.Now().UTC(),
 	}
 	chat.Messages = append(chat.Messages, answer)
-	return couchdb.UpdateDoc(inst, &chat)
+	return couchdb.UpdateDoc(inst, chat)
 }
 
 func publishDelta(inst *instance.Instance, msgID string, content string, position int) {
@@ -594,6 +745,23 @@ func publishSources(inst *instance.Instance, msgID string, sources []Source) {
 			"_id":     msgID,
 			"object":  "sources",
 			"content": sources,
+		},
+	}
+	doc.SetID(msgID)
+	realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
+}
+
+// publishAction sends the action proposed to the user, which the client
+// shows for confirmation, with the id of the assistant message it is saved
+// on, where the client writes its outcome.
+func publishAction(inst *instance.Instance, msgID, answerID string, action *ChatAction) {
+	doc := couchdb.JSONDoc{
+		Type: consts.ChatEvents,
+		M: map[string]interface{}{
+			"_id":        msgID,
+			"object":     "action",
+			"action":     action,
+			"message_id": answerID,
 		},
 	}
 	doc.SetID(msgID)
@@ -626,11 +794,15 @@ func publishDone(inst *instance.Instance, msgID string) {
 	realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
 }
 
-func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (string, []Source, error) {
+// handleStreamResponse publishes the answer streamed by openRAG, unless
+// allowed returns false, and returns it with its sources. The `done` event is
+// left to the caller, which may send an action before it.
+func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader, allowed func() bool) (string, []Source, error) {
 	position := 0
 	var completion string
 	var sources []Source
 	var sseErr error
+	canPublish := publishGate(allowed)
 
 	// Realtime messages are sent to the client during the response stream
 	// When the stream is finished, the whole answer is saved in the CouchDB document
@@ -647,14 +819,16 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 			choice := choices[0].(map[string]interface{}) // Only one choice is possible for now
 
 			if reason, ok := choice["finish_reason"].(string); ok && reason != "" {
-				publishDone(inst, msg.ID)
+				return
 			} else if delta, ok := choice["delta"].(map[string]interface{}); ok {
 				// The content is progressively reveived through a delta stream
 				content, ok := delta["content"].(string)
 				if !ok {
 					return
 				}
-				publishDelta(inst, msg.ID, content, position)
+				if canPublish() {
+					publishDelta(inst, msg.ID, content, position)
+				}
 				completion += content
 				position++
 
@@ -664,7 +838,7 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 					if sseErr != nil {
 						return
 					}
-					if sources != nil {
+					if sources != nil && canPublish() {
 						publishSources(inst, msg.ID, sources)
 					}
 				}
@@ -681,7 +855,9 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 	return completion, sources, nil
 }
 
-func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (string, []Source, error) {
+// handleNonStreamResponse is handleStreamResponse for an answer that openRAG
+// sends in one piece.
+func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader, allowed func() bool) (string, []Source, error) {
 	var event map[string]interface{}
 	if err := json.NewDecoder(body).Decode(&event); err != nil {
 		return "", nil, err
@@ -704,13 +880,26 @@ func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.R
 		return "", nil, err
 	}
 
-	publishDelta(inst, msg.ID, completion, 0)
-	if sources != nil {
-		publishSources(inst, msg.ID, sources)
+	if publishGate(allowed)() {
+		publishDelta(inst, msg.ID, completion, 0)
+		if sources != nil {
+			publishSources(inst, msg.ID, sources)
+		}
 	}
-	publishDone(inst, msg.ID)
-
 	return completion, sources, nil
+}
+
+// publishGate returns a function telling whether the events of an answer can
+// be published: allowed is asked once, before the first event.
+func publishGate(allowed func() bool) func() bool {
+	asked, publish := allowed == nil, true
+	return func() bool {
+		if !asked {
+			asked = true
+			publish = allowed()
+		}
+		return publish
+	}
 }
 
 // ragHTTPClient is the HTTP client used for the openRAG calls. It has no
