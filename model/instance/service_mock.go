@@ -34,7 +34,7 @@ func (m *Mock) Get(domain string) (*Instance, error) {
 
 // Update mock method.
 func (m *Mock) Update(inst *Instance) error {
-	return m.Called(inst).Error(1)
+	return m.Called(inst).Error(0)
 }
 
 // Delete mock method.
@@ -45,4 +45,9 @@ func (m *Mock) Delete(inst *Instance) error {
 // CheckPassphrase mock method.
 func (m *Mock) CheckPassphrase(inst *Instance, pass []byte) error {
 	return m.Called(inst, pass).Error(0)
+}
+
+// SyncEmail mock method.
+func (m *Mock) SyncEmail(inst *Instance, settingsEmail string) error {
+	return m.Called(inst, settingsEmail).Error(0)
 }

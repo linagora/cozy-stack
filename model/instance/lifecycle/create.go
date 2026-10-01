@@ -247,6 +247,10 @@ func Create(opts *Options) (*instance.Instance, error) {
 	if err = couchdb.CreateDoc(prefixer.GlobalPrefixer, i); err != nil {
 		return nil, err
 	}
+	email, _ := settings.M["email"].(string)
+	if err = instance.SyncEmail(i, email); err != nil {
+		return nil, err
+	}
 
 	opts.trace("init VFS", func() {
 		if err = i.MakeVFS(); err != nil {

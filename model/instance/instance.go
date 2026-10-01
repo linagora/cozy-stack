@@ -61,7 +61,7 @@ type Instance struct {
 	Locale          string   `json:"locale"`                     // The locale used on the server
 	UUID            string   `json:"uuid,omitempty"`             // UUID associated with the instance
 	OIDCID          string   `json:"oidc_id,omitempty"`          // An identifier to check authentication from OIDC
-	Email           string   `json:"email,omitempty"`            // The owner's email
+	Email           string   `json:"email,omitempty"`            // The settings email, normalized
 	FranceConnectID string   `json:"franceconnect_id,omitempty"` // An identifier to check authentication from FranceConnect
 	ContextName     string   `json:"context,omitempty"`          // The context attached to the instance
 	Sponsorships    []string `json:"sponsorships,omitempty"`     // The list of sponsorships for the instance
