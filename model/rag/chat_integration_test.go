@@ -1,6 +1,7 @@
 package rag_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -61,7 +62,7 @@ func TestQuerySendsTheAssistantPromptOnEveryChat(t *testing.T) {
 	require.NoError(t, couchdb.CreateNamedDocWithDB(r.inst, &chat))
 	query := rag.QueryMessage{Task: "chat-completion", DocID: chat.ID()}
 
-	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
 	require.Equal(t, []completionMessage{
 		{Role: rag.SystemRole, Content: "Answer as a lawyer."},
 		{Role: rag.UserRole, Content: "Hello"},
@@ -75,7 +76,7 @@ func TestQuerySendsTheAssistantPromptOnEveryChat(t *testing.T) {
 	chat.Messages = append(chat.Messages, rag.ChatMessage{ID: "m3", Role: rag.UserRole, Content: "Again", CreatedAt: time.Now()})
 	require.NoError(t, couchdb.UpdateDoc(r.inst, &chat))
 
-	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
 	require.Equal(t, []completionMessage{
 		{Role: rag.SystemRole, Content: "Answer as a doctor."},
 		{Role: rag.UserRole, Content: "Hello"},
@@ -86,7 +87,7 @@ func TestQuerySendsTheAssistantPromptOnEveryChat(t *testing.T) {
 	// Without a prompt, no system message is sent at all.
 	assistant.M["prompt"] = ""
 	require.NoError(t, couchdb.UpdateDoc(r.inst, &assistant))
-	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
 	messages := lastCompletionMessages(t, r.fake)
 	require.NotEmpty(t, messages)
 	require.Equal(t, rag.UserRole, messages[0].Role)
