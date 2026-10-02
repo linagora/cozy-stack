@@ -371,6 +371,33 @@ func TestCheckSharingCredentialsReportsOwnerMismatchedCount(t *testing.T) {
 	requireCheck(t, checks, "invalid_number_of_credentials", true)
 }
 
+func TestCheckSharingCredentialsSharedDriveRecipient(t *testing.T) {
+	s := &Sharing{
+		SID:    "sharing-id",
+		Active: true,
+		Owner:  false,
+		Drive:  true,
+		Members: []Member{
+			{Instance: "https://owner.example.test"},
+			{Instance: "https://recipient.example.test"},
+		},
+		Credentials: []Credentials{{}},
+	}
+
+	checks := s.checkSharingCredentials()
+	requireCheck(t, checks, "missing_access_token", false)
+
+	// With valid DriveToken
+	s.Credentials[0].DriveToken = "drive-token"
+	checks = s.checkSharingCredentials()
+	require.Empty(t, checks)
+
+	// With invalid count
+	s.Credentials = nil
+	checks = s.checkSharingCredentials()
+	requireCheck(t, checks, "invalid_number_of_credentials", false)
+}
+
 func requireCheck(t *testing.T, checks []map[string]interface{}, typ string, owner bool) {
 	t.Helper()
 	for _, c := range checks {
