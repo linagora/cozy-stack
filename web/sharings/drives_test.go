@@ -2220,6 +2220,38 @@ func TestDriveAutoAcceptSameOrganizationWithPort(t *testing.T) {
 	require.Empty(t, contacts)
 }
 
+func TestCheckSharingsSharedDriveE2E(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupDriveAutoAcceptEnv(t, 0)
+	sharingID := createDirectRecipientDriveSharing(
+		t,
+		env.ownerInstance,
+		env.eOwner,
+		env.ownerAppToken,
+		"Recipient",
+		"recipient@example.com",
+		env.recipientURL,
+		"Shared Drive",
+		"Auto-accept check sharings test drive",
+	)
+
+	waitForSharingOnRecipientWithOwnerURL(t, env.recipientInstance, sharingID, env.ownerURL)
+	waitForAutoAcceptJobForSharing(t, env.recipientInstance, sharingID)
+	waitForDriveSharingReadyOnOwner(t, env.eOwner, env.ownerAppToken, sharingID)
+	waitForDriveSharingActiveOnRecipient(t, env.recipientInstance, sharingID)
+
+	checks, err := sharing.CheckSharings(env.ownerInstance, false)
+	require.NoError(t, err)
+	assert.Empty(t, checks, "CheckSharings must not report any inconsistency for active shared drive")
+
+	checksFast, err := sharing.CheckSharings(env.ownerInstance, true)
+	require.NoError(t, err)
+	assert.Empty(t, checksFast, "CheckSharings fast mode must not report any inconsistency")
+}
+
 func TestRevokedSharedDriveInvitationAuthorizeShowsErrorPage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
