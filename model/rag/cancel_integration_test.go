@@ -115,6 +115,13 @@ func TestCancelDoesNotStopTheNextMessage(t *testing.T) {
 	require.NoError(t, couchdb.UpdateDoc(r.inst, &chat))
 	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
 	assert.Equal(t, "fake answer", lastMessage(t, r, query.DocID).Content)
+	assert.Equal(t, []completionMessage{
+		{Role: rag.UserRole, Content: "Bonjour"},
+		{Role: rag.AssistantRole, Content: "fake answer"},
+		{Role: rag.UserRole, Content: "Et le budget ?"},
+		{Role: rag.AssistantRole, Content: "fake answer"},
+		{Role: rag.UserRole, Content: "Et le planning ?"},
+	}, lastCompletionMessages(t, r.fake), "the question that got no answer is not sent")
 }
 
 func TestCancelStopsTheWritingOfANote(t *testing.T) {

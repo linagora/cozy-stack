@@ -375,6 +375,20 @@ func TestRAGMessages(t *testing.T) {
 		assert.Equal(t, expected, ragMessages(chat, assistant))
 	})
 
+	t.Run("a question without an answer is skipped", func(t *testing.T) {
+		chat := &ChatConversation{Messages: []ChatMessage{
+			{Role: UserRole, Content: "Hello"},
+			{Role: AssistantRole, Content: "Hi"},
+			{Role: UserRole, Content: "Explain everything about project Atlas"},
+			{Role: UserRole, Content: "What is its budget?"},
+		}}
+		assert.Equal(t, []ragMessage{
+			{Role: UserRole, Content: "Hello"},
+			{Role: AssistantRole, Content: "Hi"},
+			{Role: UserRole, Content: "What is its budget?"},
+		}, ragMessages(chat, nil))
+	})
+
 	t.Run("only the leading system messages are skipped", func(t *testing.T) {
 		chat := &ChatConversation{Messages: []ChatMessage{
 			{Role: SystemRole, Content: "saved prompt"},

@@ -375,7 +375,9 @@ stops it. The query stops openRAG, which closes its connection, publishes a
 `done` event, saves no answer and proposes no action. It works whatever stack
 server runs the job, through the cache of the stack (Redis when there are
 several servers). It has no effect when the last message already has its
-answer, so that it cannot stop a later message. It needs the permission to
+answer, so that it cannot stop a later message. The question that got no
+answer stays in the conversation, but is not sent to the LLM with the next
+ones. It needs the permission to
 POST on `io.cozy.ai.chat.conversations`.
 
 #### Request
