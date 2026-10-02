@@ -987,7 +987,9 @@ No further consistency checks will be run for this member.
 ##### missing_matching_docs_for_member
 
 This will be raised if the shared files and folders associated with the sharing
-could not be fetched on a member's instance.
+could not be fetched on a member's instance (for replicated sharings), or if the
+drive shortcut document could not be fetched on the member's instance (for
+shared drives).
 The request error will be returned in the `error` attribute and the member's
 domain in the `member` attribute. No further consistency checks will be run for
 this member.
@@ -1075,7 +1077,9 @@ Other error types include `missing_trigger_on_active_sharing`,
 
 When checking for files and folders inconsistencies, sharings will be skipped
 when inactive, not initialized, read-only or not about `io.cozy.files`
-documents.
+documents. Shared drives (`drive: true`) are not replicated to members; their
+consistency check verifies the owner drive root, the member's credentials
+(`drive_token`), and the recipient's shortcut document.
 Also, for each instance, only the sharings owned by said instance will be
 checked. Other sharings will be checked via their owner instance.
 
