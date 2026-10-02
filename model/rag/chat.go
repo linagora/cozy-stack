@@ -555,6 +555,18 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 		metadata["attachments"] = attachments
 	}
 	msg := chat.Messages[len(chat.Messages)-1]
+	// Everything the query asks openRAG is stopped when the user cancels it
+	ctx, cancelQuery, watcher := watchCancel(ctx, inst, chat.DocID, msg.ID)
+	defer cancelQuery()
+	// fail ends the query on an error, unless it comes from the user
+	// cancelling it
+	fail := func(err error) error {
+		if watcher.Cancelled() {
+			return endCancelled(inst, logger, msg)
+		}
+		publishError(inst, msg.ID, err)
+		return err
+	}
 	assistant, err := assistantForChat(inst, &chat)
 	if err != nil {
 		// Without the assistant we cannot know whether the conversation is
@@ -607,15 +619,13 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 	}
 	res, err := CallRAGQueryContext(ctx, inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 	if err != nil {
-		publishError(inst, msg.ID, err)
-		return err
+		return fail(err)
 	}
 	if res.StatusCode == http.StatusNotFound {
 		res.Body.Close()
 		checkRes, err := CallRAGQueryContext(ctx, inst, http.MethodGet, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
 		if err != nil {
-			publishError(inst, msg.ID, err)
-			return err
+			return fail(err)
 		}
 		checkRes.Body.Close()
 		if checkRes.StatusCode == http.StatusNotFound {
@@ -623,17 +633,14 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 			createRAGPartition(inst.RAGServer(), inst.Domain, logger)
 			res, err = CallRAGQueryContext(ctx, inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 			if err != nil {
-				publishError(inst, msg.ID, err)
-				return err
+				return fail(err)
 			}
 		}
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
-		ragErr := fmt.Errorf("POST status code: %d", res.StatusCode)
-		publishError(inst, msg.ID, ragErr)
-		return ragErr
+		return fail(fmt.Errorf("POST status code: %d", res.StatusCode))
 	}
 	var completion string
 	var sources []Source
@@ -644,9 +651,10 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 		completion, sources, err = handleNonStreamResponse(inst, msg, res.Body)
 	}
 	if err != nil {
-		// Send error event to client
-		publishError(inst, msg.ID, err)
-		return err
+		return fail(err)
+	}
+	if watcher.Cancelled() {
+		return endCancelled(inst, logger, msg)
 	}
 
 	uuidv7, _ := uuid.NewV7()
@@ -659,6 +667,14 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 	}
 	chat.Messages = append(chat.Messages, answer)
 	return couchdb.UpdateDoc(inst, &chat)
+}
+
+// endCancelled ends a query the user has cancelled: the client has stopped
+// listening, the others are told it is over, and nothing is saved.
+func endCancelled(inst *instance.Instance, logger logger.Logger, msg ChatMessage) error {
+	logger.Infof("chat query cancelled by the user")
+	publishDone(inst, msg.ID)
+	return nil
 }
 
 func publishDelta(inst *instance.Instance, msgID string, content string, position int) {
