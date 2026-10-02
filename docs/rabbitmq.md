@@ -429,8 +429,9 @@ service ([ADR 043](https://github.com/linagora/twake-workplace-private/pull/1608
 
 The feed carries every user and domain. The Stack writes a `domain` audience on
 the organization instance whose `org_domain` matches, and a `user` audience on
-the instance whose `email` matches. A message for no instance, or for
-an instance whose context does not set `common_contacts`, is acked and dropped.
+the instance whose `email` matches. A message for no instance, for
+an instance whose context does not set `common_contacts`, or that is malformed
+(invalid JSON, no path, no payload, unknown action), is acked and dropped.
 
 The contact is found by its CardDAV `path`, stored as `carddavPath`. A contact
 the Stack wrote before the feed knew it (`metadata.external`, like a member

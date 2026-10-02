@@ -33,7 +33,7 @@ func TestCommonContactsHandler(t *testing.T) {
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	orgID := "cc" + suffix
 	orgDomain := "acme-" + suffix + ".example"
-	newInstance := func(t *testing.T, domain, contextName string) *instance.Instance {
+	newOrgInstance := func(t *testing.T, domain, contextName, orgID, orgDomain string) *instance.Instance {
 		t.Helper()
 		inst, err := lifecycle.Create(&lifecycle.Options{
 			Domain:      domain,
@@ -44,6 +44,9 @@ func TestCommonContactsHandler(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
 		return inst
+	}
+	newInstance := func(t *testing.T, domain, contextName string) *instance.Instance {
+		return newOrgInstance(t, domain, contextName, orgID, orgDomain)
 	}
 	org := newInstance(t, orgID+".cc.localhost", enabledCtx)
 	alice := newInstance(t, "alice-"+suffix+".cc.localhost", enabledCtx)
@@ -145,6 +148,21 @@ func TestCommonContactsHandler(t *testing.T) {
 			handle(t, message("DELETE", domainAudience, path, nil))
 			require.Empty(t, byPath(t, org, path))
 		})
+
+		t.Run("a delete for an unknown path is acked", func(t *testing.T) {
+			handle(t, message("DELETE", domainAudience, path, nil))
+			require.Empty(t, byPath(t, org, path))
+		})
+	})
+
+	t.Run("a domain message for an org without common_contacts is dropped", func(t *testing.T) {
+		offID := "ccoff" + suffix
+		offDomain := "off-" + suffix + ".example"
+		off := newOrgInstance(t, offID+".cc.localhost", disabledCtx, offID, offDomain)
+		path := "addressbooks/domain/members/ivan-" + suffix + ".vcf"
+		handle(t, message("ADD", map[string]interface{}{"domain": offDomain}, path, card("Ivan", "ivan@off.example", "", "")))
+
+		require.Empty(t, byPath(t, off, path))
 	})
 
 	t.Run("a contact typed by hand is not taken over", func(t *testing.T) {
@@ -190,6 +208,7 @@ func TestCommonContactsHandler(t *testing.T) {
 			"e1": map[string]interface{}{"address": "a-no-pref@other.example"},
 			"e2": map[string]interface{}{"address": "z-pref@other.example", "pref": 1},
 			"e3": map[string]interface{}{"address": "b-pref@other.example", "pref": 2},
+			"e4": map[string]interface{}{"address": "b-pref@other.example"},
 		}
 		handle(t, message("ADD", map[string]interface{}{"user": aliceEmail}, path, payload))
 
@@ -218,7 +237,7 @@ func TestCommonContactsHandler(t *testing.T) {
 		require.Empty(t, byPath(t, bob, path))
 	})
 
-	t.Run("malformed messages are rejected", func(t *testing.T) {
+	t.Run("malformed messages are acked and dropped", func(t *testing.T) {
 		alicePath := "addressbooks/alice/collected/gina-" + suffix + ".vcf"
 		for _, body := range []interface{}{
 			"{",
@@ -232,7 +251,7 @@ func TestCommonContactsHandler(t *testing.T) {
 				require.NoError(t, err)
 				raw = string(b)
 			}
-			require.Error(t, rabbitmq.NewCommonContactsHandler().
+			require.NoError(t, rabbitmq.NewCommonContactsHandler().
 				Handle(context.Background(), amqp.Delivery{Body: []byte(raw)}))
 		}
 		require.Empty(t, byPath(t, alice, alicePath))
