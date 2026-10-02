@@ -2927,6 +2927,64 @@ func TestSharedDriveDelegatedRecipientRemoval(t *testing.T) {
 		require.NotEqual(t, expiredToken, refreshedSharing.Credentials[0].AccessToken.AccessToken)
 	})
 
+	t.Run("ExpiredAccessTokenIsRefreshedForRemoteOwner", func(t *testing.T) {
+		sharingID, _, _ := createSharedDrive(
+			t,
+			DriveCreationMethodLegacy,
+			env.acme,
+			env.acmeToken,
+			env.tsA.URL,
+			"Delegated Recipient Removal Expired Token Remote Drive",
+			"Drive for expired delegated recipient token tests against a remote owner",
+			nil,
+		)
+		acceptSharedDriveForBetty(t, env.acme, env.betty, env.tsA.URL, env.tsB.URL, sharingID)
+		acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, sharingID)
+
+		// Force the remote path: pretend the owner instance lives on another
+		// stack, so the removal goes through DelegateRevokeRecipient over HTTP.
+		previousLocalInstanceFromURL := sharings.LocalInstanceFromURL
+		sharings.LocalInstanceFromURL = func(rawURL string) *instance.Instance {
+			return nil
+		}
+		t.Cleanup(func() {
+			sharings.LocalInstanceFromURL = previousLocalInstanceFromURL
+		})
+
+		recipientSharing, err := sharing.FindSharing(env.betty, sharingID)
+		require.NoError(t, err)
+		require.NotEmpty(t, recipientSharing.Credentials)
+		credentials := &recipientSharing.Credentials[0]
+		require.NotNil(t, credentials.Client)
+		require.NotNil(t, credentials.AccessToken)
+		require.NotEmpty(t, credentials.AccessToken.RefreshToken)
+
+		expiredToken, err := env.acme.MakeJWT(
+			consts.AccessTokenAudience,
+			credentials.Client.ClientID,
+			credentials.AccessToken.Scope,
+			"",
+			time.Now().Add(-consts.AccessTokenValidityDuration-time.Minute),
+		)
+		require.NoError(t, err)
+		credentials.AccessToken.AccessToken = expiredToken
+		require.NoError(t, couchdb.UpdateDoc(env.betty, recipientSharing))
+
+		eBetty.DELETE("/sharings/"+sharingID+"/recipients/2").
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			Expect().Status(http.StatusNoContent).
+			Header(echo.HeaderWWWAuthenticate).Empty()
+
+		removed := findSharingMemberByEmail(t, env.acme, sharingID, "dave@example.net")
+		require.Equal(t, sharing.MemberStatusRevoked, removed.Status)
+
+		refreshedSharing, err := sharing.FindSharing(env.betty, sharingID)
+		require.NoError(t, err)
+		require.NotEmpty(t, refreshedSharing.Credentials)
+		require.NotNil(t, refreshedSharing.Credentials[0].AccessToken)
+		require.NotEqual(t, expiredToken, refreshedSharing.Credentials[0].AccessToken.AccessToken)
+	})
+
 	t.Run("ReadOnlyRecipientCannotRemoveAnotherRecipient", func(t *testing.T) {
 		sharingID, _, _ := createSharedDrive(
 			t,
