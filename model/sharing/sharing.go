@@ -1730,6 +1730,10 @@ func CheckSharings(inst *instance.Instance, skipFSConsistency bool) ([]map[strin
 
 			credentialsChecks = s.checkSharingCredentials()
 			checks = append(checks, credentialsChecks...)
+		} else if !s.Owner {
+			// For shared drives on member instances, check that DriveToken credentials exist
+			credentialsChecks = s.checkSharingCredentials()
+			checks = append(checks, credentialsChecks...)
 		}
 
 		if len(membersChecks) == 0 && len(triggersChecks) == 0 && len(credentialsChecks) == 0 {
@@ -1737,17 +1741,20 @@ func CheckSharings(inst *instance.Instance, skipFSConsistency bool) ([]map[strin
 				return nil
 			}
 
-			parentSharingID, err := findParentFileSharingID(inst, s)
-			if err != nil {
-				return err
-			} else if parentSharingID != "" {
-				checks = append(checks, map[string]interface{}{
-					"id":             s.SID,
-					"type":           "sharing_in_sharing",
-					"instance":       inst.Domain,
-					"parent_sharing": parentSharingID,
-				})
-				return nil
+			// Shared drives allow nested folder sharing, so skip parent-sharing checks for drives
+			if !s.Drive {
+				parentSharingID, err := findParentFileSharingID(inst, s)
+				if err != nil {
+					return err
+				} else if parentSharingID != "" {
+					checks = append(checks, map[string]interface{}{
+						"id":             s.SID,
+						"type":           "sharing_in_sharing",
+						"instance":       inst.Domain,
+						"parent_sharing": parentSharingID,
+					})
+					return nil
+				}
 			}
 
 			if s.Initial || s.ReadOnly() {
@@ -1767,6 +1774,38 @@ func CheckSharings(inst *instance.Instance, skipFSConsistency bool) ([]map[strin
 
 			rule := s.FirstFilesRule()
 			if rule == nil {
+				return nil
+			}
+
+			if s.Drive {
+				// Validate that the drive root exists and is not trashed in owner VFS
+				if ownerChecks := s.checkDriveOwnerRoot(inst); len(ownerChecks) > 0 {
+					checks = append(checks, ownerChecks...)
+					return nil
+				}
+
+				// Check each ready member on their instance for drive consistency
+				for _, m := range validMembers {
+					ms, err := FindSharing(m, s.ID())
+					if err != nil {
+						checks = append(checks, map[string]interface{}{
+							"id":     s.SID,
+							"type":   "missing_sharing_for_member",
+							"member": m.Domain,
+							"error":  err.Error(),
+						})
+						continue
+					}
+
+					// Skip members whose sharing doc is not active yet
+					if !ms.Active {
+						continue
+					}
+
+					// Validate member's drive rules, token authentication, and shortcut file
+					checks = append(checks, s.checkDriveMemberConsistency(inst, m, ms, skipFSConsistency)...)
+				}
+
 				return nil
 			}
 
@@ -2125,6 +2164,26 @@ func (s *Sharing) checkSharingCredentials() (checks []map[string]interface{}) {
 				})
 			}
 		}
+	} else if s.Drive {
+		// Member of a shared drive should have exactly 1 credentials entry
+		if len(s.Credentials) != 1 {
+			checks = append(checks, map[string]interface{}{
+				"id":         s.SID,
+				"type":       "invalid_number_of_credentials",
+				"owner":      false,
+				"nb_members": len(s.Credentials),
+			})
+			return checks
+		}
+
+		// Member must have a non-empty DriveToken to authenticate with the owner
+		if s.Credentials[0].DriveToken == "" {
+			checks = append(checks, map[string]interface{}{
+				"id":    s.SID,
+				"type":  "missing_access_token",
+				"owner": false,
+			})
+		}
 	} else {
 		if len(s.Credentials) != 1 {
 			checks = append(checks, map[string]interface{}{
@@ -2167,6 +2226,140 @@ func (s *Sharing) checkSharingCredentials() (checks []map[string]interface{}) {
 				"member": 0,
 			})
 		}
+	}
+
+	return checks
+}
+
+func (s *Sharing) checkDriveOwnerRoot(inst *instance.Instance) (checks []map[string]interface{}) {
+	// 1. Check that the drive root ID can be extracted from the sharing rule
+	rootID, err := s.DriveRootID()
+	if err != nil {
+		checks = append(checks, map[string]interface{}{
+			"id":    s.SID,
+			"type":  "missing_matching_docs_for_owner",
+			"error": err.Error(),
+		})
+		return checks
+	}
+
+	// 2. Check that the root folder or file actually exists in owner VFS
+	dir, file, err := inst.VFS().DirOrFileByID(rootID)
+	if err != nil || (dir == nil && file == nil) {
+		errMsg := "root file or directory not found"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		checks = append(checks, map[string]interface{}{
+			"id":    s.SID,
+			"type":  "missing_matching_docs_for_owner",
+			"error": errMsg,
+		})
+		return checks
+	}
+
+	// 3. Check that the owner's root directory or file is not in the trash
+	isTrashed := (dir != nil && (dir.DirID == consts.TrashDirID || strings.HasPrefix(dir.Fullpath, vfs.TrashDirName))) ||
+		(file != nil && (file.Trashed || file.DirID == consts.TrashDirID))
+	if isTrashed {
+		checks = append(checks, map[string]interface{}{
+			"id":    s.SID,
+			"type":  "missing_matching_docs_for_owner",
+			"error": "root file or directory is trashed",
+		})
+		return checks
+	}
+
+	return nil
+}
+
+func (s *Sharing) checkDriveMemberConsistency(inst *instance.Instance, m *instance.Instance, ms *Sharing, skipFSConsistency bool) (checks []map[string]interface{}) {
+	// 1. Check that the member's sharing doc has a files rule pointing to the drive
+	memberRule := ms.FirstFilesRule()
+	if memberRule == nil {
+		checks = append(checks, map[string]interface{}{
+			"id":     s.SID,
+			"type":   "missing_files_rule_for_member",
+			"member": m.Domain,
+		})
+		return checks
+	}
+
+	// 2. Check that the member has exactly one credentials block for this drive
+	if len(ms.Credentials) != 1 {
+		checks = append(checks, map[string]interface{}{
+			"id":         s.SID,
+			"type":       "invalid_number_of_credentials",
+			"instance":   m.Domain,
+			"nb_members": len(ms.Credentials),
+		})
+		return checks
+	}
+
+	// 3. Check that the member credentials contain a DriveToken
+	driveToken := ms.Credentials[0].DriveToken
+	if driveToken == "" {
+		checks = append(checks, map[string]interface{}{
+			"id":     s.SID,
+			"type":   "missing_access_token",
+			"member": m.Domain,
+		})
+		return checks
+	}
+
+	// 4. Check that the owner instance recognizes and authenticates this DriveToken
+	if _, err := s.FindMemberByInteractCode(inst, driveToken); err != nil {
+		checks = append(checks, map[string]interface{}{
+			"id":     s.SID,
+			"type":   "missing_access_token",
+			"member": m.Domain,
+		})
+		return checks
+	}
+
+	// Skip filesystem checks if fast mode was requested
+	if skipFSConsistency {
+		return checks
+	}
+
+	// 5. Check that the shortcut document exists in the member's VFS (by ID or reference)
+	var shortcutFile *vfs.FileDoc
+	var err error
+	if ms.ShortcutID != "" {
+		shortcutFile, err = m.VFS().FileByID(ms.ShortcutID)
+	}
+	if shortcutFile == nil {
+		// Fallback lookup: find shortcut by sharing reference if ShortcutID wasn't set or changed
+		key := []string{consts.Sharings, s.SID}
+		req := &couchdb.ViewRequest{
+			StartKey: key,
+			EndKey:   []string{key[0], key[1], couchdb.MaxString},
+		}
+		var res couchdb.ViewResponse
+		if viewErr := couchdb.ExecView(m, couchdb.FilesReferencedByView, req, &res); viewErr == nil {
+			for _, row := range res.Rows {
+				if f, fErr := m.VFS().FileByID(row.ID); fErr == nil && isShortcutFile(f) {
+					shortcutFile = f
+					break
+				}
+			}
+		}
+	}
+
+	// 6. Report an error if the recipient's shortcut is missing or was trashed
+	if shortcutFile == nil || shortcutFile.Trashed {
+		errMsg := "shortcut not found"
+		if err != nil {
+			errMsg = err.Error()
+		} else if shortcutFile != nil && shortcutFile.Trashed {
+			errMsg = "shortcut is trashed"
+		}
+		checks = append(checks, map[string]interface{}{
+			"id":     s.SID,
+			"type":   "missing_matching_docs_for_member",
+			"member": m.Domain,
+			"error":  errMsg,
+		})
 	}
 
 	return checks
