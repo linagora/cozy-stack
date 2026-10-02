@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 
@@ -60,14 +59,17 @@ type jsEntry struct {
 }
 
 // Handle writes, updates or deletes the contact a message is about. The feed
-// carries every user and domain, so a message for nobody here is acked.
+// carries every user and domain, so a message for nobody here is acked. A
+// malformed message is acked too, since a retry can never make it succeed.
 func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) error {
 	var msg CommonContactMessage
 	if err := json.Unmarshal(d.Body, &msg); err != nil {
-		return fmt.Errorf("contacts.common: %w", err)
+		log.Warnf("contacts.common: dropping invalid message: %s", err)
+		return nil
 	}
 	if msg.Path == "" {
-		return fmt.Errorf("contacts.common: missing path")
+		log.Warnf("contacts.common: dropping %s without path", msg.Action)
+		return nil
 	}
 
 	var inst *instance.Instance
@@ -98,7 +100,8 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 	switch msg.Action {
 	case "ADD", "UPDATE":
 		if msg.Payload == nil {
-			return fmt.Errorf("contacts.common: missing payload for %s", msg.Path)
+			log.Warnf("contacts.common: dropping %s without payload for %s", msg.Action, msg.Path)
+			return nil
 		}
 		return upsertCommonContact(inst, msg.Path, msg.Payload)
 	case "DELETE":
@@ -111,7 +114,8 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 		}
 		return couchdb.DeleteDoc(inst, c)
 	default:
-		return fmt.Errorf("contacts.common: unknown action %q for %s", msg.Action, msg.Path)
+		log.Warnf("contacts.common: dropping unknown action %q for %s", msg.Action, msg.Path)
+		return nil
 	}
 }
 
@@ -212,25 +216,29 @@ func setOrDelete(m map[string]interface{}, key string, value interface{}, ok boo
 // byPref returns the values of the entries by preference, a missing pref
 // coming last.
 func byPref(entries map[string]jsEntry) []string {
-	prefs := map[string]int{}
-	for _, e := range entries {
-		if v := strings.TrimSpace(e.Address + e.Number); v != "" {
-			prefs[v] = e.Pref
-		}
-	}
-	values := make([]string, 0, len(prefs))
-	for v := range prefs {
-		values = append(values, v)
-	}
-	rank := func(v string) int {
-		if prefs[v] <= 0 {
+	rank := func(pref int) int {
+		if pref <= 0 {
 			return 101 // RFC 9553 prefs go from 1 to 100
 		}
-		return prefs[v]
+		return pref
+	}
+	ranks := map[string]int{}
+	for _, e := range entries {
+		v := strings.TrimSpace(e.Address + e.Number)
+		if v == "" {
+			continue
+		}
+		if r, ok := ranks[v]; !ok || rank(e.Pref) < r {
+			ranks[v] = rank(e.Pref)
+		}
+	}
+	values := make([]string, 0, len(ranks))
+	for v := range ranks {
+		values = append(values, v)
 	}
 	sort.Slice(values, func(i, j int) bool {
-		if rank(values[i]) != rank(values[j]) {
-			return rank(values[i]) < rank(values[j])
+		if ranks[values[i]] != ranks[values[j]] {
+			return ranks[values[i]] < ranks[values[j]]
 		}
 		return values[i] < values[j]
 	})
