@@ -368,6 +368,28 @@ Content-Type: application/vnd.api+json
 }
 ```
 
+### POST /ai/chat/conversations/:id/cancel
+
+Stops the answer to the last message of the conversation, when the user
+stops it. The query stops openRAG, which closes its connection, publishes a
+`done` event, saves no answer and proposes no action. It works whatever stack
+server runs the job, through the cache of the stack (Redis when there are
+several servers). It has no effect when the last message already has its
+answer, so that it cannot stop a later message. It needs the permission to
+POST on `io.cozy.ai.chat.conversations`.
+
+#### Request
+
+```http
+POST /ai/chat/conversations/e21dce8058b9013d800a18c04daba326/cancel HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
 ### Real-time via websockets
 
 #### Messages flow example

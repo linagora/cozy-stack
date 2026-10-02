@@ -486,6 +486,9 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 		metadata["attachments"] = attachments
 	}
 	msg := chat.Messages[len(chat.Messages)-1]
+	// Everything the query asks openRAG is stopped when the user cancels it
+	ctx, cancelQuery, watcher := watchCancel(ctx, inst, chat.DocID, msg.ID)
+	defer cancelQuery()
 	assistant, err := assistantForChat(inst, &chat)
 	if err != nil {
 		// Without the assistant we cannot know whether the conversation is
@@ -521,6 +524,9 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 	actions := supportedActions(inst, query.Actions)
 	if len(actions) == 0 {
 		completion, sources, err := askRAG(ctx, inst, logger, msg, body, query.Stream, nil)
+		if watcher.Cancelled() {
+			return endCancelled(inst, logger, msg)
+		}
 		if err != nil {
 			publishError(inst, msg.ID, err)
 			return err
@@ -594,6 +600,9 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 
 	case !waitDecision().NeedsDocuments:
 		action, err = fillAction(ctx, inst, spec, messages, "", override, now)
+		if watcher.Cancelled() {
+			return endCancelled(inst, logger, msg)
+		}
 		if err == nil {
 			publishAction(inst, msg.ID, answerID, action)
 			publishDone(inst, msg.ID)
@@ -614,6 +623,9 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 			action = nil
 		}
 	}
+	if watcher.Cancelled() {
+		return endCancelled(inst, logger, msg)
+	}
 	if err != nil {
 		publishError(inst, msg.ID, err)
 		return err
@@ -623,6 +635,14 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 	}
 	publishDone(inst, msg.ID)
 	return saveAnswer(inst, &chat, answerID, completion, sources, action)
+}
+
+// endCancelled ends a query the user has cancelled: the client has stopped
+// listening, the others are told it is over, and nothing is saved.
+func endCancelled(inst *instance.Instance, logger logger.Logger, msg ChatMessage) error {
+	logger.Infof("chat query cancelled by the user")
+	publishDone(inst, msg.ID)
+	return nil
 }
 
 // ragRequest is the body of a query to openRAG for an answer from the
@@ -666,9 +686,9 @@ func writeContent(ctx context.Context, inst *instance.Instance, logger logger.Lo
 	if err == nil && strings.TrimSpace(completion) != "" {
 		return completion, sources, true, nil
 	}
-	if published {
-		// A part of the content has reached the user: another answer would
-		// be mixed with it.
+	if published || ctx.Err() != nil {
+		// A part of the content has reached the user, and another answer
+		// would be mixed with it, or the query is cancelled.
 		return "", nil, false, err
 	}
 	logger.Warnf("chat router: cannot write the %s, answering from the documents: %v", w.Kind, err)
