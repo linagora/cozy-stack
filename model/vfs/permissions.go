@@ -3,6 +3,7 @@ package vfs
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/permission"
@@ -92,7 +93,7 @@ func Allows(fs VFS, pset permission.Set, v permission.Verb, fd Fetcher) error {
 
 	// We have some rules on attributes, let's iterate over the current object
 	// ancestors and check if any match the rules
-	if len(otherRules) > 0 {
+	if len(otherRules) > 0 && fd.ID() != consts.RootDirID {
 		cur, err := fd.Parent(fs)
 		if err != nil {
 			return err
@@ -102,16 +103,54 @@ func Allows(fs VFS, pset permission.Set, v permission.Verb, fd Fetcher) error {
 				if rule.ValuesMatch(cur) {
 					return nil
 				}
-				cur, err = cur.Parent(fs)
-				if err != nil {
-					return err
-				}
+			}
+			cur, err = cur.Parent(fs)
+			if err != nil {
+				return err
 			}
 		}
 	}
 
 	// no match : game over !
-	return errors.New("no permission")
+	return errNoPermission
+}
+
+var errNoPermission = errors.New("no permission")
+
+// AllowsRule checks that the documents targeted by id in the rule r are
+// accessible with every verb of r through the parent set. It is a semantic
+// fallback for Set.RuleInSubset, which cannot tell for example that a file
+// is inside a directory matched by a referenced_by selector. It returns
+// permission.ErrNotSubset if the rule is not allowed, or doesn't target
+// io.cozy.files by id.
+func AllowsRule(fs VFS, parent permission.Set, r permission.Rule) error {
+	// Exact type only: a wildcard type would also match other doctypes by id.
+	if r.Type != consts.Files || r.Selector != "" || len(r.Values) == 0 {
+		return permission.ErrNotSubset
+	}
+	for _, id := range r.Values {
+		dir, file, err := fs.DirOrFileByID(id)
+		if os.IsNotExist(err) {
+			return permission.ErrNotSubset
+		}
+		if err != nil {
+			return err
+		}
+		var fd Fetcher = file
+		if dir != nil {
+			fd = dir
+		}
+		for v := range r.Verbs {
+			err := Allows(fs, parent, v, fd)
+			if errors.Is(err, errNoPermission) {
+				return permission.ErrNotSubset
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func pathFromID(fs VFS, id string) (string, error) {

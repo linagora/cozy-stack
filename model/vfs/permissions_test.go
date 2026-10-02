@@ -236,6 +236,56 @@ func TestPermissions(t *testing.T) {
 				},
 			}
 			assert.Error(t, vfs.Allows(fs, psetUnclePrefixID, permission.GET, f))
+
+			// AllowsRule: rules by id checked against a referenced_by parent
+			ref := couchdb.DocReference{Type: consts.Apps, ID: consts.Apps + "/mail"}
+			for _, name := range []string{"/O/A", "/O/B"} {
+				dir, err := fs.DirByPath(name)
+				require.NoError(t, err)
+				newdir := dir.Clone().(*vfs.DirDoc)
+				newdir.ReferencedBy = []couchdb.DocReference{ref}
+				require.NoError(t, fs.UpdateDirDoc(dir, newdir))
+			}
+			a1, err := fs.DirByPath("/O/A/a1")
+			require.NoError(t, err)
+			psetReferencedApp := permission.Set{
+				permission.Rule{
+					Type:     consts.Files,
+					Verbs:    permission.Verbs(permission.GET),
+					Selector: "referenced_by",
+					Values:   []string{ref.ID},
+				},
+			}
+			byID := func(verbs permission.VerbSet, ids ...string) permission.Rule {
+				return permission.Rule{Type: consts.Files, Verbs: verbs, Values: ids}
+			}
+			get := permission.Verbs(permission.GET)
+			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, byID(permission.ALL, f.ID())), permission.ErrNotSubset)
+			assert.NoError(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, f.ID())))
+			assert.NoError(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, a1.ID())))
+			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, f.ID(), B2.ID())), permission.ErrNotSubset)
+			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, "unknown-id")), permission.ErrNotSubset)
+			// every rule is checked on each ancestor, not one rule per ancestor
+			psetTwoSelectors := append(permission.Set{
+				permission.Rule{
+					Type:     consts.Files,
+					Verbs:    permission.Verbs(permission.GET),
+					Selector: "name",
+					Values:   []string{"Home"},
+				},
+			}, psetReferencedApp...)
+			assert.NoError(t, vfs.Allows(fs, psetTwoSelectors, permission.GET, f))
+			root, err := fs.DirByID(consts.RootDirID)
+			require.NoError(t, err)
+			assert.Error(t, vfs.Allows(fs, psetTwoSelectors, permission.GET, root))
+			assert.ErrorIs(t, vfs.AllowsRule(fs, psetTwoSelectors, byID(get, consts.RootDirID)), permission.ErrNotSubset)
+
+			withSelector := byID(get, "testtag")
+			withSelector.Selector = "tags"
+			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, withSelector), permission.ErrNotSubset)
+			otherType := byID(get, f.ID())
+			otherType.Type = "io.cozy.not.files"
+			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, otherType), permission.ErrNotSubset)
 		})
 	}
 }

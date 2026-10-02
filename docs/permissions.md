@@ -288,6 +288,11 @@ parameter to the query-string to have a shortcode of 6 digits.
 
 **Note**: it is only possible to create a strict subset of the permissions
 associated to the sent token.
+Rules on `io.cozy.files` that target documents by id are also accepted when
+the token can perform the requested verbs on each document (same check as
+normal file access), so an app restricted by a selector such as
+`referenced_by` can share files it can access. The same applies when adding
+rules with `PATCH /permissions/:id`.
 
 #### Request
 
