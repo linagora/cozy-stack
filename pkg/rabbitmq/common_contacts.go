@@ -14,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/utils"
 )
@@ -73,7 +74,10 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 	var err error
 	switch {
 	case msg.Audience.Domain != "":
-		inst, err = lifecycle.GetOrgInstanceByOrgDomain(utils.NormalizeDomain(msg.Audience.Domain))
+		inst, err = orgdirectory.FindOrganizationInstance(ctx, "", msg.Audience.Domain)
+		if err == nil && inst == nil {
+			err = instance.ErrNotFound
+		}
 	case msg.Audience.User != "":
 		inst, err = lifecycle.GetInstanceByEmail(msg.Audience.User)
 	default:

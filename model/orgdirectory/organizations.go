@@ -40,7 +40,7 @@ func ResolveOrganizationInstances(organizationID, organizationDomain string) (Or
 	}
 
 	if len(list) == 0 {
-		return OrganizationInstances{}, fmt.Errorf("organization has no instances")
+		return OrganizationInstances{}, fmt.Errorf("organization has no instances: %w", instance.ErrNotFound)
 	}
 
 	resolvedID := organizationID
@@ -59,8 +59,10 @@ func ResolveOrganizationInstances(organizationID, organizationDomain string) (Or
 	}, nil
 }
 
-func findOrganizationInstance(ctx context.Context, organizationID string) (*instance.Instance, error) {
-	scope, err := ResolveOrganizationInstances(organizationID, "")
+// FindOrganizationInstance returns the organization instance, found by ID when
+// it is available, otherwise by organization domain.
+func FindOrganizationInstance(ctx context.Context, organizationID, organizationDomain string) (*instance.Instance, error) {
+	scope, err := ResolveOrganizationInstances(organizationID, organizationDomain)
 	if err != nil {
 		return nil, fmt.Errorf("org-directory: %w", err)
 	}
