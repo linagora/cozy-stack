@@ -276,6 +276,49 @@ func FindByEmail(db prefixer.Prefixer, email string) (*Contact, error) {
 	return docs[0], nil
 }
 
+// CardDAVPathKey is the key of the CardDAV path of a contact written from the
+// twake:contacts:common feed.
+const CardDAVPathKey = "carddavPath"
+
+// FindByCardDAVPath returns the contact written for the given CardDAV path.
+func FindByCardDAVPath(db prefixer.Prefixer, path string) (*Contact, error) {
+	var docs []*Contact
+	err := couchdb.FindDocs(db, consts.Contacts, &couchdb.FindRequest{
+		UseIndex: "by-carddav-path",
+		Selector: mango.Equal(CardDAVPathKey, path),
+		Limit:    1,
+	}, &docs)
+	if couchdb.IsNoDatabaseError(err) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, ErrNotFound
+	}
+	return docs[0], nil
+}
+
+// FindExternalWithoutCardDAVPath returns a contact the stack created for the
+// given email before the feed knew it, like a member copied by the
+// organization directory. A contact typed by hand is never returned.
+func FindExternalWithoutCardDAVPath(db prefixer.Prefixer, email string) (*Contact, error) {
+	docs, err := FindAllByEmail(db, email)
+	if couchdb.IsNoDatabaseError(err) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, doc := range docs {
+		if _, ok := doc.M[CardDAVPathKey]; !ok && doc.IsExternal() {
+			return doc, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
 // IsExternal returns true if this contact was created from an external source.
 func (c *Contact) IsExternal() bool {
 	metadata, ok := c.Get("metadata").(map[string]interface{})

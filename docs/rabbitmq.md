@@ -433,8 +433,9 @@ the instance whose `email` matches. A message for no instance, or for
 an instance whose context does not set `common_contacts`, is acked and dropped.
 
 The contact is found by its CardDAV `path`, stored as `carddavPath`. A contact
-written before the feed knew it, and so without a path, is found by email and
-takes the path. `ADD` and `UPDATE` overwrite the name, emails and phones, and
+the Stack wrote before the feed knew it (`metadata.external`, like a member
+copied by the organization directory) is found by email and takes the path. A
+contact typed by hand is never taken over: the feed writes its own beside it. `ADD` and `UPDATE` overwrite the name, emails and phones, and
 keep the fields that belong to the Stack (`cozy`, `trustedForSharing`, the
 groups). `x-twake-workplace-fqdn` fills `cozy` when it is empty. A message that
 changes nothing writes nothing. `DELETE` removes the document.
