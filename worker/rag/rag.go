@@ -45,5 +45,5 @@ func WorkerQuery(ctx *job.TaskContext) error {
 		return err
 	}
 	logger.Debugf("RAG: query %v", msg)
-	return rag.Query(ctx.Instance, logger, msg)
+	return rag.Query(ctx, ctx.Instance, logger, msg)
 }
