@@ -20,6 +20,7 @@ const (
 	QueueB2BGroupLifecycle         = "stack.b2b.group.lifecycle"
 	QueueAppCommands               = "stack.app.commands.queue"
 	QueueBannerCommands            = "stack.banner.commands"
+	QueueCommonContacts            = "stack.contacts.common"
 )
 
 const (
