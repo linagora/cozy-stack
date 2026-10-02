@@ -3,6 +3,7 @@ package rag
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,8 @@ type ChatPayload struct {
 	// answer is put in a document as it is: a system message of the answer,
 	// like the instructions of the OpenAI Responses API.
 	Instructions string `json:"instructions,omitempty"`
+	// Actions are the definitions of the chat actions the client can run.
+	Actions []ActionDefinition `json:"actions,omitempty"`
 }
 
 // directLLM tells whether the client asks for an answer without the documents.
@@ -62,7 +65,7 @@ func (p ChatPayload) Validate() error {
 	if n := utf8.RuneCountInString(p.Instructions); n > maxInstructionsChars {
 		return fmt.Errorf("instructions too long: %d characters, at most %d", n, maxInstructionsChars)
 	}
-	return nil
+	return ValidateActions(p.Actions)
 }
 
 type ChatConversation struct {
@@ -74,12 +77,13 @@ type ChatConversation struct {
 }
 
 type ChatMessage struct {
-	ID            string    `json:"id"`
-	Role          string    `json:"role"`
-	Content       string    `json:"content"`
-	Sources       []Source  `json:"sources,omitempty"`
-	AttachmentIDs []string  `json:"attachmentIDs,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	ID            string      `json:"id"`
+	Role          string      `json:"role"`
+	Content       string      `json:"content"`
+	Sources       []Source    `json:"sources,omitempty"`
+	AttachmentIDs []string    `json:"attachmentIDs,omitempty"`
+	Action        *ChatAction `json:"action,omitempty"`
+	CreatedAt     time.Time   `json:"createdAt"`
 }
 
 const (
@@ -114,11 +118,12 @@ func (c *ChatConversation) Links() *jsonapi.LinksList              { return nil 
 var _ jsonapi.Object = (*ChatConversation)(nil)
 
 type QueryMessage struct {
-	Task          string   `json:"task"`
-	DocID         string   `json:"doc_id"`
-	Stream        bool     `json:"stream"`
-	WebSearch     bool     `json:"websearch"`
-	AttachmentIDs []string `json:"attachmentIDs,omitempty"`
+	Task          string             `json:"task"`
+	DocID         string             `json:"doc_id"`
+	Stream        bool               `json:"stream"`
+	WebSearch     bool               `json:"websearch"`
+	AttachmentIDs []string           `json:"attachmentIDs,omitempty"`
+	Actions       []ActionDefinition `json:"actions,omitempty"`
 	// DirectLLM is the answer of the LLM alone, without the user's documents.
 	DirectLLM bool `json:"directLLM,omitempty"`
 	// Instructions are those of the client on how to answer.
@@ -265,6 +270,7 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 		Stream:        stream,
 		WebSearch:     websearch,
 		AttachmentIDs: payload.AttachmentIDs,
+		Actions:       payload.Actions,
 		DirectLLM:     payload.directLLM(),
 		Instructions:  strings.TrimSpace(payload.Instructions),
 	})
@@ -488,7 +494,11 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 		turns = turns[1:]
 	}
 	for _, msg := range turns {
-		messages = append(messages, ragMessage{Role: msg.Role, Content: msg.Content})
+		content := msg.Content
+		if msg.Action != nil {
+			content = strings.TrimSpace(content + "\n\n" + describeAction(msg.Action))
+		}
+		messages = append(messages, ragMessage{Role: msg.Role, Content: content})
 	}
 	return messages
 }
@@ -554,6 +564,9 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 		metadata["attachments"] = attachments
 	}
 	msg := chat.Messages[len(chat.Messages)-1]
+	// The answer from the documents is asked with a context: it is cancelled
+	// when an action replaces it, which stops openRAG.
+	ctx := context.Background()
 	assistant, err := assistantForChat(inst, &chat)
 	if err != nil {
 		// Without the assistant we cannot know whether the conversation is
@@ -585,79 +598,228 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	// The answer comes from the documents with openRAG, or, when the client
 	// asks for an answer without them, from the LLM behind it.
 	messages := withInstructions(ragMessages(&chat, assistant), query.Instructions)
-	var payload map[string]interface{}
+	var body []byte
 	if query.DirectLLM {
-		payload = directLLMPayload(messages, query.Stream, metadata)
+		body, err = json.Marshal(directLLMPayload(messages, query.Stream, metadata))
 	} else {
-		payload = map[string]interface{}{
-			"model":       fmt.Sprintf("ragondin-%s", inst.Domain),
-			"messages":    messages,
-			"stream":      query.Stream,
-			"metadata":    metadata,
-			"temperature": Temperature,
-			"top_p":       TopP,
-			"logprobs":    LogProbs,
-		}
+		body, err = ragRequest(inst, messages, query.Stream, metadata, 0)
 	}
-
-	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	res, err := CallRAGQuery(inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
+
+	actions := query.Actions
+	if len(actions) == 0 {
+		completion, sources, err := askRAG(ctx, inst, logger, msg, body, query.Stream, nil)
+		if err != nil {
+			publishError(inst, msg.ID, err)
+			return err
+		}
+		publishDone(inst, msg.ID)
+		return saveAnswer(inst, &chat, newMessageID(), completion, sources, nil)
+	}
+
+	// The router and the answer from the documents start together, so that
+	// a search does not wait for the router. The router answers long before
+	// the first token of the answer, which follows the query rewriting, the
+	// retrieval and the reranking: the answer is held back until the router
+	// has decided, and when it is not the one to give, it is cancelled,
+	// which stops openRAG.
+	override, _ := metadata["llm_override"].(map[string]interface{})
+	ragCtx, cancelRAG := context.WithCancel(ctx)
+	defer cancelRAG()
+	decided := make(chan routeDecision, 1)
+	go func() {
+		started := time.Now()
+		decision, err := routeQuery(ctx, inst, messages, actions, override)
+		if err != nil {
+			logger.Warnf("chat router failed, answering from the documents: %s", err)
+		} else {
+			logger.Infof("chat router: intent=%s needs_documents=%t in %s", decision.Intent, decision.NeedsDocuments, time.Since(started))
+		}
+		workspace, _ := metadata["workspace"].(string)
+		checked, err := checkDocuments(ctx, inst, decision, msg.Content, workspace)
+		if err != nil {
+			logger.Warnf("chat router: cannot search the documents, using them: %s", err)
+		} else if checked.NeedsDocuments != decision.NeedsDocuments {
+			logger.Infof("chat router: the documents are relevant to the message, using them")
+		}
+		decision = checked
+		if !keepsAnswer(actions, decision) {
+			cancelRAG()
+		}
+		decided <- decision
+	}()
+	var decision *routeDecision
+	waitDecision := func() routeDecision {
+		if decision == nil {
+			d := <-decided
+			decision = &d
+		}
+		return *decision
+	}
+	answerAllowed := func() bool { return keepsAnswer(actions, waitDecision()) }
+
+	completion, sources, err := askRAG(ragCtx, inst, logger, msg, body, query.Stream, answerAllowed)
+	answerID := newMessageID()
+	def := actionFor(actions, waitDecision().action())
+	now := time.Now().UTC()
+	var action *ChatAction
+	switch {
+	case def == nil:
+		// A search: the answer is the one to give.
+
+	case def.Content != nil:
+		// The content of the action is written as the answer, with its own
+		// instructions, and the action saves it.
+		var written bool
+		completion, sources, written, err = writeContent(ctx, inst, logger, msg, def, messages, query.Stream, metadata, override, waitDecision().NeedsDocuments, now)
+		if err == nil && written {
+			if title := contentTitle(completion); title != "" {
+				action = &ChatAction{Name: def.Name, Params: map[string]interface{}{"title": title}}
+			} else {
+				logger.Infof("chat router: the content of %s has no title, no action proposed", def.Name)
+			}
+		}
+
+	case !waitDecision().NeedsDocuments:
+		action, err = fillAction(ctx, inst, def, messages, "", override, now)
+		if err == nil {
+			publishAction(inst, msg.ID, answerID, action)
+			publishDone(inst, msg.ID)
+			return saveAnswer(inst, &chat, answerID, "", nil, action)
+		}
+		// The user still gets an answer when the action cannot be prepared.
+		logger.Warnf("chat router: cannot prepare %s, answering from the documents: %s", def.Name, err)
+		action = nil
+		completion, sources, err = askRAG(ctx, inst, logger, msg, body, query.Stream, nil)
+
+	case err == nil:
+		// An action that needs the documents is prepared from the answer,
+		// and shown below it.
+		var fillErr error
+		action, fillErr = fillAction(ctx, inst, def, messages, completion, override, now)
+		if fillErr != nil {
+			logger.Warnf("chat router: cannot prepare %s after the answer: %s", def.Name, fillErr)
+			action = nil
+		}
+	}
 	if err != nil {
 		publishError(inst, msg.ID, err)
 		return err
 	}
+	if action != nil {
+		publishAction(inst, msg.ID, answerID, action)
+	}
+	publishDone(inst, msg.ID)
+	return saveAnswer(inst, &chat, answerID, completion, sources, action)
+}
+
+// ragRequest is the body of a query to openRAG for an answer from the
+// documents. maxTokens is 0 for the default of openRAG.
+func ragRequest(inst *instance.Instance, messages []ragMessage, stream bool, metadata map[string]interface{}, maxTokens int) ([]byte, error) {
+	payload := map[string]interface{}{
+		"model":       fmt.Sprintf("ragondin-%s", inst.Domain),
+		"messages":    messages,
+		"stream":      stream,
+		"metadata":    metadata,
+		"temperature": Temperature,
+		"top_p":       TopP,
+		"logprobs":    LogProbs,
+	}
+	if maxTokens > 0 {
+		payload["max_tokens"] = maxTokens
+	}
+	return json.Marshal(payload)
+}
+
+// writeContent writes the content of an action as the answer, published as
+// it comes: from the user's documents with openRAG, or else by the LLM from
+// the conversation. written is false when it could not be written before
+// anything was published, and the answer from the documents is given
+// instead.
+func writeContent(ctx context.Context, inst *instance.Instance, logger logger.Logger, msg ChatMessage, a *ActionDefinition, messages []ragMessage, stream bool, metadata, override map[string]interface{}, fromDocuments bool, now time.Time) (completion string, sources []Source, written bool, err error) {
+	var body []byte
+	if fromDocuments {
+		body, err = ragRequest(inst, withWritingInstructions(messages, a, now), stream, metadata, contentTokens(a))
+	} else {
+		body, err = writingRequest(a, messages, stream, override, now)
+	}
+	if err != nil {
+		return "", nil, false, err
+	}
+	published := false
+	completion, sources, err = askRAG(ctx, inst, logger, msg, body, stream, func() bool {
+		published = true
+		return true
+	})
+	if err == nil && strings.TrimSpace(completion) != "" {
+		return completion, sources, true, nil
+	}
+	if published || ctx.Err() != nil {
+		// A part of the content has reached the user, and another answer
+		// would be mixed with it, or the query is cancelled.
+		return "", nil, false, err
+	}
+	logger.Warnf("chat router: cannot write the content of %s, answering from the documents: %v", a.Name, err)
+	if body, err = ragRequest(inst, messages, stream, metadata, 0); err != nil {
+		return "", nil, false, err
+	}
+	completion, sources, err = askRAG(ctx, inst, logger, msg, body, stream, nil)
+	return completion, sources, false, err
+}
+
+// askRAG asks openRAG for the answer from the documents, publishing it on the
+// realtime as it comes. allowed, when set, is called before the first event
+// is published: when it returns false, nothing is published.
+func askRAG(ctx context.Context, inst *instance.Instance, logger logger.Logger, msg ChatMessage, body []byte, stream bool, allowed func() bool) (string, []Source, error) {
+	res, err := CallRAGQueryContext(ctx, inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
+	if err != nil {
+		return "", nil, err
+	}
 	if res.StatusCode == http.StatusNotFound {
 		res.Body.Close()
-		checkRes, err := CallRAGQuery(inst, http.MethodGet, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
+		checkRes, err := CallRAGQueryContext(ctx, inst, http.MethodGet, nil, fmt.Sprintf("/partition/%s", inst.Domain), echo.MIMEApplicationJSON)
 		if err != nil {
-			publishError(inst, msg.ID, err)
-			return err
+			return "", nil, err
 		}
 		checkRes.Body.Close()
 		if checkRes.StatusCode == http.StatusNotFound {
 			logger.Warnf("RAG partition not found, attempting creation")
 			createRAGPartition(inst.RAGServer(), inst.Domain, logger)
-			res, err = CallRAGQuery(inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
+			res, err = CallRAGQueryContext(ctx, inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 			if err != nil {
-				publishError(inst, msg.ID, err)
-				return err
+				return "", nil, err
 			}
 		}
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
-		ragErr := fmt.Errorf("POST status code: %d", res.StatusCode)
-		publishError(inst, msg.ID, ragErr)
-		return ragErr
+		return "", nil, fmt.Errorf("POST status code: %d", res.StatusCode)
 	}
-	var completion string
-	var sources []Source
+	if stream {
+		return handleStreamResponse(inst, msg, res.Body, allowed)
+	}
+	return handleNonStreamResponse(inst, msg, res.Body, allowed)
+}
 
-	if query.Stream {
-		completion, sources, err = handleStreamResponse(inst, msg, res.Body)
-	} else {
-		completion, sources, err = handleNonStreamResponse(inst, msg, res.Body)
-	}
-	if err != nil {
-		// Send error event to client
-		publishError(inst, msg.ID, err)
-		return err
-	}
-
+func newMessageID() string {
 	uuidv7, _ := uuid.NewV7()
+	return uuidv7.String()
+}
+
+func saveAnswer(inst *instance.Instance, chat *ChatConversation, id, completion string, sources []Source, action *ChatAction) error {
 	answer := ChatMessage{
-		ID:        uuidv7.String(),
+		ID:        id,
 		Role:      AssistantRole,
 		Content:   completion,
 		Sources:   sources,
+		Action:    action,
 		CreatedAt: time.Now().UTC(),
 	}
 	chat.Messages = append(chat.Messages, answer)
-	return couchdb.UpdateDoc(inst, &chat)
+	return couchdb.UpdateDoc(inst, chat)
 }
 
 func publishDelta(inst *instance.Instance, msgID string, content string, position int) {
@@ -681,6 +843,23 @@ func publishSources(inst *instance.Instance, msgID string, sources []Source) {
 			"_id":     msgID,
 			"object":  "sources",
 			"content": sources,
+		},
+	}
+	doc.SetID(msgID)
+	realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
+}
+
+// publishAction sends the action proposed to the user, which the client
+// shows for confirmation, with the id of the assistant message it is saved
+// on, where the client writes its outcome.
+func publishAction(inst *instance.Instance, msgID, answerID string, action *ChatAction) {
+	doc := couchdb.JSONDoc{
+		Type: consts.ChatEvents,
+		M: map[string]interface{}{
+			"_id":        msgID,
+			"object":     "action",
+			"action":     action,
+			"message_id": answerID,
 		},
 	}
 	doc.SetID(msgID)
@@ -713,11 +892,15 @@ func publishDone(inst *instance.Instance, msgID string) {
 	realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
 }
 
-func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (string, []Source, error) {
+// handleStreamResponse publishes the answer streamed by openRAG, unless
+// allowed returns false, and returns it with its sources. The `done` event is
+// left to the caller, which may send an action before it.
+func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader, allowed func() bool) (string, []Source, error) {
 	position := 0
 	var completion string
 	var sources []Source
 	var sseErr error
+	canPublish := publishGate(allowed)
 
 	// Realtime messages are sent to the client during the response stream
 	// When the stream is finished, the whole answer is saved in the CouchDB document
@@ -734,14 +917,16 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 			choice := choices[0].(map[string]interface{}) // Only one choice is possible for now
 
 			if reason, ok := choice["finish_reason"].(string); ok && reason != "" {
-				publishDone(inst, msg.ID)
+				return
 			} else if delta, ok := choice["delta"].(map[string]interface{}); ok {
 				// The content is progressively reveived through a delta stream
 				content, ok := delta["content"].(string)
 				if !ok {
 					return
 				}
-				publishDelta(inst, msg.ID, content, position)
+				if canPublish() {
+					publishDelta(inst, msg.ID, content, position)
+				}
 				completion += content
 				position++
 
@@ -751,7 +936,7 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 					if sseErr != nil {
 						return
 					}
-					if sources != nil {
+					if sources != nil && canPublish() {
 						publishSources(inst, msg.ID, sources)
 					}
 				}
@@ -768,7 +953,9 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 	return completion, sources, nil
 }
 
-func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (string, []Source, error) {
+// handleNonStreamResponse is handleStreamResponse for an answer that openRAG
+// sends in one piece.
+func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader, allowed func() bool) (string, []Source, error) {
 	var event map[string]interface{}
 	if err := json.NewDecoder(body).Decode(&event); err != nil {
 		return "", nil, err
@@ -791,13 +978,26 @@ func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.R
 		return "", nil, err
 	}
 
-	publishDelta(inst, msg.ID, completion, 0)
-	if sources != nil {
-		publishSources(inst, msg.ID, sources)
+	if publishGate(allowed)() {
+		publishDelta(inst, msg.ID, completion, 0)
+		if sources != nil {
+			publishSources(inst, msg.ID, sources)
+		}
 	}
-	publishDone(inst, msg.ID)
-
 	return completion, sources, nil
+}
+
+// publishGate returns a function telling whether the events of an answer can
+// be published: allowed is asked once, before the first event.
+func publishGate(allowed func() bool) func() bool {
+	asked, publish := allowed == nil, true
+	return func() bool {
+		if !asked {
+			asked = true
+			publish = allowed()
+		}
+		return publish
+	}
 }
 
 // ragHTTPClient is the HTTP client used for the openRAG calls. It has no
@@ -820,6 +1020,12 @@ var ragHTTPClient = &http.Client{
 // callRAG is the instance-free part of CallRAGQuery, split out so the openRAG
 // HTTP mechanics can be unit-tested against an httptest server.
 func callRAG(server config.RAGServer, method string, payload []byte, path string, contentType string) (*http.Response, error) {
+	return callRAGContext(context.Background(), server, method, payload, path, contentType)
+}
+
+// callRAGContext is callRAG bound to a context: cancelling it closes the
+// connection to openRAG, which stops the work in progress on its side.
+func callRAGContext(ctx context.Context, server config.RAGServer, method string, payload []byte, path string, contentType string) (*http.Response, error) {
 	if server.URL == "" {
 		return nil, errors.New("no RAG server configured")
 	}
@@ -842,7 +1048,7 @@ func callRAG(server config.RAGServer, method string, payload []byte, path string
 	if payload != nil {
 		body = bytes.NewReader(payload)
 	}
-	req, err := http.NewRequest(method, u.String(), body)
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -853,6 +1059,11 @@ func callRAG(server config.RAGServer, method string, payload []byte, path string
 
 func CallRAGQuery(inst *instance.Instance, method string, payload []byte, path string, contentType string) (*http.Response, error) {
 	return callRAG(inst.RAGServer(), method, payload, path, contentType)
+}
+
+// CallRAGQueryContext is CallRAGQuery bound to a context.
+func CallRAGQueryContext(ctx context.Context, inst *instance.Instance, method string, payload []byte, path string, contentType string) (*http.Response, error) {
+	return callRAGContext(ctx, inst.RAGServer(), method, payload, path, contentType)
 }
 
 // createdOrExists tells whether an openRAG create endpoint reported success,

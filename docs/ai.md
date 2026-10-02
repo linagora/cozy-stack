@@ -301,7 +301,16 @@ Content-Type: application/json
   "documents": true,
   "instructions": "The answer is put in a document as it is: no introduction, no comment.",
   "assistantID": "abc123",
-  "attachmentIDs": ["827f0fbb928b375cc457c732a4013aa7", "9a3b1c2d3e4f5a6b7c8d9e0f1a2b3c4d"]
+  "attachmentIDs": ["827f0fbb928b375cc457c732a4013aa7", "9a3b1c2d3e4f5a6b7c8d9e0f1a2b3c4d"],
+  "actions": [
+    {
+      "name": "create_note",
+      "description": "write a note in the user's Notes app: a summary of the conversation, a list of tasks, a short text on a subject.",
+      "examples": [{ "message": "Fais-en une note", "needs_documents": false }],
+      "content": { "max_tokens": 1024 },
+      "instructions": "A note is concise: after the title, organize the content with short \"##\" sections or lists."
+    }
+  ]
 }
 ```
 
@@ -337,7 +346,10 @@ Content-Type: application/json
   conversation: editing it on the assistant applies to its existing
   conversations as well.
 - `attachmentIDs` (optional) array of ids, specifying which documents should be leveraged by the RAG.
-  
+- `actions` (optional) the definitions of the [chat actions](#chat-actions)
+  the client can run. Without it, the message is always answered from the
+  documents. Invalid definitions are rejected with a `400 Bad Request`.
+
 
 #### Response
 
@@ -409,6 +421,27 @@ server > {"event": "CREATED",
                       "doc": {"object": "done"}}}
 ```
 
+#### Action message
+
+When the stack proposes a [chat action](#chat-actions), an `action` event
+comes before the `done` one. When the action replaces the answer, there is no
+`delta` nor `sources` event. `message_id` is the id of the assistant message
+the action is saved on:
+
+```
+server > {"event": "CREATED",
+          "payload": {"id": "eb17c3205bf1013ddea018c04daba326",
+                      "type": "io.cozy.ai.chat.events",
+                      "doc": {"object": "action",
+                              "message_id": "0192f0a5-4d8b-7c1e-9a3f-1b2c3d4e5f60",
+                              "action": {"name": "draft_email",
+                                         "params": {"to": ["Paul"], "subject": "Groceries", "body": "Hi Paul, ..."}}}}}
+server > {"event": "CREATED",
+          "payload": {"id": "eb17c3205bf1013ddea018c04daba326",
+                      "type": "io.cozy.ai.chat.events",
+                      "doc": {"object": "done"}}}
+```
+
 #### Error message
 
 If an error occurs while processing the AI response (e.g. the LLM is
@@ -420,3 +453,116 @@ server > {"event": "CREATED",
                       "type": "io.cozy.ai.chat.events",
                       "doc": {"object": "error", "message": "I don't want to talk today"}}}
 ```
+
+### Chat actions
+
+The assistant can propose an action of the client instead of a plain answer
+from the documents, like writing a note or drafting an email. The client
+defines its actions in the request; the stack knows nothing of them but these
+definitions. It never runs an action: the client shows it to the user, who
+can edit it, and runs it once the user has confirmed it.
+
+An action definition has:
+
+- `name` (required): the identifier of the action, in lowercase letters,
+  digits and `_`. `search` is reserved.
+- `description` (required): what the action does, and when to pick it. It is
+  given to the router, and to the LLM that prepares the action.
+- `examples` (optional): messages for which the router picks the action,
+  each with `needs_documents`, whether it needs the user's documents.
+- `instructions` (optional): how to write the content or fill the params.
+- Either `content` or `parameters`:
+  - `content`: the content of the action is written as the answer, in
+    Markdown starting with a `# ` title line, like a note or a document.
+    `max_tokens` bounds it (1024 by default, 4096 at most). The action gets
+    one param, `title`, the text of that line.
+  - `parameters`: the JSON schema of the params the LLM fills, like the
+    `parameters` of a tool for function calling: an `object` whose
+    `properties` are strings, or arrays of strings, with a `description`.
+    `required` lists the params without which the action is not proposed. A
+    property with `"x-user-written": true` keeps only the values the user
+    wrote in the conversation, so that the content of a document cannot add
+    one, like the recipient of an email.
+
+There are at most 10 actions, 5 examples per action and 10 params. A
+description and instructions have at most 1000 characters; an example and the
+description of a param at most 300.
+
+```json
+{
+  "name": "draft_email",
+  "description": "prepare an email for the user to review and send: a reply, a message to someone, a summary to share.",
+  "examples": [{ "message": "Write an email to the team about the delivery delay", "needs_documents": false }],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "to": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "the recipients, as the user named them (names or email addresses)",
+        "x-user-written": true
+      },
+      "subject": { "type": "string", "description": "the subject of the email" },
+      "body": { "type": "string", "description": "the text of the email" }
+    },
+    "required": ["subject", "body"]
+  },
+  "instructions": "The body is plain text, ready to send, with a greeting and a sign-off."
+}
+```
+
+When the request has `actions`, a router asks the LLM, in the same time as
+the answer starts on openRAG, whether the message is a search or one of the
+actions, and whether the action needs the user's documents:
+
+- For a search, the answer is published as usual. It is held back until the
+  router has decided, which happens before its first token in practice.
+- For an action with `content`, the answer is cancelled, which stops it on
+  openRAG, and the content is written as the answer, with the description
+  and the instructions of the action: by openRAG from the user's documents
+  when it needs them ("write a report on project X from my files"), or else
+  by the LLM from the conversation ("summarize this conversation in a note")
+  or what it knows of a general subject. A content without a `# ` title,
+  like an answer saying the documents do not cover the subject, is given
+  without an action.
+- For an action with `parameters`, the answer is cancelled and the LLM fills
+  the params from the conversation. If they cannot be filled, the message is
+  answered from the documents.
+- For an action with `parameters` that needs the documents ("email the team
+  the status of project X"), the answer is published as usual, then the
+  params are filled from it and the action comes after it.
+
+The router and the params use the LLM of the assistant, without retrieval,
+with a JSON schema. When the router fails, the message is answered from the
+documents.
+
+A small LLM cannot be trusted to tell whether an action needs the user's
+documents, and makes up the facts of the user's organization when it writes
+without them. So when the router says an action does not need them, the
+stack searches them anyway with `GET /search/partition/:domain` of openRAG
+(in the workspace of the assistant, with the similarity threshold of the
+chat): when they have chunks relevant to the message, or when the search
+fails, the action uses them.
+
+The proposed action is saved in the `action` field of the assistant message
+of the conversation. The content of an action with `content` is the
+`content` of the message, which is empty when the action replaces the answer:
+
+```json
+{
+  "id": "0192f0a5-4d8b-7c1e-9a3f-1b2c3d4e5f60",
+  "role": "assistant",
+  "content": "# Groceries\n\n- milk\n- bread",
+  "action": {
+    "name": "create_note",
+    "params": { "title": "Groceries" }
+  },
+  "createdAt": "2024-09-24T13:24:09.123Z"
+}
+```
+
+Once the user has handled the action, the client writes its outcome in the
+`action` of the message: `status` is `done`, with the `url` of what it
+created if any, or `cancelled`. The stack keeps them.
+
+Every param of the schema is present, `""` or `[]` when unknown.
