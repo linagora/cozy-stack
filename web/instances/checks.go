@@ -245,3 +245,11 @@ func checkSharings(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, results)
 }
+
+func checkEmails(c echo.Context) error {
+	check, err := lifecycle.CheckEmails()
+	if err != nil {
+		return wrapError(err)
+	}
+	return c.JSON(http.StatusOK, check)
+}

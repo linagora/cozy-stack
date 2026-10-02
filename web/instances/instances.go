@@ -818,6 +818,7 @@ func Routes(router *echo.Group) {
 	router.POST("/:domain/checks/triggers", checkTriggers)
 	router.POST("/:domain/checks/shared", checkShared)
 	router.POST("/:domain/checks/sharings", checkSharings)
+	router.POST("/checks/emails", checkEmails)
 
 	// Fixers
 	router.POST("/:domain/fixers/password-defined", passwordDefinedFixer)

@@ -933,6 +933,32 @@ Content-Type: application/json
 ]
 ```
 
+### POST /instances/checks/emails
+
+Compare the email of every instance with its settings email. Drifts
+are logged as errors and counted in the response, never fixed.
+
+#### Request
+
+```http
+POST /instances/checks/emails HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "scanned": 3,
+  "drifts": 1,
+  "errors": []
+}
+```
+
 ### POST /instances/:domain/checks/sharings
 
 This endpoint can be used to check the setup of sharings owned by a given
