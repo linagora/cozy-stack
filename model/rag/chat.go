@@ -476,7 +476,9 @@ type ragMessage struct {
 // a leading system message (openRAG pins it as a custom instruction), then
 // the conversation turns. The prompt is read on every query so an edit of the
 // assistant applies at once; the leading system messages an older stack saved
-// in the conversation are skipped, so the current prompt replaces them.
+// in the conversation are skipped, so the current prompt replaces them. A
+// question without an answer, stopped by the user or failed, is skipped too:
+// the LLM would answer it along with the next one.
 func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage {
 	messages := make([]ragMessage, 0, len(chat.Messages)+1)
 	if assistant != nil {
@@ -488,7 +490,10 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 	for len(turns) > 0 && turns[0].Role == SystemRole {
 		turns = turns[1:]
 	}
-	for _, msg := range turns {
+	for i, msg := range turns {
+		if msg.Role == UserRole && i+1 < len(turns) && turns[i+1].Role == UserRole {
+			continue
+		}
 		messages = append(messages, ragMessage{Role: msg.Role, Content: msg.Content})
 	}
 	return messages
