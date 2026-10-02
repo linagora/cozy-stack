@@ -14,13 +14,9 @@ import (
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
-	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/utils"
 )
-
-const carddavPathKey = "carddavPath"
 
 // CommonContactsHandler writes the contacts published on twake:contacts:common.
 type CommonContactsHandler struct{}
@@ -102,8 +98,11 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 		}
 		return upsertCommonContact(inst, msg.Path, msg.Payload)
 	case "DELETE":
-		c, err := findContactByPath(inst, msg.Path)
-		if err != nil || c == nil {
+		c, err := contact.FindByCardDAVPath(inst, msg.Path)
+		if errors.Is(err, contact.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
 			return err
 		}
 		return couchdb.DeleteDoc(inst, c)
@@ -114,16 +113,16 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 
 func upsertCommonContact(inst *instance.Instance, path string, card *jsContact) error {
 	emails := byPref(card.Emails)
-	c, err := findContactByPath(inst, path)
-	if err == nil && c == nil && len(emails) > 0 {
-		c, err = findContactWithoutPath(inst, emails[0])
+	c, err := contact.FindByCardDAVPath(inst, path)
+	if errors.Is(err, contact.ErrNotFound) && len(emails) > 0 {
+		c, err = contact.FindExternalWithoutCardDAVPath(inst, emails[0])
+	}
+	if errors.Is(err, contact.ErrNotFound) {
+		c, err = contact.New(), nil
+		c.M["metadata"] = map[string]interface{}{"external": true}
 	}
 	if err != nil {
 		return err
-	}
-	if c == nil {
-		c = contact.New()
-		c.M["metadata"] = map[string]interface{}{"external": true}
 	}
 
 	before, err := json.Marshal(c.M)
@@ -144,41 +143,10 @@ func upsertCommonContact(inst *instance.Instance, path string, card *jsContact) 
 	return couchdb.UpdateDoc(inst, c)
 }
 
-func findContactByPath(inst *instance.Instance, path string) (*contact.Contact, error) {
-	var docs []*contact.Contact
-	err := couchdb.FindDocs(inst, consts.Contacts, &couchdb.FindRequest{
-		UseIndex: "by-carddav-path",
-		Selector: mango.Equal(carddavPathKey, path),
-		Limit:    1,
-	}, &docs)
-	if err != nil && !couchdb.IsNoDatabaseError(err) {
-		return nil, err
-	}
-	if len(docs) == 0 {
-		return nil, nil
-	}
-	return docs[0], nil
-}
-
-// findContactWithoutPath finds a contact written before the feed knew it, like
-// a member copied by the old writers.
-func findContactWithoutPath(inst *instance.Instance, email string) (*contact.Contact, error) {
-	docs, err := contact.FindAllByEmail(inst, email)
-	if err != nil && !errors.Is(err, contact.ErrNotFound) && !couchdb.IsNoDatabaseError(err) {
-		return nil, err
-	}
-	for _, doc := range docs {
-		if _, ok := doc.M[carddavPathKey]; !ok && doc.M["me"] != true {
-			return doc, nil
-		}
-	}
-	return nil, nil
-}
-
 // applyCard overwrites the fields that come from Sabre. The others, like the
 // cozy URL, trustedForSharing or the groups, belong to the stack.
 func applyCard(c *contact.Contact, path string, card *jsContact, emails []string) {
-	c.M[carddavPathKey] = path
+	c.M[contact.CardDAVPathKey] = path
 
 	name := map[string]interface{}{}
 	for _, comp := range card.Name.Components {

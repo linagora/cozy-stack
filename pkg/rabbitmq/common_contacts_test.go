@@ -147,6 +147,21 @@ func TestCommonContactsHandler(t *testing.T) {
 		})
 	})
 
+	t.Run("a contact typed by hand is not taken over", func(t *testing.T) {
+		email := "judy-" + suffix + "@acme.example"
+		typed := createContact(t, alice, email, "", false, "Judy by hand")
+		path := "addressbooks/alice/contacts/judy-" + suffix + ".vcf"
+		handle(t, message("ADD", map[string]interface{}{"user": aliceEmail}, path, card("Judy Doe", email, "", "")))
+
+		docs := byPath(t, alice, path)
+		require.Len(t, docs, 1)
+		require.NotEqual(t, typed.ID(), docs[0].ID())
+		kept, err := contact.Find(alice, typed.ID())
+		require.NoError(t, err)
+		require.Equal(t, "Judy by hand", kept.PrimaryName())
+		require.NotContains(t, kept.M, contact.CardDAVPathKey)
+	})
+
 	t.Run("a member copied before the feed is taken over, not duplicated", func(t *testing.T) {
 		email := "dave-" + suffix + "@acme.example"
 		copied := createContact(t, org, email, "https://dave.cc.localhost", true, "Dave")
