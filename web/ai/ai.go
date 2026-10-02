@@ -7,6 +7,7 @@ import (
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/rag"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
@@ -34,6 +35,23 @@ func Chat(c echo.Context) error {
 		return jsonapi.InternalServerError(err)
 	}
 	return jsonapi.Data(c, http.StatusAccepted, chat, nil)
+}
+
+// CancelChat is the route for stopping the answer to the last message of a
+// conversation, when the user stops it.
+func CancelChat(c echo.Context) error {
+	if err := middlewares.AllowWholeType(c, permission.POST, consts.ChatConversations); err != nil {
+		return middlewares.ErrForbidden
+	}
+	inst := middlewares.GetInstance(c)
+	err := rag.CancelChat(inst, c.Param("id"))
+	if couchdb.IsNotFoundError(err) {
+		return jsonapi.NotFound(err)
+	}
+	if err != nil {
+		return jsonapi.InternalServerError(err)
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 func callAI(c echo.Context, path string) (*http.Response, error) {
@@ -79,6 +97,7 @@ func ExecuteTool(c echo.Context) error {
 // Routes sets the routing for the AI tasks.
 func Routes(router *echo.Group) {
 	router.POST("/chat/conversations/:id", Chat)
+	router.POST("/chat/conversations/:id/cancel", CancelChat)
 	router.POST("/v1/chat/completions", OpenAICompletion)
 	router.POST("/v1/tools/execute", ExecuteTool)
 	router.POST("/index/status", IndexStatus)

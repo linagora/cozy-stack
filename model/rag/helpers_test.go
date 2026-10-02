@@ -121,6 +121,9 @@ type FakeOpenRAG struct {
 	Fail func(method, path string) int
 	// SupportedTypes is what GET /indexer/supported/types answers.
 	SupportedTypes []string
+	// RAG, when set, answers the chat completions in place of the canned
+	// non-streamed answer.
+	RAG http.HandlerFunc
 }
 
 // DefaultSupportedTypes is a subset of openRAG's default loaders.
@@ -262,6 +265,12 @@ func (f *FakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
 			writeJSON(w, status, map[string]string{"error": "injected"})
 			return
 		}
+	}
+	// The completions do not touch the state, and are served without the
+	// lock: a slow answer does not block the other requests.
+	if req.Method == http.MethodPost && path.Clean(req.URL.Path) == "/v1/chat/completions" {
+		f.handleCompletion(w, req)
+		return
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -471,19 +480,25 @@ func (f *FakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
 		}
 		ff.Workspaces = slices.DeleteFunc(ff.Workspaces, func(s string) bool { return s == ws })
 		writeJSON(w, 200, map[string]string{})
-	case req.Method == http.MethodPost && len(segs) == 3 && segs[0] == "v1" && segs[1] == "chat" && segs[2] == "completions":
-		// A non-streamed completion, enough for the stack to save an answer.
-		writeJSON(w, 200, map[string]interface{}{
-			"object": "chat.completion",
-			"choices": []map[string]interface{}{{
-				"index":         0,
-				"finish_reason": "stop",
-				"message":       map[string]string{"role": "assistant", "content": "fake answer"},
-			}},
-			"extra": `{"sources": []}`,
-		})
 	default:
 		f.t.Logf("fake openRAG: unhandled %s %s", req.Method, req.URL.Path)
 		writeJSON(w, 404, map[string]string{"error": "unhandled " + req.Method + " " + path.Clean(req.URL.Path)})
 	}
+}
+
+func (f *FakeOpenRAG) handleCompletion(w http.ResponseWriter, req *http.Request) {
+	if f.RAG != nil {
+		f.RAG(w, req)
+		return
+	}
+	// A non-streamed completion, enough for the stack to save an answer.
+	writeJSON(w, 200, map[string]interface{}{
+		"object": "chat.completion",
+		"choices": []map[string]interface{}{{
+			"index":         0,
+			"finish_reason": "stop",
+			"message":       map[string]string{"role": "assistant", "content": "fake answer"},
+		}},
+		"extra": `{"sources": []}`,
+	})
 }
