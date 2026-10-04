@@ -232,6 +232,9 @@ func actionFor(actions []ActionDefinition, name string) *ActionDefinition {
 type routeDecision struct {
 	Intent         string `json:"intent"`
 	NeedsDocuments bool   `json:"needs_documents"`
+	// confidence and documents are the confidence of the intent and the
+	// probability that the documents are needed, for a JEV decision model.
+	confidence, documents float64
 }
 
 // action is the name of the action the router picked, "" for a search.
@@ -325,6 +328,25 @@ func routerToolsPrompt(actions []ActionDefinition) string {
 // maxChars, then the previous turns are taken from the most recent while
 // they fit in maxTotal characters.
 func transcript(messages []ragMessage, maxChars, maxTotal int) string {
+	previous, last, ok := recentTurns(messages, maxChars, maxTotal)
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	if len(previous) > 0 {
+		b.WriteString("Conversation so far:\n")
+		for _, turn := range previous {
+			fmt.Fprintf(&b, "%s: %s\n", turn.Role, turn.Content)
+		}
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "Last user message:\n%s\n", last)
+	return b.String()
+}
+
+// recentTurns returns the user and assistant messages of the conversation,
+// cut like the transcript: the last message, then the previous turns that fit.
+func recentTurns(messages []ragMessage, maxChars, maxTotal int) (previous []ragMessage, last string, ok bool) {
 	var turns []ragMessage
 	for _, msg := range messages {
 		if msg.Role == UserRole || msg.Role == AssistantRole {
@@ -332,27 +354,19 @@ func transcript(messages []ragMessage, maxChars, maxTotal int) string {
 		}
 	}
 	if len(turns) == 0 {
-		return ""
+		return nil, "", false
 	}
-	last := truncate(turns[len(turns)-1].Content, maxChars)
+	last = truncate(turns[len(turns)-1].Content, maxChars)
 	budget := maxTotal - len([]rune(last))
-	var previous []string
 	for i := len(turns) - 2; i >= 0; i-- {
-		line := fmt.Sprintf("%s: %s\n", turns[i].Role, truncate(turns[i].Content, maxChars))
-		budget -= len([]rune(line))
+		turn := ragMessage{Role: turns[i].Role, Content: truncate(turns[i].Content, maxChars)}
+		budget -= len([]rune(fmt.Sprintf("%s: %s\n", turn.Role, turn.Content)))
 		if budget < 0 {
 			break
 		}
-		previous = append([]string{line}, previous...)
+		previous = append([]ragMessage{turn}, previous...)
 	}
-	var b strings.Builder
-	if len(previous) > 0 {
-		b.WriteString("Conversation so far:\n")
-		b.WriteString(strings.Join(previous, ""))
-		b.WriteString("\n")
-	}
-	fmt.Fprintf(&b, "Last user message:\n%s\n", last)
-	return b.String()
+	return previous, last, true
 }
 
 func truncate(s string, maxChars int) string {
@@ -368,6 +382,17 @@ func truncate(s string, maxChars int) string {
 // like function calling, instead of answering a JSON object.
 const routerTools = "tools"
 
+// routerJEV is the router mode of the config for a decision model of the JEV
+// family (System One): it answers typed questions with probabilities, a
+// choice for the intent and a yes or no for the documents, without
+// generating text.
+const routerJEV = "jev"
+
+// routerJEVGate is the JEV mode with a third question, whether the user
+// explicitly asks the assistant to do something now: when not, the message
+// is a search, whatever the choice of the intent.
+const routerJEVGate = "jev-gate"
+
 // routeQuery asks the LLM whether the last message of the conversation is a
 // search or one of the actions. On any failure, it answers a search.
 func routeQuery(ctx context.Context, inst *instance.Instance, messages []ragMessage, actions []ActionDefinition, override map[string]interface{}) (routeDecision, error) {
@@ -381,9 +406,12 @@ func route(ctx context.Context, inst *instance.Instance, mode string, messages [
 
 	var decision routeDecision
 	var err error
-	if mode == routerTools {
+	switch mode {
+	case routerTools:
 		decision, err = routeWithTools(ctx, inst, messages, actions, override)
-	} else {
+	case routerJEV, routerJEVGate:
+		decision, err = routeWithJEV(ctx, inst, messages, actions, override, mode == routerJEVGate)
+	default:
 		decision, err = routeWithSchema(ctx, inst, messages, actions, override)
 	}
 	if err != nil {
@@ -474,6 +502,140 @@ func routeWithTools(ctx context.Context, inst *instance.Instance, messages []rag
 		decision.NeedsDocuments = args.NeedsDocuments
 	}
 	return decision, nil
+}
+
+// routeWithJEV asks a JEV decision model two questions on the conversation:
+// the intent, as a choice between the search and the actions, and whether
+// the action needs the user's documents.
+func routeWithJEV(ctx context.Context, inst *instance.Instance, messages []ragMessage, actions []ActionDefinition, override map[string]interface{}, gate bool) (routeDecision, error) {
+	previous, last, ok := recentTurns(messages, 600, 4000)
+	if !ok {
+		return routeDecision{}, errors.New("no message")
+	}
+	conversation := make([]map[string]string, len(previous))
+	for i, turn := range previous {
+		conversation[i] = map[string]string{"role": turn.Role, "content": turn.Content}
+	}
+
+	intents := map[string]interface{}{}
+	var searches, withDocuments, withoutDocuments []string
+	for _, ex := range routerExamples(actions) {
+		switch {
+		case ex.intent == searchIntent:
+			searches = append(searches, ex.Message)
+		case ex.NeedsDocuments:
+			withDocuments = append(withDocuments, ex.Message)
+		default:
+			withoutDocuments = append(withoutDocuments, ex.Message)
+		}
+	}
+	intents[searchIntent] = map[string]interface{}{
+		"description": "answer the message from the user's documents. This is the default: questions, requests for information, " +
+			"summaries or explanations given in the chat, small talk, and questions about HOW to do something.",
+		"examples": searches,
+	}
+	for _, a := range actions {
+		criterion := map[string]interface{}{"description": strings.TrimSpace(a.Description)}
+		var examples []string
+		for _, ex := range a.Examples {
+			examples = append(examples, ex.Message)
+		}
+		if len(examples) > 0 {
+			criterion["examples"] = examples
+		}
+		intents[a.Name] = criterion
+	}
+	request := map[string]interface{}{
+		"state": map[string]interface{}{
+			"conversation":      conversation,
+			"last_user_message": last,
+		},
+		"questions": map[string]interface{}{
+			"intent": map[string]interface{}{
+				"type": "choice",
+				"instructions": "What should the assistant of the user do with the last user message? " +
+					"Choose an action only when the user explicitly asks the assistant to do it now. When in doubt, choose search.",
+				"criteria": intents,
+			},
+			"needs_documents": map[string]interface{}{
+				"type":         "noul",
+				"instructions": "Does what the user asks in the last message need information from the user's documents?",
+				"criteria": map[string]interface{}{
+					"true": map[string]interface{}{
+						"description": "anything about their organization, its rules and policies, their projects, clients, colleagues, " +
+							"meetings or files, even when the user does not say \"from my files\"",
+						"examples": withDocuments,
+					},
+					"false": map[string]interface{}{
+						"description": "made from the conversation or from the message itself, or a general subject that does not " +
+							"depend on the user's organization, like general best practices",
+						"examples": withoutDocuments,
+					},
+				},
+			},
+		},
+	}
+	if gate {
+		questions := request["questions"].(map[string]interface{})
+		questions["explicit_request"] = map[string]interface{}{
+			"type": "noul",
+			"instructions": "In the last message, does the user explicitly ask the assistant to do something now, " +
+				"like writing, creating, preparing or sending something?",
+			"criteria": map[string]interface{}{
+				"true": "a request or an order to the assistant, even politely phrased as a question (\"Peux-tu écrire…\")",
+				"false": "a question to get information, a question about HOW to do something or about what the assistant can do, " +
+					"a remark, a thank you, or small talk",
+			},
+		}
+	}
+	content, err := json.Marshal(request)
+	if err != nil {
+		return routeDecision{}, err
+	}
+	// The request is the content of the last message, the way the JEV
+	// models are served behind an OpenAI-compatible API.
+	payload := map[string]interface{}{
+		"messages": []ragMessage{{Role: UserRole, Content: string(content)}},
+		"stream":   false,
+	}
+	if override != nil {
+		payload["metadata"] = map[string]interface{}{"llm_override": override}
+	}
+	msg, err := complete(ctx, inst, payload)
+	if err != nil {
+		return routeDecision{}, err
+	}
+	var answer struct {
+		Answers struct {
+			Intent struct {
+				Choice     string  `json:"choice"`
+				Confidence float64 `json:"confidence"`
+			} `json:"intent"`
+			NeedsDocuments struct {
+				Noul float64 `json:"noul"`
+			} `json:"needs_documents"`
+			ExplicitRequest *struct {
+				Noul float64 `json:"noul"`
+			} `json:"explicit_request"`
+		} `json:"answers"`
+	}
+	if err := decodeJSONObject(msg.Content, &answer); err != nil {
+		return routeDecision{}, err
+	}
+	if gate {
+		if answer.Answers.ExplicitRequest == nil {
+			return routeDecision{}, errors.New("no answer to explicit_request")
+		}
+		if answer.Answers.ExplicitRequest.Noul < 0.5 {
+			return routeDecision{Intent: searchIntent, confidence: answer.Answers.ExplicitRequest.Noul}, nil
+		}
+	}
+	return routeDecision{
+		Intent:         answer.Answers.Intent.Choice,
+		NeedsDocuments: answer.Answers.NeedsDocuments.Noul >= 0.5,
+		confidence:     answer.Answers.Intent.Confidence,
+		documents:      answer.Answers.NeedsDocuments.Noul,
+	}, nil
 }
 
 func functionTool(name, description string, parameters map[string]interface{}) map[string]interface{} {

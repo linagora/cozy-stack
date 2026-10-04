@@ -268,6 +268,52 @@ func TestQueryRoutesWithTools(t *testing.T) {
 	assert.Contains(t, route.Prompt(), "Last user message:\nÉcris un mail à Paul pour faire le point")
 }
 
+func TestQueryRoutesWithJEV(t *testing.T) {
+	r := newRAGTest(t)
+	server := config.GetConfig().RAGServers[config.DefaultInstanceContext]
+	server.Router = "jev"
+	config.GetConfig().RAGServers[config.DefaultInstanceContext] = server
+	var request struct {
+		State struct {
+			LastUserMessage string `json:"last_user_message"`
+		} `json:"state"`
+		Questions struct {
+			Intent struct {
+				Type     string                     `json:"type"`
+				Criteria map[string]json.RawMessage `json:"criteria"`
+			} `json:"intent"`
+			NeedsDocuments struct {
+				Type string `json:"type"`
+			} `json:"needs_documents"`
+		} `json:"questions"`
+	}
+	r.fake.LLM = func(call rag.LLMCall) string {
+		if strings.HasPrefix(call.Prompt(), `{"questions"`) {
+			require.NoError(t, json.Unmarshal([]byte(call.Prompt()), &request))
+			return `{"model": "Decision-2.0-Nox-4B", "answers": {` +
+				`"intent": {"type": "choice", "choice": "create_note", "confidence": 0.9}, ` +
+				`"needs_documents": {"type": "noul", "noul": 0.2}}}`
+		}
+		return "# Courses\n\n- lait\n- pain"
+	}
+	query := newRouterConversation(t, r, "conversation-jev", "Crée une note de courses : lait, pain", testActions(t))
+	events := subscribeRouterEvents(t, r)
+
+	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	assert.Equal(t, []string{"delta", "action", "done"}, objects(events()))
+	assert.Equal(t, "Crée une note de courses : lait, pain", request.State.LastUserMessage)
+	assert.Equal(t, "choice", request.Questions.Intent.Type)
+	var intents []string
+	for name := range request.Questions.Intent.Criteria {
+		intents = append(intents, name)
+	}
+	assert.ElementsMatch(t, []string{"search", "create_note", "create_document", "draft_email"}, intents)
+	assert.Equal(t, "noul", request.Questions.NeedsDocuments.Type)
+	answer := lastMessage(t, r, query.DocID)
+	require.NotNil(t, answer.Action)
+	assert.Equal(t, "create_note", answer.Action.Name)
+}
+
 func TestQueryWritesANoteFromTheConversation(t *testing.T) {
 	r := newRAGTest(t)
 	var writing rag.LLMCall
