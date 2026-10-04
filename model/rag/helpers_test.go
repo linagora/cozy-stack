@@ -127,6 +127,9 @@ type FakeOpenRAG struct {
 	// model, the direct calls to the LLM of the chat router. Without it,
 	// the router is told the message is a search.
 	LLM func(call LLMCall) string
+	// LLMTool answers the direct calls with tools: the name of the tool to
+	// call and its arguments. Without it, the "search" tool is called.
+	LLMTool func(call LLMCall) (name, arguments string)
 	// RAG, when set, answers the completions of a partition in place of
 	// the canned non-streamed answer.
 	RAG http.HandlerFunc
@@ -148,6 +151,12 @@ type LLMCall struct {
 			Name string `json:"name"`
 		} `json:"json_schema"`
 	} `json:"response_format"`
+	Tools []struct {
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	} `json:"tools"`
+	ToolChoice string `json:"tool_choice"`
 }
 
 // Step is the name of the JSON schema of the call.
@@ -556,11 +565,34 @@ func (f *FakeOpenRAG) handleCompletion(w http.ResponseWriter, req *http.Request)
 		})
 		return
 	}
+	var call LLMCall
+	_ = json.Unmarshal(body, &call)
+	if payload.Model == "" && len(call.Tools) > 0 {
+		name, arguments := "search", "{}"
+		if f.LLMTool != nil {
+			name, arguments = f.LLMTool(call)
+		}
+		writeJSON(w, 200, map[string]interface{}{
+			"object": "chat.completion",
+			"choices": []map[string]interface{}{{
+				"index":         0,
+				"finish_reason": "tool_calls",
+				"message": map[string]interface{}{
+					"role":    "assistant",
+					"content": "",
+					"tool_calls": []map[string]interface{}{{
+						"id":       "call-1",
+						"type":     "function",
+						"function": map[string]string{"name": name, "arguments": arguments},
+					}},
+				},
+			}},
+		})
+		return
+	}
 	if payload.Model == "" {
 		content := `{"intent": "search", "needs_documents": false}`
 		if f.LLM != nil {
-			var call LLMCall
-			_ = json.Unmarshal(body, &call)
 			content = f.LLM(call)
 		}
 		if payload.Stream {

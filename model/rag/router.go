@@ -268,24 +268,53 @@ func routerPrompt(actions []ActionDefinition) string {
 	b.WriteString("It is false for \"search\", for an action made from the conversation or from the message itself, ")
 	b.WriteString("and for a general subject that does not depend on the user's organization, like general best practices.\n\n")
 	b.WriteString("Examples:\n")
-	examples := []struct {
-		ActionExample
-		intent string
-	}{
+	for _, ex := range routerExamples(actions) {
+		decision, _ := json.Marshal(routeDecision{Intent: ex.intent, NeedsDocuments: ex.NeedsDocuments})
+		fmt.Fprintf(&b, "User: %q\n%s\n", ex.Message, decision)
+	}
+	return b.String()
+}
+
+type routerExample struct {
+	ActionExample
+	intent string
+}
+
+// routerExamples are the examples of the router prompt: two searches, then
+// the examples of the actions.
+func routerExamples(actions []ActionDefinition) []routerExample {
+	examples := []routerExample{
 		{ActionExample{Message: "What does our contract with Acme say about penalties?"}, searchIntent},
 		{ActionExample{Message: "Comment je partage un dossier ?"}, searchIntent},
 	}
 	for _, a := range actions {
 		for _, ex := range a.Examples {
-			examples = append(examples, struct {
-				ActionExample
-				intent string
-			}{ex, a.Name})
+			examples = append(examples, routerExample{ex, a.Name})
 		}
 	}
-	for _, ex := range examples {
-		decision, _ := json.Marshal(routeDecision{Intent: ex.intent, NeedsDocuments: ex.NeedsDocuments})
-		fmt.Fprintf(&b, "User: %q\n%s\n", ex.Message, decision)
+	return examples
+}
+
+// routerToolsPrompt is the router prompt when the LLM calls a tool: the
+// descriptions of the actions are in the tools.
+func routerToolsPrompt(actions []ActionDefinition) string {
+	var b strings.Builder
+	b.WriteString("You are the router of the Twake assistant. Read the last user message of the conversation and call the one tool that handles it.\n\n")
+	b.WriteString("\"search\" is the default: questions, requests for information, summaries or explanations given in the chat, small talk, ")
+	b.WriteString("and questions about HOW to do something. ")
+	b.WriteString("Call another tool only when the user explicitly asks the assistant to do it now. When in doubt, call \"search\".\n")
+	b.WriteString("\nThe needs_documents argument of the other tools is true when the action may need information from the user's documents: ")
+	b.WriteString("anything about their organization, its rules and policies, their projects, clients, colleagues, meetings or files, ")
+	b.WriteString("even when the user does not say \"from my files\". ")
+	b.WriteString("It is false for an action made from the conversation or from the message itself, ")
+	b.WriteString("and for a general subject that does not depend on the user's organization, like general best practices.\n\n")
+	b.WriteString("Examples:\n")
+	for _, ex := range routerExamples(actions) {
+		if ex.intent == searchIntent {
+			fmt.Fprintf(&b, "User: %q\nsearch()\n", ex.Message)
+		} else {
+			fmt.Fprintf(&b, "User: %q\n%s({\"needs_documents\":%t})\n", ex.Message, ex.intent, ex.NeedsDocuments)
+		}
 	}
 	return b.String()
 }
@@ -335,13 +364,44 @@ func truncate(s string, maxChars int) string {
 	return string(runes[:maxChars]) + " [...]"
 }
 
+// routerTools is the router mode of the config where the LLM calls a tool,
+// like function calling, instead of answering a JSON object.
+const routerTools = "tools"
+
 // routeQuery asks the LLM whether the last message of the conversation is a
 // search or one of the actions. On any failure, it answers a search.
 func routeQuery(ctx context.Context, inst *instance.Instance, messages []ragMessage, actions []ActionDefinition, override map[string]interface{}) (routeDecision, error) {
+	return route(ctx, inst, inst.RAGServer().Router, messages, actions, override)
+}
+
+func route(ctx context.Context, inst *instance.Instance, mode string, messages []ragMessage, actions []ActionDefinition, override map[string]interface{}) (routeDecision, error) {
 	search := routeDecision{Intent: searchIntent}
 	ctx, cancel := context.WithTimeout(ctx, routerTimeout)
 	defer cancel()
 
+	var decision routeDecision
+	var err error
+	if mode == routerTools {
+		decision, err = routeWithTools(ctx, inst, messages, actions, override)
+	} else {
+		decision, err = routeWithSchema(ctx, inst, messages, actions, override)
+	}
+	if err != nil {
+		return search, err
+	}
+	if decision.Intent == searchIntent {
+		decision.NeedsDocuments = false
+		return decision, nil
+	}
+	if actionFor(actions, decision.Intent) == nil {
+		return search, fmt.Errorf("unknown intent %q", decision.Intent)
+	}
+	return decision, nil
+}
+
+// routeWithSchema asks the LLM for a JSON object with the intent, in a closed
+// list, and needs_documents.
+func routeWithSchema(ctx context.Context, inst *instance.Instance, messages []ragMessage, actions []ActionDefinition, override map[string]interface{}) (routeDecision, error) {
 	intents := []string{searchIntent}
 	for _, a := range actions {
 		intents = append(intents, a.Name)
@@ -357,18 +417,74 @@ func routeQuery(ctx context.Context, inst *instance.Instance, messages []ragMess
 	}
 	var decision routeDecision
 	err := completeJSON(ctx, inst, routerPrompt(actions), transcript(messages, 600, 4000), "route", schema, 32, override, &decision)
+	return decision, err
+}
+
+// routeWithTools asks the LLM to call one tool: "search" without argument,
+// or an action with its needs_documents argument.
+func routeWithTools(ctx context.Context, inst *instance.Instance, messages []ragMessage, actions []ActionDefinition, override map[string]interface{}) (routeDecision, error) {
+	tools := []map[string]interface{}{
+		functionTool(searchIntent, "answer the message from the user's documents", map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{},
+		}),
+	}
+	for _, a := range actions {
+		tools = append(tools, functionTool(a.Name, strings.TrimSpace(a.Description), map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"needs_documents": map[string]interface{}{
+					"type":        "boolean",
+					"description": "whether the action may need information from the user's documents",
+				},
+			},
+			"required":             []string{"needs_documents"},
+			"additionalProperties": false,
+		}))
+	}
+	payload := map[string]interface{}{
+		"messages": []ragMessage{
+			{Role: SystemRole, Content: routerToolsPrompt(actions)},
+			{Role: UserRole, Content: transcript(messages, 600, 4000)},
+		},
+		"stream":      false,
+		"temperature": 0,
+		"max_tokens":  32,
+		"tools":       tools,
+		"tool_choice": "required",
+	}
+	if override != nil {
+		payload["metadata"] = map[string]interface{}{"llm_override": override}
+	}
+	msg, err := complete(ctx, inst, payload)
 	if err != nil {
-		return search, err
+		return routeDecision{}, err
 	}
-	for _, intent := range intents {
-		if decision.Intent == intent {
-			if intent == searchIntent {
-				decision.NeedsDocuments = false
-			}
-			return decision, nil
+	if len(msg.ToolCalls) == 0 {
+		return routeDecision{}, fmt.Errorf("no tool call in %q", truncate(msg.Content, 200))
+	}
+	call := msg.ToolCalls[0].Function
+	decision := routeDecision{Intent: call.Name}
+	if strings.TrimSpace(call.Arguments) != "" {
+		var args struct {
+			NeedsDocuments bool `json:"needs_documents"`
 		}
+		if err := decodeJSONObject(call.Arguments, &args); err != nil {
+			return routeDecision{}, err
+		}
+		decision.NeedsDocuments = args.NeedsDocuments
 	}
-	return search, fmt.Errorf("unknown intent %q", decision.Intent)
+	return decision, nil
+}
+
+func functionTool(name, description string, parameters map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "function",
+		"function": map[string]interface{}{
+			"name":        name,
+			"description": description,
+			"parameters":  parameters,
+		},
+	}
 }
 
 // checkDocuments makes sure that an action uses the user's documents when
@@ -674,33 +790,53 @@ func completeJSON(ctx context.Context, inst *instance.Instance, system, user, na
 	if override != nil {
 		payload["metadata"] = map[string]interface{}{"llm_override": override}
 	}
-	body, err := json.Marshal(payload)
+	msg, err := complete(ctx, inst, payload)
 	if err != nil {
 		return err
 	}
+	return decodeJSONObject(msg.Content, out)
+}
+
+// completionMessage is the message of a completion of the LLM: a text, or
+// tool calls.
+type completionMessage struct {
+	Content   string `json:"content"`
+	ToolCalls []struct {
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
+}
+
+// complete sends a completion request to the LLM behind openRAG, without
+// retrieval, and returns its message.
+func complete(ctx context.Context, inst *instance.Instance, payload map[string]interface{}) (*completionMessage, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
 	res, err := CallRAGQueryContext(ctx, inst, http.MethodPost, body, "v1/chat/completions", echo.MIMEApplicationJSON)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, res.Body)
-		return fmt.Errorf("POST status code: %d", res.StatusCode)
+		return nil, fmt.Errorf("POST status code: %d", res.StatusCode)
 	}
 	var completion struct {
 		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
+			Message completionMessage `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&completion); err != nil {
-		return err
+		return nil, err
 	}
 	if len(completion.Choices) == 0 {
-		return errors.New("no completion")
+		return nil, errors.New("no completion")
 	}
-	return decodeJSONObject(completion.Choices[0].Message.Content, out)
+	return &completion.Choices[0].Message, nil
 }
 
 // decodeJSONObject decodes the JSON object of an LLM answer, which may be

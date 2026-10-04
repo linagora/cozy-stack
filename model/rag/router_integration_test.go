@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/rag"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/metadata"
@@ -235,6 +236,36 @@ func TestQueryProposesAnActionOfTheApp(t *testing.T) {
 	action := published[0]["action"].(*rag.ChatAction)
 	assert.Equal(t, map[string]interface{}{"title": "Relancer Acme", "due": "2026-10-03", "assignee": ""}, action.Params,
 		"the assignee the user did not write is dropped")
+}
+
+func TestQueryRoutesWithTools(t *testing.T) {
+	r := newRAGTest(t)
+	server := config.GetConfig().RAGServers[config.DefaultInstanceContext]
+	server.Router = "tools"
+	config.GetConfig().RAGServers[config.DefaultInstanceContext] = server
+	var route rag.LLMCall
+	r.fake.LLMTool = func(call rag.LLMCall) (string, string) {
+		route = call
+		return "draft_email", `{"needs_documents": false}`
+	}
+	r.fake.LLM = func(call rag.LLMCall) string {
+		return `{"to": ["Paul"], "subject": "Point", "body": "Bonjour Paul"}`
+	}
+	query := newRouterConversation(t, r, "conversation-tools", "Écris un mail à Paul pour faire le point", testActions(t))
+	events := subscribeRouterEvents(t, r)
+
+	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	published := events()
+	require.Equal(t, []string{"action", "done"}, objects(published))
+	assert.Equal(t, "draft_email", published[0]["action"].(*rag.ChatAction).Name)
+	assert.Equal(t, "required", route.ToolChoice)
+	var tools []string
+	for _, tool := range route.Tools {
+		tools = append(tools, tool.Function.Name)
+	}
+	assert.Equal(t, []string{"search", "create_note", "create_document", "draft_email"}, tools)
+	assert.Contains(t, route.Prompt(), `User: "Fais-en une note"`+"\n"+`create_note({"needs_documents":false})`)
+	assert.Contains(t, route.Prompt(), "Last user message:\nÉcris un mail à Paul pour faire le point")
 }
 
 func TestQueryWritesANoteFromTheConversation(t *testing.T) {

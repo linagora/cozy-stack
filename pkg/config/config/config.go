@@ -307,6 +307,9 @@ type Office struct {
 type RAGServer struct {
 	URL    string
 	APIKey string
+	// Router is how the chat router asks the LLM for its decision: "tools"
+	// for native function calling, else a JSON schema.
+	Router string
 }
 
 // CommonSettings contains the configuration for common settings for a context
@@ -1412,9 +1415,11 @@ func makeRAGServers(v *viper.Viper) (map[string]RAGServer, error) {
 		}
 		url, _ := m["url"].(string)
 		key, _ := m["api_key"].(string)
+		router, _ := m["router"].(string)
 		servers[k] = RAGServer{
 			URL:    url,
 			APIKey: key,
+			Router: router,
 		}
 	}
 	return servers, nil
