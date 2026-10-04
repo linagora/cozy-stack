@@ -17,15 +17,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRouterEval compares the router modes with a real openRAG: each case is
-// routed by both modes, several times, then the documents are checked like
-// the stack does when an action is said not to need them.
+// TestRouterEval compares router configurations with a real openRAG: each
+// case is routed by every configuration, several times, then the documents
+// are checked like the stack does when an action is said not to need them.
 //
 //	ROUTER_EVAL_URL, ROUTER_EVAL_KEY: the openRAG server
 //	ROUTER_EVAL_DOMAIN: the partition of the documents
 //	ROUTER_EVAL_CASES: the JSON file of the cases
+//	ROUTER_EVAL_CONFIGS: a JSON file of the configurations, a list of
+//	  {"name", "mode", "override"}, override being the llm_override of
+//	  openRAG (the JSON schema and tools modes with its default LLM)
 //	ROUTER_EVAL_OUT: the JSON file of the results
-//	ROUTER_EVAL_REPS: the number of runs of each case in each mode (3)
+//	ROUTER_EVAL_REPS: the number of runs of each case in each configuration (3)
 //
 //	go test -tags routereval -run TestRouterEval -v -timeout 60m ./model/rag/
 func TestRouterEval(t *testing.T) {
@@ -52,22 +55,39 @@ func TestRouterEval(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(raw, &cases))
 
+	configs := []struct {
+		Name     string                 `json:"name"`
+		Mode     string                 `json:"mode"`
+		Override map[string]interface{} `json:"override,omitempty"`
+	}{{Name: "schema", Mode: "schema"}, {Name: routerTools, Mode: routerTools}}
+	if path := os.Getenv("ROUTER_EVAL_CONFIGS"); path != "" {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(raw, &configs))
+	}
+
 	type run struct {
-		Case     int     `json:"case"`
-		Mode     string  `json:"mode"`
-		Rep      int     `json:"rep"`
-		Intent   string  `json:"intent"`
-		Docs     bool    `json:"docs"`
-		Checked  bool    `json:"checked"`
-		Error    string  `json:"error,omitempty"`
-		Seconds  float64 `json:"seconds"`
-		IntentOK bool    `json:"intent_ok"`
-		DocsOK   *bool   `json:"docs_ok,omitempty"`
-		FinalOK  bool    `json:"final_ok"`
+		Case    int     `json:"case"`
+		Mode    string  `json:"mode"`
+		Rep     int     `json:"rep"`
+		Intent  string  `json:"intent"`
+		Docs    bool    `json:"docs"`
+		Checked bool    `json:"checked"`
+		Error   string  `json:"error,omitempty"`
+		Seconds float64 `json:"seconds"`
+		// Confidence and Documents come from a JEV decision model
+		Confidence float64 `json:"confidence,omitempty"`
+		Documents  float64 `json:"documents,omitempty"`
+		IntentOK   bool    `json:"intent_ok"`
+		DocsOK     *bool   `json:"docs_ok,omitempty"`
+		FinalOK    bool    `json:"final_ok"`
 	}
 	var runs []run
 	relevant := map[string]bool{}
-	modes := []string{"schema", routerTools}
+	var modes []string
+	for _, c := range configs {
+		modes = append(modes, c.Name)
+	}
 	for rep := 0; rep < reps; rep++ {
 		for i, c := range cases {
 			var messages []ragMessage
@@ -79,15 +99,13 @@ func TestRouterEval(t *testing.T) {
 				messages = append(messages, ragMessage{Role: role, Content: content})
 			}
 			last := c.Messages[len(c.Messages)-1]
-			// Both modes run in turn, in another order on each run
-			order := modes
-			if (rep+i)%2 == 1 {
-				order = []string{modes[1], modes[0]}
-			}
-			for _, mode := range order {
+			// The configurations run in turn, from another one on each case
+			for k := range configs {
+				cfg := configs[(k+rep+i)%len(configs)]
 				started := time.Now()
-				d, err := route(context.Background(), inst, mode, messages, actions, nil)
-				r := run{Case: i, Mode: mode, Rep: rep, Intent: d.Intent, Docs: d.NeedsDocuments, Seconds: time.Since(started).Seconds()}
+				d, err := route(context.Background(), inst, cfg.Mode, messages, actions, cfg.Override)
+				r := run{Case: i, Mode: cfg.Name, Rep: rep, Intent: d.Intent, Docs: d.NeedsDocuments, Seconds: time.Since(started).Seconds(),
+					Confidence: d.confidence, Documents: d.documents}
 				if err != nil {
 					r.Error = err.Error()
 				}
@@ -109,7 +127,7 @@ func TestRouterEval(t *testing.T) {
 				}
 				r.FinalOK = r.IntentOK && (c.Docs == nil || c.Expected == searchIntent || final == *c.Docs)
 				runs = append(runs, r)
-				fmt.Printf("rep %d case %2d %-6s %-16s docs=%-5t checked=%-5t %.2fs %s %s\n", rep, i, mode, r.Intent, r.Docs, r.Checked, r.Seconds, mark(r.FinalOK), r.Error)
+				fmt.Printf("rep %d case %2d %-8s %-16s docs=%-5t checked=%-5t %.2fs %s conf=%.2f pdocs=%.2f %s\n", rep, i, cfg.Name, r.Intent, r.Docs, r.Checked, r.Seconds, mark(r.FinalOK), r.Confidence, r.Documents, r.Error)
 			}
 		}
 	}
@@ -141,7 +159,7 @@ func TestRouterEval(t *testing.T) {
 			seconds = append(seconds, r.Seconds)
 		}
 		sort.Float64s(seconds)
-		fmt.Printf("%-6s intent %d/%d, needs_documents %d/%d, after the check %d/%d, errors %d, latency median %.2fs p90 %.2fs max %.2fs\n",
+		fmt.Printf("%-8s intent %d/%d, needs_documents %d/%d, after the check %d/%d, errors %d, latency median %.2fs p90 %.2fs max %.2fs\n",
 			mode, intentOK, total, docsOK, docsTotal, finalOK, total, errs,
 			seconds[len(seconds)/2], seconds[len(seconds)*9/10], seconds[len(seconds)-1])
 	}
@@ -158,7 +176,7 @@ func TestRouterEval(t *testing.T) {
 				}
 			}
 			if wrong {
-				line += fmt.Sprintf("\n    %-6s%s", mode, outcomes)
+				line += fmt.Sprintf("\n    %-8s%s", mode, outcomes)
 			}
 		}
 		if line != "" {
