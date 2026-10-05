@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/cozy/cozy-stack/client/request"
+	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/spf13/cobra"
 )
 
@@ -228,11 +229,46 @@ check via the flags.
 	},
 }
 
+var checkEmailsCmd = &cobra.Command{
+	Use:   "emails",
+	Short: "Check the emails of all the instances",
+	Long: `
+This command checks that the email of each instance matches its
+settings email. The drifts are logged by the stack, not fixed.
+`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ac := newAdminClient()
+		res, err := ac.Req(&request.Options{
+			Method: "POST",
+			Path:   "/instances/checks/emails",
+		})
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+
+		var check lifecycle.EmailsCheck
+		if err := json.NewDecoder(res.Body).Decode(&check); err != nil {
+			return err
+		}
+		for _, e := range check.Errors {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", e)
+		}
+		fmt.Fprintf(os.Stdout, "Scanned: %d\nDrifts: %d\nErrors: %d\n",
+			check.Scanned, check.Drifts, len(check.Errors))
+		if check.Drifts > 0 || len(check.Errors) > 0 {
+			return fmt.Errorf("%d drifts and %d errors", check.Drifts, len(check.Errors))
+		}
+		return nil
+	},
+}
+
 func init() {
 	checkCmdGroup.AddCommand(checkFSCmd)
 	checkCmdGroup.AddCommand(checkTriggers)
 	checkCmdGroup.AddCommand(checkSharedCmd)
 	checkCmdGroup.AddCommand(checkSharingsCmd)
+	checkCmdGroup.AddCommand(checkEmailsCmd)
 	checkFSCmd.Flags().BoolVar(&flagCheckFSIndexIntegrity, "index-integrity", false, "Check the index integrity only")
 	checkFSCmd.Flags().BoolVar(&flagCheckFSFilesConsistensy, "files-consistency", false, "Check the files consistency only (between CouchDB and Swift)")
 	checkFSCmd.Flags().BoolVar(&flagCheckFSFailFast, "fail-fast", false, "Stop the FSCK on the first error")
