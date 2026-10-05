@@ -550,9 +550,8 @@ func (s *Sharing) SendAnswer(inst *instance.Instance, state string) error {
 	})
 }
 
-// markSenderContactTrusted keeps contact-based trust for external sharers.
-// Organization members are trusted through their instances and need no local
-// contact when a sharing is answered.
+// markSenderContactTrusted trusts the sender's contact, except for members of
+// the same organization, who need no contact.
 func markSenderContactTrusted(inst *instance.Instance, sender *Member) {
 	options := config.GetSharingConfig(inst.ContextName)
 	if !options.AutoAcceptTrustedContacts || sender == nil || sender.Email == "" || isSameOrganizationMember(inst, sender) {

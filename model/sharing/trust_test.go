@@ -221,33 +221,39 @@ func TestIsTrustedMember(t *testing.T) {
 
 	t.Run("organization membership", func(t *testing.T) {
 		prevDefault := cfg.Contexts[config.DefaultInstanceContext]
-		cfg.Contexts[config.DefaultInstanceContext] = map[string]interface{}{
-			"common_contacts": true,
-			"sharing": map[string]interface{}{
-				"auto_accept_trusted": true,
-			},
+		prevOrgID := inst.OrgID
+		t.Cleanup(func() {
+			cfg.Contexts[config.DefaultInstanceContext] = prevDefault
+			inst.OrgID = prevOrgID
+		})
+		setContext := func(commonContacts, autoAccept bool) {
+			cfg.Contexts[config.DefaultInstanceContext] = map[string]interface{}{
+				"common_contacts": commonContacts,
+				"sharing":         map[string]interface{}{"auto_accept_trusted": autoAccept},
+			}
 		}
-		t.Cleanup(func() { cfg.Contexts[config.DefaultInstanceContext] = prevDefault })
 
-		inst.OrgID = "org-one"
-		senderSetup := testutils.NewSetup(t, t.Name()+"_sender")
-		sender := senderSetup.GetTestInstance(&lifecycle.Options{OrgID: "org-one"})
+		sender := testutils.NewSetup(t, t.Name()+"_sender").
+			GetTestInstance(&lifecycle.Options{OrgID: "org-one"})
 		member := &Member{Instance: sender.PageURL("", nil)}
-		require.True(t, IsTrustedMember(inst, member))
-		cfg.Contexts[config.DefaultInstanceContext].(map[string]interface{})["sharing"] = map[string]interface{}{}
-		require.False(t, IsTrustedMember(inst, member))
-		cfg.Contexts[config.DefaultInstanceContext].(map[string]interface{})["sharing"] = map[string]interface{}{"auto_accept_trusted": true}
-
-		inst.OrgID = "org-two"
-		require.False(t, IsTrustedMember(inst, member))
-		inst.OrgID = ""
-		require.False(t, IsTrustedMember(inst, member))
 		inst.OrgID = "org-one"
+
+		setContext(true, true)
+		require.True(t, IsTrustedMember(inst, member))
 		require.False(t, IsTrustedMember(inst, &Member{Instance: "https://unknown.example.net"}))
 		require.False(t, IsTrustedMember(inst, &Member{}))
 
-		cfg.Contexts[config.DefaultInstanceContext].(map[string]interface{})["common_contacts"] = false
-		require.False(t, IsTrustedMember(inst, member))
+		setContext(true, false)
+		require.False(t, IsTrustedMember(inst, member), "auto accept is off")
+
+		setContext(false, true)
+		require.False(t, IsTrustedMember(inst, member), "common contacts are off")
+
+		setContext(true, true)
+		inst.OrgID = "org-two"
+		require.False(t, IsTrustedMember(inst, member), "other organization")
+		inst.OrgID = ""
+		require.False(t, IsTrustedMember(inst, member), "no organization")
 	})
 }
 

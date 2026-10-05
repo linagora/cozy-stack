@@ -67,27 +67,18 @@ func IsTrustedMember(inst *instance.Instance, member *Member) bool {
 	return false
 }
 
-// isSameOrganizationMember resolves the sender from its instance URL. Trusting
-// the URL's hostname alone would let a sender claim another organization's ID.
+// isSameOrganizationMember compares the OrgID of the sender's instance on this
+// stack. A spoofed URL gains nothing: the answer is sent to that URL.
 func isSameOrganizationMember(inst *instance.Instance, member *Member) bool {
-	if inst == nil || member == nil || inst.OrgID == "" {
+	if inst == nil || member == nil || inst.OrgID == "" || !inst.HasCommonContacts() {
 		return false
 	}
-	ctx, ok := inst.SettingsContext()
-	if !ok {
-		return false
-	}
-	enabled, _ := ctx["common_contacts"].(bool)
-	if !enabled {
-		return false
-	}
-
 	host := utils.ExtractInstanceHost(member.Instance)
 	if host == "" {
 		return false
 	}
 	sender, err := instance.Get(host)
-	return err == nil && sender.OrgID != "" && sender.OrgID == inst.OrgID
+	return err == nil && sender.OrgID == inst.OrgID
 }
 
 // isTrustedContact checks if a member is marked as a trusted contact
