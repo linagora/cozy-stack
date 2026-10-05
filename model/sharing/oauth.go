@@ -531,44 +531,8 @@ func (s *Sharing) SendAnswer(inst *instance.Instance, state string) error {
 	s.Active = true
 	s.Initial = s.NbFiles > 0
 
-	options := config.GetSharingConfig(inst.ContextName)
-	// Mark the sender's contact as trusted since we accepted their sharing
-	if options.AutoAcceptTrustedContacts && len(s.Members) > 0 && s.Members[0].Email != "" {
-		c, err := contact.FindByEmail(inst, s.Members[0].Email)
-		if err != nil {
-			// Contact doesn't exist, create it using the standardized method
-			c, err = contact.Create(inst, contact.CreateOptions{
-				Email:   s.Members[0].Email,
-				Name:    s.Members[0].Name,
-				CozyURL: s.Members[0].Instance,
-			})
-			if err != nil {
-				if couchdb.IsConflictError(err) {
-					c, err = contact.FindByEmail(inst, s.Members[0].Email)
-					if err != nil {
-						inst.Logger().WithNamespace("sharing").
-							Debugf("Contact creation conflict and retry failed: %s", err)
-						c = nil
-					}
-				} else {
-					inst.Logger().WithNamespace("sharing").
-						Warnf("Could not create contact for sender: %s", err)
-				}
-			} else {
-				inst.Logger().WithNamespace("sharing").
-					Infof("Created contact for sender %s", s.Members[0].Email)
-			}
-		}
-
-		if c != nil && !c.IsTrusted() {
-			if err := c.MarkAsTrusted(inst); err != nil {
-				inst.Logger().WithNamespace("sharing").
-					Warnf("Could not mark contact as trusted: %s", err)
-			} else {
-				inst.Logger().WithNamespace("sharing").
-					Infof("Marked contact %s as trusted after accepting sharing", s.Members[0].Email)
-			}
-		}
+	if len(s.Members) > 0 {
+		markSenderContactTrusted(inst, &s.Members[0])
 	}
 
 	return updateSharingWithConflictRetry(inst, s, 1, func(latest *Sharing) bool {
@@ -584,6 +548,52 @@ func (s *Sharing) SendAnswer(inst *instance.Instance, state string) error {
 		}
 		return false
 	})
+}
+
+// markSenderContactTrusted keeps contact-based trust for external sharers.
+// Organization members are trusted through their instances and need no local
+// contact when a sharing is answered.
+func markSenderContactTrusted(inst *instance.Instance, sender *Member) {
+	options := config.GetSharingConfig(inst.ContextName)
+	if !options.AutoAcceptTrustedContacts || sender == nil || sender.Email == "" || isSameOrganizationMember(inst, sender) {
+		return
+	}
+
+	c, err := contact.FindByEmail(inst, sender.Email)
+	if err != nil {
+		// Contact doesn't exist, create it using the standardized method
+		c, err = contact.Create(inst, contact.CreateOptions{
+			Email:   sender.Email,
+			Name:    sender.Name,
+			CozyURL: sender.Instance,
+		})
+		if err != nil {
+			if couchdb.IsConflictError(err) {
+				c, err = contact.FindByEmail(inst, sender.Email)
+				if err != nil {
+					inst.Logger().WithNamespace("sharing").
+						Debugf("Contact creation conflict and retry failed: %s", err)
+					c = nil
+				}
+			} else {
+				inst.Logger().WithNamespace("sharing").
+					Warnf("Could not create contact for sender: %s", err)
+			}
+		} else {
+			inst.Logger().WithNamespace("sharing").
+				Infof("Created contact for sender %s", sender.Email)
+		}
+	}
+
+	if c != nil && !c.IsTrusted() {
+		if err := c.MarkAsTrusted(inst); err != nil {
+			inst.Logger().WithNamespace("sharing").
+				Warnf("Could not mark contact as trusted: %s", err)
+		} else {
+			inst.Logger().WithNamespace("sharing").
+				Infof("Marked contact %s as trusted after accepting sharing", sender.Email)
+		}
+	}
 }
 
 // ProcessAnswer takes somes credentials and update the sharing with those.

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/contact"
+	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/tests/testutils"
@@ -217,4 +218,82 @@ func TestIsTrustedMember(t *testing.T) {
 			require.False(t, IsTrustedMember(inst, member))
 		})
 	})
+
+	t.Run("organization membership", func(t *testing.T) {
+		prevDefault := cfg.Contexts[config.DefaultInstanceContext]
+		cfg.Contexts[config.DefaultInstanceContext] = map[string]interface{}{
+			"common_contacts": true,
+			"sharing": map[string]interface{}{
+				"auto_accept_trusted": true,
+			},
+		}
+		t.Cleanup(func() { cfg.Contexts[config.DefaultInstanceContext] = prevDefault })
+
+		inst.OrgID = "org-one"
+		senderSetup := testutils.NewSetup(t, t.Name()+"_sender")
+		sender := senderSetup.GetTestInstance(&lifecycle.Options{OrgID: "org-one"})
+		member := &Member{Instance: sender.PageURL("", nil)}
+		require.True(t, IsTrustedMember(inst, member))
+		cfg.Contexts[config.DefaultInstanceContext].(map[string]interface{})["sharing"] = map[string]interface{}{}
+		require.False(t, IsTrustedMember(inst, member))
+		cfg.Contexts[config.DefaultInstanceContext].(map[string]interface{})["sharing"] = map[string]interface{}{"auto_accept_trusted": true}
+
+		inst.OrgID = "org-two"
+		require.False(t, IsTrustedMember(inst, member))
+		inst.OrgID = ""
+		require.False(t, IsTrustedMember(inst, member))
+		inst.OrgID = "org-one"
+		require.False(t, IsTrustedMember(inst, &Member{Instance: "https://unknown.example.net"}))
+		require.False(t, IsTrustedMember(inst, &Member{}))
+
+		cfg.Contexts[config.DefaultInstanceContext].(map[string]interface{})["common_contacts"] = false
+		require.False(t, IsTrustedMember(inst, member))
+	})
+}
+
+func TestMarkSenderContactTrusted(t *testing.T) {
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	cfg := config.GetConfig()
+	prevContexts := cfg.Contexts
+	cfg.Contexts = map[string]interface{}{
+		config.DefaultInstanceContext: map[string]interface{}{
+			"common_contacts": true,
+			"sharing": map[string]interface{}{
+				"auto_accept_trusted_contacts": true,
+			},
+		},
+	}
+	t.Cleanup(func() { cfg.Contexts = prevContexts })
+
+	recipient := testutils.NewSetup(t, t.Name()+"_recipient").GetTestInstance()
+	recipient.OrgID = "org-one"
+	sender := testutils.NewSetup(t, t.Name()+"_sender").GetTestInstance(&lifecycle.Options{OrgID: "org-one"})
+	member := &Member{Email: "member@example.net", Name: "Member", Instance: sender.PageURL("", nil)}
+
+	markSenderContactTrusted(recipient, member)
+	_, err := contact.FindByEmail(recipient, member.Email)
+	require.ErrorIs(t, err, contact.ErrNotFound, "answering a member's sharing must not write a contact")
+	existing := contact.New()
+	existing.M["email"] = []interface{}{map[string]interface{}{"address": member.Email}}
+	require.NoError(t, couchdb.CreateDoc(recipient, existing))
+	revision := existing.Rev()
+	markSenderContactTrusted(recipient, member)
+	c, err := contact.FindByEmail(recipient, member.Email)
+	require.NoError(t, err)
+	require.Equal(t, revision, c.Rev())
+	require.False(t, c.IsTrusted())
+
+	external := &Member{Email: "external@example.net", Instance: "https://external.example.net"}
+	markSenderContactTrusted(recipient, external)
+	c, err = contact.FindByEmail(recipient, external.Email)
+	require.NoError(t, err)
+	require.True(t, c.IsTrusted())
+
+	cfg.Contexts[config.DefaultInstanceContext].(map[string]interface{})["common_contacts"] = false
+	markSenderContactTrusted(recipient, member)
+	c, err = contact.FindByEmail(recipient, member.Email)
+	require.NoError(t, err)
+	require.True(t, c.IsTrusted())
 }
