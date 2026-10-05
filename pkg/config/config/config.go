@@ -242,6 +242,7 @@ type Fs struct {
 // FsS3 configures bucket provisioning and destinations by storage type.
 type FsS3 struct {
 	AutoCreateBuckets *bool                 `mapstructure:"auto_create_buckets"`
+	PreferIPv4        bool                  `mapstructure:"prefer_ipv4"`
 	Buckets           map[string]FsS3Bucket `mapstructure:"buckets"`
 }
 
