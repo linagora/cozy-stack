@@ -185,7 +185,7 @@ func getIntent(c echo.Context) error {
 	}
 	allowed := false
 	for _, service := range intent.Services {
-		if pdoc.SourceID == consts.Apps+"/"+service.Slug {
+		if RequestAppSourceID(pdoc) == consts.Apps+"/"+service.Slug {
 			allowed = true
 		}
 	}

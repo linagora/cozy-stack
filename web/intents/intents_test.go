@@ -121,6 +121,26 @@ func TestIntents(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// Calendar: intent service hosted on an external origin (service_url_flag)
+	calendarApp := &couchdb.JSONDoc{
+		Type: consts.Apps,
+		M: map[string]interface{}{
+			"_id":              consts.Apps + "/calendar",
+			"slug":             "calendar",
+			"service_url_flag": "calendar_service_url",
+			"intents": []app.Intent{
+				{
+					Action: "OPEN",
+					Types:  []string{"io.cozy.calendar.events"},
+					Href:   "/intents#/open",
+				},
+			},
+		},
+	}
+	require.NoError(t, couchdb.CreateNamedDoc(ins, calendarApp))
+	_, err = permission.CreateWebappSet(ins, "calendar", permission.Set{}, "1.0.0")
+	require.NoError(t, err)
+
 	ts := setup.GetTestServer("/intents", Routes)
 	ts.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
 	t.Cleanup(ts.Close)
@@ -437,6 +457,101 @@ func TestIntents(t *testing.T) {
 
 		checkIntentResult(obj, customAppPerms, true, "https://custom.cozy.example.net")
 	})
+
+	t.Run("GetIntentWithOAuthLinkedAppService", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		calIntentID := createOpenCalendarIntent(t, e, appToken)
+
+		// The external calendar app authenticates with an OAuth token of a
+		// client linked to the "calendar" slug.
+		oauthClient := &oauth.Client{
+			ClientName:   "test-external-calendar",
+			RedirectURIs: []string{"https://calendar.external.test/callback"},
+			SoftwareID:   "registry://calendar/stable",
+		}
+		require.Nil(t, oauthClient.Create(ins, oauth.SoftwareIDPrevalidated))
+		tok, err := ins.MakeJWT(consts.AccessTokenAudience,
+			oauthClient.ClientID, oauth.BuildLinkedAppScope("calendar"), "", time.Now())
+		require.NoError(t, err)
+
+		got := e.GET("/intents/"+calIntentID).
+			WithHeader("Authorization", "Bearer "+tok).
+			WithHeader("Accept", "application/vnd.api+json").
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+		got.Value("data").Object().Value("attributes").Object().
+			ValueEqual("client", "https://app.cozy.example.net")
+	})
+
+	t.Run("GetIntentWithOAuthClientLinkedToAnotherAppIsForbidden", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		calIntentID := createOpenCalendarIntent(t, e, appToken)
+
+		// An OAuth client linked to "drive", which does not serve the intent
+		oauthClient := &oauth.Client{
+			ClientName:   "test-other-linked-app",
+			RedirectURIs: []string{"https://drive.external.test/callback"},
+			SoftwareID:   "registry://drive",
+		}
+		require.Nil(t, oauthClient.Create(ins, oauth.SoftwareIDPrevalidated))
+		tok, err := ins.MakeJWT(consts.AccessTokenAudience,
+			oauthClient.ClientID, oauth.BuildLinkedAppScope("drive"), "", time.Now())
+		require.NoError(t, err)
+
+		// The token is valid: it can be used to create an intent
+		createOpenCalendarIntent(t, e, tok)
+
+		e.GET("/intents/"+calIntentID).
+			WithHeader("Authorization", "Bearer "+tok).
+			WithHeader("Accept", "application/vnd.api+json").
+			Expect().Status(403)
+	})
+
+	t.Run("GetIntentWithOAuthUnlinkedClientIsForbidden", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		calIntentID := createOpenCalendarIntent(t, e, appToken)
+
+		oauthClient := &oauth.Client{
+			ClientName:   "test-unlinked-client",
+			RedirectURIs: []string{"https://unlinked.external.test/callback"},
+			SoftwareID:   "github.com/example/unlinked",
+		}
+		require.Nil(t, oauthClient.Create(ins))
+		tok, err := ins.MakeJWT(consts.AccessTokenAudience,
+			oauthClient.ClientID, "io.cozy.files", "", time.Now())
+		require.NoError(t, err)
+
+		e.GET("/intents/"+calIntentID).
+			WithHeader("Authorization", "Bearer "+tok).
+			WithHeader("Accept", "application/vnd.api+json").
+			Expect().Status(403)
+	})
+}
+
+const openCalendarIntentPayload = `{
+  "data": {
+    "type": "io.cozy.settings",
+    "attributes": {
+      "action": "OPEN",
+      "type": "io.cozy.calendar.events",
+      "permissions": ["GET"]
+    }
+  }
+}`
+
+func createOpenCalendarIntent(t *testing.T, e *httpexpect.Expect, token string) string {
+	t.Helper()
+
+	obj := e.POST("/intents").
+		WithHeader("Authorization", "Bearer "+token).
+		WithHeader("Content-Type", "application/vnd.api+json").
+		WithHeader("Accept", "application/vnd.api+json").
+		WithBytes([]byte(openCalendarIntentPayload)).
+		Expect().Status(200).
+		JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+		Object()
+	return obj.Value("data").Object().Value("id").String().NotEmpty().Raw()
 }
 
 const pickIntentPayload = `{
