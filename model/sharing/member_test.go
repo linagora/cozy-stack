@@ -651,8 +651,8 @@ func TestFindContactByEmail(t *testing.T) {
 	c, created, err = FindContactByEmail(alice, "dave@unknown.example")
 	require.NoError(t, err)
 	assert.True(t, created)
-	saved, err := contact.FindByEmail(alice, "dave@unknown.example")
-	require.NoError(t, err)
+	saved, err := contact.FindExternalWithoutCardDAVPath(alice, "dave@unknown.example")
+	require.NoError(t, err, "the common feed must be able to take the created contact over")
 	assert.Equal(t, c.ID(), saved.ID())
 
 	_, _, err = FindContactByEmail(alice, "dup")

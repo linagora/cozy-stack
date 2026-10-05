@@ -2,6 +2,7 @@ package sharing
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +19,8 @@ import (
 	"github.com/cozy/cozy-stack/model/bitwarden"
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
-	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/model/permission"
 	csettings "github.com/cozy/cozy-stack/model/settings"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -219,20 +220,21 @@ func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact
 	if addr, err := stdmail.ParseAddress(email); err != nil || addr.Address != email {
 		return nil, false, ErrInvalidEmail
 	}
-	if inst.OrgDomain != "" {
-		orgInst, err := lifecycle.GetOrgInstanceByOrgDomain(inst.OrgDomain)
-		if err == nil {
+	if inst.OrgID != "" || inst.OrgDomain != "" {
+		orgInst, err := orgdirectory.FindOrganizationInstance(context.Background(), inst.OrgID, inst.OrgDomain)
+		if err != nil && !errors.Is(err, instance.ErrNotFound) {
+			return nil, false, err
+		}
+		if orgInst != nil {
 			if c, err := findContactByEmail(orgInst, email); c != nil || err != nil {
 				return c, false, err
 			}
-		} else if !errors.Is(err, instance.ErrNotFound) {
-			return nil, false, err
 		}
 	}
 	if c, err := findContactByEmail(inst, email); c != nil || err != nil {
 		return c, false, err
 	}
-	c, err := contact.Create(inst, contact.CreateOptions{Email: email})
+	c, err := contact.Create(inst, contact.CreateOptions{Email: email, External: true})
 	return c, err == nil, err
 }
 
