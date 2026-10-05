@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path"
@@ -21,6 +22,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/i18n"
 	"github.com/cozy/cozy-stack/pkg/limits"
+	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/cozy/cozy-stack/web/middlewares"
@@ -664,6 +666,94 @@ func TestFiles(t *testing.T) {
 		buf, err := readFile(storage, "/goodhash")
 		assert.NoError(t, err)
 		assert.Equal(t, "foo", string(buf))
+	})
+
+	t.Run("UploadFromURL", func(t *testing.T) {
+		const content = "downloaded content"
+		var requests atomic.Int32
+		source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Empty(t, r.Header.Get("Authorization"))
+			assert.Empty(t, r.Header.Get("Cookie"))
+			switch r.URL.Path {
+			case "/redirect":
+				http.Redirect(w, r, "/file?signature=secret", http.StatusFound)
+				return
+			case "/missing":
+				http.NotFound(w, r)
+				return
+			case "/chunked":
+				w.(http.Flusher).Flush()
+			default:
+				assert.Equal(t, "secret", r.URL.Query().Get("signature"))
+			}
+			_, _ = io.WriteString(w, content)
+		}))
+		defer source.Close()
+		require.NoError(t, safehttp.SetTrustedPrivateNetworks([]string{"127.0.0.1/32"}))
+		t.Cleanup(func() {
+			require.NoError(t, safehttp.SetTrustedPrivateNetworks(config.GetConfig().SafeHTTPTrustedNetworks))
+		})
+
+		e := testutils.CreateTestClient(t, ts.URL)
+		_, readOnlyToken := setup.GetTestClient(consts.Files + ":GET")
+		e.POST("/files/").
+			WithQuery("Type", "file").
+			WithQuery("Name", "unauthorized.txt").
+			WithQuery("SourceURL", source.URL+"/file?signature=secret").
+			WithHeader("Authorization", "Bearer "+readOnlyToken).
+			Expect().Status(http.StatusForbidden)
+		assert.Zero(t, requests.Load())
+
+		for _, tc := range []struct {
+			name   string
+			url    string
+			status int
+		}{
+			{"file.txt", source.URL + "/file?signature=secret", http.StatusCreated},
+			{"chunked.txt", source.URL + "/chunked", http.StatusCreated},
+			{"redirect.txt", source.URL + "/redirect", http.StatusCreated},
+			{"note.cozy-note", source.URL + "/file?signature=secret", http.StatusCreated},
+			{"file.txt", source.URL + "/file?signature=secret", http.StatusConflict},
+			{"missing.txt", source.URL + "/missing", http.StatusBadGateway},
+			{"invalid.txt", "://invalid", http.StatusUnprocessableEntity},
+			{"relative.txt", "/file", http.StatusUnprocessableEntity},
+			{"scheme.txt", "file:///etc/passwd", http.StatusUnprocessableEntity},
+			{"credentials.txt", "https://user:password@example.com/file", http.StatusUnprocessableEntity},
+			{"private.txt", "http://169.254.169.254/file", http.StatusBadGateway},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				e := testutils.CreateTestClient(t, ts.URL)
+				res := e.POST("/files/").
+					WithQuery("Type", "file").
+					WithQuery("Name", "url-"+tc.name).
+					WithQuery("SourceURL", tc.url).
+					WithQuery("Size", 999).
+					WithHeader("Authorization", "Bearer "+token).
+					WithHeader("Cookie", "source-must-not-receive=secret").
+					WithBytes([]byte("ignored")).
+					Expect().Status(tc.status)
+				if tc.status == http.StatusCreated {
+					attrs := res.JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+						Object().Path("$.data.attributes").Object()
+					attrs.ValueEqual("name", "url-"+tc.name)
+					attrs.ValueEqual("size", strconv.Itoa(len(content)))
+					if tc.name == "note.cozy-note" {
+						attrs.ValueEqual("mime", consts.NoteMimeType)
+						attrs.Path("$.metadata.content").Object().NotEmpty()
+					} else {
+						attrs.ValueEqual("mime", "text/plain")
+					}
+					buf, err := readFile(testInstance.VFS(), "/url-"+tc.name)
+					require.NoError(t, err)
+					assert.Equal(t, content, string(buf))
+				} else if tc.status != http.StatusConflict {
+					_, err := readFile(testInstance.VFS(), "/url-"+tc.name)
+					assert.ErrorIs(t, err, os.ErrNotExist)
+				}
+			})
+		}
 	})
 
 	t.Run("UploadExceedingQuota", func(t *testing.T) {

@@ -35,6 +35,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/limits"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/metadata"
+	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/cozy/cozy-stack/worker/thumbnail"
@@ -144,8 +145,26 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 		return nil, err
 	}
 
+	body := c.Request().Body
+	if sourceURL := c.QueryParam("SourceURL"); sourceURL != "" {
+		req, err := http.NewRequestWithContext(c.Request().Context(), http.MethodGet, sourceURL, nil)
+		if err != nil || (req.URL.Scheme != "http" && req.URL.Scheme != "https") || req.URL.Host == "" || req.URL.User != nil {
+			return nil, jsonapi.InvalidParameter("SourceURL", errors.New("expected an absolute HTTP(S) URL without credentials"))
+		}
+		res, err := safehttp.DefaultClient.Do(req)
+		if err != nil {
+			return nil, jsonapi.NewError(http.StatusBadGateway, "could not download SourceURL")
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			return nil, jsonapi.Errorf(http.StatusBadGateway, "SourceURL returned HTTP %d", res.StatusCode)
+		}
+		body = res.Body
+		doc.ByteSize = res.ContentLength
+	}
+
 	if filepath.Ext(doc.DocName) == ".cozy-note" {
-		err := note.ImportFile(inst, doc, nil, c.Request().Body)
+		err := note.ImportFile(inst, doc, nil, body)
 		if err != nil {
 			inst.Logger().WithNamespace("files").
 				Infof("Cannot import note: %s", err)
@@ -159,7 +178,7 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 		return nil, err
 	}
 
-	n, err := io.Copy(file, c.Request().Body)
+	n, err := io.Copy(file, body)
 	if err != nil {
 		inst.Logger().WithNamespace("files").
 			Warnf("Error on uploading file (copy): %s (%d bytes written - expected %d)", err, n, doc.ByteSize)
@@ -170,7 +189,7 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 			Warnf("Error on uploading file (close): %s", err)
 	}
 	if err != nil {
-		return nil, wrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
 	maybeNotifyShareByLinkUpload(c, inst, doc.DocName, doc.ID(), doc.DirID, false)
 	return NewFile(doc, inst, sharedDrive), nil
