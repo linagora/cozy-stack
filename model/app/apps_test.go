@@ -3,9 +3,49 @@ package app
 import (
 	"testing"
 
+	"github.com/cozy/cozy-stack/model/feature"
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestExternalServiceURLFromFlags(t *testing.T) {
+	config.UseTestFile(t)
+	ins := &instance.Instance{Domain: "cozy.example.net"}
+	const flagKey = "calendar_service_url"
+	assert.Nil(t, ExternalServiceURLFromFlags(ins, "calendar", flagKey, nil))
+	assert.Nil(t, ExternalServiceURLFromFlags(ins, "calendar", "", &feature.Flags{}))
+	for _, tc := range []struct {
+		name  string
+		value interface{}
+		want  string
+	}{
+		{"missing", nil, ""},
+		{"not_a_string", true, ""},
+		{"not_a_url", "not-a-url", ""},
+		{"malformed", "https://%", ""},
+		{"csp_separator", "https://x.example;sandbox", ""},
+		{"scheme", "javascript://x", ""},
+		{"userinfo", "https://u:p@calendar.external.test/", ""},
+		{"cozy_host", "https://calendar.cozy.example.net/app/", ""},
+		{"external", "https://calendar.external.test", "https://calendar.external.test"},
+		{"path_prefix", "https://calendar.external.test/app/", "https://calendar.external.test/app/"},
+		{"http_with_port", "http://localhost:3000/app/", "http://localhost:3000/app/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := &feature.Flags{M: map[string]interface{}{flagKey: tc.value}}
+			got := ExternalServiceURLFromFlags(ins, "calendar", flagKey, flags)
+			if tc.want == "" {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.Equal(t, tc.want, got.String())
+			}
+		})
+	}
+}
 
 func TestFindRoute(t *testing.T) {
 	manifest := &WebappManifest{}
