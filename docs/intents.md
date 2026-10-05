@@ -240,6 +240,11 @@ of the app is ignored. In all these cases, the cozy subdomain is used. The
 external service authenticates with an OAuth token of a client linked to the
 app (`software_id` `registry://<slug>`).
 
+The stack adds the origin of such external services to the `frame-src`
+directive of the Content Security Policy of every app, so that any client app
+can open them. The external host must itself allow the client apps in its
+`frame-ancestors` directive.
+
 ### 4. Available apps
 
 In addition to the services that manage intents, a list of available (but not

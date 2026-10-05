@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/appfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/spf13/afero"
@@ -281,6 +283,59 @@ func ExternalServiceURLFromFlags(ins *instance.Instance, slug, flagKey string, f
 		return nil
 	}
 	return u
+}
+
+// ExternalServiceURLs returns the base URLs of the intent services hosted
+// outside the cozy domain, for all the installed apps. Only the slug and the
+// "service_url_flag" of the apps that declare one are fetched, with a mango
+// query. There is no dedicated index: a design doc in the io.cozy.apps
+// database would break the pagination of ListWebappsWithPagination, and this
+// database stays small.
+func ExternalServiceURLs(ins *instance.Instance) ([]*url.URL, error) {
+	var docs []struct {
+		Slug           string      `json:"slug"`
+		ServiceURLFlag interface{} `json:"service_url_flag"`
+	}
+	req := &couchdb.FindRequest{
+		Selector: mango.Gt("service_url_flag", ""),
+		Fields:   []string{"slug", "service_url_flag"},
+		Limit:    defaultAppListLimit,
+	}
+	if err := couchdb.FindDocsUnoptimized(ins, consts.Apps, req, &docs); err != nil && !couchdb.IsNoDatabaseError(err) {
+		return nil, err
+	}
+	keys := make(map[string]string)
+	for _, doc := range docs {
+		if key, ok := doc.ServiceURLFlag.(string); ok && key != "" {
+			keys[doc.Slug] = key
+		}
+	}
+	// The apps loaded from a directory (development) take precedence
+	for slug := range appsdir {
+		delete(keys, slug)
+		if man, err := loadManifestFromDir(slug); err == nil && man.ServiceURLFlag() != "" {
+			keys[slug] = man.ServiceURLFlag()
+		}
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	flags, err := feature.GetFlags(ins)
+	if err != nil {
+		return nil, err
+	}
+	slugs := make([]string, 0, len(keys))
+	for slug := range keys {
+		slugs = append(slugs, slug)
+	}
+	sort.Strings(slugs)
+	var urls []*url.URL
+	for _, slug := range slugs {
+		if u := ExternalServiceURLFromFlags(ins, slug, keys[slug], flags); u != nil {
+			urls = append(urls, u)
+		}
+	}
+	return urls, nil
 }
 
 func DefaultClientURL(ins *instance.Instance, slug string) string {
