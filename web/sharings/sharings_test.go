@@ -368,6 +368,70 @@ func TestSharings(t *testing.T) {
 		g.HasValue("addedBy", 0)
 	})
 
+	t.Run("CreateSharingWithEmail", func(t *testing.T) {
+		eA := httpexpect.Default(t, tsA.URL)
+		conf := config.GetConfig()
+		if conf.Contexts == nil {
+			conf.Contexts = make(map[string]interface{})
+		}
+		contextName := "common-contacts-test"
+		conf.Contexts[contextName] = map[string]interface{}{"common_contacts": true}
+		originalContext := aliceInstance.ContextName
+		aliceInstance.ContextName = contextName
+		require.NoError(t, instance.Update(aliceInstance))
+		t.Cleanup(func() {
+			delete(conf.Contexts, contextName)
+			aliceInstance.ContextName = originalContext
+			_ = instance.Update(aliceInstance)
+		})
+
+		body := func(email string) []byte {
+			return []byte(`{
+        "data": {
+          "type": "` + consts.Sharings + `",
+          "attributes": {
+            "description":  "this is a test with an email",
+            "rules": [{
+                "title": "test email",
+                "doctype": "` + iocozytests + `",
+                "values": ["000003"],
+                "add": "sync"
+              }]
+          },
+          "relationships": {
+            "recipients": {
+              "data": [{"type": "` + consts.Contacts + `", "email": "` + email + `"}]
+            }
+          }
+        }
+      }`)
+		}
+
+		obj := eA.POST("/sharings/").
+			WithHeader("Authorization", "Bearer "+aliceAppToken).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes(body("erin@example.net")).
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		members := obj.Path("$.data.attributes.members").Array()
+		members.Length().IsEqual(2)
+		recipient := members.Value(1).Object()
+		recipient.HasValue("status", "pending")
+		recipient.HasValue("email", "erin@example.net")
+		_, err := contact.FindByEmail(aliceInstance, "erin@example.net")
+		require.NoError(t, err)
+
+		eA.POST("/sharings/").
+			WithHeader("Authorization", "Bearer "+aliceAppToken).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes(body("dup")).
+			Expect().Status(422)
+		_, err = contact.FindByEmail(aliceInstance, "dup")
+		assert.ErrorIs(t, err, contact.ErrNotFound)
+	})
+
 	t.Run("CreateSharingWithPreview", func(t *testing.T) {
 		bobContact := createBobContact(t, aliceInstance)
 		require.NotEmpty(t, aliceAppToken)

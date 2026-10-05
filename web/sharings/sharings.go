@@ -69,7 +69,7 @@ func CreateSharing(c echo.Context) error {
 		}
 		for _, email := range emails {
 			if err = s.AddEmail(inst, email, readOnly); err != nil {
-				return err
+				return wrapErrors(err)
 			}
 		}
 		for _, id := range groupIDs {
@@ -1261,7 +1261,7 @@ func wrapErrors(err error) error {
 		err = merr.WrappedErrors()[0]
 	}
 	switch err {
-	case contact.ErrNoMailAddress:
+	case contact.ErrNoMailAddress, sharing.ErrInvalidEmail:
 		return jsonapi.InvalidAttribute("recipients", err)
 	case sharing.ErrNoRecipients, sharing.ErrNoRules:
 		return jsonapi.BadRequest(err)

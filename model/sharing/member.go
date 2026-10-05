@@ -3,8 +3,10 @@ package sharing
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	stdmail "net/mail"
 	"net/url"
 	"runtime"
 	"strconv"
@@ -199,36 +201,44 @@ func (s *Sharing) AddContact(inst *instance.Instance, contactID string, readOnly
 
 // AddEmail adds the person with the given email address
 func (s *Sharing) AddEmail(inst *instance.Instance, email string, readOnly bool) error {
-	c, err := FindContactByEmail(inst, email)
+	c, created, err := FindContactByEmail(inst, email)
 	if err != nil {
 		return err
 	}
 	_, _, err = s.addMember(inst, buildMemberFromContact(c, readOnly))
+	if err != nil && created {
+		_ = couchdb.DeleteDoc(inst, c)
+	}
 	return err
 }
 
 // FindContactByEmail looks the email up on the org instance, then on the
-// instance itself, and creates the contact there when nothing matches.
-func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact, error) {
+// instance itself, and creates the contact there when nothing matches. It
+// also reports whether the contact has been created.
+func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact, bool, error) {
+	if addr, err := stdmail.ParseAddress(email); err != nil || addr.Address != email {
+		return nil, false, ErrInvalidEmail
+	}
 	if inst.OrgDomain != "" {
 		orgInst, err := lifecycle.GetOrgInstanceByOrgDomain(inst.OrgDomain)
 		if err == nil {
 			if c, err := findContactByEmail(orgInst, email); c != nil || err != nil {
-				return c, err
+				return c, false, err
 			}
-		} else if err != instance.ErrNotFound {
-			return nil, err
+		} else if !errors.Is(err, instance.ErrNotFound) {
+			return nil, false, err
 		}
 	}
 	if c, err := findContactByEmail(inst, email); c != nil || err != nil {
-		return c, err
+		return c, false, err
 	}
-	return contact.Create(inst, contact.CreateOptions{Email: email})
+	c, err := contact.Create(inst, contact.CreateOptions{Email: email})
+	return c, err == nil, err
 }
 
 func findContactByEmail(db prefixer.Prefixer, email string) (*contact.Contact, error) {
 	c, err := contact.FindByEmail(db, email)
-	if err == contact.ErrNotFound || couchdb.IsNoDatabaseError(err) {
+	if errors.Is(err, contact.ErrNotFound) || couchdb.IsNoDatabaseError(err) {
 		return nil, nil
 	}
 	return c, err
@@ -365,7 +375,7 @@ func (s *Sharing) DelegateAddContactsAndGroups(inst *instance.Instance, groupIDs
 	api.sid = s.SID
 
 	for _, email := range emails {
-		c, err := FindContactByEmail(inst, email)
+		c, _, err := FindContactByEmail(inst, email)
 		if err != nil {
 			return err
 		}

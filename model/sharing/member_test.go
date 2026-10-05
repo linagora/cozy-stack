@@ -635,20 +635,36 @@ func TestFindContactByEmail(t *testing.T) {
 	carol, err := contact.Create(alice, contact.CreateOptions{Email: "carol@friends.example"})
 	require.NoError(t, err)
 
-	c, err := FindContactByEmail(alice, "bob@acme.example")
+	c, created, err := FindContactByEmail(alice, "bob@acme.example")
 	require.NoError(t, err)
+	assert.False(t, created)
 	assert.Equal(t, bob.ID(), c.ID())
 	assert.Equal(t, "https://bob.acme.example", c.PrimaryCozyURL())
 	_, err = contact.FindByEmail(alice, "bob@acme.example")
 	assert.ErrorIs(t, err, contact.ErrNotFound)
 
-	c, err = FindContactByEmail(alice, "carol@friends.example")
+	c, created, err = FindContactByEmail(alice, "carol@friends.example")
 	require.NoError(t, err)
+	assert.False(t, created)
 	assert.Equal(t, carol.ID(), c.ID())
 
-	c, err = FindContactByEmail(alice, "dave@unknown.example")
+	c, created, err = FindContactByEmail(alice, "dave@unknown.example")
 	require.NoError(t, err)
+	assert.True(t, created)
 	saved, err := contact.FindByEmail(alice, "dave@unknown.example")
 	require.NoError(t, err)
 	assert.Equal(t, c.ID(), saved.ID())
+
+	_, _, err = FindContactByEmail(alice, "dup")
+	assert.ErrorIs(t, err, ErrInvalidEmail)
+	_, _, err = FindContactByEmail(alice, "Bob <bob@acme.example>")
+	assert.ErrorIs(t, err, ErrInvalidEmail)
+	_, err = contact.FindByEmail(alice, "dup")
+	assert.ErrorIs(t, err, contact.ErrNotFound)
+
+	full := &Sharing{Members: make([]Member, maxNumberOfMembers(alice))}
+	err = full.AddEmail(alice, "erin@unknown.example", false)
+	assert.ErrorIs(t, err, ErrTooManyMembers)
+	_, err = contact.FindByEmail(alice, "erin@unknown.example")
+	assert.ErrorIs(t, err, contact.ErrNotFound, "the contact created for a failed add must be removed")
 }

@@ -176,7 +176,8 @@ func wrapDriveRootErrors(err error) error {
 	}
 }
 
-// extractRecipientIDs extracts group and contact IDs from a JSON:API relationship.
+// extractRecipients extracts group IDs, contact IDs and emails from a JSON:API
+// relationship.
 func extractRecipients(inst *instance.Instance, obj *jsonapi.ObjectMarshalling, relationshipName string) (groupIDs, contactIDs, emails []string) {
 	rel, ok := obj.GetRelationship(relationshipName)
 	if !ok {
