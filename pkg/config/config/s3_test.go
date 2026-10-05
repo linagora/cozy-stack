@@ -271,7 +271,7 @@ func TestS3BucketCheckDeadline(t *testing.T) {
 		deadline, ok = r.Context().Deadline()
 		assert.True(t, ok)
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody, Request: r}, nil
-	}), false)
+	}))
 	require.NoError(t, err)
 	require.NoError(t, s3util.CheckBucket(context.Background(), client, "company-storage"))
 	assert.WithinDuration(t, time.Now().Add(30*time.Second), deadline, time.Second)
