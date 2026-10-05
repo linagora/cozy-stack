@@ -236,7 +236,9 @@ the base of the service URL. The `href` of the intent is appended to it. Only
 `http` and `https` URLs with an ASCII host (letters, digits, dots and dashes,
 with an optional port) and no userinfo are accepted; a query or a fragment in
 the flag value is dropped; and a flag value whose host is the cozy subdomain
-of the app is ignored. In all these cases, the cozy subdomain is used.
+of the app is ignored. In all these cases, the cozy subdomain is used. The
+external service authenticates with an OAuth token of a client linked to the
+app (`software_id` `registry://<slug>`).
 
 ### 4. Available apps
 
@@ -409,7 +411,10 @@ Content-Type: application/vnd.api+json
 
 Get all the informations about the intent
 
-**Note**: only the service can access this route (no permission involved).
+**Note**: only the service can access this route: the request must be
+authenticated as one of the apps listed in the `services` of the intent,
+either with a token of the app itself or with an OAuth token of a client
+linked to the app (`software_id` `registry://<slug>`).
 
 #### Request
 
