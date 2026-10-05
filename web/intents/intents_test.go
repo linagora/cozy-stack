@@ -21,6 +21,8 @@ import (
 	"github.com/gavv/httpexpect/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	"github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -139,6 +141,25 @@ func TestIntents(t *testing.T) {
 	}
 	require.NoError(t, couchdb.CreateNamedDoc(ins, calendarApp))
 	_, err = permission.CreateWebappSet(ins, "calendar", permission.Set{}, "1.0.0")
+	require.NoError(t, err)
+
+	// Internal app serving the same intent, on its cozy subdomain
+	internalCalApp := &couchdb.JSONDoc{
+		Type: consts.Apps,
+		M: map[string]interface{}{
+			"_id":  consts.Apps + "/internalcal",
+			"slug": "internalcal",
+			"intents": []app.Intent{
+				{
+					Action: "OPEN",
+					Types:  []string{"io.cozy.calendar.events"},
+					Href:   "/open",
+				},
+			},
+		},
+	}
+	require.NoError(t, couchdb.CreateNamedDoc(ins, internalCalApp))
+	_, err = permission.CreateWebappSet(ins, "internalcal", permission.Set{}, "1.0.0")
 	require.NoError(t, err)
 
 	ts := setup.GetTestServer("/intents", Routes)
@@ -527,6 +548,88 @@ func TestIntents(t *testing.T) {
 			WithHeader("Accept", "application/vnd.api+json").
 			Expect().Status(403)
 	})
+
+	t.Run("CreateIntentWithForcedSessionCodeSkipsExternalService", func(t *testing.T) {
+		ins.FeatureFlags = map[string]interface{}{"calendar_service_url": "https://calendar.external.test"}
+		t.Cleanup(func() { ins.FeatureFlags = nil })
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		tok := createEligibleSessionCodeToken(t, "test-forced-session-external-service")
+		obj := e.POST("/intents").
+			WithQuery("force_session_id", "true").
+			WithHeader("Authorization", "Bearer "+tok).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithHeader("Accept", "application/vnd.api+json").
+			WithBytes([]byte(openCalendarIntentPayload)).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		extURL, err := url.Parse(serviceHrefBySlug(t, obj, "calendar"))
+		require.NoError(t, err)
+		require.Equal(t, "calendar.external.test", extURL.Host)
+		require.Empty(t, extURL.Query().Get("session_code"))
+		require.NotEmpty(t, extURL.Query().Get("intent"))
+
+		intURL, err := url.Parse(serviceHrefBySlug(t, obj, "internalcal"))
+		require.NoError(t, err)
+		require.Equal(t, "internalcal.cozy.example.net", intURL.Host)
+		require.NotEmpty(t, intURL.Query().Get("session_code"))
+	})
+
+	t.Run("CreateIntentWithForcedSessionCodeOnlyExternalServicesMintsNoCode", func(t *testing.T) {
+		extOnlyApp := &couchdb.JSONDoc{
+			Type: consts.Apps,
+			M: map[string]interface{}{
+				"_id":              consts.Apps + "/extonly",
+				"slug":             "extonly",
+				"service_url_flag": "extonly_service_url",
+				"intents": []app.Intent{
+					{
+						Action: "OPEN",
+						Types:  []string{"io.cozy.extonly.events"},
+						Href:   "/intents#/open",
+					},
+				},
+			},
+		}
+		require.NoError(t, couchdb.CreateNamedDoc(ins, extOnlyApp))
+		t.Cleanup(func() { _ = couchdb.DeleteDoc(ins, extOnlyApp) })
+		ins.FeatureFlags = map[string]interface{}{"extonly_service_url": "https://extonly.external.test"}
+		t.Cleanup(func() { ins.FeatureFlags = nil })
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		tok := createEligibleSessionCodeToken(t, "test-forced-session-external-only")
+		hook := captureLogs(t)
+		obj := e.POST("/intents").
+			WithQuery("force_session_id", "true").
+			WithHeader("Authorization", "Bearer "+tok).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithHeader("Accept", "application/vnd.api+json").
+			WithBytes([]byte(`{
+  "data": {
+    "type": "io.cozy.settings",
+    "attributes": {
+      "action": "OPEN",
+      "type": "io.cozy.extonly.events",
+      "permissions": ["GET"]
+    }
+  }
+}`)).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+
+		extURL, err := url.Parse(serviceHrefBySlug(t, obj, "extonly"))
+		require.NoError(t, err)
+		require.Equal(t, "extonly.external.test", extURL.Host)
+		require.Empty(t, extURL.Query().Get("session_code"))
+
+		// No session code has been minted (MintSessionCode logs each creation)
+		for _, entry := range hook.AllEntries() {
+			require.NotContains(t, entry.Message, "New session_code created")
+		}
+	})
 }
 
 const openCalendarIntentPayload = `{
@@ -540,6 +643,13 @@ const openCalendarIntentPayload = `{
   }
 }`
 
+func captureLogs(t *testing.T) *logtest.Hook {
+	t.Helper()
+	oldHooks := logrus.StandardLogger().ReplaceHooks(make(logrus.LevelHooks))
+	t.Cleanup(func() { logrus.StandardLogger().ReplaceHooks(oldHooks) })
+	return logtest.NewGlobal()
+}
+
 func createOpenCalendarIntent(t *testing.T, e *httpexpect.Expect, token string) string {
 	t.Helper()
 
@@ -552,6 +662,20 @@ func createOpenCalendarIntent(t *testing.T, e *httpexpect.Expect, token string) 
 		JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
 		Object()
 	return obj.Value("data").Object().Value("id").String().NotEmpty().Raw()
+}
+
+func serviceHrefBySlug(t *testing.T, obj *httpexpect.Object, slug string) string {
+	t.Helper()
+
+	services := obj.Value("data").Object().Value("attributes").Object().Value("services").Array()
+	for _, s := range services.Iter() {
+		o := s.Object()
+		if o.Value("slug").String().Raw() == slug {
+			return o.Value("href").String().NotEmpty().Raw()
+		}
+	}
+	t.Fatalf("no service for slug %s", slug)
+	return ""
 }
 
 const pickIntentPayload = `{

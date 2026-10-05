@@ -511,6 +511,10 @@ Mobile app                cozy-stack                WebView (service app)
    The stack consumes the code, creates a session cookie, and redirects (code
    stripped). The WebView now has a full user session for the instance domain.
 
+When the intent is created with `force_session_id=true`, the services hosted
+on an external origin (see `service_url_flag`) do not receive a
+`session_code` in their href; they must authenticate on their own.
+
 ### Security
 
 - The `session_code` is single-use (atomic delete in Redis on read) with a 7-day TTL.
