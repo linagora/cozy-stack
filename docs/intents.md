@@ -228,17 +228,31 @@ The stack then stores the information for that intent:
 Finally, the service URL is suffixed with `?intent=` followed by the intent's
 id, and then sent to the client.
 
-By default, the service URL is on the cozy subdomain of the service app. An
-app whose intent services are hosted on another origin declares a
-`service_url_flag` in its manifest: the value of this feature flag (an
-absolute URL, optionally with a path prefix) replaces the cozy subdomain as
-the base of the service URL. The `href` of the intent is appended to it. Only
-`http` and `https` URLs with an ASCII host (letters, digits, dots and dashes,
-with an optional port) and no userinfo are accepted; a query or a fragment in
-the flag value is dropped; and a flag value whose host is the cozy subdomain
-of the app is ignored. In all these cases, the cozy subdomain is used. The
-external service authenticates with an OAuth token of a client linked to the
-app (`software_id` `registry://<slug>`).
+The service URL opens the app's frontend page that handles the intent. By
+default, this page is on the app's cozy subdomain. To host it elsewhere, the
+app declares `service_url_flag` in its manifest. This names a feature flag
+containing the external base URL, optionally with a path prefix. The stack
+appends the intent's `href` and the intent ID.
+
+For example, a Calendar manifest with `"service_url_flag": "calendar_service_url"`
+and an intent whose `href` is `/open-event`, with that flag set to
+`https://calendar.example.com`, produces:
+
+```text
+https://calendar.example.com/open-event?intent=abc
+```
+
+The calling app opens this page in an iframe. Calendar must implement the
+`/open-event` page, which retrieves the intent details from the stack's
+`GET /intents/abc` API using an OAuth token linked to Calendar
+(`software_id: registry://calendar`). The frontend route can have any name;
+the `/intents` API remains on the stack.
+
+Only `http` and `https` URLs with an ASCII host (letters, digits, dots and
+dashes, with an optional port) and no userinfo are accepted. Missing or
+invalid flag values, and values pointing to the app's cozy host, fall back
+to the cozy subdomain. For valid external URLs, the stack drops the query
+and fragment from the base URL while keeping its host and path prefix.
 
 The stack adds the origin of such external services to the `frame-src`
 directive of the Content Security Policy of every app, so that any client app
