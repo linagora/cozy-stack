@@ -370,20 +370,6 @@ func TestSharings(t *testing.T) {
 
 	t.Run("CreateSharingWithEmail", func(t *testing.T) {
 		eA := httpexpect.Default(t, tsA.URL)
-		conf := config.GetConfig()
-		if conf.Contexts == nil {
-			conf.Contexts = make(map[string]interface{})
-		}
-		contextName := "common-contacts-test"
-		conf.Contexts[contextName] = map[string]interface{}{"common_contacts": true}
-		originalContext := aliceInstance.ContextName
-		aliceInstance.ContextName = contextName
-		require.NoError(t, instance.Update(aliceInstance))
-		t.Cleanup(func() {
-			delete(conf.Contexts, contextName)
-			aliceInstance.ContextName = originalContext
-			_ = instance.Update(aliceInstance)
-		})
 
 		body := func(email string) []byte {
 			return []byte(`{

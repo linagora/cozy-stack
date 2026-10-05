@@ -61,7 +61,7 @@ func CreateSharing(c echo.Context) error {
 
 	for _, rel := range []string{"recipients", "read_only_recipients"} {
 		readOnly := rel == "read_only_recipients"
-		groupIDs, contactIDs, emails := extractRecipients(inst, obj, rel)
+		groupIDs, contactIDs, emails := extractRecipients(obj, rel)
 		for _, id := range contactIDs {
 			if err = s.AddContact(inst, id, readOnly); err != nil {
 				return err
@@ -346,7 +346,7 @@ func ChangeCozyAddress(c echo.Context) error {
 }
 
 func addRecipientsToSharing(inst *instance.Instance, s *sharing.Sharing, obj *jsonapi.ObjectMarshalling, rel string, readOnly bool) error {
-	groupIDs, contactIDs, emails := extractRecipients(inst, obj, rel)
+	groupIDs, contactIDs, emails := extractRecipients(obj, rel)
 	if len(groupIDs) == 0 && len(contactIDs) == 0 && len(emails) == 0 {
 		return nil
 	}

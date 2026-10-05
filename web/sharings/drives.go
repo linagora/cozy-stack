@@ -120,8 +120,8 @@ func CreateSharedDrive(c echo.Context) error {
 	newSharing.OrgDrive = inst.IsOrganizationInstance()
 
 	// Extract recipient IDs from relationships
-	rwGroupIDs, rwContactIDs, rwEmails := extractRecipients(inst, obj, "recipients")
-	roGroupIDs, roContactIDs, roEmails := extractRecipients(inst, obj, "read_only_recipients")
+	rwGroupIDs, rwContactIDs, rwEmails := extractRecipients(obj, "recipients")
+	roGroupIDs, roContactIDs, roEmails := extractRecipients(obj, "read_only_recipients")
 
 	// Create the sharing document first (drives can be created without recipients)
 	if _, err = newSharing.Create(inst); err != nil {
@@ -178,7 +178,7 @@ func wrapDriveRootErrors(err error) error {
 
 // extractRecipients extracts group IDs, contact IDs and emails from a JSON:API
 // relationship.
-func extractRecipients(inst *instance.Instance, obj *jsonapi.ObjectMarshalling, relationshipName string) (groupIDs, contactIDs, emails []string) {
+func extractRecipients(obj *jsonapi.ObjectMarshalling, relationshipName string) (groupIDs, contactIDs, emails []string) {
 	rel, ok := obj.GetRelationship(relationshipName)
 	if !ok {
 		return nil, nil, nil
@@ -194,8 +194,7 @@ func extractRecipients(inst *instance.Instance, obj *jsonapi.ObjectMarshalling, 
 		}
 		id, ok := refMap["id"].(string)
 		if !ok {
-			// Without common contacts, a ref without id is ignored as before.
-			if email, _ := refMap["email"].(string); email != "" && inst.HasCommonContacts() {
+			if email, _ := refMap["email"].(string); email != "" {
 				emails = append(emails, email)
 			}
 			continue
