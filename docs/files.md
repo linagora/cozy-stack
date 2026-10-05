@@ -801,6 +801,7 @@ then the `updated_at` will be set with the value of the `created_at`.
 | ----------------------- | -------------------------------------------------------------- |
 | Type                    | `file`                                                         |
 | Name                    | the file name                                                  |
+| SourceURL               | optional HTTP(S) URL to download instead of the request body    |
 | Size                    | the file size (when `Content-Length` can't be used)            |
 | Tags                    | an array of tags                                               |
 | Executable              | `true` if the file is executable (UNIX permission)             |
@@ -811,6 +812,15 @@ then the `updated_at` will be set with the value of the `created_at`.
 | UpdatedAt               | the modification date of the file                              |
 | SourceAccount           | the id of the source account used by a konnector               |
 | SourceAccountIdentifier | the unique identifier of the account targeted by the connector |
+
+When `SourceURL` is non-empty, the Stack streams the response into the file after
+checking write permissions. The URL must be accessible without credentials;
+caller headers and cookies are never forwarded. Redirects, network restrictions
+and the 10-second download timeout use the Stack's safe HTTP client. The source
+must return HTTP 200. Its content length (or the streamed byte count when unknown)
+determines the file size; the upload request's body and size are ignored.
+`Name` remains required, and the existing MIME-type and name-conflict rules apply.
+An invalid URL returns 422; a failed download request or non-200 response returns 502.
 
 #### HTTP headers
 
