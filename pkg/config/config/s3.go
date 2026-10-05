@@ -82,7 +82,12 @@ func InitS3Connection(fs Fs) error {
 		client := clients[connection]
 		if client == nil {
 			var err error
-			client, err = newS3Client(u, fs.Transport, fs.S3.PreferIPv4)
+			// Build IPv4-only transport if prefer_ipv4 is enabled and no custom transport provided
+			transport := fs.Transport
+			if transport == nil && fs.S3.PreferIPv4 {
+				transport = newIPv4OnlyTransport()
+			}
+			client, err = newS3Client(u, transport)
 			if err != nil {
 				return fmt.Errorf("s3: invalid connection URL for bucket %q", entry.Name)
 			}
@@ -120,40 +125,34 @@ func InitS3Connection(fs Fs) error {
 	return nil
 }
 
-func newS3Client(u *url.URL, transport http.RoundTripper, preferIPv4 bool) (*minio.Client, error) {
+func newIPv4OnlyTransport() http.RoundTripper {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// Force IPv4-only connections by using "tcp4" network
+		// Useful for environments with broken IPv6 connectivity
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
+	}
+}
+
+func newS3Client(u *url.URL, transport http.RoundTripper) (*minio.Client, error) {
 	if u.Scheme != SchemeS3 {
 		return nil, errors.New("s3: expected an s3:// connection URL")
 	}
 	q, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
 		return nil, errors.New("s3: invalid connection parameters")
-	}
-
-	// If no custom transport provided, create one with optional IPv4-only mode
-	if transport == nil {
-		dialer := &net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}
-
-		// Force IPv4-only connections when fs.s3.prefer_ipv4 is enabled
-		// Useful for environments with broken IPv6 connectivity
-		network := "tcp"
-		if preferIPv4 {
-			network = "tcp4"
-		}
-
-		transport = &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-				return dialer.DialContext(ctx, network, addr)
-			},
-		}
 	}
 
 	return minio.New(u.Host, &minio.Options{
