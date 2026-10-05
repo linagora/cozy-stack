@@ -78,32 +78,19 @@ func (in *Intent) Save(instance *instance.Instance) error {
 	return couchdb.CreateDoc(instance, in)
 }
 
-// GenerateHref creates the href where the service can be called for an intent
-// The base URL is the cozy subdomain of the app, unless the app manifest has a
-// "service_url_flag" whose feature flag value is a valid URL (external host).
-func (in *Intent) GenerateHref(instance *instance.Instance, slug, target string) string {
-	u := instance.SubDomain(slug)
-	prefix := ""
-	if base := app.ExternalServiceURL(instance, slug); base != nil {
-		u = base
-		prefix = strings.TrimSuffix(base.Path, "/")
-		u.Path = prefix
-		u.RawQuery = ""
-		u.Fragment = ""
-	}
-	parts := strings.SplitN(target, "#", 2)
-	if len(parts[0]) > 0 {
-		p := parts[0]
-		if prefix != "" && !strings.HasPrefix(p, "/") {
-			p = "/" + p
+// GenerateHref builds the frontend page URL that handles an intent.
+func (in *Intent) GenerateHref(base url.URL, target string) string {
+	targetPath, fragment, _ := strings.Cut(target, "#")
+	if targetPath != "" {
+		prefix := strings.TrimSuffix(base.Path, "/")
+		if prefix != "" && !strings.HasPrefix(targetPath, "/") {
+			targetPath = "/" + targetPath
 		}
-		u.Path = prefix + p
+		base.Path = prefix + targetPath
 	}
-	if len(parts) == 2 && len(parts[1]) > 0 {
-		u.Fragment = parts[1]
-	}
-	u.RawQuery = "intent=" + in.ID()
-	return u.String()
+	base.Fragment = fragment
+	base.RawQuery = "intent=" + in.ID()
+	return base.String()
 }
 
 // FillServices looks at all the application that can answer this intent
@@ -115,7 +102,14 @@ func (in *Intent) FillServices(instance *instance.Instance) error {
 	}
 	for _, man := range res {
 		if intent := man.FindIntent(in.Action, in.Type); intent != nil {
-			href := in.GenerateHref(instance, man.Slug(), intent.Href)
+			base := instance.SubDomain(man.Slug())
+			if external := app.ExternalServiceURL(instance, man.Slug()); external != nil {
+				base = external
+				if intent.Href == "" || strings.HasPrefix(intent.Href, "#") {
+					base.Path = strings.TrimSuffix(base.Path, "/")
+				}
+			}
+			href := in.GenerateHref(*base, intent.Href)
 			service := Service{Slug: man.Slug(), Href: href}
 			in.Services = append(in.Services, service)
 		}
