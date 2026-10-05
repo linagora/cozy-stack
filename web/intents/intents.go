@@ -60,7 +60,7 @@ func (i *apiIntent) MarshalJSON() ([]byte, error) {
 		output.Client = i.resolveClientURL(parts[1])
 	}
 	if i.sessionCode != "" {
-		if err := addSessionCodeToServices(output.Services, i.sessionCode); err != nil {
+		if err := addSessionCodeToServices(i.ins, output.Services, i.sessionCode); err != nil {
 			return nil, err
 		}
 	}
@@ -124,7 +124,9 @@ func createIntent(c echo.Context) error {
 		return wrapIntentsError(err)
 	}
 	sessionCode := ""
-	if grant.Source != "" && len(intent.Services) > 0 {
+	// The session code is only sent to the services on a cozy subdomain, so
+	// it is not minted when all the services are hosted on an external origin.
+	if grant.Source != "" && hasCozyService(instance, intent.Services) {
 		sessionCode, err = auth.MintSessionCode(c, instance, grant.Source)
 		if err != nil {
 			return jsonapi.InternalServerError(err)
@@ -150,8 +152,12 @@ func createIntentSessionCodeGrant(c echo.Context, inst *instance.Instance) (auth
 	return grant, nil
 }
 
-func addSessionCodeToServices(services []intent.Service, sessionCode string) error {
+func addSessionCodeToServices(inst *instance.Instance, services []intent.Service, sessionCode string) error {
 	for idx := range services {
+		// A session code must never be sent to an external origin.
+		if !isCozyServiceHref(inst, services[idx].Slug, services[idx].Href) {
+			continue
+		}
 		href, err := serviceHrefWithSessionCode(services[idx].Href, sessionCode)
 		if err != nil {
 			return err
@@ -159,6 +165,23 @@ func addSessionCodeToServices(services []intent.Service, sessionCode string) err
 		services[idx].Href = href
 	}
 	return nil
+}
+
+func hasCozyService(inst *instance.Instance, services []intent.Service) bool {
+	for _, service := range services {
+		if isCozyServiceHref(inst, service.Slug, service.Href) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCozyServiceHref(inst *instance.Instance, slug, href string) bool {
+	u, err := url.Parse(href)
+	if err != nil {
+		return false
+	}
+	return u.Host == inst.SubDomain(slug).Host
 }
 
 func serviceHrefWithSessionCode(href, sessionCode string) (string, error) {
