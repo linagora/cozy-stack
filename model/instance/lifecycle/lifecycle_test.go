@@ -546,7 +546,7 @@ func TestLifecycle(t *testing.T) {
 		require.NoError(t, lifecycle.SetEmail(org, "erin@"+suffix))
 		erin := create("erin", "erin@"+suffix)
 		report = lifecycle.BackfillEmails([]*instance.Instance{org, erin}, false)
-		assert.Len(t, report.Duplicates["erin@"+suffix], 2)
+		assert.Equal(t, []string{erin.Domain}, report.Duplicates["erin@"+suffix])
 		assert.Empty(t, emailOf(erin))
 
 		// SetEmail refuses an email held by another instance, even when the
@@ -585,6 +585,11 @@ func TestLifecycle(t *testing.T) {
 		require.NoError(t, lifecycle.SetEmail(synced, "synced@"+suffix))
 		drifted := create("drifted", "new@"+suffix)
 		require.NoError(t, lifecycle.SetEmail(drifted, "old@"+suffix))
+		orgSlug := "org-" + strings.TrimSuffix(suffix, ".example")
+		org, err := lifecycle.Create(&lifecycle.Options{Domain: orgSlug + ".example", OrgID: orgSlug})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(org.Domain) })
+		require.NoError(t, lifecycle.SetEmail(org, "org@"+suffix))
 
 		oldHooks := logrus.StandardLogger().ReplaceHooks(make(logrus.LevelHooks))
 		t.Cleanup(func() { logrus.StandardLogger().ReplaceHooks(oldHooks) })
@@ -599,12 +604,13 @@ func TestLifecycle(t *testing.T) {
 			if entry.Data["nspace"] != "email" {
 				continue
 			}
-			if entry.Level == logrus.ErrorLevel {
+			if entry.Level == logrus.WarnLevel {
 				logged[entry.Data["domain"].(string)] = entry.Data
 			}
 			summary = summary || strings.HasPrefix(entry.Message, "emails checked:")
 		}
 		assert.NotContains(t, logged, synced.Domain)
+		assert.NotContains(t, logged, org.Domain)
 		require.Contains(t, logged, drifted.Domain)
 		assert.Equal(t, "old@"+suffix, logged[drifted.Domain]["email"])
 		assert.Equal(t, "new@"+suffix, logged[drifted.Domain]["settings_email"])

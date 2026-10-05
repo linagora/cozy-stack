@@ -92,7 +92,7 @@ func BackfillEmails(insts []*instance.Instance, dryRun bool) *EmailsReport {
 	byEmail := make(map[string][]*instance.Instance)
 	for _, inst := range insts {
 		report.Scanned++
-		if inst.IsOrganizationInstance() && inst.Email == "" {
+		if inst.IsOrganizationInstance() {
 			report.Skipped++
 			continue
 		}
@@ -161,7 +161,7 @@ func CheckEmails() (*EmailsCheck, error) {
 	log := logger.WithNamespace("email")
 	err := instance.ForeachInstances(func(inst *instance.Instance) error {
 		check.Scanned++
-		if inst.IsOrganizationInstance() && inst.Email == "" {
+		if inst.IsOrganizationInstance() {
 			return nil
 		}
 		email, err := inst.SettingsEMail()
@@ -180,13 +180,17 @@ func CheckEmails() (*EmailsCheck, error) {
 			"settings_email": email,
 			"context":        inst.ContextName,
 			"org_domain":     inst.OrgDomain,
-		}).Errorf("email differs from the settings email")
+		}).Warnf("email differs from the settings email")
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	log.Infof("emails checked: %d scanned, %d drifts, %d errors",
+	logf := log.Infof
+	if check.Drifts > 0 || len(check.Errors) > 0 {
+		logf = log.Errorf
+	}
+	logf("emails checked: %d scanned, %d drifts, %d errors",
 		check.Scanned, check.Drifts, len(check.Errors))
 	return check, nil
 }
