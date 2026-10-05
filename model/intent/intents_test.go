@@ -132,6 +132,83 @@ func TestIntents(t *testing.T) {
 		assert.Len(t, intent.Services, 0)
 	})
 
+	t.Run("GenerateHrefWithServiceURLFlag", func(t *testing.T) {
+		calendar := &couchdb.JSONDoc{
+			Type: consts.Apps,
+			M: map[string]interface{}{
+				"_id":              consts.Apps + "/calendar",
+				"slug":             "calendar",
+				"service_url_flag": "calendar_service_url",
+				"intents": []app.Intent{
+					{
+						Action: "OPEN",
+						Types:  []string{"io.cozy.calendar.events"},
+						Href:   "/intents#/open",
+					},
+				},
+			},
+		}
+		require.NoError(t, couchdb.CreateNamedDoc(ins, calendar))
+		t.Cleanup(func() { ins.FeatureFlags = nil })
+
+		intent := &Intent{IID: "abc"}
+
+		// No flag value: fallback to the cozy subdomain
+		ins.FeatureFlags = nil
+		href := intent.GenerateHref(ins, "calendar", "/intents#/open")
+		assert.Equal(t, "https://calendar.cozy.example.net/intents?intent=abc#/open", href)
+
+		// No flag value and a target without path: unchanged cozy subdomain href
+		href = intent.GenerateHref(ins, "calendar", "#/open")
+		assert.Equal(t, "https://calendar.cozy.example.net/?intent=abc#/open", href)
+
+		// Flag value that is not a string: fallback to the cozy subdomain
+		ins.FeatureFlags = map[string]interface{}{"calendar_service_url": true}
+		href = intent.GenerateHref(ins, "calendar", "/intents#/open")
+		assert.Equal(t, "https://calendar.cozy.example.net/intents?intent=abc#/open", href)
+
+		// Invalid flag value: fallback to the cozy subdomain
+		ins.FeatureFlags = map[string]interface{}{"calendar_service_url": "not-a-url"}
+		href = intent.GenerateHref(ins, "calendar", "/intents#/open")
+		assert.Equal(t, "https://calendar.cozy.example.net/intents?intent=abc#/open", href)
+
+		// Host with a CSP separator: fallback to the cozy subdomain
+		ins.FeatureFlags = map[string]interface{}{"calendar_service_url": "https://x.example;sandbox"}
+		href = intent.GenerateHref(ins, "calendar", "/intents#/open")
+		assert.Equal(t, "https://calendar.cozy.example.net/intents?intent=abc#/open", href)
+
+		// Scheme other than http(s): fallback to the cozy subdomain
+		ins.FeatureFlags = map[string]interface{}{"calendar_service_url": "javascript://x"}
+		href = intent.GenerateHref(ins, "calendar", "/intents#/open")
+		assert.Equal(t, "https://calendar.cozy.example.net/intents?intent=abc#/open", href)
+
+		// URL with userinfo: fallback to the cozy subdomain
+		ins.FeatureFlags = map[string]interface{}{"calendar_service_url": "https://u:p@calendar.external.test/"}
+		href = intent.GenerateHref(ins, "calendar", "/intents#/open")
+		assert.Equal(t, "https://calendar.cozy.example.net/intents?intent=abc#/open", href)
+
+		// Valid flag value without path
+		ins.FeatureFlags = map[string]interface{}{"calendar_service_url": "https://calendar.external.test"}
+		href = intent.GenerateHref(ins, "calendar", "/intents#/open")
+		assert.Equal(t, "https://calendar.external.test/intents?intent=abc#/open", href)
+
+		// Valid flag value with a path prefix and a trailing slash
+		ins.FeatureFlags = map[string]interface{}{"calendar_service_url": "https://calendar.external.test/app/"}
+		href = intent.GenerateHref(ins, "calendar", "/intents#/open")
+		assert.Equal(t, "https://calendar.external.test/app/intents?intent=abc#/open", href)
+
+		// Path prefix and a target without leading slash
+		href = intent.GenerateHref(ins, "calendar", "intents#/open")
+		assert.Equal(t, "https://calendar.external.test/app/intents?intent=abc#/open", href)
+
+		// FillServices uses the external URL too
+		in := &Intent{IID: "abc", Action: "OPEN", Type: "io.cozy.calendar.events"}
+		require.NoError(t, in.FillServices(ins))
+		require.Len(t, in.Services, 1)
+		assert.Equal(t, "calendar", in.Services[0].Slug)
+		assert.Equal(t, "https://calendar.external.test/app/intents?intent=abc#/open", in.Services[0].Href)
+	})
+
 	t.Run("FillAvailableWebapps", func(t *testing.T) {
 		intent := &Intent{
 			IID:    "6b44d8d0-148b-11e7-a1cf-a38d75a77df6",

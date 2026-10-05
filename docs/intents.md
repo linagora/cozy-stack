@@ -228,6 +228,16 @@ The stack then stores the information for that intent:
 Finally, the service URL is suffixed with `?intent=` followed by the intent's
 id, and then sent to the client.
 
+By default, the service URL is on the cozy subdomain of the service app. An
+app whose intent services are hosted on another origin declares a
+`service_url_flag` in its manifest: the value of this feature flag (an
+absolute URL, optionally with a path prefix) replaces the cozy subdomain as
+the base of the service URL. The `href` of the intent is appended to it. Only
+`http` and `https` URLs with an ASCII host (letters, digits, dots and dashes,
+with an optional port) and no userinfo are accepted; a query or a fragment in
+the flag value is dropped; and a flag value whose host is the cozy subdomain
+of the app is ignored. In all these cases, the cozy subdomain is used.
+
 ### 4. Available apps
 
 In addition to the services that manage intents, a list of available (but not
