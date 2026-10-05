@@ -158,7 +158,7 @@ func TestConfirmEmailUpdate_success(t *testing.T) {
 		},
 	}).Return(nil).Once()
 
-	instSvc.On("SyncEmail", &inst, "some@email.com").Return(nil).Once()
+	instSvc.On("SetEmail", &inst, "some@email.com").Return(nil).Once()
 
 	clouderySvc.On("SaveInstance", &inst, &cloudery.SaveCmd{
 		Locale:     "fr/FR",

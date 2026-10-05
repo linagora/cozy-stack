@@ -2,13 +2,16 @@ package instance
 
 import (
 	"encoding/json"
+	"fmt"
 
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/cozy-stack/pkg/utils"
 )
 
 type InstanceService struct {
@@ -96,9 +99,31 @@ func (s *InstanceService) listByOrgField(indexName, fieldName, value string) ([]
 	}
 }
 
-// SyncEmail copies the settings email to the instance.
-func (s *InstanceService) SyncEmail(inst *Instance, settingsEmail string) error {
-	return SyncEmail(inst, settingsEmail)
+// SetEmail stores the email of the instance owner. Organization instances
+// keep no email. The lock on the email keeps two instances from taking it at
+// the same time.
+func (s *InstanceService) SetEmail(inst *Instance, email string) error {
+	email = utils.NormalizeEmail(email)
+	if inst.IsOrganizationInstance() || email == "" || email == inst.Email {
+		return nil
+	}
+	mu := config.Lock().ReadWrite(prefixer.GlobalPrefixer, "instance-email/"+email)
+	if err := mu.Lock(); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+
+	docs, err := FindByEmail(email)
+	if err != nil {
+		return err
+	}
+	for _, doc := range docs {
+		if doc.Domain != inst.Domain {
+			return fmt.Errorf("%w: %s", ErrEmailTaken, doc.Domain)
+		}
+	}
+	inst.Email = email
+	return s.Update(inst)
 }
 
 // Update saves the changes in CouchDB.

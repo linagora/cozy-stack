@@ -207,7 +207,11 @@ func (s *SettingsService) ConfirmEmailUpdate(inst *instance.Instance, tok string
 		return fmt.Errorf("failed to save the settings changes: %w", err)
 	}
 
-	if err := s.instance.SyncEmail(inst, pendingEmail); err != nil {
+	// An email held by another instance is left out, as the settings update
+	// has already been saved.
+	if err := s.instance.SetEmail(inst, pendingEmail); errors.Is(err, instance.ErrEmailTaken) {
+		inst.Logger().WithNamespace("settings").Warnf("Email not synced: %s", err)
+	} else if err != nil {
 		return fmt.Errorf("failed to update the instance: %w", err)
 	}
 

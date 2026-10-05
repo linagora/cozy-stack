@@ -543,7 +543,9 @@ func TestLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = lifecycle.Destroy(org.Domain) })
 		require.True(t, org.IsOrganizationInstance())
-		require.NoError(t, instance.SetEmail(org, "erin@"+suffix))
+		// SetEmail skips organization instances, but older ones may hold one.
+		org.Email = "erin@" + suffix
+		require.NoError(t, instance.Update(org))
 		erin := create("erin", "erin@"+suffix)
 		report = lifecycle.BackfillEmails([]*instance.Instance{org, erin}, false)
 		assert.Len(t, report.Duplicates["erin@"+suffix], 2)
@@ -572,7 +574,7 @@ func TestLifecycle(t *testing.T) {
 		assert.Empty(t, emailOf(dave))
 	})
 
-	t.Run("SyncEmail", func(t *testing.T) {
+	t.Run("SetEmail", func(t *testing.T) {
 		suffix := fmt.Sprintf("%d.example", time.Now().UnixNano())
 		domain := "sync-" + suffix
 		inst, err := lifecycle.Create(&lifecycle.Options{Domain: domain, Email: " Sync@" + suffix})
@@ -580,9 +582,10 @@ func TestLifecycle(t *testing.T) {
 		t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
 		assert.Equal(t, "sync@"+suffix, inst.Email)
 
-		// Any settings update brings back a drifted email.
+		// Any patch brings back a drifted email, even one that leaves the
+		// settings unchanged.
 		require.NoError(t, instance.SetEmail(inst, "drifted@"+suffix))
-		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{PublicName: "Sync", FromCloudery: true}))
+		require.NoError(t, lifecycle.Patch(inst, &lifecycle.Options{FromCloudery: true}))
 		inst, err = lifecycle.GetInstance(domain)
 		require.NoError(t, err)
 		assert.Equal(t, "sync@"+suffix, inst.Email)

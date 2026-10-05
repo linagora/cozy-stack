@@ -247,10 +247,6 @@ func Create(opts *Options) (*instance.Instance, error) {
 	if err = couchdb.CreateDoc(prefixer.GlobalPrefixer, i); err != nil {
 		return nil, err
 	}
-	email, _ := settings.M["email"].(string)
-	if err = instance.SyncEmail(i, email); err != nil {
-		return nil, err
-	}
 
 	opts.trace("init VFS", func() {
 		if err = i.MakeVFS(); err != nil {
@@ -263,6 +259,13 @@ func Create(opts *Options) (*instance.Instance, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// The instance is usable without its email, so a failure here does not
+	// fail the creation.
+	email, _ := settings.M["email"].(string)
+	if err := instance.SetEmail(i, email); err != nil {
+		i.Logger().Warnf("Email not set: %s", err)
 	}
 
 	opts.trace("install apps", func() {

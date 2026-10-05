@@ -47,7 +47,7 @@ func (m *Mock) CheckPassphrase(inst *Instance, pass []byte) error {
 	return m.Called(inst, pass).Error(0)
 }
 
-// SyncEmail mock method.
-func (m *Mock) SyncEmail(inst *Instance, settingsEmail string) error {
-	return m.Called(inst, settingsEmail).Error(0)
+// SetEmail mock method.
+func (m *Mock) SetEmail(inst *Instance, email string) error {
+	return m.Called(inst, email).Error(0)
 }
