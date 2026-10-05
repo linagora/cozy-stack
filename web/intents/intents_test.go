@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/app"
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/intent"
 	"github.com/cozy/cozy-stack/model/oauth"
@@ -25,6 +26,27 @@ import (
 	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAddSessionCodeToServices(t *testing.T) {
+	config.UseTestFile(t)
+	ins := &instance.Instance{Domain: "cozy.example.net"}
+	for _, tc := range []struct {
+		name, href, want string
+		cozy             bool
+	}{
+		{"internal", "https://calendar.cozy.example.net/open?intent=abc&session_code=old&view=week#/open", "https://calendar.cozy.example.net/open?intent=abc&session_code=new&view=week#/open", true},
+		{"external", "https://calendar.external.test/open?intent=abc#/open", "https://calendar.external.test/open?intent=abc#/open", false},
+		{"other_app", "https://drive.cozy.example.net/open?intent=abc", "https://drive.cozy.example.net/open?intent=abc", false},
+		{"malformed", "https://%", "https://%", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			services := []intent.Service{{Slug: "calendar", Href: tc.href}}
+			require.Equal(t, tc.cozy, hasCozyService(ins, services))
+			addSessionCodeToServices(ins, services, "new")
+			require.Equal(t, tc.want, services[0].Href)
+		})
+	}
+}
 
 func TestIntents(t *testing.T) {
 	if testing.Short() {
