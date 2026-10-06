@@ -30,7 +30,7 @@
             <input type="text" class="form-control form-control-md-lg {{if or .URLError .NotEmailError}}is-invalid{{end}}" name="slug" autofocus value="{{.RecipientSlug}}" placeholder="claude" inputmode="url" />
             <select name="domain" class="form-select form-select-end w-min-content flex-grow-0">
               <option value="{{.RecipientDomain}}">.{{.RecipientDomain}}</option>
-              <option value="">Autre domaine</option>
+              <option value="">{{t "Sharing Discovery Other domain"}}</option>
             </select>
             <span class="select-arrow"></span>
             <label for="slug">{{t "Sharing Discovery URL field"}}</label>

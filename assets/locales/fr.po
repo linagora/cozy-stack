@@ -746,6 +746,9 @@ msgstr "Coffre-fort numérique"
 msgid "Permissions io.cozy.files.versions"
 msgstr "Versions des fichiers"
 
+msgid "Permissions io.cozy.home.settings"
+msgstr "Paramètres de l'application"
+
 msgid "Permissions io.cozy.identities"
 msgstr "Identités"
 
@@ -1183,6 +1186,9 @@ msgstr ""
 msgid "Sharing Discovery URL field"
 msgstr "Adresse de mon Twake"
 
+msgid "Sharing Discovery Other domain"
+msgstr "Autre domaine"
+
 msgid "Sharing URL Discovery error"
 msgstr ""
 "L'adresse du Twake que vous avez saisie est incorrecte, veuillez ré-essayer."
@@ -1195,6 +1201,9 @@ msgstr "Synchroniser dans mon Twake"
 
 msgid "Sharing Discovery Shortcut Submit"
 msgstr "Ajouter à mon Twake"
+
+msgid "Sharing No Twake"
+msgstr "Vous n'avez pas encore de Twake ?"
 
 msgid "Sharing No Cozy"
 msgstr "Pas encore de Twake ?"

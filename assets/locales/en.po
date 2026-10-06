@@ -1084,6 +1084,9 @@ msgstr "Your address will be sent to %s to simplify the nexts sharings"
 msgid "Sharing Discovery URL field"
 msgstr "My Twake address"
 
+msgid "Sharing Discovery Other domain"
+msgstr "Other domain"
+
 msgid "Sharing URL Discovery error"
 msgstr "The Twake URL you entered is incorrect, please try again"
 
