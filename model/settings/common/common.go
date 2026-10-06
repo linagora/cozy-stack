@@ -36,6 +36,7 @@ type UserSettingsPayload struct {
 	MatrixID    string `json:"matrix_id,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 	Avatar      string `json:"avatar,omitempty"`
+	Theme       string `json:"theme,omitempty"`
 }
 
 // UserSettingsRequest represents the complete request structure
@@ -129,6 +130,9 @@ func UpdateCommonSettings(inst *instance.Instance, settings *couchdb.JSONDoc) (b
 		}
 		if matrixID, _ := settings.M["matrix_id"].(string); matrixID != "" {
 			addDiff("matrix_id", remote.Payload.MatrixID, matrixID)
+		}
+		if request.Payload.Theme != "" {
+			addDiff("theme", remote.Payload.Theme, request.Payload.Theme)
 		}
 
 		log.Warnf("common settings out of sync: local=%d remote=%d", inst.CommonSettingsVersion, remote.Version)
@@ -308,6 +312,11 @@ func buildRequest(inst *instance.Instance, settings *couchdb.JSONDoc) UserSettin
 	request.Payload.Email = email
 	if phone, ok := settings.M["phone"].(string); ok {
 		request.Payload.Phone = phone
+	}
+	// The common settings API rejects the whole request on an unknown theme.
+	switch theme, _ := settings.M["colorScheme"].(string); theme {
+	case "light", "dark", "auto":
+		request.Payload.Theme = theme
 	}
 	if matrixID, _ := settings.M["matrix_id"].(string); IsMatrixID(matrixID) {
 		request.Payload.MatrixID = matrixID
