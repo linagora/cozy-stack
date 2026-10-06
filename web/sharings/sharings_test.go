@@ -1196,7 +1196,7 @@ func TestSharings(t *testing.T) {
 		body.Contains(`<select name="domain"`)
 		body.Contains(`class="form-select`)
 		body.Contains("mycozy.cloud") // Default domain
-		body.Contains("Autre domaine")
+		body.Contains("Other domain")
 
 		// Verify submit button
 		body.Contains(`<button id="login-submit"`)
