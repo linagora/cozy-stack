@@ -443,7 +443,9 @@ changes nothing writes nothing. `DELETE` removes the document.
 
 When a sharing by email creates a contact, and `common_contacts` is set, the
 Stack publishes it on the `twake:contacts:collected` fanout exchange without
-waiting. It comes back on `twake:contacts:common` and takes its path.
+waiting. It comes back on `twake:contacts:common` and takes its path. Only
+contacts created by the sharing are published: a contact that already exists
+locally is not backfilled.
 
 ```json
 {
