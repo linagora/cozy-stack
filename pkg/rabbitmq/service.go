@@ -56,7 +56,7 @@ func buildManager(node config.RabbitMQNode, exchangesCfg []config.RabbitExchange
 // Failure modes:
 //   - ErrManagerNotFound if no RabbitMQ manager exists for req.ContextName and
 //     no "default" manager is configured;
-//   - a validation error if Exchange or Payload is missing;
+//   - a validation error if Exchange, RoutingKey (unless Fanout) or Payload is missing;
 //   - PublishReturnedError if the exchange exists but no queue binding matches
 //     the routing key and UnroutableOK is false;
 //   - PublishNackedError if the broker negatively acknowledges the publish;
