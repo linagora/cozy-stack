@@ -89,6 +89,36 @@ func TestBuildRequest_MatrixID(t *testing.T) {
 	})
 }
 
+func TestBuildRequest_Theme(t *testing.T) {
+	inst := &instance.Instance{Domain: "alice.example.com"}
+
+	t.Run("the color scheme is sent as the theme", func(t *testing.T) {
+		for _, v := range []string{"light", "dark", "auto"} {
+			settings := &couchdb.JSONDoc{M: map[string]interface{}{
+				"colorScheme": v,
+			}}
+			req := buildRequest(inst, settings)
+			require.Equal(t, v, req.Payload.Theme)
+		}
+	})
+
+	t.Run("no color scheme yields no theme", func(t *testing.T) {
+		settings := &couchdb.JSONDoc{M: map[string]interface{}{}}
+		req := buildRequest(inst, settings)
+		require.Empty(t, req.Payload.Theme)
+	})
+
+	t.Run("an unknown color scheme yields no theme", func(t *testing.T) {
+		for _, v := range []interface{}{"", "blue", 42} {
+			settings := &couchdb.JSONDoc{M: map[string]interface{}{
+				"colorScheme": v,
+			}}
+			req := buildRequest(inst, settings)
+			require.Empty(t, req.Payload.Theme, v)
+		}
+	})
+}
+
 func TestIsMatrixID(t *testing.T) {
 	valid := []string{
 		"@alice:example.org",
