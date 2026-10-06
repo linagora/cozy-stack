@@ -242,6 +242,16 @@ func TestIsTrustedMember(t *testing.T) {
 		require.True(t, IsTrustedMember(inst, member))
 		require.False(t, IsTrustedMember(inst, &Member{Instance: "https://unknown.example.net"}))
 		require.False(t, IsTrustedMember(inst, &Member{}))
+		t.Run("unregistered port", func(t *testing.T) {
+			require.False(t, IsTrustedMember(inst, &Member{Instance: "https://" + sender.Domain + ":8080"}))
+		})
+		t.Run("instance with a port", func(t *testing.T) {
+			withPort := testutils.NewSetup(t, t.Name()).GetTestInstance(&lifecycle.Options{
+				Domain: "withport." + sender.Domain + ":8080",
+				OrgID:  "org-one",
+			})
+			require.True(t, IsTrustedMember(inst, &Member{Instance: withPort.PageURL("", nil)}))
+		})
 
 		setContext(true, false)
 		require.False(t, IsTrustedMember(inst, member), "auto accept is off")

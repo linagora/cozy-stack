@@ -73,7 +73,7 @@ func isSameOrganizationMember(inst *instance.Instance, member *Member) bool {
 	if inst == nil || member == nil || inst.OrgID == "" || !inst.HasCommonContacts() {
 		return false
 	}
-	host := utils.ExtractInstanceHost(member.Instance)
+	host := utils.NormalizeDomain(member.InstanceHost())
 	if host == "" {
 		return false
 	}
