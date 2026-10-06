@@ -1571,6 +1571,10 @@ func TestSettings(t *testing.T) {
 	t.Run("ClientsLimitExceededWithLimitExceeded", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, tsURL)
 
+		// An earlier test switches the instance to German, which is now a
+		// supported locale: render this page in English for its assertions.
+		require.NoError(t, lifecycle.Patch(testInstance, &lifecycle.Options{Locale: "en"}))
+
 		testutils.WithFlag(t, testInstance, "cozy.oauthclients.max", float64(0))
 
 		// Create the OAuth client for the flagship app
