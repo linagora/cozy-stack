@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cozy/cozy-stack/model/account"
 	"github.com/cozy/cozy-stack/model/instance"
@@ -37,6 +38,10 @@ type ChatPayload struct {
 	// Documents, when false, asks for an answer of the LLM alone, without
 	// the user's documents.
 	Documents *bool `json:"documents,omitempty"`
+	// Instructions tell the LLM how to answer in the client, e.g. that the
+	// answer is put in a document as it is: a system message of the answer,
+	// like the instructions of the OpenAI Responses API.
+	Instructions string `json:"instructions,omitempty"`
 }
 
 // directLLM tells whether the client asks for an answer without the documents.
@@ -44,11 +49,18 @@ func (p ChatPayload) directLLM() bool {
 	return p.Documents != nil && !*p.Documents
 }
 
+// maxInstructionsChars bounds the instructions of a client: they come with
+// every answer, before the conversation.
+const maxInstructionsChars = 2000
+
 // Validate checks the options of a chat message: those that cannot go
-// together.
+// together, and the size of the instructions.
 func (p ChatPayload) Validate() error {
 	if p.directLLM() && len(p.AttachmentIDs) > 0 {
 		return errors.New("attachmentIDs cannot be used without the documents")
+	}
+	if n := utf8.RuneCountInString(p.Instructions); n > maxInstructionsChars {
+		return fmt.Errorf("instructions too long: %d characters, at most %d", n, maxInstructionsChars)
 	}
 	return nil
 }
@@ -109,6 +121,8 @@ type QueryMessage struct {
 	AttachmentIDs []string `json:"attachmentIDs,omitempty"`
 	// DirectLLM is the answer of the LLM alone, without the user's documents.
 	DirectLLM bool `json:"directLLM,omitempty"`
+	// Instructions are those of the client on how to answer.
+	Instructions string `json:"instructions,omitempty"`
 }
 
 type Source struct {
@@ -252,6 +266,7 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 		WebSearch:     websearch,
 		AttachmentIDs: payload.AttachmentIDs,
 		DirectLLM:     payload.directLLM(),
+		Instructions:  strings.TrimSpace(payload.Instructions),
 	})
 	if err != nil {
 		return nil, err
@@ -478,6 +493,24 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 	return messages
 }
 
+// withInstructions adds the instructions of the client to the messages, as a
+// system message after the prompt of the assistant: the LLM gets it as it is
+// without the documents, and openRAG takes the leading system messages as
+// custom instructions.
+func withInstructions(messages []ragMessage, instructions string) []ragMessage {
+	if instructions == "" {
+		return messages
+	}
+	i := 0
+	for i < len(messages) && messages[i].Role == SystemRole {
+		i++
+	}
+	out := make([]ragMessage, 0, len(messages)+1)
+	out = append(out, messages[:i]...)
+	out = append(out, ragMessage{Role: SystemRole, Content: instructions})
+	return append(out, messages[i:]...)
+}
+
 // directLLMPayload is the body of a chat completion without the documents.
 // openRAG takes a request without a partition as its model as one for the LLM
 // itself: it gets the messages as they are, with no retrieval and no system
@@ -551,7 +584,7 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	}
 	// The answer comes from the documents with openRAG, or, when the client
 	// asks for an answer without them, from the LLM behind it.
-	messages := ragMessages(&chat, assistant)
+	messages := withInstructions(ragMessages(&chat, assistant), query.Instructions)
 	var payload map[string]interface{}
 	if query.DirectLLM {
 		payload = directLLMPayload(messages, query.Stream, metadata)

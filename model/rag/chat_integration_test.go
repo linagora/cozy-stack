@@ -3,6 +3,7 @@ package rag_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,4 +196,51 @@ func TestChatValidatesTheOptionsOfAMessage(t *testing.T) {
 	require.NoError(t, rag.ChatPayload{Query: "Hello", Documents: &with, AttachmentIDs: []string{"a-file"}}.Validate())
 	require.Error(t, rag.ChatPayload{Query: "Hello", Documents: &without, AttachmentIDs: []string{"a-file"}}.Validate(),
 		"the attached files are read from the documents")
+}
+
+func TestQuerySendsTheInstructionsOfTheClientAsASystemMessage(t *testing.T) {
+	r := newRAGTest(t)
+	assistant := couchdb.JSONDoc{Type: consts.ChatAssistants, M: map[string]interface{}{
+		"name":   "Lawyer",
+		"prompt": "Answer as a lawyer.",
+	}}
+	require.NoError(t, couchdb.CreateDoc(r.inst, &assistant))
+	chat := rag.ChatConversation{
+		DocID: "conversation-with-instructions",
+		Messages: []rag.ChatMessage{
+			{ID: "m1", Role: rag.UserRole, Content: "Make it shorter", CreatedAt: time.Now()},
+		},
+		CozyMetadata: metadata.New(),
+		Rels: jsonapi.RelationshipMap{"assistant": jsonapi.Relationship{
+			Data: map[string]interface{}{"_id": assistant.ID(), "_type": consts.ChatAssistants},
+		}},
+	}
+	require.NoError(t, couchdb.CreateNamedDocWithDB(r.inst, &chat))
+	expected := []completionMessage{
+		{Role: rag.SystemRole, Content: "Answer as a lawyer."},
+		{Role: rag.SystemRole, Content: "Answer with the text only."},
+		{Role: rag.UserRole, Content: "Make it shorter"},
+	}
+
+	// From the documents: openRAG takes the leading system messages as
+	// custom instructions.
+	query := rag.QueryMessage{Task: "chat-completion", DocID: chat.ID(), Instructions: "Answer with the text only."}
+	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	require.Contains(t, lastCompletion(t, r.fake), "model")
+	require.Equal(t, expected, lastCompletionMessages(t, r.fake))
+
+	// Without the documents: the LLM gets them as they are. The instructions
+	// are not saved: the first query has left none in the conversation.
+	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, chat.ID(), &chat))
+	chat.Messages = chat.Messages[:1]
+	require.NoError(t, couchdb.UpdateDoc(r.inst, &chat))
+	query.DirectLLM = true
+	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	require.NotContains(t, lastCompletion(t, r.fake), "model")
+	require.Equal(t, expected, lastCompletionMessages(t, r.fake))
+}
+
+func TestChatLimitsTheInstructionsOfTheClient(t *testing.T) {
+	require.NoError(t, rag.ChatPayload{Query: "Hello", Instructions: strings.Repeat("é", 2000)}.Validate())
+	require.Error(t, rag.ChatPayload{Query: "Hello", Instructions: strings.Repeat("é", 2001)}.Validate())
 }
