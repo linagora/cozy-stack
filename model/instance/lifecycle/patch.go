@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -228,6 +229,16 @@ func Patch(i *instance.Instance, opts *Options) error {
 				i.Logger().Errorf("Error during cloudery settings update %s", err)
 			}
 		}
+	}
+
+	// Outside the settings update, so that an unchanged settings email still
+	// brings back a drifted instance email. An email held by another instance
+	// is left out, as the settings update has already been saved.
+	email, _ := settings.M["email"].(string)
+	if err := instance.SetEmail(i, email); errors.Is(err, instance.ErrEmailTaken) {
+		i.Logger().WithNamespace("instance").Warnf("Email not synced: %s", err)
+	} else if err != nil {
+		return err
 	}
 
 	var updated bool

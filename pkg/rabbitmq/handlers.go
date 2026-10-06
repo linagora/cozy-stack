@@ -227,17 +227,25 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 		log.Infof("user.created: successfully updated passphrase for instance: %s (PasswordDefined: %v)", inst.Domain, inst.PasswordDefined)
 	}
 
-	// A taken email never frees itself, so requeuing would loop forever.
-	if err := lifecycle.SetEmail(inst, msg.InternalEmail); errors.Is(err, lifecycle.ErrEmailTaken) {
-		log.Warnf("user.created: %s not stored for %s: %s", msg.InternalEmail, inst.Domain, err)
-	} else if err != nil {
-		return fmt.Errorf("user.created: store email: %w", err)
+	settings, err := inst.SettingsDocument()
+	if err != nil {
+		return fmt.Errorf("user.created: get settings document: %w", err)
+	}
+	if matrixID := strings.TrimSpace(msg.MatrixID); matrixID != "" {
+		if common.IsMatrixID(matrixID) {
+			settings.M["matrix_id"] = matrixID
+		} else {
+			log.Warnf("user.created: ignoring malformed matrix id %q for instance: %s", matrixID, inst.Domain)
+		}
 	}
 
-	if matrixID := strings.TrimSpace(msg.MatrixID); matrixID != "" {
-		if err := storeMatrixID(inst, matrixID); err != nil {
-			return err
-		}
+	// Publish the email and explicit Matrix ID together to common settings.
+	if err := lifecycle.Patch(inst, &lifecycle.Options{
+		Email:        strings.TrimSpace(msg.InternalEmail),
+		SettingsObj:  settings,
+		FromCloudery: true,
+	}); err != nil {
+		return fmt.Errorf("user.created: update settings: %w", err)
 	}
 
 	if strings.TrimSpace(msg.OrganizationID) != "" || strings.TrimSpace(msg.OrganizationDomain) != "" {
@@ -259,34 +267,6 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 		}
 	}
 
-	return nil
-}
-
-// storeMatrixID saves the Matrix ID carried by a user.created message, which
-// buildRequest then forwards in place of the one derived from the email. A
-// malformed ID is dropped rather than retried, and an unchanged one is patched
-// anyway so a redelivery retries the common settings push.
-func storeMatrixID(inst *instance.Instance, matrixID string) error {
-	if !common.IsMatrixID(matrixID) {
-		log.Warnf("user.created: ignoring malformed matrix id %q for instance: %s", matrixID, inst.Domain)
-		return nil
-	}
-
-	settings, err := inst.SettingsDocument()
-	if err != nil {
-		return fmt.Errorf("user.created: get settings document: %w", err)
-	}
-
-	settings.M["matrix_id"] = matrixID
-
-	if err := lifecycle.Patch(inst, &lifecycle.Options{
-		SettingsObj:  settings,
-		FromCloudery: true, // XXX: the Cloudery has no matrix_id field
-	}); err != nil {
-		return fmt.Errorf("user.created: update matrix id: %w", err)
-	}
-
-	log.Infof("user.created: stored matrix id for instance: %s", inst.Domain)
 	return nil
 }
 

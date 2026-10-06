@@ -10,6 +10,8 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/emailer"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func setupTest(t *testing.T) (*emailer.Mock, *instance.Mock, *token.Mock, *cloudery.Mock, *storageMock, Service) {
@@ -132,7 +134,7 @@ func Test_StartEmailUpdate_with_a_missing_public_name(t *testing.T) {
 }
 
 func TestConfirmEmailUpdate_success(t *testing.T) {
-	_, _, tokenSvc, clouderySvc, storage, svc := setupTest(t)
+	_, instSvc, tokenSvc, clouderySvc, storage, svc := setupTest(t)
 
 	inst := instance.Instance{
 		Domain: "foo.mycozy.cloud",
@@ -154,9 +156,19 @@ func TestConfirmEmailUpdate_success(t *testing.T) {
 		M: map[string]interface{}{
 			"public_name":   "Jane Doe",
 			"email":         "some@email.com",
+			"pending_email": "some@email.com",
+		},
+	}).Return(nil).Once()
+
+	storage.On("setInstanceSettings", &inst, &couchdb.JSONDoc{
+		M: map[string]interface{}{
+			"public_name":   "Jane Doe",
+			"email":         "some@email.com",
 			"pending_email": nil,
 		},
 	}).Return(nil).Once()
+
+	instSvc.On("SetEmail", &inst, "some@email.com").Return(nil).Once()
 
 	clouderySvc.On("SaveInstance", &inst, &cloudery.SaveCmd{
 		Locale:     "fr/FR",
@@ -166,6 +178,64 @@ func TestConfirmEmailUpdate_success(t *testing.T) {
 
 	err := svc.ConfirmEmailUpdate(&inst, "some-token")
 	assert.NoError(t, err)
+}
+
+func TestConfirmEmailUpdate_retry(t *testing.T) {
+	failure := errors.New("temporary failure")
+	for _, step := range []string{"instance", "cloudery", "clear pending email"} {
+		t.Run(step, func(t *testing.T) {
+			_, instSvc, tokenSvc, clouderySvc, storage, svc := setupTest(t)
+			inst := instance.Instance{Domain: "foo.mycozy.cloud", Locale: "fr/FR"}
+			stored := &couchdb.JSONDoc{M: map[string]interface{}{
+				"public_name":   "Jane Doe",
+				"email":         "foo@bar.baz",
+				"pending_email": "some@email.com",
+			}}
+			storage.On("getInstanceSettings", &inst).Return(stored.Clone(), nil).Once()
+			tokenSvc.On("Validate", &inst, token.EmailUpdate, "some@email.com", "some-token").
+				Return(nil).Twice()
+
+			save := func(args mock.Arguments) {
+				stored = args.Get(1).(*couchdb.JSONDoc).Clone().(*couchdb.JSONDoc)
+			}
+			pending := mock.MatchedBy(func(doc *couchdb.JSONDoc) bool {
+				return doc.M["email"] == "some@email.com" && doc.M["pending_email"] == "some@email.com"
+			})
+			cleared := mock.MatchedBy(func(doc *couchdb.JSONDoc) bool {
+				return doc.M["email"] == "some@email.com" && doc.M["pending_email"] == nil
+			})
+			storage.On("setInstanceSettings", &inst, pending).Run(save).Return(nil).Twice()
+			if step == "clear pending email" {
+				storage.On("setInstanceSettings", &inst, cleared).Return(failure).Once()
+			}
+			storage.On("setInstanceSettings", &inst, cleared).Run(save).Return(nil).Once()
+
+			var instanceErr, clouderyErr error
+			if step == "instance" {
+				instanceErr = failure
+			} else if step == "cloudery" {
+				clouderyErr = failure
+			}
+			instSvc.On("SetEmail", &inst, "some@email.com").Return(instanceErr).Once()
+			instSvc.On("SetEmail", &inst, "some@email.com").Return(nil).Once()
+			cmd := &cloudery.SaveCmd{Locale: inst.Locale, Email: "some@email.com", PublicName: "Jane Doe"}
+			if instanceErr == nil {
+				clouderySvc.On("SaveInstance", &inst, cmd).Return(clouderyErr).Once()
+			}
+			clouderySvc.On("SaveInstance", &inst, cmd).Return(nil).Once()
+
+			require.ErrorIs(t, svc.ConfirmEmailUpdate(&inst, "some-token"), failure)
+			require.Equal(t, "some@email.com", stored.M["pending_email"])
+			if step == "instance" {
+				clouderySvc.AssertNotCalled(t, "SaveInstance", &inst, cmd)
+			}
+
+			storage.On("getInstanceSettings", &inst).Return(stored.Clone(), nil).Once()
+			require.NoError(t, svc.ConfirmEmailUpdate(&inst, "some-token"))
+			require.Equal(t, "some@email.com", stored.M["email"])
+			require.Nil(t, stored.M["pending_email"])
+		})
+	}
 }
 
 func TestConfirmEmailUpdate_with_an_invalid_token(t *testing.T) {

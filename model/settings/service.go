@@ -200,11 +200,18 @@ func (s *SettingsService) ConfirmEmailUpdate(inst *instance.Instance, tok string
 	}
 
 	settings.M["email"] = pendingEmail
-	settings.M["pending_email"] = nil
 
 	err = s.storage.setInstanceSettings(inst, settings)
 	if err != nil {
 		return fmt.Errorf("failed to save the settings changes: %w", err)
+	}
+
+	// An email held by another instance is left out, as the settings update
+	// has already been saved.
+	if err := s.instance.SetEmail(inst, pendingEmail); errors.Is(err, instance.ErrEmailTaken) {
+		inst.Logger().WithNamespace("settings").Warnf("Email not synced: %s", err)
+	} else if err != nil {
+		return fmt.Errorf("failed to update the instance: %w", err)
 	}
 
 	publicName, _ := settings.M["public_name"].(string)
@@ -221,6 +228,12 @@ func (s *SettingsService) ConfirmEmailUpdate(inst *instance.Instance, tok string
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update the cloudery: %w", err)
+	}
+
+	// Keep the confirmation link retryable until every update has succeeded.
+	settings.M["pending_email"] = nil
+	if err := s.storage.setInstanceSettings(inst, settings); err != nil {
+		return fmt.Errorf("failed to clear the pending email: %w", err)
 	}
 
 	return nil

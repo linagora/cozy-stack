@@ -16,6 +16,7 @@ type Service interface {
 	Update(inst *Instance) error
 	Delete(inst *Instance) error
 	CheckPassphrase(inst *Instance, pass []byte) error
+	SetEmail(inst *Instance, email string) error
 }
 
 func Init() *InstanceService {

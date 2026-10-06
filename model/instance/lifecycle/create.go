@@ -261,6 +261,13 @@ func Create(opts *Options) (*instance.Instance, error) {
 		return nil, err
 	}
 
+	// The instance is usable without its email, so a failure here does not
+	// fail the creation.
+	email, _ := settings.M["email"].(string)
+	if err := instance.SetEmail(i, email); err != nil {
+		i.Logger().Warnf("Email not set: %s", err)
+	}
+
 	opts.trace("install apps", func() {
 		done := make(chan struct{})
 		for _, app := range opts.Apps {
