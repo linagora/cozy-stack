@@ -927,6 +927,11 @@ func LockOAuthClient(inst *instance.Instance, clientID string) (func(), error) {
 }
 
 func accessToken(c echo.Context) error {
+	// The origins allowed for token_exchange get CORS headers to refresh their
+	// token. Other origins keep the current behavior: no CORS headers, the
+	// request is still processed for clients that send an Origin header.
+	tokenExchangeCORS(c)
+
 	grant := c.FormValue("grant_type")
 	clientID := c.FormValue("client_id")
 	clientSecret := c.FormValue("client_secret")

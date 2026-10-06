@@ -903,6 +903,7 @@ func Routes(router *echo.Group) {
 	authHandler.Register(router.Group("/authorize", noCSRF))
 
 	router.POST("/access_token", accessToken)
+	router.OPTIONS("/access_token", tokenExchangePreflight)
 	router.POST("/token_exchange", tokenExchange, middlewares.AcceptJSON, middlewares.ContentTypeJSON)
 	router.OPTIONS("/token_exchange", tokenExchangePreflight)
 

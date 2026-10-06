@@ -2362,6 +2362,51 @@ func TestTokenExchange(t *testing.T) {
 		resp.Header("Access-Control-Allow-Credentials").Equal("true")
 	})
 
+	t.Run("AllowsRefreshingTheTokenFromAppClientURLFlagOrigin", func(t *testing.T) {
+		const twakeMailURL = "https://mail.stg.lin-saas.com"
+		testutils.WithFlag(t, testInstance, appTokenClientURLFlag, twakeMailURL)
+
+		preflight := e.OPTIONS("/auth/access_token").
+			WithHost(testInstance.Domain).
+			WithHeader("Origin", twakeMailURL).
+			Expect().
+			Status(http.StatusNoContent)
+		preflight.Header("Access-Control-Allow-Origin").Equal(twakeMailURL)
+		preflight.Header("Access-Control-Allow-Methods").Equal(http.MethodPost)
+
+		resp := e.POST("/auth/access_token").
+			WithHost(testInstance.Domain).
+			WithHeader("Origin", twakeMailURL).
+			WithFormField("grant_type", "refresh_token").
+			WithFormField("client_id", "unknown").
+			WithFormField("client_secret", "unknown").
+			WithFormField("refresh_token", "foo").
+			Expect().
+			Status(http.StatusBadRequest)
+		resp.Header("Access-Control-Allow-Origin").Equal(twakeMailURL)
+	})
+
+	t.Run("RejectsRefreshingTheTokenFromUnknownOrigin", func(t *testing.T) {
+		const origin = "https://evil.example.org"
+
+		e.OPTIONS("/auth/access_token").
+			WithHost(testInstance.Domain).
+			WithHeader("Origin", origin).
+			Expect().
+			Status(http.StatusForbidden)
+
+		e.POST("/auth/access_token").
+			WithHost(testInstance.Domain).
+			WithHeader("Origin", origin).
+			WithFormField("grant_type", "refresh_token").
+			WithFormField("client_id", "unknown").
+			WithFormField("client_secret", "unknown").
+			WithFormField("refresh_token", "foo").
+			Expect().
+			Status(http.StatusBadRequest).
+			Header("Access-Control-Allow-Origin").Empty()
+	})
+
 	t.Run("RejectsAppClientURLFlagOriginWhenFlagInvalid", func(t *testing.T) {
 		const twakeMailURL = "https://mail.stg.lin-saas.com"
 		testutils.WithFlag(t, testInstance, appTokenClientURLFlag, twakeMailURL)
