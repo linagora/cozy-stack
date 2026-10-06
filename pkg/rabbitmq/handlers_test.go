@@ -12,6 +12,7 @@ import (
 	"github.com/cozy/cozy-stack/model/banner"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/settings/common"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/cozy/cozy-stack/tests/testutils"
@@ -148,6 +149,65 @@ func TestUserCreatedHandlerStoresEmail(t *testing.T) {
 	got, err := lifecycle.GetInstance(other)
 	require.NoError(t, err)
 	assert.Empty(t, got.Email)
+}
+
+func TestUserCreatedHandlerPatchesEmailAndMatrixIDTogether(t *testing.T) {
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	domain := fmt.Sprintf("email-matrix-%d.example", time.Now().UnixNano())
+	_, err := lifecycle.Create(&lifecycle.Options{Domain: domain, Email: "before@" + domain})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
+
+	cfg := config.GetConfig()
+	previousSettings := cfg.CommonSettings
+	previousHTTP := common.DoCommonHTTP
+	previousRemote := common.GetRemoteCommonSettings
+	t.Cleanup(func() {
+		cfg.CommonSettings = previousSettings
+		common.DoCommonHTTP = previousHTTP
+		common.GetRemoteCommonSettings = previousRemote
+	})
+	cfg.CommonSettings = map[string]config.CommonSettings{
+		config.DefaultInstanceContext: {URL: "http://example.org", Token: "token"},
+	}
+	var requests []common.UserSettingsRequest
+	common.DoCommonHTTP = func(method, urlStr, token string, body []byte) error {
+		var request common.UserSettingsRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			return err
+		}
+		requests = append(requests, request)
+		return nil
+	}
+	common.GetRemoteCommonSettings = func(inst *instance.Instance) (*common.UserSettingsRequest, error) {
+		return &common.UserSettingsRequest{Version: inst.CommonSettingsVersion}, nil
+	}
+
+	email := "Alice@" + domain
+	for _, matrixID := range []string{" @al.ice:example.org ", "@al.ice:example.org", "", "invalid"} {
+		requests = nil
+		body, err := json.Marshal(rabbitmq.UserCreatedMessage{
+			TwakeID:       "alice",
+			WorkplaceFqdn: domain,
+			InternalEmail: " " + email + " ",
+			MatrixID:      matrixID,
+		})
+		require.NoError(t, err)
+		require.NoError(t, rabbitmq.NewUserCreatedHandler().Handle(context.Background(), amqp.Delivery{Body: body}))
+
+		require.Len(t, requests, 1, "one update for matrix id %q", matrixID)
+		require.Equal(t, email, requests[0].Payload.Email)
+		require.Equal(t, "@al.ice:example.org", requests[0].Payload.MatrixID)
+		inst, err := lifecycle.GetInstance(domain)
+		require.NoError(t, err)
+		require.Equal(t, strings.ToLower(email), inst.Email)
+		settings, err := inst.SettingsDocument()
+		require.NoError(t, err)
+		require.Equal(t, email, settings.M["email"])
+		require.Equal(t, "@al.ice:example.org", settings.M["matrix_id"])
+	}
 }
 
 func TestBannerCommandHandler(t *testing.T) {
