@@ -10,6 +10,9 @@ msgstr ""
 "Language: es\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
+msgid "Time Format Long"
+msgstr "el 2 Jan 2006 a las 15:04"
+
 msgid "Tree Administrative"
 msgstr "Administrativo"
 
@@ -26,45 +29,52 @@ msgid "Tree Shared Drives"
 msgstr "Drives"
 
 msgid "Tree Shared with me"
-msgstr "Compartido conmigo"
+msgstr "Compartidos conmigo"
 
 msgid "Tree No longer shared"
-msgstr "Ya no se comparte"
+msgstr "Ya no compartidos"
 
 msgid "Tree Revoked sharing suffix"
-msgstr "Se ha cancelado el compartir"
+msgstr "uso compartido cancelado"
 
 msgid "Notes New note"
 msgstr "Nueva nota"
 
+msgid "Back icon label"
+msgstr "Volver a la pantalla anterior"
+
 msgid "Login Credentials error"
-msgstr ""
-"Las credenciales que usted ha escrito son incorrectas, por favor ensaye de "
-"nuevo."
+msgstr "La contraseña introducida es incorrecta. Inténtelo de nuevo."
 
 msgid "URL Discovery error"
-msgstr "La URL de Twake que usted ha puesto es incorrecta, vuelva a ensayar"
+msgstr "La URL de Twake introducida es incorrecta. Inténtelo de nuevo"
 
 msgid "Login Welcome"
-msgstr "¡Bienvenida.o.!"
+msgstr "¡Bienvenido/a!"
 
 msgid "Login Welcome name"
 msgstr "%s"
 
+msgid "Login Password best practice"
+msgstr "Buena práctica:"
+
+msgid "Login Password tip"
+msgstr "no introduzca nunca su contraseña sin comprobar que la dirección de su navegador coincide con la de su Twake."
+
 msgid "Login Password help"
-msgstr "Escriba su contraseña para acceder a su Twake"
+msgstr "Introduzca su contraseña para acceder a su Twake"
 
 msgid "Login Password field"
 msgstr "Contraseña"
 
 msgid "Login Password show"
-msgstr "Visualizar la contraseña"
+msgstr "Mostrar contraseña"
 
 msgid "Login Password hide"
-msgstr "Ocultar la contraseña"
+msgstr "Ocultar contraseña"
 
 msgid "Login Long Session"
-msgstr "Recuérdemelo"
+msgstr "Recordarme a mí y mis datos en este dispositivo"
 
 msgid "Login Submit"
 msgstr "Iniciar sesión"
@@ -73,156 +83,145 @@ msgid "Login Confirm"
 msgstr "Iniciar sesión"
 
 msgid "Login Connect after reset requested title"
-msgstr "¡Revise sus emails!"
+msgstr "¡Revise su correo!"
 
 msgid "Login Connect after reset requested help"
-msgstr ""
-"Le hemos enviado un enlace e-mail especial. Haga clic en este enlace para "
-"reiniciar su contraseña. Advertencia: este email puede encontrarse en la "
-"carpeta de spams. No dude en echarle una mirada a todos sus archivos."
+msgstr "Le hemos enviado un enlace especial por correo electrónico. Haga clic en este enlace para restablecer su contraseña. Atención: este correo puede llegar a su carpeta de spam. No dude en revisar todas sus carpetas. "
 
 msgid "Login Reconnect title"
-msgstr "Confirmar su contraseña"
+msgstr "Confirme su contraseña"
 
 msgid "Login Reconnect help"
-msgstr ""
-"¡Hola! Una vez haya sido confirmada su contraseña, usted podrá acceder al "
-"tablero de permisos que permite o no el acceso a sus aplicaciones móviles. "
-"¡A usted le corresponde decidir!"
+msgstr "¡Hola! Una vez confirmada su contraseña, accederá al panel de permisos para autorizar o no el acceso a la aplicación móvil. ¡Usted decide!"
 
 msgid "Login Connect from sharing title"
-msgstr "Hola %s!"
+msgstr "¡Hola, %s!"
 
 msgid "Login Connect from sharing help"
-msgstr "Esccribir su contraseña ahora"
+msgstr "Introduzca ahora su contraseña"
 
 msgid "Login Two factor title"
-msgstr "Escriba su código"
+msgstr "Autenticación en 2 pasos"
 
 msgid "Login Two factor error"
-msgstr "La código de acceso  introducido es incorrecto, inténtelo de nuevo."
+msgstr "El código introducido es incorrecto. Inténtelo de nuevo."
 
 msgid "Login Two factor attempts error"
-msgstr ""
-"Usted ha introducido demasiadas contraseñas malas. Se le ha enviado una "
-"nueva, revise su correo electrónico."
+msgstr "Ha introducido demasiados códigos incorrectos. Se le ha enviado uno nuevo, revise su correo electrónico."
 
 msgid "Login Two factor field"
 msgstr "Código (6 dígitos)"
 
 msgid "Login Two factor help"
-msgstr "Se ha enviado un código a su correo"
+msgstr "Introduzca el código que se ha enviado a su buzón de correo"
 
 msgid "Login Two factor device trust field"
 msgstr "Confiar en este dispositivo"
 
 msgid "Login Two factor device trust help"
-msgstr ""
-"Al seleccionar esta opción, no se le volverá a pedi a este dispositivo una "
-"autenticación de dos factores"
+msgstr "Si marca esta opción, ya no se le pedirá la autenticación de dos factores en este dispositivo"
+
+msgid "Magic Link Submit"
+msgstr "Iniciar sesión con mi correo"
+
+msgid "Magic link has been sent Title"
+msgstr "Abra su correo"
+
+msgid "Magic link has been sent Body"
+msgstr "Se le ha enviado un correo electrónico para iniciar sesión en su Twake"
+
+msgid "Magic link has been sent Detail"
+msgstr "¿No ha recibido el correo? Revise sus carpetas de spam, notificaciones y redes sociales."
 
 msgid "Onboarding Not activated Title"
-msgstr "Usted necesita activar su Twake"
+msgstr "Debe activar su Twake"
 
 msgid "Onboarding Not activated Check mails"
-msgstr ""
-"Su Twake aún no está activada. Chequée su email y haga clic en el enlace de "
-"activación para proceder a la instalación de su Twake."
+msgstr "Su Twake aún no se ha activado. Revise su correo electrónico y haga clic en el enlace de activación para continuar con la instalación de su Twake."
 
 msgid "Onboarding Not activated Contact us"
-msgstr "¿Está usted perdido? No dude en contactarnos en "
+msgstr "¿Necesita ayuda? No dude en contactarnos en"
 
 msgid "Passphrase reset Title"
 msgstr "Contraseña olvidada"
 
 msgid "Passphrase reset Help hint"
-msgstr ""
-"Ha establecido una pista para recuperar su contraseña. Haga clic en el botón"
-" de abajo para recibirla por correo electrónico."
+msgstr "La pista que eligió al crear su contraseña se le enviará por correo electrónico."
+
+msgid "Passphrase reset Help hint Cozy Pass"
+msgstr "La pista que eligió al crear su contraseña de Twake Pass se le enviará por correo electrónico."
 
 msgid "Passphrase reset Submit hint"
-msgstr "Envíeme una sugerencia"
+msgstr "Ayúdeme a recuperar mi contraseña"
 
-msgid "Passphrase reset password Title"
-msgstr "Como último recurso, puede restablecer su contraseña:"
-
-msgid "Passphrase reset Help Warning"
-msgstr "¡Atención!"
-
-msgid "Passphrase reset Help 1"
-msgstr ""
-"Su contraseña actual es la única clave para decodificar sus contraseñas "
-"guardadas en su aplicación \"Twake Pass\". Si la reinicia, "
-
-msgid "Passphrase reset Help 2"
-msgstr "usted perderá esos datos"
-
-msgid "Passphrase reset Help 3"
-msgstr "El resto de sus datos seguirá siendo accesible"
+msgid "Passphrase reset Help Message"
+msgstr "¡Atención! Su contraseña actual es la única forma de descifrar las contraseñas guardadas en su aplicación \"Twake Pass\". Si la restablece, perderá esos datos. El resto de sus datos seguirá siendo accesible."
 
 msgid "Passphrase reset Help emptyVault"
-msgstr ""
-"Al hacer clic en este botón, usted enviará un email a su email para cambiar "
-"su contraseńa."
+msgstr "Se le enviará un enlace por correo electrónico para elegir una nueva contraseña."
+
+msgid "Passphrase reset Help emptyVault Cozy Pass"
+msgstr "Se le enviará un enlace por correo electrónico para elegir una nueva contraseña de Twake Pass."
 
 msgid "Passphrase reset Submit"
-msgstr "Reiniciar mi contraseña"
+msgstr "Restablecer mi contraseña"
 
 msgid "Passphrase reset Submit emptyVault"
 msgstr "Cambiar mi contraseña"
 
 msgid "Hint sent Title"
-msgstr "¡Revise sus emails!"
+msgstr "¡Revise su correo!"
 
 msgid "Passphrase is reset Title"
-msgstr "¡Revise sus emails!"
+msgstr "¡Revise su correo!"
 
 msgid "Passphrase Onboarding Title"
-msgstr "Escoger su contraseña"
+msgstr "Elija su contraseña"
 
 msgid "Passphrase Onboarding Help"
-msgstr ""
-"Usar al menos ocho caracteres que incluyan letras, números y símbolos. "
+msgstr "Utilice al menos ocho caracteres con letras, números y símbolos."
+
+msgid "Passphrase Pass Error"
+msgstr "¡Su contraseña es demasiado corta!"
 
 msgid "Passphrase Hint Error"
 msgstr "¡Su pista debe ser diferente de su contraseña!"
 
 msgid "Passphrase Onboarding Show hint form"
-msgstr "Deje una pista"
+msgstr "Dejar una pista"
 
 msgid "Passphrase Onboarding Hint Field"
-msgstr "Deje una pista (opcional)"
+msgstr "Dejar una pista (opcional)"
 
 msgid "Passphrase Onboarding Hint Help"
-msgstr ""
-"La pista se le enviará por correo electrónico si usted olvida su contraseña."
-" Elija una pista que sólo usted pueda entender."
+msgstr "La pista se le enviará por correo electrónico si olvida su contraseña. Elija una pista que solo usted pueda entender."
 
 msgid "Passphrase Onboarding Submit"
 msgstr "Terminar"
 
 msgid "Hint sent Body"
-msgstr ""
-"Le acabamos de enviar su pista para recuperar su contraseña por correo. Le ayudará a recordar su contraseña de Twake.\n"
-"Preferimos advertirle, este correo se puede encontrar en las carpetas de Spam, Notificación o Social. No dude en echar un vistazo a estas carpetas para encontrarlo."
+msgstr "Le acabamos de enviar la pista de su contraseña por correo electrónico. Le ayudará a recordar su contraseña de Twake."
+
+msgid "Hint sent Detail"
+msgstr "Le advertimos de que este correo puede encontrarse en las carpetas de spam, notificaciones o redes sociales. No dude en revisar estas carpetas para encontrarlo."
 
 msgid "Hint sent Login Button"
 msgstr "Volver a la página de inicio de sesión"
 
 msgid "Passphrase is reset Body"
-msgstr ""
-"Acabamos de enviarle un enlace (muy) especial por correo. Haga clic en él para restablecer su contraseña.\n"
-"Preferimos advertirle, este correo puede encontrarse en las carpetas Spam, Notificación o Social. No dude en echar un vistazo a estas carpetas para encontrarlo."
+msgstr "Le acabamos de enviar un enlace (muy) especial por correo electrónico. Haga clic en él para restablecer su contraseña."
+
+msgid "Passphrase is reset Detail"
+msgstr "Le advertimos de que este correo puede encontrarse en las carpetas de spam, notificaciones o redes sociales. No dude en revisar estas carpetas para encontrarlo."
 
 msgid "Passphrase is reset Login Button"
 msgstr "Volver a la página de inicio de sesión"
 
 msgid "Passphrase renew Title"
-msgstr "Escoger una nueva contraseña"
+msgstr "Elija una nueva contraseña"
 
 msgid "Passphrase renew Help"
-msgstr ""
-"Usar al menos ocho caracteres que incluyan letras, números y símbolos. "
+msgstr "Utilice al menos ocho caracteres con letras, números y símbolos."
 
 msgid "Passphrase renew Field"
 msgstr "contraseña"
@@ -232,6 +231,15 @@ msgstr "Guardar"
 
 msgid "Login Forgot password"
 msgstr "He olvidado mi contraseña"
+
+msgid "Login Confirm Title"
+msgstr "Autenticación"
+
+msgid "Login Confirm Help"
+msgstr "Por motivos de seguridad, confirme su identidad"
+
+msgid "Login Confirm Submit"
+msgstr "Confirmar"
 
 msgid "Authorize Title"
 msgstr "Autorizar a %s a acceder a su perfil"
@@ -243,20 +251,16 @@ msgid "Authorize Sharing Title Add"
 msgstr "Añadir a mi Twake"
 
 msgid "Authorize Client presentation"
-msgstr "quisiera acceder a los siguientes datos de su workplace "
+msgstr "desea acceder a los siguientes datos de su espacio de trabajo "
 
 msgid "Authorize Sharing Request"
-msgstr "ha compartido con usted:"
+msgstr "Compartido por"
 
 msgid "Authorize Sharing Description start"
-msgstr ""
-"%s y usted pueden colaborar editando el %s. Cada cambio se enviará "
-"automáticamente entre sus Twake."
+msgstr "%s y usted pueden colaborar editando %s. Cada cambio se transmitirá automáticamente entre sus Twake."
 
 msgid "Authorize Sharing Description end"
-msgstr ""
-"Usted guardará el %s en su Twake, aún si se el compartir ha sido cancelado "
-"por %s."
+msgstr "Conservará %s en su Twake, incluso si %s cancela el uso compartido."
 
 msgid "Authorize Sharing Synchronize label"
 msgstr "Sincronizar en mi Twake"
@@ -268,25 +272,16 @@ msgid "Authorize Sharing Submit Add"
 msgstr "Añadir"
 
 msgid "Authorize Sharing Cancel"
-msgstr "Anular"
+msgstr "Cancelar"
 
 msgid "Authorize Policy sentence"
-msgstr "Usted puede leer la política del uso de sus datos en esta dirección"
+msgstr "Puede consultar su política sobre el uso que hará de sus datos "
 
 msgid "Authorize Policy link"
 msgstr "aquí"
 
-msgid "Authorize Give permission start"
-msgstr "Haciendo clic"
-
-msgid "Authorize Give permission keyword"
-msgstr "Autorizar"
-
-msgid "Authorize Give permission end"
-msgstr ""
-", usted autoriza a la aplicación para que pueda acceder a sus datos en "
-"concordancia con las condiciones del servicio y la política de "
-"confidencialidad."
+msgid "Authorize Give permission"
+msgstr "Al seleccionar **Autorizar**, acepta que la aplicación acceda a sus datos, de acuerdo con sus condiciones de servicio y su política de privacidad."
 
 msgid "Authorize Submit"
 msgstr "Autorizar"
@@ -298,51 +293,157 @@ msgid "Authorize Linked Title"
 msgstr "Solicitud de permisos"
 
 msgid "Authorize Linked Webapp"
-msgstr "Una aplicación dice tenerlos:"
+msgstr "Una aplicación que dice ser:"
 
 msgid "Authorize Linked YourCozy"
-msgstr "Solicita el acceso a su Twake:"
+msgstr "solicita acceso a su Twake:"
 
 msgid "Authorize Linked Help"
-msgstr "Al autorizarlo, la aplicación podrá acceder a estos datos en su Twake:"
+msgstr "La aplicación solicita acceso a estos tipos de datos de su Twake:"
+
+msgid "Authorize Confirm Flagship title"
+msgstr "Aplicación no certificada"
+
+msgid "Authorize Confirm Flagship help"
+msgstr "El origen de esta aplicación no está certificado. Se le ha enviado un código de 6 dígitos por correo electrónico a la dirección: %s. Introduzca el código para confirmar que desea usar la aplicación"
+
+msgid "Authorize Confirm Flagship more link"
+msgstr "https://support.cozy.io/"
+
+msgid "Authorize Confirm Flagship more text"
+msgstr "más información"
+
+msgid "Authorize Confirm Flagship field"
+msgstr "Código de confirmación"
+
+msgid "Authorize Confirm Flagship Confirm"
+msgstr "Confirmar"
+
+msgid "Confirm Flagship Invalid code"
+msgstr "Código no válido"
+
+msgid "Mail Confirm Flagship Subject"
+msgstr "Código de confirmación"
+
+msgid "Mail Confirm Flagship Greeting"
+msgstr "Hola, %s:"
+
+msgid "Mail Confirm Flagship Intro"
+msgstr "Para confirmar que desea usar la aplicación Twake, copie el siguiente código e introdúzcalo en la aplicación:"
+
+msgid "Move delegated auth Title"
+msgstr "Confirmación de la mudanza"
+
+msgid "Move delegated auth Help"
+msgstr "Se ha enviado un código por correo electrónico a la dirección %s."
 
 msgid "Import Title"
 msgstr "Importación en curso"
 
 msgid "Import Description"
-msgstr ""
-"La importación de datos puede tomar tiempo. Puede cerrar esta pantalla, se "
-"le enviará un correo electrónico una vez que la importación se haya "
-"completado."
+msgstr "La importación de datos puede tardar. Puede cerrar esta pantalla: recibirá un correo electrónico cuando la importación haya finalizado."
+
+msgid "Move in progress Title"
+msgstr "Mudanza en curso"
+
+msgid "Move in progress Box"
+msgstr "De **%s** a **%s**"
+
+msgid "Move in progress Description"
+msgstr "La mudanza de datos puede tardar. Puede cerrar esta pantalla: recibirá un correo electrónico cuando la mudanza haya finalizado."
+
+msgid "Move Confirm Title"
+msgstr "Hemos recibido su solicitud de mudanza"
+
+msgid "Move Confirm Box"
+msgstr "Se ha enviado un correo electrónico a %s para aceptar la mudanza."
+
+msgid "Move Confirm Description"
+msgstr "¿No ha recibido este correo? Revise su carpeta de spam o escríbanos a claude@cozycloud.cc."
+
+msgid "Move Link Title"
+msgstr "%s ha cambiado la dirección de su Twake"
+
+msgid "Move Link Description"
+msgstr "Este enlace pronto dejará de estar disponible; se ha generado uno nuevo:"
+
+msgid "Move Link More"
+msgstr "Copie y pegue este nuevo enlace para conservarlo antes de que deje de poder acceder a esta página."
+
+msgid "Move Link FAQ URL"
+msgstr "https://help.cozy.io/article/491-how-to-retrieve-a-share-link"
+
+msgid "Move Link FAQ Text"
+msgstr "¿Cómo encuentro un enlace compartido en caso de cambio de dirección?"
+
+msgid "Move Vault Title"
+msgstr "Importar mis contraseñas"
+
+msgid "Move Vault Description"
+msgstr "Siga estos pasos para importar las contraseñas que exportó al inicio de la mudanza:"
+
+msgid "Move Vault Step 1"
+msgstr "Abra la extensión de Twake en su navegador"
+
+msgid "Move Vault Step 2"
+msgstr "Cierre la sesión y, a continuación, inicie sesión en la extensión con su nuevo Twake"
+
+msgid "Move Vault Step 3"
+msgstr "Haga clic en \"**Ajustes / Importar elementos**\""
+
+msgid "Move Vault Step 4"
+msgstr "Seleccione el formato de origen \"**Bitwarden (json)**\", haga clic en \"**elegir archivo**\" y seleccione el archivo que acaba de exportar desde su extensión"
+
+msgid "Move Vault Step 5"
+msgstr "Haga clic en \"**Importar**\""
+
+msgid "Move Vault Link"
+msgstr "He importado mis contraseñas"
+
+msgid "Move Vault Ignore"
+msgstr "Omitir este paso"
 
 msgid "Error Title"
-msgstr "Lo siento, se ha producido un error."
+msgstr "Lo sentimos, se ha producido un error inesperado."
 
 msgid "Error Internal Server Error Title"
-msgstr "Oops…"
+msgstr "Vaya…"
 
 msgid "Error Internal Server Error Message"
-msgstr ""
-"Parece que su Twake se cayó. Nuestro equipo está trabajando duro para ponerlo"
-" de nuevo en pie."
+msgstr "Parece que su Twake está desbordado. Nuestro equipo trabaja para que vuelva a funcionar."
 
 msgid "Error Instance not found Title"
 msgstr "La dirección de este Twake no existe"
 
 msgid "Error Instance not found Message"
-msgstr ""
-"Es posible que haya introducido una dirección incorrecta o haya cometido un "
-"error de escritura. Para estar seguro, por favor, compruebe la dirección de "
-"su Twake que le enviamos por correo electrónico durante su creación."
+msgstr "Es posible que haya introducido una dirección incorrecta por un error de escritura. Para asegurarse, compruebe la dirección de su Twake que se le envió por correo electrónico durante su creación."
+
+msgid "Error InvalidToken Title"
+msgstr "Enlace no válido"
+
+msgid "Error InvalidToken Message"
+msgstr "Su enlace ha caducado o no es válido"
+
+msgid "Error InvalidToken Link"
+msgstr "Volver a los ajustes"
+
+msgid "Error Application not installed Title"
+msgstr "Aplicación aún no disponible"
+
+msgid "Error Application not installed Message"
+msgstr "Esta aplicación aún no está disponible en su Twake."
+
+msgid "Error Application not supported Message"
+msgstr "Esta aplicación no es compatible con su servidor Twake."
 
 msgid "Error Application not found Title"
-msgstr "Esta a plicación no está disponible aún."
+msgstr "La aplicación no existe"
 
 msgid "Error Application not found Message"
-msgstr "Lo sentimos. Esta aplicación no está disponible aún en su Twake."
+msgstr "No hemos encontrado ninguna aplicación que corresponda a esta dirección en su Twake. Quizás se trate de un error de escritura."
 
 msgid "Error Application not found Action"
-msgstr "Ir a Inicio"
+msgstr "Ir al inicio"
 
 msgid "Error Application not found Button"
 msgstr "Instalar esta aplicación"
@@ -351,167 +452,207 @@ msgid "Error Learn more"
 msgstr "Más información:"
 
 msgid "Error Contact us"
-msgstr "¿Tiene un problema, una duda? Contáctenos en"
+msgstr "¿Un problema, una pregunta? Contáctenos en"
 
 msgid "Error Contact instance blocked"
-msgstr "Por favor contáctenos en "
+msgstr "Si desea más información, contáctenos en"
 
 msgid "Error Message instance blocked"
 msgstr "Su Twake ha sido bloqueado"
 
+msgid "the authentication has failed"
+msgstr "La autenticación ha fallado"
+
+msgid "the FranceConnect authentication has failed"
+msgstr "La autenticación con FranceConnect ha fallado"
+
+msgid "OIDC Domain Mismatch %s %s"
+msgstr "Para conectarse a %s, primero cierre la sesión de %s"
+
+msgid "Disconnect"
+msgstr "Cerrar sesión"
+
 msgid "Instance Blocked Login"
-msgstr "El Twake fue bloqueado debido a demasiados intentos de acceso"
+msgstr "El Twake se ha bloqueado debido a demasiados intentos de inicio de sesión"
 
 msgid "Instance Blocked Payment"
-msgstr "El Twake requiere que usted pague"
+msgstr "El Twake requiere un pago"
 
 msgid "Instance Blocked Importing"
-msgstr "Twake está importando datos"
+msgstr "El Twake está importando datos"
+
+msgid "Instance Blocked Moving"
+msgstr "Mudanza en curso"
 
 msgid "Instance Blocked Unknown"
-msgstr "El Twake está bloqueado por razones desconocidas"
+msgstr "El Twake está bloqueado por un motivo desconocido"
 
 msgid "Error No state parameter"
-msgstr "El parámetro de estado es obligatorio"
+msgstr "El parámetro state es obligatorio"
 
 msgid "Error No client_id parameter"
 msgstr "El parámetro client_id es obligatorio"
 
 msgid "Error No redirect_uri parameter"
-msgstr "El parámetro redirect_url es obligatorio"
+msgstr "El parámetro redirect_uri es obligatorio"
 
 msgid "Error No scope parameter"
 msgstr "El parámetro scope es obligatorio"
 
 msgid "Error No registered client"
-msgstr "El cliente debe estar inscrito"
+msgstr "El cliente debe estar registrado"
 
 msgid "Error No sharing_id parameter"
-msgstr "El parámetrp sharing_id es obligatorio"
+msgstr "El parámetro sharing_id es obligatorio"
 
 msgid "Error Incorrect redirect_uri"
-msgstr "El parámetro redirect_url no coincide con el registrado"
+msgstr "El parámetro redirect_uri no coincide con los registrados"
 
 msgid "Error Invalid redirect_uri"
-msgstr "El parámetro redirect_url no es válido"
+msgstr "El parámetro redirect_uri no es válido"
 
 msgid "Error Invalid response type"
-msgstr "El tipo de respuesta no es válido"
+msgstr "Tipo de respuesta no válido"
 
 msgid "Error Invalid scope"
-msgstr "El parámetro scope no es válido"
+msgstr "Scope no válido"
+
+msgid "Error Invalid challenge code method"
+msgstr "Método de código de desafío no válido"
+
+msgid "Error No challenge code"
+msgstr "El parámetro code_challenge debe proporcionarse cuando code_challenge_method está presente"
 
 msgid "Error Must be authenticated"
-msgstr "Usted debe ser autentificado"
+msgstr "Debe estar autenticado"
 
 msgid "Error Invalid reset token"
-msgstr "El enlace para reiniciar su contraseña esta truncado o ha expirado"
+msgstr "El enlace para restablecer la contraseña está incompleto o ha caducado"
 
 msgid "Error Reset already requested"
-msgstr ""
-"El reinicio de la contraseña ya se solicitó. Por favor revise su bandeja de "
-"entrada de emails, y la carpeta de spams."
+msgstr "Ya se ha solicitado el restablecimiento de la contraseña. Revise su bandeja de entrada y la carpeta de spam."
+
+msgid "Error Invalid magic link"
+msgstr "El enlace para iniciar sesión en su Twake está incompleto o ha caducado"
 
 msgid "Error Invalid mail token"
-msgstr "El enlace para confirmar su email está truncado o ha expirado"
+msgstr "El enlace para confirmar su correo electrónico está incompleto o ha caducado"
+
+msgid "Error Invalid sharing Title"
+msgstr "Este elemento ya no está disponible"
 
 msgid "Error Invalid sharing"
-msgstr "Parece que el uso compartido no se ha encontrado o ha sido revocado"
+msgstr ""
+"El archivo o la carpeta se ha eliminado o se ha retirado su acceso.\n"
+"Contacte con el propietario para obtener más información."
 
 msgid "Error Sharing already accepted Title"
-msgstr "Usted ya aceptó compartir este documento"
+msgstr "Ya ha aceptado este uso compartido"
 
 msgid "Error Sharing already accepted"
-msgstr "Debería saber si usted ya aceptó compartir este documento."
+msgstr "Encontrará este uso compartido en su Twake."
 
 msgid "Error Sharing already accepted Button"
-msgstr "Ir a mi Twake: %s"
+msgstr "Ir a mi Twake"
 
 msgid "Two Factor Activation"
-msgstr "La autenticación con dos factores está activada"
+msgstr "La autenticación de dos factores está activada"
 
 msgid "Confirmation User Content"
-msgstr ""
-"Su e-mail ha sido confirmado. Hemos activado con éxito la autenticación de "
-"dos factores para su Twake."
+msgstr "Su correo electrónico ya está confirmado. Hemos activado correctamente la autenticación de dos factores para su Twake."
+
+msgid "Permissions Maximal"
+msgstr "Todos los datos"
+
+msgid "Permissions Wildcard"
+msgstr ", y documentos relacionados"
 
 msgid "Permissions Read only"
-msgstr ", sólo en lectura"
+msgstr ", solo lectura"
 
 msgid "Permissions disk usage"
-msgstr "Cantidad de espacio disco utilizado"
+msgstr "El espacio en disco utilizado"
 
 msgid "Permissions worker konnectors"
-msgstr "Se está ejecutando un conector para importar datos"
+msgstr "Ejecución de un conector para importar datos"
 
 msgid "Permissions worker log"
-msgstr "Guardar un mensaje en los diarios del sistema"
+msgstr "Registro de un mensaje en los registros del sistema"
 
 msgid "Permissions worker sendmail"
-msgstr "Envío de un email"
+msgstr "Envío de un correo"
 
 msgid "Permissions com.bitwarden.profiles"
-msgstr "Perfiles del administrador de contraseñas"
+msgstr "Perfiles del gestor de contraseñas"
 
 msgid "Permissions com.bitwarden.ciphers"
-msgstr "Entradas del administrador de contraseñas"
+msgstr "Entradas del gestor de contraseñas"
 
 msgid "Permissions com.bitwarden.folders"
-msgstr "Carpetas del administrador de contraseñas"
+msgstr "Carpetas del gestor de contraseñas"
 
 msgid "Permissions com.bitwarden.organizations"
-msgstr "Organizaciones del administrador de contraseñas"
+msgstr "Carpetas compartidas de contraseñas"
 
 msgid "Permissions io.cozy.accounts"
 msgstr "Cuentas"
 
 msgid "Permissions io.cozy.apps"
-msgstr "Lista de las aplicaciones instaladas"
+msgstr "Lista de aplicaciones instaladas"
 
 msgid "Permissions io.cozy.apps.suggestions"
-msgstr "Aplicaciones sugeridas"
+msgstr "Sugerencias de aplicaciones"
 
 msgid "Permissions io.cozy.bank.accounts"
 msgstr "Cuentas bancarias"
 
 msgid "Permissions io.cozy.bank.accounts.stats"
-msgstr "Estadísticas de las cuentas bancarias"
+msgstr "Estadísticas de cuentas bancarias"
 
 msgid "Permissions io.cozy.bank.groups"
-msgstr "Grupos bancarios"
+msgstr "Grupos de cuentas bancarias"
 
 msgid "Permissions io.cozy.bank.operations"
 msgstr "Transacciones bancarias"
 
 msgid "Permissions io.cozy.bank.settings"
-msgstr "Configuración de aplicaciones"
+msgstr "Ajustes de la aplicación"
 
 msgid "Permissions io.cozy.bank.recipients"
-msgstr "Receptores de transferencias bancarias"
+msgstr "Destinatarios de transferencias bancarias"
 
 msgid "Permissions io.cozy.bank.recurrence"
-msgstr "Grupos bancarios recurrentes"
+msgstr "Grupos de operaciones bancarias recurrentes"
 
 msgid "Permissions io.cozy.bills"
 msgstr "Facturas"
 
 msgid "Permissions io.cozy.coachco2.settings"
-msgstr "Configuración de aplicaciones"
+msgstr "Ajustes de la aplicación"
 
 msgid "Permissions io.cozy.contacts"
 msgstr "Contactos"
 
+msgid "Permissions io.cozy.contacts.groups"
+msgstr "Grupos de contactos"
+
 msgid "Permissions io.cozy.files"
 msgstr "Archivos"
 
+msgid "Permissions io.cozy.calendar"
+msgstr "Calendario"
+
 msgid "Permissions io.cozy.certified.carbon_copy"
-msgstr "Copia carbón"
+msgstr "Copia certificada"
 
 msgid "Permissions io.cozy.certified.electronic_safe"
-msgstr "Seguro electrónico"
+msgstr "Caja fuerte electrónica"
 
 msgid "Permissions io.cozy.files.versions"
 msgstr "Versiones de archivos"
+
+msgid "Permissions io.cozy.home.settings"
+msgstr "Ajustes de la aplicación"
 
 msgid "Permissions io.cozy.identities"
 msgstr "Identidades"
@@ -520,22 +661,28 @@ msgid "Permissions io.cozy.konnectors"
 msgstr "Conectores para importar datos"
 
 msgid "Permissions io.cozy.notifications"
-msgstr "Preferencias de notificaciónes de aplicaciónes"
+msgstr "Preferencias de notificaciones de la aplicación"
 
 msgid "Permissions io.cozy.photos.albums"
 msgstr "Álbumes de fotos"
 
+msgid "Permissions io.cozy.tags"
+msgstr "Etiquetas"
+
+msgid "Permissions io.cozy.timeseries.geojson"
+msgstr "Trayectos"
+
+msgid "Permissions io.cozy.timeseries.grades"
+msgstr "Calificaciones"
+
 msgid "Permissions io.cozy.settings"
-msgstr "Parámetros"
+msgstr "Ajustes"
 
 msgid "Permissions io.cozy.jobs"
-msgstr "Trabajos por efectuar"
+msgstr "Tareas"
 
 msgid "Permissions io.cozy.triggers"
-msgstr "Tareas programadas"
-
-msgid "Permissions io.cozy.tags"
-msgstr "Tags"
+msgstr "Programación de tareas"
 
 msgid "Permissions io.cozy.permissions"
 msgstr "Delegación de permisos"
@@ -543,32 +690,65 @@ msgstr "Delegación de permisos"
 msgid "Permissions io.cozy.oauth.clients"
 msgstr "Dispositivos conectados"
 
+msgid "Permissions io.cozy.sharings"
+msgstr "Lista de elementos compartidos"
+
 msgid "Permissions fr.maif.maifuser.contrat"
 msgstr "Contrato (Maif)"
 
 msgid "Permissions fr.maif.maifuser.home"
-msgstr "Inicio (Maif)"
+msgstr "Vivienda (Maif)"
 
 msgid "Permissions fr.maif.maifuser.foyer"
-msgstr "Familia (Maif)"
+msgstr "Hogar (Maif)"
 
 msgid "Permissions fr.maif.maifuser.paymentterms"
 msgstr "Condiciones de pago (Maif)"
 
 msgid "Permissions fr.maif.maifuser.sinistre"
-msgstr "Daños (Maif)"
+msgstr "Siniestros (Maif)"
 
 msgid "Permissions fr.maif.maifuser.societaire"
-msgstr "Asociaciones (Maif)"
+msgstr "Socio (Maif)"
 
 msgid "Permissions org.fing.mesinfos.insuranceclaim"
-msgstr "Reclamo de seguros (Maif)"
+msgstr "Declaraciones de siniestros (Maif)"
 
 msgid "Permissions cc.cozycloud.autocategorization"
 msgstr "Archivo de enriquecimiento del modelo de categorización"
 
+msgid "Permissions cc.cozycloud.dacc"
+msgstr "Estadísticas agregadas anónimas"
+
+msgid "Permissions cc.cozycloud.dacc.dev"
+msgstr "Estadísticas agregadas anónimas con fines de desarrollo"
+
+msgid "Permissions cc.cozycloud.dacc_v2"
+msgstr "Estadísticas agregadas anónimas"
+
+msgid "Permissions cc.cozycloud.dacc.dev_v2"
+msgstr "Estadísticas agregadas anónimas con fines de desarrollo"
+
+msgid "Permissions eu.mycozy.dacc_v2"
+msgstr "Estadísticas agregadas anónimas"
+
 msgid "Permissions cc.cozycloud.sentry"
-msgstr "Logs de la aplicación"
+msgstr "Registros de la aplicación"
+
+msgid "Permissions cc.cozycloud.errors"
+msgstr "Registros de la aplicación"
+
+msgid "Permissions cc.cozycloud.announcements"
+msgstr "API para recuperar anuncios"
+
+msgid "Permissions cc.cozycloud.announcements.uploads"
+msgstr "API para recuperar las imágenes de los anuncios"
+
+msgid "Permissions cc.cozycloud.announcements.dev"
+msgstr "API para recuperar anuncios (desarrollo)"
+
+msgid "Permissions cc.cozycloud.announcements.dev.uploads"
+msgstr "API para recuperar las imágenes de los anuncios (desarrollo)"
 
 msgid "Mail Greeting"
 msgstr "Hola"
@@ -579,186 +759,281 @@ msgstr "Atentamente"
 msgid "Mail Cozy Team"
 msgstr "El equipo de Twake Workplace"
 
+msgid "Mail Magic Link Subject"
+msgstr "Inicie sesión en su Twake"
+
+msgid "Mail Magic Link Greeting"
+msgstr "Hola, %s:"
+
+msgid "Mail Magic Link Intro"
+msgstr "Haga clic en el botón para iniciar sesión en su Twake:"
+
+msgid "Mail Magic Link Button text"
+msgstr "Iniciar sesión en mi Twake"
+
 msgid "Mail Hint Subject"
 msgstr "Contraseña olvidada: su pista"
 
 msgid "Mail Hint Intro 1"
-msgstr "Hola %s,"
+msgstr "Hola, %s:"
 
 msgid "Mail Hint Intro 2"
-msgstr ""
-"A continuación encontrará la pista que solicitó para recordar su contraseña "
-"Twake"
+msgstr "A continuación encontrará la pista que solicitó para recordar la contraseña de su Twake"
+
+msgid "Mail Hint Intro 2 Cozy Pass"
+msgstr "A continuación encontrará la pista que solicitó para recordar su contraseña de Twake Pass"
 
 msgid "Mail Hint Outro"
-msgstr ""
-"Como último recurso, puede restablecer su contraseña en la sección \"Olvidé "
-"mi contraseña\" de su Twake. Si usted no inició esta solicitud, contáctenos "
-"respondiendo directamente a este correo electrónico."
+msgstr "Como último recurso, puede restablecer su contraseña en la sección “¿Ha olvidado su contraseña?” de su Twake. Si no ha realizado esta solicitud, contáctenos respondiendo directamente a este correo."
+
+msgid "Mail Update Email Subject"
+msgstr "Confirme su dirección de correo electrónico"
+
+msgid "Mail Update Email Intro 1"
+msgstr "Hola, %s:"
+
+msgid "Mail Update Email Intro 2"
+msgstr "Ha solicitado cambiar la dirección de correo electrónico de su Twake."
+
+msgid "Mail Update Email Button instruction"
+msgstr "Haga clic en el siguiente botón para confirmar la nueva dirección."
+
+msgid "Mail Update Email Button text"
+msgstr "Confirmar mi nueva dirección"
 
 msgid "Mail Reset Passphrase Subject"
-msgstr "Reiniciar su contraseña"
+msgstr "Restablezca su contraseña"
 
 msgid "Mail Reset Passphrase Intro 1"
-msgstr "Hola %s,"
+msgstr "Hola, %s:"
 
 msgid "Mail Reset Passphrase Intro 2"
-msgstr ""
-"Usted pidió cambiar su contraseña. Si usted no inició esta solicitud, por "
-"favor contáctenos respondiendo directamente a este correo electrónico."
+msgstr "Ha solicitado cambiar su contraseña. Si no ha realizado esta solicitud, contáctenos respondiendo directamente a este correo."
+
+msgid "Mail Reset Passphrase Intro 2 Cozy Pass"
+msgstr "Ha solicitado cambiar su contraseña de Twake Pass. Si no ha realizado esta solicitud, contáctenos respondiendo directamente a este correo."
 
 msgid "Mail Reset Passphrase Button instruction"
-msgstr "Haga clic en este botón para cambiarlo de forma segura."
+msgstr "Haga clic en este botón para cambiarla de forma segura."
 
 msgid "Mail Reset Passphrase Button text"
-msgstr "Reiniciar mi contraseña"
+msgstr "Restablecer mi contraseña"
 
 msgid "Mail Reset Passphrase Outro"
-msgstr ""
-"Sólo para que usted lo sepa, tiene 15 minutos para elegir una nueva "
-"contraseña, entonces este email se autodestruirá."
+msgstr "Para su información, dispone de 15 minutos para elegir una nueva contraseña; después, este correo se autodestruirá."
 
 msgid "Mail Archive Subject"
-msgstr "Descargar sus datos de Twake"
+msgstr "Descargue sus datos"
 
 msgid "Mail Archive Intro 1"
-msgstr "Hola %s,"
+msgstr "Hola, %s:"
 
 msgid "Mail Archive Intro 2"
-msgstr "Usted pidió una copia de todos los datos que Twake tiene sobre usted."
+msgstr "Ha solicitado una copia de todos los datos que tenemos sobre usted."
 
 msgid "Mail Archive Button instruction"
-msgstr "Usted puede descargar haciendo clic en el siguiente enlace."
+msgstr "Puede descargarla haciendo clic en el siguiente enlace."
 
 msgid "Mail Archive Button text"
-msgstr "Descargar sus datos de Twake"
+msgstr "Descargar sus datos"
 
 msgid "Mail Archive Alternative text"
-msgstr "El enlace para descargar de su Twake  es el siguiente:"
+msgstr "El enlace de descarga de su Twake es el siguiente:"
 
 msgid "Mail Import Success Subject"
-msgstr "¡Enhorabuena! Su Twake ha sido importado exitosamente."
+msgstr "¡Buenas noticias! Su Twake se ha importado correctamente"
 
 msgid "Mail Import Success Intro 1"
-msgstr "Hola %s,"
+msgstr "Hola, %s:"
 
 msgid "Mail Import Success Intro 2"
-msgstr "La importación de todos sus datos a su Twake ha sido exitosa."
+msgstr "La importación de todos sus datos a su Twake se ha realizado correctamente."
 
 msgid "Mail Import Success Button instruction"
-msgstr ""
-"Usted puede ahora acceder a los datos en su Twake haciendo clic en el "
-"siguiente botón:"
+msgstr "Ya puede acceder a sus datos en su Twake haciendo clic en el siguiente botón:"
 
 msgid "Mail Import Success Button text"
 msgstr "Acceder a mi Twake"
 
 msgid "Mail Import Success Apps not installed"
-msgstr ""
-"A título informativo, los %sservicios no pudieron ser reinstalados. Sin "
-"embargo, todos los datos asociados han sido importados satisfactoriamente."
+msgstr "Para su información, no se han podido reinstalar los servicios %s. No obstante, todos los datos asociados se han importado correctamente."
 
 msgid "Mail Import Success Outro"
 msgstr "Hasta pronto, su Twake"
 
 msgid "Mail Import Error Subject"
-msgstr "La importación a su Twake ha fallado"
+msgstr "⚠ La importación a su Twake ha fallado"
 
 msgid "Mail Import Error Text"
-msgstr ""
-"La importación de los datos a su Twake encuentra un problema. El archivo "
-"transmitido a su Twake no parece válido. ¿Puede renovar la operación desde el"
-" principio?"
+msgstr "Se ha producido un problema durante la importación de datos a su Twake. El archivo transmitido a su Twake no parece válido. ¿Puede repetir la operación desde el principio?"
 
 msgid "Mail Import Error Outro"
-msgstr ""
-"Si el problema persiste, contactar con el servicio de atención al cliente."
+msgstr "Si el problema persiste, contacte con el servicio de atención al cliente."
+
+msgid "Mail Export Error Subject"
+msgstr "⚠ La exportación de su Twake ha fallado"
+
+msgid "Mail Export Error Text"
+msgstr "Se ha producido un problema durante la exportación de datos de su Twake. ¿Puede repetir la operación desde el principio?"
+
+msgid "Mail Export Error Outro"
+msgstr "Si el problema persiste, contacte con el servicio de atención al cliente."
+
+msgid "Mail Move Confirm Subject"
+msgstr "¿Desea mudar su Twake ahora?"
+
+msgid "Mail Move Confirm Intro 1"
+msgstr "Hola, %s:"
+
+msgid "Mail Move Confirm Intro 2"
+msgstr "Se ha solicitado mudar sus datos de %s a %s."
+
+msgid "Mail Move Confirm Button instruction"
+msgstr "Si ha realizado usted esta solicitud, haga clic a continuación para iniciar la mudanza."
+
+msgid "Mail Move Confirm Button text"
+msgstr "Aceptar la mudanza"
+
+msgid "Mail Move Success Subject"
+msgstr "¡Buenas noticias! Su Twake se ha mudado correctamente"
+
+msgid "Mail Move Success Intro 1"
+msgstr "Hola, %s:"
+
+msgid "Mail Move Success Intro 2"
+msgstr "La mudanza de todos sus datos a su Twake se ha realizado correctamente."
+
+msgid "Mail Move Success Button instruction"
+msgstr "Ya puede acceder a sus datos en su Twake haciendo clic en el siguiente botón:"
+
+msgid "Mail Move Success Button text"
+msgstr "Acceder a mi Twake"
+
+msgid "Mail Move Success Apps not installed"
+msgstr "Para su información, no se han podido reinstalar los servicios %s. No obstante, todos los datos asociados se han importado correctamente."
+
+msgid "Mail Move Success Outro"
+msgstr "Hasta pronto, su Twake"
+
+msgid "Mail Move Error Subject"
+msgstr "⚠ La mudanza de su Twake ha fallado"
+
+msgid "Mail Move Error Text"
+msgstr "Se ha producido un problema durante la mudanza de su Twake. ¿Puede repetir la operación desde el principio?"
+
+msgid "Mail Move Error Outro"
+msgstr "Si el problema persiste, contacte con el servicio de atención al cliente."
 
 msgid "Mail Two Factor Subject"
-msgstr "Código de conexión único"
+msgstr "Código de conexión de un solo uso"
 
 msgid "Mail Two Factor Intro"
-msgstr ""
-"La autenticación de dos factores está habilitada para su Twake. Introduzca el"
-" siguiente código para verificar su identidad:"
+msgstr "La autenticación de dos factores está activada en su Twake. Introduzca el siguiente código para verificar su identidad:"
 
 msgid "Mail Two Factor Outro"
-msgstr ""
-"¿No está seguro de lo que hace? Solicite nuestra ayuda a "
-"support@twake.app"
+msgstr "¿No sabe qué hacer? Solicite ayuda en support@twake.app"
 
 msgid "Mail Two Factor Mail Confirmation Subject"
-msgstr "Desea habilitar la autenticación de dos factores en su %s"
+msgstr "Desea activar la autenticación de dos factores en su %s"
 
 msgid "Mail Two Factor Mail Confirmation Intro"
-msgstr ""
-"Aquí está el código para habilitar la autenticación de dos factores en su "
-"Twake:"
+msgstr "Este es el código para activar la autenticación de dos factores:"
 
 msgid "Mail Two Factor Mail Confirmation Outro"
-msgstr ""
-"Si usted no es el autor de este cambio, por favor contáctenos en "
-"support@twake.app"
+msgstr "Si no ha realizado este cambio, contáctenos en support@twake.app"
 
 msgid "Mail Sharing Request Subject"
-msgstr "Nueva solicitud para compartir desde  %s"
+msgstr "%s ha compartido %s con usted"
 
 msgid "Mail Sharing Request Intro"
-msgstr "Hola,"
+msgstr "Hola:"
 
 msgid "Mail Sharing Request Description"
-msgstr " %s (%s) le invita a %s el %s %s de su espacio Twake personal."
+msgstr "%s (%s) le invita a %s %s **%s** desde su espacio personal, Twake."
 
 msgid "Mail Sharing Request Action Read"
-msgstr "acceso"
+msgstr "ver"
 
 msgid "Mail Sharing Request Action Write"
-msgstr "actualizar"
+msgstr "editar"
 
 msgid "Mail Sharing Request Button text"
-msgstr "Acceso a este %s"
+msgstr "Ver %s"
+
+msgid "Mail Sharing Member To Confirm Subject"
+msgstr "Se requiere una confirmación para finalizar el uso compartido de sus contraseñas"
+
+msgid "Mail Sharing Member To Confirm Intro"
+msgstr "Hola, %s:"
+
+msgid "Mail Sharing Member To Confirm Description"
+msgstr "%s ha aceptado el uso compartido de sus contraseñas. Para finalizarlo, debe verificar la identidad de su Twake."
+
+msgid "Mail Sharing Member To Confirm Button"
+msgstr "Verificar la identidad"
 
 msgid "Mail Alert Account Subject"
-msgstr "Error en la eliminación de instancias durante la limpieza de cuentas"
+msgstr "La eliminación de la instancia ha fallado durante la limpieza de las cuentas"
 
 msgid "Mail Support Confirmation Subject"
-msgstr "[twake-support] ¡Su solicitud está en curso!"
+msgstr "[twake-support] ¡Hemos recibido su solicitud!"
 
 msgid "Mail Support Confirmation Intro 1"
-msgstr "Hola %s,"
+msgstr "Hola, %s:"
 
 msgid "Mail Support Confirmation Intro 2"
-msgstr "Nuestro equipo examina su solicitud."
+msgstr "Nuestro equipo está examinando su solicitud."
 
 msgid "Mail Support Confirmation Outro"
-msgstr "Usted recibirá una respuesta lo antes posible."
+msgstr "Le responderé por correo electrónico lo antes posible."
 
 msgid "Mail Support Confirmation Signature"
-msgstr "Claude - Departamento de atención al cliente de Twake Workplace"
+msgstr "Claude - Servicio de atención al cliente de Twake Workplace"
 
 msgid "Notification Sharing Subject"
-msgstr "Una nueva manera de intercambiar está disponible en su Twake"
+msgstr "%s ha compartido %s con usted"
 
 msgid "Notification Sharing Description"
-msgstr "%s le invita a %s el %s %s"
+msgstr "%s le invita a %s %s **%s**"
+
+msgid "Notification Sharing Title Shared Drive"
+msgstr "una unidad"
+
+msgid "Notification Sharing Title Document"
+msgstr "un documento"
+
+msgid "Notification Sharing Title Directory"
+msgstr "una carpeta"
+
+msgid "Notification Sharing Title File"
+msgstr "un archivo"
+
+msgid "Notification Sharing Title Note"
+msgstr "una nota"
 
 msgid "Notification Sharing Type Shared Drive"
-msgstr "directorio"
+msgstr "la carpeta"
+
+msgid "Notification Sharing Type Organization"
+msgstr "la carpeta de contraseñas"
 
 msgid "Notification Sharing Type Document"
-msgstr "documento"
+msgstr "el documento"
 
 msgid "Notification Sharing Type Directory"
-msgstr "directorio"
+msgstr "la carpeta"
 
 msgid "Notification Sharing Type File"
-msgstr "archivo"
+msgstr "el archivo"
+
+msgid "Notification Sharing Type Note"
+msgstr "la nota"
 
 msgid "Notification Sharing Button text"
-msgstr "Ver la compartición"
+msgstr "Ver %s"
 
 msgid "Sharing Connect to Cozy"
-msgstr "Conectar a su Twake"
+msgstr "Conéctese a su Twake"
 
 msgid "Sharing Empty name"
 msgstr "Alguien"
@@ -766,23 +1041,29 @@ msgstr "Alguien"
 msgid "Sharing Empty description"
 msgstr "¡Sorpresa!"
 
+msgid "Sharing Discovery Intro"
+msgstr "Su dirección se enviará a %s para simplificar los próximos usos compartidos"
+
 msgid "Sharing Discovery URL field"
-msgstr "La dirección de su correo electrónico"
+msgstr "Dirección de mi Twake"
+
+msgid "Sharing Discovery Other domain"
+msgstr "Otro dominio"
 
 msgid "Sharing URL Discovery error"
-msgstr "La URL de Twake que usted ha puesto es incorrecta, vuelva a ensayar"
+msgstr "La URL de Twake introducida es incorrecta. Inténtelo de nuevo"
 
 msgid "Sharing URL Not email error"
-msgstr "La URL de su Twake no es la dirección de su correo electrónico"
+msgstr "La URL de Twake no es su dirección de correo electrónico."
 
 msgid "Sharing Discovery Submit"
 msgstr "Sincronizar en mi Twake"
 
 msgid "Sharing Discovery Shortcut Submit"
-msgstr "Sincronizar en mi Twake"
+msgstr "Añadir a mi Twake"
 
-msgid "Sharing No Cozy"
-msgstr "¿Todavía no tiene una Twake?"
+msgid "Sharing No Twake"
+msgstr "¿Aún no tiene un Twake?"
 
 msgid "Sharing Discover Cozy URL"
 msgstr "https://cozy.io/en/try-it/?from=sharing"
@@ -791,115 +1072,107 @@ msgid "Sharing Discover Cozy"
 msgstr "¡Descubra Twake ahora!"
 
 msgid "Sharing Forgotten URL"
-msgstr "¿Ha olvidado la URL? No hay que tener miedo alguno."
+msgstr "He olvidado mi dirección"
 
 msgid "Sharing Connect with Twake Account"
-msgstr "Iniciar sesión en cuenta Twake"
+msgstr "Iniciar sesión con la cuenta de Twake"
 
 msgid "Sharing Connect with OIDC"
-msgstr "Conectar con OIDC"
+msgstr "Conectarse con OIDC"
 
 msgid "Sharing Login with"
 msgstr "Iniciar sesión con"
 
 msgid "Sharing Account"
-msgstr "cuenta"
+msgstr "(cuenta)"
 
 msgid "Sharing Twake ID Description"
 msgstr "Twake ID es su acceso único a todos nuestros servicios: Chat, Mail y Drive"
 
 msgid "Sharing Twake ID Features"
-msgstr "Cifrado de extremo a extremo, funciones colaborativas para un trabajo en equipo seguro y eficiente"
-
-msgid "Sharing Forgotten URL email"
-msgstr "Busque en la bandeja de entrada de su correo electrónico \"Twake\"."
+msgstr "Cifrado de extremo a extremo y funciones colaborativas para un trabajo en equipo seguro y eficiente"
 
 msgid "Notifications Disk Quota Close Title"
-msgstr "You've reached 90% of your storage"
+msgstr "Su almacenamiento está lleno al 90%"
 
 msgid "Notifications Disk Quota Close Message"
-msgstr "You are using over 90% of your storage. Please delete files, or upgrade your offer to get more space."
+msgstr "Su almacenamiento está ocupado en más del 90%. Elimine archivos o mejore su plan para obtener más espacio."
 
 msgid "Notifications Disk Quota Subject"
-msgstr "Usted ha alcanzado el 90% de su espacio Twake."
+msgstr "Su espacio está ocupado al 90%."
 
 msgid "Notifications Disk Quota Intro"
-msgstr "Usté tiene dos opciones para disponer de más espacio."
+msgstr "Tiene dos opciones para obtener más espacio."
 
 msgid "Notifications Disk Quota offers instruction"
 msgstr ""
 "Opción 1:\n"
-"Actualice su Twake cambiando a una nueva oferta para disponer de más espacio disco"
+"Mejore su Twake eligiendo una nueva oferta para obtener mucho más espacio"
 
 msgid "Notifications Disk Quota offers text"
-msgstr "Actualizar ahora"
+msgstr "Mejorar ahora"
 
 msgid "Notifications Disk Quota free instructions"
 msgstr ""
 "Opción 2:\n"
-"Gane espacio borrando archivos innecesarios"
+"Ahorre espacio eliminando los archivos que no necesite"
 
 msgid "Notifications Disk Quota free text"
 msgstr "Liberar espacio de almacenamiento"
 
 msgid "Notifications OAuth Clients Subject"
-msgstr "You've exceeded the maximum number of devices allowed in your plan"
+msgstr "Ha superado el número máximo de dispositivos permitidos en su plan"
 
 msgid "Notifications OAuth Clients Title"
-msgstr "Important information: maximum number of devices exceeded"
+msgstr "Información importante: número máximo de dispositivos superado"
 
 msgid "Notifications OAuth Clients Greeting"
-msgstr "Hello,"
+msgstr "Hola:"
 
 msgid "Notifications OAuth Clients Reason Device"
-msgstr "**You've exceeded the maximum number of devices allowed** when connecting **%s** to your Twake."
+msgstr "**Ha superado el número máximo de dispositivos permitidos** al conectar **%s** a su Twake."
 
 msgid "Notifications OAuth Clients Reason Limit"
-msgstr "Your plan allows you to connect up to **%.0f devices**."
+msgstr "Su plan le permite conectar hasta **%.0f dispositivos**."
 
 msgid "Notifications OAuth Clients Increase Limit"
-msgstr "To upgrade your Twake, or simply support us, you can change your Twake plan."
+msgstr "Para mejorar su Twake, o simplemente para apoyarnos, puede cambiar el plan de su Twake."
 
 msgid "Notifications OAuth Clients Offers Text"
-msgstr "Check our plans"
+msgstr "Ver nuestros planes"
 
 msgid "Notifications OAuth Clients Devices Text"
-msgstr "Manage my devices"
+msgstr "Gestionar mis dispositivos"
 
 msgid "Terms of services have been updated"
-msgstr ""
-"Para cumplir con la GDPR que estará vigente a partir del 25 de mayo de 2018,"
-" Twake Workplace ha actualizado sus Condiciones de Servicio "
+msgstr "Para cumplir con el RGPD, Twake Workplace ha actualizado sus Condiciones de Servicio, que entraron en vigor el 25 de mayo de 2018"
 
 msgid "Compat Title"
-msgstr "Su navegador web no está actualizado o ya no es más compatible."
+msgstr "Su navegador web no está actualizado o ya no es compatible."
 
 msgid "Compat Subtitle"
-msgstr ""
-"Actualice su navegador o descargue una de estas opciones para tener una "
-"experiencia completa con su Twake. ¡Recomendamos Firefox!"
+msgstr "Actualice su navegador o descargue una de estas opciones para disfrutar plenamente de su Twake. ¡Le recomendamos Firefox!"
 
 msgid "Compat Browser Chrome Link"
 msgstr "https://www.google.com/chrome/"
 
 msgid "Compat Browser Firefox Link"
-msgstr "https://www.mozilla.org/en-US/firefox/new/"
+msgstr "https://www.mozilla.org/es-ES/firefox/new/"
 
 msgid "Compat Browser Edge Link"
-msgstr "https://www.microsoft.com/en-us/windows/microsoft-edge"
+msgstr "https://www.microsoft.com/es-es/windows/microsoft-edge"
 
 msgid "Compat Tip 1"
-msgstr "Actualizar su navegador implica una navegación más segura."
+msgstr "Actualizar su navegador web le permite navegar de forma más segura."
 
 msgid "Compat Tip 2"
-msgstr ""
-"Su navegador web será más rápido y la experiencia con su Twake será mejorada."
+msgstr "Su navegador web será más rápido y mejorará su experiencia con su Twake."
 
 msgid "Compat Help"
 msgstr "¿Necesita más ayuda?"
 
 msgid "Compat Guide"
-msgstr "Consulte nuestra guía de asistencia."
+msgstr "Consulte nuestra guía de ayuda."
 
 msgid "Compat Guide Link"
 msgstr "https://help.cozy.io/article/274-ie-11-not-supported"
@@ -907,91 +1180,137 @@ msgstr "https://help.cozy.io/article/274-ie-11-not-supported"
 msgid "File copy Suffix"
 msgstr "copia"
 
+msgid "Install New App Title"
+msgstr "¡Instale la nueva aplicación Twake!"
+
+msgid "Install App Unavailable"
+msgstr "Esta versión de %s ya no es compatible."
+
+msgid "Install New Iphone App Description"
+msgstr "Instale la nueva aplicación Twake desde el App Store para seguir disfrutando de todas sus funciones."
+
+msgid "Install New Android App Description"
+msgstr "Instale la nueva aplicación Twake desde Play Store para seguir disfrutando de todas sus funciones."
+
+msgid "Install New Generic App Description"
+msgstr "Instale la nueva aplicación Twake desde su tienda de aplicaciones para seguir disfrutando de todas sus funciones."
+
+msgid "Install New App Store Btn"
+msgstr "Instalar"
+
 msgid "Too Many OAuth Clients Title"
-msgstr "%s/%s connected devices"
+msgstr "%s/%s dispositivos conectados"
 
 msgid "Too Many OAuth Clients Intro"
-msgstr "Your current offer allows you to connect %s devices at the same time"
+msgstr "Su oferta actual le permite conectar %s dispositivos a la vez"
 
 msgid "Too Many OAuth Clients More Text"
-msgstr "Learn more"
+msgstr "Más información"
 
 msgid "Too Many OAuth Clients More Link"
 msgstr "https://help.cozy.io/maximum-number-of-connected-devices-allowed/"
 
 msgid "Too Many OAuth Clients Available Actions"
-msgstr "Disconnect one of your devices or change your Twake offer to access your Twake from this device."
+msgstr "Desconecte uno de sus dispositivos o cambie su oferta de Twake para acceder a su Twake desde este dispositivo."
 
 msgid "Too Many OAuth Clients Offers Btn"
-msgstr "See offers"
+msgstr "Ver ofertas"
 
 msgid "Too Many OAuth Clients Settings Btn"
-msgstr "Manage my connected devices"
+msgstr "Gestionar mis dispositivos conectados"
 
 msgid "Too Many OAuth Clients Refresh Btn"
-msgstr "Refresh"
+msgstr "Actualizar"
 
 msgid "Asset not found"
-msgstr "Asset not found"
+msgstr "Recurso no encontrado"
 
 msgid "Install flagship app Title"
-msgstr "Install the application to finish"
+msgstr "Instale la aplicación para terminar"
 
 msgid "Install flagship app Description"
-msgstr "Your Twake has been successfully created, install the application to use it right now!"
+msgstr "Su Twake se ha creado correctamente. ¡Instale la aplicación para usarlo ahora mismo!"
 
 msgid "Install flagship app Install"
-msgstr "Install the Twake app"
+msgstr "Instalar la aplicación Twake"
 
 msgid "Install flagship app Skip"
-msgstr "Continue in the browser"
+msgstr "Continuar en el navegador"
 
 msgid "Share by link Password Title"
-msgstr "Enter the password to access the link"
+msgstr "Introduzca la contraseña para acceder al enlace"
 
 msgid "Share by link Password Field"
-msgstr "Password"
+msgstr "Contraseña"
 
 msgid "Share by link Password Submit"
-msgstr "Continue"
+msgstr "Continuar"
 
 msgid "Share by link Password Invalid"
-msgstr "Invalid password"
+msgstr "Contraseña no válida"
 
 msgid "Onboarding Resend activation mail"
-msgstr "Send again the activation email"
+msgstr "Volver a enviar el correo de activación"
 
 msgid "Onboarding Resend activation Title"
-msgstr "Check your emails!"
+msgstr "¡Revise su correo!"
 
 msgid "Onboarding Resend activation Body"
-msgstr ""
-"We just sent you an activation link by email."
+msgstr "Le acabamos de enviar un enlace de activación por correo electrónico."
 
 msgid "Onboarding Resend activation Detail"
-msgstr ""
-"We prefer to warn you, this mail can be found in Spam, Notification or Social folders. Do not hesitate to take a look at these folders to find it."
+msgstr "Le advertimos de que este correo puede encontrarse en las carpetas de spam, notificaciones o redes sociales. No dude en revisar estas carpetas para encontrarlo."
 
 msgid "Push Sharing Shortcut Title"
-msgstr "A new share is available in your Twake"
+msgstr "Hay un nuevo elemento compartido disponible en su Twake"
 
 msgid "Push Sharing Shortcut Message"
-msgstr "%s has shared %s with you."
+msgstr "%s ha compartido %s con usted."
 
 msgid "Permissions io.cozy.drive.settings"
-msgstr "Configuración de Drive"
+msgstr "Ajustes de Drive"
+
+msgid "Mail Sharing File Changed Subject"
+msgstr "Archivo modificado en una carpeta compartida: %s"
+
+msgid "Mail Sharing File Changed Intro"
+msgstr "Alguien ha compartido un archivo con usted:"
+
+msgid "Mail Sharing File Changed Link Text"
+msgstr "Ver en Twake Drive"
+
+msgid "Mail Sharing Folder Changed Intro"
+msgstr "Alguien ha compartido una carpeta con usted:"
+
+msgid "Mail Antivirus Alert Subject"
+msgstr "Alerta del antivirus en su Twake Drive"
+
+msgid "Mail Antivirus Alert Title"
+msgstr "Alerta del antivirus en su Twake Drive"
+
+msgid "Mail Antivirus Alert Description"
+msgstr "El análisis antivirus de un archivo de su Twake Drive ha detectado un problema."
+
+msgid "Mail Antivirus Issue Label"
+msgstr "Problema:"
+
+msgid "Mail Antivirus Issue Infected"
+msgstr "Virus detectado"
+
+msgid "Mail Antivirus Issue Skipped"
+msgstr "Archivo demasiado grande para analizarlo"
+
+msgid "Mail Antivirus Issue Error"
+msgstr "Error de análisis"
+
+msgid "Mail Antivirus File Label"
+msgstr "Archivo:"
+
+msgid "Mail Antivirus View Details Button"
+msgstr "Ver los detalles del archivo"
 
 msgid "Permissions io.cozy.ai.chat.assistants"
 msgstr "Asistente de IA"
 
-msgid "Mail Sharing File Changed Subject"
-msgstr "File changed in shared folder: %s"
-
-msgid "Mail Sharing File Changed Intro"
-msgstr "Someone shared a file with you:"
-
-msgid "Mail Sharing File Changed Link Text"
-msgstr "See on Twake Drive"
-
-msgid "Mail Sharing Folder Changed Intro"
-msgstr "Someone shared a folder with you:"
+msgid "Banners Quota Exceeded Text"
+msgstr "Ha alcanzado el límite de su almacenamiento."

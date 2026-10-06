@@ -100,7 +100,7 @@ var KnownFlatDomains = []string{
 const DefaultLocale = "en"
 
 // SupportedLocales is the list of supported locales tags.
-var SupportedLocales = []string{"en", "fr"}
+var SupportedLocales = []string{"en", "fr", "es", "de", "it"}
 
 // PlatformApps is the list of applications that can be updated automatically
 // even if their permissions have changed.
