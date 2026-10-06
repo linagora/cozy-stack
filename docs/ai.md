@@ -298,6 +298,7 @@ Content-Type: application/json
   "q": "Why the sky is blue?",
   "stream": true,
   "websearch": false,
+  "documents": true,
   "assistantID": "abc123",
   "attachmentIDs": ["827f0fbb928b375cc457c732a4013aa7", "9a3b1c2d3e4f5a6b7c8d9e0f1a2b3c4d"]
 }
@@ -306,6 +307,13 @@ Content-Type: application/json
 - `q` is the user's message (required).
 - `stream` enables streaming the response via SSE deltas (defaults to `true`).
 - `websearch` enables web search for the query (defaults to `false`).
+- `documents` (defaults to `true`): when `false`, the LLM answers the
+  conversation by itself, without searching the user's documents, whatever the
+  knowledge base of the assistant: the answer has no sources. For a client
+  that gives the LLM all it needs in the message, like a text to translate or
+  to fix. `websearch` still applies. It cannot be used with `attachmentIDs`,
+  which are read from the documents: the message is rejected with a
+  `400 Bad Request`.
 - `assistantID` (optional) associates the conversation with an `io.cozy.ai.chat.assistants`
   document. When set, the response includes a `relationships` block.
   When the assistant has a knowledge base folder, the retrieval is scoped to

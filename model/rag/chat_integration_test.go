@@ -109,3 +109,90 @@ func TestChatDoesNotSaveTheAssistantPrompt(t *testing.T) {
 	require.Len(t, chat.Messages, 1, "the prompt is read from the assistant at query time, not saved")
 	require.Equal(t, rag.UserRole, chat.Messages[0].Role)
 }
+
+// lastCompletion returns the body of the last chat completion the fake
+// openRAG received.
+func lastCompletion(t *testing.T, fake *rag.FakeOpenRAG) map[string]interface{} {
+	t.Helper()
+	var body []byte
+	for _, req := range fake.Rec.All() {
+		if req.Method == http.MethodPost && req.Path == "/v1/chat/completions" {
+			body = req.Body
+		}
+	}
+	require.NotNil(t, body, "no chat completion was sent to openRAG")
+	var payload map[string]interface{}
+	require.NoError(t, json.Unmarshal(body, &payload))
+	return payload
+}
+
+func TestQueryWithoutTheDocumentsAsksTheLLMDirectly(t *testing.T) {
+	r := newRAGTest(t)
+	// The knowledge base folder of the assistant is not indexed: a query
+	// from the documents fails, one without them does not need it.
+	assistant := couchdb.JSONDoc{Type: consts.ChatAssistants, M: map[string]interface{}{
+		"name":          "Lawyer",
+		"prompt":        "Answer as a lawyer.",
+		"knowledgeBase": []map[string]string{{"doctype": consts.Files, "dirId": "a-folder-never-indexed"}},
+	}}
+	require.NoError(t, couchdb.CreateDoc(r.inst, &assistant))
+	chat := rag.ChatConversation{
+		DocID: "conversation-without-the-documents",
+		Messages: []rag.ChatMessage{
+			{ID: "m1", Role: rag.UserRole, Content: "Fix the spelling of: helo", CreatedAt: time.Now()},
+		},
+		CozyMetadata: metadata.New(),
+		Rels: jsonapi.RelationshipMap{"assistant": jsonapi.Relationship{
+			Data: map[string]interface{}{"_id": assistant.ID(), "_type": consts.ChatAssistants},
+		}},
+	}
+	require.NoError(t, couchdb.CreateNamedDocWithDB(r.inst, &chat))
+
+	query := rag.QueryMessage{Task: "chat-completion", DocID: chat.ID()}
+	require.Error(t, rag.Query(r.inst, rag.TestingLogger(), query),
+		"the documents of the assistant are not indexed")
+
+	query.DirectLLM = true
+	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	completion := lastCompletion(t, r.fake)
+	require.NotContains(t, completion, "model", "a model is the partition of the documents for openRAG")
+	require.NotContains(t, completion, "metadata", "nothing to search: no workspace, no web search")
+	require.Equal(t, []completionMessage{
+		{Role: rag.SystemRole, Content: "Answer as a lawyer."},
+		{Role: rag.UserRole, Content: "Fix the spelling of: helo"},
+	}, lastCompletionMessages(t, r.fake), "the LLM gets the conversation as it is")
+
+	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, chat.ID(), &chat))
+	answer := chat.Messages[len(chat.Messages)-1]
+	require.Equal(t, rag.AssistantRole, answer.Role)
+	require.Equal(t, "fake answer", answer.Content, "the answer of the LLM itself")
+	require.Empty(t, answer.Sources)
+}
+
+func TestQueryWithoutTheDocumentsKeepsTheWebSearch(t *testing.T) {
+	r := newRAGTest(t)
+	chat := rag.ChatConversation{
+		DocID: "conversation-with-the-web-only",
+		Messages: []rag.ChatMessage{
+			{ID: "m1", Role: rag.UserRole, Content: "What is the weather?", CreatedAt: time.Now()},
+		},
+		CozyMetadata: metadata.New(),
+	}
+	require.NoError(t, couchdb.CreateNamedDocWithDB(r.inst, &chat))
+
+	query := rag.QueryMessage{Task: "chat-completion", DocID: chat.ID(), DirectLLM: true, WebSearch: true}
+	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	completion := lastCompletion(t, r.fake)
+	require.NotContains(t, completion, "model")
+	require.Equal(t, map[string]interface{}{"websearch": true}, completion["metadata"])
+}
+
+func TestChatValidatesTheOptionsOfAMessage(t *testing.T) {
+	without := false
+	with := true
+	require.NoError(t, rag.ChatPayload{Query: "Hello"}.Validate())
+	require.NoError(t, rag.ChatPayload{Query: "Hello", Documents: &without}.Validate())
+	require.NoError(t, rag.ChatPayload{Query: "Hello", Documents: &with, AttachmentIDs: []string{"a-file"}}.Validate())
+	require.Error(t, rag.ChatPayload{Query: "Hello", Documents: &without, AttachmentIDs: []string{"a-file"}}.Validate(),
+		"the attached files are read from the documents")
+}

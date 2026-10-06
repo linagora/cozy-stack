@@ -34,6 +34,23 @@ type ChatPayload struct {
 	WebSearch          *bool    `json:"websearch"`
 	AssistantID        string   `json:"assistantID,omitempty"`
 	AttachmentIDs      []string `json:"attachmentIDs,omitempty"`
+	// Documents, when false, asks for an answer of the LLM alone, without
+	// the user's documents.
+	Documents *bool `json:"documents,omitempty"`
+}
+
+// directLLM tells whether the client asks for an answer without the documents.
+func (p ChatPayload) directLLM() bool {
+	return p.Documents != nil && !*p.Documents
+}
+
+// Validate checks the options of a chat message: those that cannot go
+// together.
+func (p ChatPayload) Validate() error {
+	if p.directLLM() && len(p.AttachmentIDs) > 0 {
+		return errors.New("attachmentIDs cannot be used without the documents")
+	}
+	return nil
 }
 
 type ChatConversation struct {
@@ -90,6 +107,8 @@ type QueryMessage struct {
 	Stream        bool     `json:"stream"`
 	WebSearch     bool     `json:"websearch"`
 	AttachmentIDs []string `json:"attachmentIDs,omitempty"`
+	// DirectLLM is the answer of the LLM alone, without the user's documents.
+	DirectLLM bool `json:"directLLM,omitempty"`
 }
 
 type Source struct {
@@ -232,6 +251,7 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 		Stream:        stream,
 		WebSearch:     websearch,
 		AttachmentIDs: payload.AttachmentIDs,
+		DirectLLM:     payload.directLLM(),
 	})
 	if err != nil {
 		return nil, err
@@ -458,6 +478,31 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 	return messages
 }
 
+// directLLMPayload is the body of a chat completion without the documents.
+// openRAG takes a request without a partition as its model as one for the LLM
+// itself: it gets the messages as they are, with no retrieval and no system
+// prompt of openRAG.
+func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]interface{}) map[string]interface{} {
+	payload := map[string]interface{}{
+		"messages":    messages,
+		"stream":      stream,
+		"temperature": Temperature,
+		"top_p":       TopP,
+		"logprobs":    LogProbs,
+	}
+	kept := map[string]interface{}{}
+	if override, ok := metadata["llm_override"]; ok {
+		kept["llm_override"] = override
+	}
+	if websearch, _ := metadata["websearch"].(bool); websearch {
+		kept["websearch"] = true
+	}
+	if len(kept) > 0 {
+		payload["metadata"] = kept
+	}
+	return payload
+}
+
 func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) error {
 	var chat ChatConversation
 	err := couchdb.GetDoc(inst, consts.ChatConversations, query.DocID, &chat)
@@ -491,7 +536,9 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	if override := buildLLMOverride(inst, assistant); override != nil {
 		metadata["llm_override"] = override
 	}
-	if dirID := assistant.knowledgeBaseDirID(logger); dirID != "" {
+	// Without the documents, the knowledge base of the assistant is not
+	// searched: its workspace does not have to be there.
+	if dirID := assistant.knowledgeBaseDirID(logger); dirID != "" && !query.DirectLLM {
 		workspaceID := workspaceIDForDir(dirID)
 		if err := checkWorkspace(inst, workspaceID); err != nil {
 			logger.Warnf("RAG workspace %s unavailable: %s", workspaceID, err)
@@ -502,14 +549,22 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 		}
 		metadata["workspace"] = workspaceID
 	}
-	payload := map[string]interface{}{
-		"model":       fmt.Sprintf("ragondin-%s", inst.Domain),
-		"messages":    ragMessages(&chat, assistant),
-		"stream":      query.Stream,
-		"metadata":    metadata,
-		"temperature": Temperature,
-		"top_p":       TopP,
-		"logprobs":    LogProbs,
+	// The answer comes from the documents with openRAG, or, when the client
+	// asks for an answer without them, from the LLM behind it.
+	messages := ragMessages(&chat, assistant)
+	var payload map[string]interface{}
+	if query.DirectLLM {
+		payload = directLLMPayload(messages, query.Stream, metadata)
+	} else {
+		payload = map[string]interface{}{
+			"model":       fmt.Sprintf("ragondin-%s", inst.Domain),
+			"messages":    messages,
+			"stream":      query.Stream,
+			"metadata":    metadata,
+			"temperature": Temperature,
+			"top_p":       TopP,
+			"logprobs":    LogProbs,
+		}
 	}
 
 	body, err := json.Marshal(payload)
