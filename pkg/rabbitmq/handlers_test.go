@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/banner"
+	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -145,6 +146,69 @@ func TestUserCreatedHandlerStoresEmail(t *testing.T) {
 	got, err := lifecycle.GetInstance(other)
 	require.NoError(t, err)
 	assert.Empty(t, got.Email)
+}
+
+func TestCommonContactsStopsMemberCopies(t *testing.T) {
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	const contextName = "common-contacts-members"
+	conf := config.GetConfig()
+	previous := conf.Contexts
+	conf.Contexts = map[string]interface{}{contextName: map[string]interface{}{"common_contacts": true}}
+	t.Cleanup(func() { conf.Contexts = previous })
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	orgID := "org-members-" + suffix
+	orgDomain := "members-" + suffix + ".example"
+	newMember := func(name, email string) *instance.Instance {
+		inst, err := lifecycle.Create(&lifecycle.Options{
+			Domain:      name + "-" + suffix + ".local",
+			OrgDomain:   orgDomain,
+			OrgID:       orgID,
+			Email:       email,
+			PublicName:  name,
+			ContextName: contextName,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
+		return inst
+	}
+	aliceEmail := "alice-" + suffix + "@acme.example"
+	bobEmail := "bob-" + suffix + "@acme.example"
+	alice := newMember("alice", aliceEmail)
+	bob := newMember("bob", bobEmail)
+
+	t.Run("user.created copies no contact", func(t *testing.T) {
+		body, err := json.Marshal(rabbitmq.UserCreatedMessage{
+			TwakeID:        "alice",
+			WorkplaceFqdn:  alice.Domain,
+			InternalEmail:  aliceEmail,
+			OrganizationID: orgID,
+		})
+		require.NoError(t, err)
+		require.NoError(t, rabbitmq.NewUserCreatedHandler().
+			Handle(context.Background(), amqp.Delivery{Body: body}))
+
+		_, err = contact.FindAllByEmail(bob, aliceEmail)
+		assert.ErrorIs(t, err, contact.ErrNotFound)
+		_, err = contact.FindAllByEmail(alice, bobEmail)
+		assert.ErrorIs(t, err, contact.ErrNotFound)
+	})
+
+	t.Run("user.deleted leaves the other instances alone", func(t *testing.T) {
+		copied := createContact(t, bob, aliceEmail, alice.PageURL("", nil), true, "Alice")
+		require.NoError(t, rabbitmq.SyncDeletedOrgContact(context.Background(), rabbitmq.UserDeletedMessage{
+			WorkplaceFqdn:  alice.Domain,
+			InternalEmail:  aliceEmail,
+			OrganizationID: orgID,
+		}))
+
+		found, err := contact.FindAllByEmail(bob, aliceEmail)
+		require.NoError(t, err)
+		require.Len(t, found, 1)
+		assert.Equal(t, copied.ID(), found[0].ID())
+	})
 }
 
 func TestBannerCommandHandler(t *testing.T) {
