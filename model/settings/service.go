@@ -200,7 +200,6 @@ func (s *SettingsService) ConfirmEmailUpdate(inst *instance.Instance, tok string
 	}
 
 	settings.M["email"] = pendingEmail
-	settings.M["pending_email"] = nil
 
 	err = s.storage.setInstanceSettings(inst, settings)
 	if err != nil {
@@ -229,6 +228,12 @@ func (s *SettingsService) ConfirmEmailUpdate(inst *instance.Instance, tok string
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update the cloudery: %w", err)
+	}
+
+	// Keep the confirmation link retryable until every update has succeeded.
+	settings.M["pending_email"] = nil
+	if err := s.storage.setInstanceSettings(inst, settings); err != nil {
+		return fmt.Errorf("failed to clear the pending email: %w", err)
 	}
 
 	return nil
