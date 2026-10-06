@@ -11,7 +11,6 @@ import (
 	_ "github.com/cozy/cozy-stack/model/banner" // materializes io.cozy.banners on the quota alert
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
-	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/stack"
 	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -242,7 +241,7 @@ func SetupRoutes(router *echo.Echo, services *stack.Services) error {
 		office.Routes(router.Group("/office", mws...))
 		editor.Routes(router.Group("/editor", mws...))
 		remote.NewHTTPHandler(services.RabbitMQ).Register(router.Group("/remote", mws...))
-		sharing.RabbitMQ = services.RabbitMQ
+		sharings.Init(services.RabbitMQ)
 		sharings.Routes(router.Group("/sharings", mws...))
 		bitwarden.Routes(router.Group("/bitwarden", mws...))
 		shortcuts.Routes(router.Group("/shortcuts", mws...))

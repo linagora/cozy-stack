@@ -665,7 +665,7 @@ func TestFindContactByEmail(t *testing.T) {
 	assert.ErrorIs(t, err, contact.ErrNotFound)
 
 	full := &Sharing{Members: make([]Member, maxNumberOfMembers(alice))}
-	err = full.AddEmail(alice, "erin@unknown.example", false)
+	err = full.AddEmail(alice, new(rabbitmq.NoopService), "erin@unknown.example", false)
 	assert.ErrorIs(t, err, ErrTooManyMembers)
 	_, err = contact.FindByEmail(alice, "erin@unknown.example")
 	assert.ErrorIs(t, err, contact.ErrNotFound, "the contact created for a failed add must be removed")
@@ -691,25 +691,24 @@ func TestPublishCollected(t *testing.T) {
 	config.GetConfig().Contexts = map[string]interface{}{
 		"collected-on": map[string]interface{}{"common_contacts": true},
 	}
-	fake := &fakeRabbitMQ{published: make(chan rabbitmq.PublishRequest, 1)}
-	RabbitMQ = fake
-	t.Cleanup(func() { RabbitMQ = new(rabbitmq.NoopService) })
-
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	newInstance := func(name, contextName string) *instance.Instance {
+	newInstance := func(name, contextName, email string) *instance.Instance {
 		inst, err := lifecycle.Create(&lifecycle.Options{Domain: name + "-" + suffix + ".fe.localhost", ContextName: contextName})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
-		require.NoError(t, lifecycle.SetEmail(inst, name+"-"+suffix+"@acme.example"))
+		if email != "" {
+			require.NoError(t, lifecycle.SetEmail(inst, email))
+		}
 		return inst
 	}
 
-	alice := newInstance("alice", "collected-on")
-	_, _, err := FindContactByEmail(alice, "dave@unknown.example")
-	require.NoError(t, err)
+	alice := newInstance("alice", "collected-on", "alice-"+suffix+"@acme.example")
+	fake := &fakeRabbitMQ{published: make(chan rabbitmq.PublishRequest, 1)}
+	publishCollected(alice, fake, "dave@unknown.example")
 	select {
 	case req := <-fake.published:
 		assert.Equal(t, rabbitmq.ExchangeContactsCollected, req.Exchange)
+		assert.True(t, req.Fanout)
 		assert.Empty(t, req.RoutingKey)
 		msg := req.Payload.(rabbitmq.CollectedContactsMessage)
 		assert.Equal(t, alice.Email, msg.UserEmail)
@@ -719,15 +718,11 @@ func TestPublishCollected(t *testing.T) {
 		t.Fatal("the collected contact was not published")
 	}
 
-	// An existing contact is not published again, and standalone publishes nothing.
-	_, _, err = FindContactByEmail(alice, "dave@unknown.example")
-	require.NoError(t, err)
-	standalone := newInstance("bob", "")
-	_, _, err = FindContactByEmail(standalone, "erin@unknown.example")
-	require.NoError(t, err)
-	select {
-	case req := <-fake.published:
-		t.Fatalf("unexpected publish: %v", req.Payload)
-	case <-time.After(200 * time.Millisecond):
-	}
+	// Nothing is published without common contacts, or without an email.
+	standalone := newInstance("bob", "", "bob-"+suffix+"@acme.example")
+	_, ok := collectedRequest(standalone, "erin@unknown.example")
+	assert.False(t, ok)
+	noEmail := newInstance("carol", "collected-on", "")
+	_, ok = collectedRequest(noEmail, "erin@unknown.example")
+	assert.False(t, ok)
 }
