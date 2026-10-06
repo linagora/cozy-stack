@@ -2159,6 +2159,67 @@ func TestDriveAutoAcceptTrusted(t *testing.T) {
 	assertSharedDriveRedirectLocation(t, location, sharingID)
 }
 
+func TestDriveAutoAcceptSameOrganizationWithPort(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupDriveAutoAcceptEnv(t, 0)
+	config.GetConfig().Contexts[config.DefaultInstanceContext] = map[string]interface{}{
+		"common_contacts": true,
+		"sharing": map[string]interface{}{
+			"auto_accept_trusted":          true,
+			"auto_accept_trusted_contacts": true,
+			"trusted_domains":              []string{},
+		},
+	}
+	for inst, serverURL := range map[*instance.Instance]string{
+		env.ownerInstance: env.ownerURL, env.recipientInstance: env.recipientURL,
+	} {
+		u, err := url.Parse(serverURL)
+		require.NoError(t, err)
+		inst.OrgID = "org-one"
+		inst.DomainAliases = append(inst.DomainAliases, u.Host)
+		require.NoError(t, instance.Update(inst))
+		inst.WithContextualDomain(u.Host)
+	}
+
+	sharingID := createDirectRecipientDriveSharing(
+		t,
+		env.ownerInstance,
+		env.eOwner,
+		env.ownerAppToken,
+		"Recipient",
+		"recipient@example.com",
+		env.recipientURL,
+		"Shared Drive",
+		"Same organization auto-accept test drive",
+	)
+
+	waitForAutoAcceptJobForSharing(t, env.recipientInstance, sharingID)
+	waitForDriveSharingReadyOnOwner(t, env.eOwner, env.ownerAppToken, sharingID)
+	waitForDriveSharingActiveOnRecipient(t, env.recipientInstance, sharingID)
+
+	recipientSharing, err := sharing.FindSharing(env.recipientInstance, sharingID)
+	require.NoError(t, err)
+	require.Equal(t, env.ownerURL, recipientSharing.Members[0].Instance)
+	require.NotEmpty(t, recipientSharing.Credentials)
+	require.NotEmpty(t, recipientSharing.Credentials[0].InboundClientID)
+	require.NotNil(t, recipientSharing.Credentials[0].AccessToken)
+	require.NotEmpty(t, recipientSharing.Credentials[0].DriveToken)
+	require.NotEmpty(t, recipientSharing.ShortcutID)
+
+	loginSharingRecipient(t, env.eRecipient)
+	openSharingAuthorize(t, env.eRecipient,
+		env.recipientInstance.PageURL("/auth/authorize/sharing", url.Values{
+			"state": {recipientSharing.Credentials[0].State},
+		}), sharingID)
+
+	contacts, err := contact.FindAllByEmail(env.recipientInstance, "owner@example.com")
+	require.ErrorIs(t, err, contact.ErrNotFound)
+	require.Empty(t, contacts)
+}
+
 func TestRevokedSharedDriveInvitationAuthorizeShowsErrorPage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")

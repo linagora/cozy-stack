@@ -681,8 +681,9 @@ background job that performs the same handshake as a manual acceptance and
 POSTs the answer back to the owner's Cozy.
 
 Trusted members are determined by the recipient Cozy only. The recipient checks
-that the sender belongs to a trusted domain (or has been marked as a trusted
-contact) before launching the auto-accept flow.
+that the sender belongs to a trusted domain, is a member of the same
+organization, or has been marked as a trusted contact before launching the
+auto-accept flow.
 
 Members are trusted when their instance domain exactly matches or is a
 subdomain of any of the configured trusted domains. The behaviour can be tuned
@@ -729,11 +730,16 @@ context override):
 4. Future Drive sharings from Bob are auto-accepted (if `auto_accept_trusted` is enabled)
 
 **Trust determination:**
-A member is considered trusted if **either**:
+A member is considered trusted if **any** of these holds:
 - Their instance domain matches a configured trusted domain (domain-based trust)
+- Their instance has the same `OrgID` as the recipient (organization trust)
 - Their contact has been marked as trusted (contact-based trust)
 
 The contact's `trustedForSharing` field is set to `true` when a sharing is accepted.
+
+Organization trust needs the `common_contacts` context setting, and the
+sender's instance on the same stack. Accepting a sharing from a member of the
+same organization writes no contact.
 
 #### Request
 

@@ -12,9 +12,10 @@ import (
 // IsTrustedMember checks if a member is trusted for auto-accepting sharings.
 // Trust is determined by:
 // - Domain matching: member's domain matches configured trusted domains (or subdomains)
+// - Organization membership: both instances have the same organization ID
 // - Contact trust: member's contact has been marked as trusted (by previously accepting a sharing)
 //
-// Contact-based trust takes precedence and works even if domain-based trust is not configured.
+// Contact-based trust also works when no trusted domains are configured.
 func IsTrustedMember(inst *instance.Instance, member *Member) bool {
 	if inst == nil || member == nil {
 		return false
@@ -47,6 +48,12 @@ func IsTrustedMember(inst *instance.Instance, member *Member) bool {
 		}
 	}
 
+	if isSameOrganizationMember(inst, member) {
+		inst.Logger().WithNamespace("sharing-trust").
+			Infof("Member %s trusted (same organization)", member.Instance)
+		return true
+	}
+
 	// Check if this member is a trusted contact
 	if !options.AutoAcceptTrustedContacts {
 		return false
@@ -58,6 +65,20 @@ func IsTrustedMember(inst *instance.Instance, member *Member) bool {
 	}
 
 	return false
+}
+
+// isSameOrganizationMember compares the OrgID of the sender's instance on this
+// stack. A spoofed URL gains nothing: the answer is sent to that URL.
+func isSameOrganizationMember(inst *instance.Instance, member *Member) bool {
+	if inst == nil || member == nil || inst.OrgID == "" || !inst.HasCommonContacts() {
+		return false
+	}
+	host := utils.NormalizeDomain(member.InstanceHost())
+	if host == "" {
+		return false
+	}
+	sender, err := instance.Get(host)
+	return err == nil && sender.OrgID == inst.OrgID
 }
 
 // isTrustedContact checks if a member is marked as a trusted contact
