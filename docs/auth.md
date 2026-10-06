@@ -1017,6 +1017,10 @@ for an `access_token`. It can use this route with the `code` given above.
 This endpoint is also used to refresh the access token, by sending the
 `refresh_token` instead of the `code`.
 
+The origins allowed for [`POST /auth/token_exchange`](#post-authtoken_exchange)
+get CORS headers on this endpoint, so that an application holding a token from
+`token_exchange` can refresh it from its own origin.
+
 The parameters are:
 
 -   `grant_type`, with `authorization_code` or `refresh_token` as value
