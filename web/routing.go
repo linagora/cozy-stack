@@ -241,6 +241,7 @@ func SetupRoutes(router *echo.Echo, services *stack.Services) error {
 		office.Routes(router.Group("/office", mws...))
 		editor.Routes(router.Group("/editor", mws...))
 		remote.NewHTTPHandler(services.RabbitMQ).Register(router.Group("/remote", mws...))
+		sharings.Init(services.RabbitMQ)
 		sharings.Routes(router.Group("/sharings", mws...))
 		bitwarden.Routes(router.Group("/bitwarden", mws...))
 		shortcuts.Routes(router.Group("/shortcuts", mws...))

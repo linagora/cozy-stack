@@ -47,3 +47,12 @@ func TestWaitForPublishResultPrefersReturnedMessageWhenConfirmChannelCloses(t *t
 	require.Equal(t, uint16(312), returned.ReplyCode)
 	require.Equal(t, "NO_ROUTE", returned.ReplyText)
 }
+
+func TestPublishRequestRoutingKey(t *testing.T) {
+	t.Parallel()
+
+	req := PublishRequest{Exchange: ExchangeAuth, Payload: struct{}{}}
+	require.Error(t, req.validate())
+	req.Fanout = true
+	require.NoError(t, req.validate())
+}

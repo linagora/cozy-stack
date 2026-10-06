@@ -130,14 +130,14 @@ func CreateSharedDrive(c echo.Context) error {
 
 	// Add read-write recipients and send invitations
 	if len(rwGroupIDs) > 0 || len(rwContactIDs) > 0 || len(rwEmails) > 0 {
-		if err = newSharing.AddGroupsAndContacts(inst, rwGroupIDs, rwContactIDs, rwEmails, false); err != nil {
+		if err = newSharing.AddGroupsAndContacts(inst, rmq, rwGroupIDs, rwContactIDs, rwEmails, false); err != nil {
 			return wrapErrors(err)
 		}
 	}
 
 	// Add read-only recipients and send invitations
 	if len(roGroupIDs) > 0 || len(roContactIDs) > 0 || len(roEmails) > 0 {
-		if err = newSharing.AddGroupsAndContacts(inst, roGroupIDs, roContactIDs, roEmails, true); err != nil {
+		if err = newSharing.AddGroupsAndContacts(inst, rmq, roGroupIDs, roContactIDs, roEmails, true); err != nil {
 			return wrapErrors(err)
 		}
 	}

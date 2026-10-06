@@ -30,6 +30,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/pkg/logger"
+	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/web/middlewares"
@@ -68,7 +69,7 @@ func CreateSharing(c echo.Context) error {
 			}
 		}
 		for _, email := range emails {
-			if err = s.AddEmail(inst, email, readOnly); err != nil {
+			if err = s.AddEmail(inst, rmq, email, readOnly); err != nil {
 				return wrapErrors(err)
 			}
 		}
@@ -351,9 +352,9 @@ func addRecipientsToSharing(inst *instance.Instance, s *sharing.Sharing, obj *js
 		return nil
 	}
 	if s.Owner {
-		return s.AddGroupsAndContacts(inst, groupIDs, contactIDs, emails, readOnly)
+		return s.AddGroupsAndContacts(inst, rmq, groupIDs, contactIDs, emails, readOnly)
 	}
-	return s.DelegateAddContactsAndGroups(inst, groupIDs, contactIDs, emails, readOnly)
+	return s.DelegateAddContactsAndGroups(inst, rmq, groupIDs, contactIDs, emails, readOnly)
 }
 
 // AddRecipients is used to add a member to a sharing
@@ -1097,6 +1098,14 @@ func localAvatar(c echo.Context, m sharing.Member) error {
 		return wrapErrors(err)
 	}
 	return c.Blob(http.StatusOK, mime, img)
+}
+
+// rmq publishes the contacts collected by the sharings.
+var rmq rabbitmq.Service = new(rabbitmq.NoopService)
+
+// Init sets the RabbitMQ service used by the sharing routes.
+func Init(svc rabbitmq.Service) {
+	rmq = svc
 }
 
 // Routes sets the routing for the sharing service

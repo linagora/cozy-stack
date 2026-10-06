@@ -122,8 +122,11 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 func upsertCommonContact(inst *instance.Instance, path string, card *jsContact) error {
 	emails := byPref(card.Emails)
 	c, err := contact.FindByCardDAVPath(inst, path)
-	if errors.Is(err, contact.ErrNotFound) && len(emails) > 0 {
-		c, err = contact.FindExternalWithoutCardDAVPath(inst, emails[0])
+	for _, email := range emails {
+		if !errors.Is(err, contact.ErrNotFound) {
+			break
+		}
+		c, err = contact.FindExternalWithoutCardDAVPath(inst, email)
 	}
 	if errors.Is(err, contact.ErrNotFound) {
 		c, err = contact.New(), nil
