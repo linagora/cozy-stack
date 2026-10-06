@@ -299,6 +299,7 @@ Content-Type: application/json
   "stream": true,
   "websearch": false,
   "documents": true,
+  "instructions": "The answer is put in a document as it is: no introduction, no comment.",
   "assistantID": "abc123",
   "attachmentIDs": ["827f0fbb928b375cc457c732a4013aa7", "9a3b1c2d3e4f5a6b7c8d9e0f1a2b3c4d"]
 }
@@ -314,6 +315,15 @@ Content-Type: application/json
   to fix. `websearch` still applies. It cannot be used with `attachmentIDs`,
   which are read from the documents: the message is rejected with a
   `400 Bad Request`.
+- `instructions` (optional, at most 2000 characters) tell the LLM how to
+  answer in this client, e.g. that the answer is put in a document as it is.
+  They are sent as a `system` message with the answer, after the prompt of
+  the assistant, with or without the documents; with them, openRAG splices
+  them into its own system prompt, like the prompt of an assistant. They are
+  not saved in the conversation: the client sends them with each message
+  they apply to. They are inspired by the `instructions` of the
+  [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses/create),
+  which are not carried over to the next answers either.
 - `assistantID` (optional) associates the conversation with an `io.cozy.ai.chat.assistants`
   document. When set, the response includes a `relationships` block.
   When the assistant has a knowledge base folder, the retrieval is scoped to
