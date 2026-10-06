@@ -26,6 +26,9 @@ func Chat(c echo.Context) error {
 	if err := middlewares.AllowWholeType(c, permission.GET, consts.Files); err != nil {
 		return middlewares.ErrForbidden
 	}
+	if err := payload.Validate(); err != nil {
+		return jsonapi.BadRequest(err)
+	}
 	chat, err := rag.Chat(inst, payload)
 	if err != nil {
 		return jsonapi.InternalServerError(err)
