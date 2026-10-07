@@ -46,6 +46,15 @@ func (r *Record) Clone() couchdb.Doc {
 // ProvisionDrive returns the shared drive of the space on the organization
 // instance, creating it on the first call.
 func ProvisionDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error) {
+	var rec Record
+	err := couchdb.GetDoc(inst, consts.Spaces, sp.ID, &rec)
+	if err == nil {
+		return sharing.FindSharing(inst, rec.SharingID)
+	}
+	if !couchdb.IsNotFoundError(err) && !couchdb.IsNoDatabaseError(err) {
+		return nil, err
+	}
+
 	dir, err := vfs.NewDirDocWithPath(sp.Name, consts.RootDirID, "/", nil)
 	if err != nil {
 		return nil, err
@@ -64,7 +73,7 @@ func ProvisionDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error)
 		return nil, err
 	}
 
-	rec := &Record{
+	rec = Record{
 		DocID:          sp.ID,
 		OrganizationID: sp.OrganizationID,
 		Name:           sp.Name,
@@ -73,7 +82,7 @@ func ProvisionDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error)
 		LastEventAt:    sp.Timestamp,
 		CreatedAt:      time.Now(),
 	}
-	if err := couchdb.CreateNamedDocWithDB(inst, rec); err != nil {
+	if err := couchdb.CreateNamedDocWithDB(inst, &rec); err != nil {
 		return nil, err
 	}
 	return s, nil

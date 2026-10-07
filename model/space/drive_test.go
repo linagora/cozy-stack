@@ -7,6 +7,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -52,6 +53,21 @@ func TestProvisionDrive(t *testing.T) {
 		require.Equal(t, rootID, rec.DirID)
 		require.Equal(t, org.OrgID, rec.OrganizationID)
 		require.Equal(t, "Design Sprint", rec.Name)
+	})
+
+	t.Run("RedeliveryReturnsTheSameDrive", func(t *testing.T) {
+		org := newOrgInstance(t)
+		sp := Space{ID: "space-" + utils.RandomString(8), OrganizationID: org.OrgID, Name: "Roadmap"}
+
+		first, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+		again, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+
+		require.Equal(t, first.SID, again.SID)
+		drives, err := sharing.ListDrives(org)
+		require.NoError(t, err)
+		require.Len(t, drives, 1)
 	})
 }
 
