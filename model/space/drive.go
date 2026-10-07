@@ -4,6 +4,7 @@
 package space
 
 import (
+	"strings"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -104,15 +105,35 @@ func spaceDir(inst *instance.Instance, sp Space) (*vfs.DirDoc, error) {
 		return inst.VFS().DirByID(res.Rows[0].ID)
 	}
 
-	dir, err := vfs.NewDirDocWithPath(sp.Name, consts.RootDirID, "/", nil)
+	fs := inst.VFS()
+	name := folderName(sp)
+	if exists, err := fs.GetIndexer().DirChildExists(consts.RootDirID, name); err != nil {
+		return nil, err
+	} else if exists {
+		name = vfs.ConflictName(fs, consts.RootDirID, name, false)
+	}
+	dir, err := vfs.NewDirDocWithPath(name, consts.RootDirID, "/", nil)
 	if err != nil {
 		return nil, err
 	}
 	dir.AddReferencedBy(ref)
-	if err := inst.VFS().CreateDir(dir); err != nil {
+	if err := fs.CreateDir(dir); err != nil {
 		return nil, err
 	}
 	return dir, nil
+}
+
+func folderName(sp Space) string {
+	name := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if strings.ContainsRune(vfs.ForbiddenFilenameChars, r) {
+			return '-'
+		}
+		return r
+	}, sp.Name))
+	if name == "" || name == "." || name == ".." {
+		return sp.ID
+	}
+	return name
 }
 
 // dirDrive returns the drive sharing of the folder, or nil when it has none.

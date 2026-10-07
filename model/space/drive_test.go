@@ -8,6 +8,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/sharing"
+	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -87,6 +88,31 @@ func TestProvisionDrive(t *testing.T) {
 		var restored Record
 		require.NoError(t, couchdb.GetDoc(org, consts.Spaces, sp.ID, &restored))
 		require.Equal(t, first.SID, restored.SharingID)
+	})
+
+	t.Run("NamesTheFolderAfterTheSpaceWithoutClashing", func(t *testing.T) {
+		org := newOrgInstance(t)
+		_, err := vfs.Mkdir(org.VFS(), "/Design", nil)
+		require.NoError(t, err)
+
+		for name, want := range map[string]string{
+			"Design":        "/Design (2)",
+			"Q3 / Q4 plans": "/Q3 - Q4 plans",
+			"  ":            "",
+		} {
+			sp := Space{ID: "space-" + utils.RandomString(8), OrganizationID: org.OrgID, Name: name}
+			s, err := ProvisionDrive(org, sp)
+			require.NoError(t, err)
+			rootID, err := s.DriveRootID()
+			require.NoError(t, err)
+			dir, err := org.VFS().DirByID(rootID)
+			require.NoError(t, err)
+			if want == "" {
+				want = "/" + sp.ID
+			}
+			require.Equal(t, want, dir.Fullpath)
+			require.Equal(t, name, s.Description)
+		}
 	})
 }
 
