@@ -1076,7 +1076,7 @@ func (s *Sharing) getDirDocFromInstance(inst *instance.Instance, m *Member, cred
 		ParseError: ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	if res != nil && res.StatusCode/100 == 4 {
+	if res != nil && ShouldRefreshToken(res.StatusCode) {
 		res, err = RefreshToken(inst, res, err, s, m, creds, opts, nil)
 	}
 	if err != nil {

@@ -123,7 +123,7 @@ func notifyMember(inst *instance.Instance, s *sharing.Sharing, index int) error 
 		ParseError: sharing.ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	if res != nil && res.StatusCode/100 == 4 {
+	if res != nil && sharing.ShouldRefreshToken(res.StatusCode) {
 		res, err = sharing.RefreshToken(inst, res, err, s, &s.Members[index], &s.Credentials[credIndex], opts, body)
 	}
 	if err != nil {

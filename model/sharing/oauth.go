@@ -723,6 +723,19 @@ func updateContactAddress(inst *instance.Instance, email, newInstance string) {
 }
 
 // RefreshToken is used after a failed request with a 4xx error code.
+// ShouldRefreshToken reports whether a failed request can be fixed by
+// refreshing the OAuth token and retrying it: the stack reports an expired
+// or invalid token with a 400, a 401 can happen when a cross-host redirect
+// strips the Authorization header, and a 410 Gone means the instance has
+// moved.
+func ShouldRefreshToken(status int) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusGone:
+		return true
+	}
+	return false
+}
+
 // It checks if the targeted instance has moved, and tries on the new instance
 // if it is the case. And, if needed, it renews the access token and retries
 // the request.
