@@ -91,6 +91,34 @@ func TestProvisionDrive(t *testing.T) {
 		require.Equal(t, first.SID, restored.SharingID)
 	})
 
+	t.Run("PutsANewDriveOnTheFolderWhenTheDriveIsGone", func(t *testing.T) {
+		org := newOrgInstance(t)
+		sp := Space{
+			ID:             "space-" + utils.RandomString(8),
+			OrganizationID: org.OrgID,
+			Name:           "Legal",
+			Timestamp:      time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC),
+		}
+		first, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+		firstRoot, err := first.DriveRootID()
+		require.NoError(t, err)
+		require.NoError(t, first.Revoke(org))
+
+		sp.Timestamp = sp.Timestamp.Add(time.Hour)
+		again, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+
+		require.NotEqual(t, first.SID, again.SID)
+		root, err := again.DriveRootID()
+		require.NoError(t, err)
+		require.Equal(t, firstRoot, root)
+		var rec Record
+		require.NoError(t, couchdb.GetDoc(org, consts.Spaces, sp.ID, &rec))
+		require.Equal(t, again.SID, rec.SharingID)
+		require.True(t, rec.LastEventAt.Equal(sp.Timestamp))
+	})
+
 	t.Run("NamesTheFolderAfterTheSpaceWithoutClashing", func(t *testing.T) {
 		org := newOrgInstance(t)
 		_, err := vfs.Mkdir(org.VFS(), "/Design", nil)

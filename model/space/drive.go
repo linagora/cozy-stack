@@ -82,10 +82,13 @@ func ProvisionDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error)
 func spaceDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error) {
 	var rec Record
 	err := couchdb.GetDoc(inst, consts.Spaces, sp.ID, &rec)
-	if err == nil {
-		return sharing.FindSharing(inst, rec.SharingID)
-	}
-	if !couchdb.IsNotFoundError(err) && !couchdb.IsNoDatabaseError(err) {
+	switch {
+	case err == nil:
+		s, err := activeDrive(inst, rec.SharingID)
+		if s != nil || err != nil {
+			return s, err
+		}
+	case !couchdb.IsNotFoundError(err) && !couchdb.IsNoDatabaseError(err):
 		return nil, err
 	}
 
@@ -103,17 +106,36 @@ func spaceDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error) {
 		}
 	}
 
-	rec = Record{
-		DocID:          sp.ID,
-		OrganizationID: sp.OrganizationID,
-		Name:           sp.Name,
-		DirID:          dir.ID(),
-		SharingID:      s.SID,
-		LastEventAt:    sp.Timestamp,
-		CreatedAt:      time.Now(),
+	rec.OrganizationID = sp.OrganizationID
+	rec.Name = sp.Name
+	rec.DirID = dir.ID()
+	rec.SharingID = s.SID
+	rec.LastEventAt = sp.Timestamp
+	if rec.DocRev != "" {
+		err = couchdb.UpdateDoc(inst, &rec)
+	} else {
+		rec.DocID = sp.ID
+		rec.CreatedAt = time.Now()
+		err = couchdb.CreateNamedDocWithDB(inst, &rec)
 	}
-	if err := couchdb.CreateNamedDocWithDB(inst, &rec); err != nil {
+	if err != nil {
 		return nil, err
+	}
+	return s, nil
+}
+
+// activeDrive returns the drive sharing with this id, or nil when it has been
+// revoked or deleted.
+func activeDrive(inst *instance.Instance, sharingID string) (*sharing.Sharing, error) {
+	s, err := sharing.FindSharing(inst, sharingID)
+	if couchdb.IsNotFoundError(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !s.Drive || !s.Active {
+		return nil, nil
 	}
 	return s, nil
 }
@@ -171,15 +193,8 @@ func dirDrive(inst *instance.Instance, dir *vfs.DirDoc) (*sharing.Sharing, error
 		if ref.Type != consts.Sharings {
 			continue
 		}
-		s, err := sharing.FindSharing(inst, ref.ID)
-		if couchdb.IsNotFoundError(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if s.Drive && s.Active {
-			return s, nil
+		if s, err := activeDrive(inst, ref.ID); s != nil || err != nil {
+			return s, err
 		}
 	}
 	return nil, nil
