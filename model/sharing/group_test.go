@@ -2,14 +2,18 @@ package sharing
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/client/auth"
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
+	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -587,4 +591,125 @@ func addEmailToContact(t *testing.T, inst *instance.Instance, c *contact.Contact
 	mail := map[string]interface{}{"address": email}
 	c.M["email"] = []interface{}{mail}
 	require.NoError(t, couchdb.UpdateDoc(inst, c))
+}
+
+func TestRevokeGroupIsIdempotent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance(&lifecycle.Options{
+		Email:      "alice@example.net",
+		PublicName: "Alice",
+	})
+
+	team := createGroup(t, inst, "Idem Team")
+	_ = createContactInGroups(t, inst, "IdemAlice", []string{team.ID()})
+	s := createDriveSharingForGroupTest(t, inst, "Idempotent group revoke")
+	s.OrgDrive = true
+	sid := s.SID
+	require.NoError(t, s.AddGroup(inst, team.ID(), false))
+	require.NoError(t, couchdb.UpdateDoc(inst, s))
+
+	require.NoError(t, s.RevokeGroup(inst, 0))
+
+	stored := &Sharing{}
+	require.NoError(t, couchdb.GetDoc(inst, consts.Sharings, sid, stored))
+	revBefore := stored.Rev()
+
+	require.NoError(t, stored.RevokeGroup(inst, 0))
+
+	after := &Sharing{}
+	require.NoError(t, couchdb.GetDoc(inst, consts.Sharings, sid, after))
+	require.Equal(t, revBefore, after.Rev(), "second revoke must not touch the sharing")
+	assert.Equal(t, MemberStatusRevoked, after.Members[1].Status)
+	require.Len(t, after.Groups, 1)
+	assert.True(t, after.Groups[0].Revoked)
+}
+
+// TestDelegateRevokeGroup checks that a recipient asking for the revocation
+// of one of its groups contacts the sharer with the right request.
+func TestDelegateRevokeGroup(t *testing.T) {
+	config.UseTestFile(t)
+
+	// safehttp blocks loopback addresses outside dev mode; enable it so the
+	// in-memory httptest server is reachable.
+	oldBuildMode := build.BuildMode
+	build.BuildMode = build.ModeDev
+	t.Cleanup(func() { build.BuildMode = oldBuildMode })
+
+	inst := &instance.Instance{Domain: "bob.example.net"}
+
+	newSharing := func(srvURL string) *Sharing {
+		now := time.Now()
+		return &Sharing{
+			SID:    "delegaterevoke",
+			Active: true,
+			Drive:  true,
+			Groups: []Group{{
+				ID:      "deleted-team-id",
+				Name:    "Deleted Team",
+				AddedBy: 1,
+			}},
+			Members: []Member{
+				{Status: MemberStatusOwner, Instance: srv.URL},
+				{
+					Status:   MemberStatusReady,
+					Name:     "Bob",
+					Email:    "bob@cozy.tools",
+					Instance: inst.Domain,
+				},
+			},
+			Credentials: []Credentials{{
+				AccessToken: &auth.AccessToken{AccessToken: "test-token"},
+			}},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+	}
+
+	t.Run("RevokesThroughTheSharer", func(t *testing.T) {
+		reqCh := make(chan *http.Request, 4)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reqCh <- r
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer srv.Close()
+
+		s := newSharing(srv.URL)
+		require.NoError(t, s.DelegateRevokeGroup(inst, 0))
+
+		require.Len(t, reqCh, 1)
+		r := <-reqCh
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.Equal(t, "/sharings/delegaterevoke/groups/0", r.URL.Path)
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+	})
+
+	t.Run("FailsOnUnexpectedResponse", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		s := newSharing(srv.URL)
+		require.ErrorIs(t, s.DelegateRevokeGroup(inst, 0), ErrInternalServerError)
+	})
+
+	t.Run("DoesNotRefreshOnUnfixableClientError", func(t *testing.T) {
+		reqCh := make(chan *http.Request, 4)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reqCh <- r
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		s := newSharing(srv.URL)
+		require.Error(t, s.DelegateRevokeGroup(inst, 0))
+		// A 404 cannot be fixed by a fresh token: no refresh, no retry.
+		require.Len(t, reqCh, 1)
+	})
 }
