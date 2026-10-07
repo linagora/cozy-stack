@@ -131,9 +131,6 @@ func RevokeGroup(c echo.Context) error {
 	if err != nil {
 		return jsonapi.InvalidParameter("index", err)
 	}
-	if index >= len(s.Groups) {
-		return jsonapi.InvalidParameter("index", errors.New("Invalid index"))
-	}
 	if err = authorizeRevokeGroup(c, s, index); err != nil {
 		return err
 	}
@@ -146,6 +143,7 @@ func RevokeGroup(c echo.Context) error {
 
 // authorizeRevokeGroup allows the sharer to revoke any group of the sharing,
 // and a recipient of a drive sharing to revoke a group they added themselves.
+// For the sharer, an invalid index is left to the model to reject.
 func authorizeRevokeGroup(c echo.Context, s *sharing.Sharing, index int) error {
 	if _, err := checkCreatePermissions(c, s); err == nil {
 		return nil
@@ -166,7 +164,8 @@ func authorizeRevokeGroup(c echo.Context, s *sharing.Sharing, index int) error {
 			memberIndex = i
 		}
 	}
-	if memberIndex == -1 || s.Groups[index].AddedBy != memberIndex {
+	if memberIndex == -1 || index < 0 || index >= len(s.Groups) ||
+		s.Groups[index].AddedBy != memberIndex {
 		return echo.NewHTTPError(http.StatusForbidden)
 	}
 	return nil

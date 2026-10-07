@@ -1338,6 +1338,8 @@ func wrapErrors(err error) error {
 		return jsonapi.BadRequest(err)
 	case sharing.ErrGroupCannotBeAddedTwice, sharing.ErrMemberAlreadyAdded, sharing.ErrMemberAlreadyInGroup:
 		return jsonapi.BadRequest(err)
+	case sharing.ErrInvalidGroupIndex:
+		return jsonapi.InvalidParameter("index", err)
 	case sharing.ErrFolderAlreadyShared:
 		return jsonapi.Conflict(err)
 	case sharing.ErrNotADirectory, sharing.ErrSystemFolder:

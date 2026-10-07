@@ -630,6 +630,34 @@ func TestRevokeGroupIsIdempotent(t *testing.T) {
 	assert.True(t, after.Groups[0].Revoked)
 }
 
+func TestRevokeGroupInvalidIndex(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance(&lifecycle.Options{
+		Email:      "alice@example.net",
+		PublicName: "Alice",
+	})
+
+	s := createDriveSharingForGroupTest(t, inst, "Invalid index group revoke")
+	stored := &Sharing{}
+	require.NoError(t, couchdb.GetDoc(inst, consts.Sharings, s.SID, stored))
+	revBefore := stored.Rev()
+
+	// The sharing has no group: negative, zero and out-of-range indexes are invalid
+	require.ErrorIs(t, stored.RevokeGroup(inst, -1), ErrInvalidGroupIndex)
+	require.ErrorIs(t, stored.RevokeGroup(inst, 0), ErrInvalidGroupIndex)
+	require.ErrorIs(t, stored.RevokeGroup(inst, 1), ErrInvalidGroupIndex)
+
+	after := &Sharing{}
+	require.NoError(t, couchdb.GetDoc(inst, consts.Sharings, s.SID, after))
+	require.Equal(t, revBefore, after.Rev(), "an invalid index must not touch the sharing")
+}
+
 // TestDelegateRevokeGroup checks that a recipient asking for the revocation
 // of one of its groups contacts the sharer with the right request.
 func TestDelegateRevokeGroup(t *testing.T) {
@@ -655,7 +683,7 @@ func TestDelegateRevokeGroup(t *testing.T) {
 				AddedBy: 1,
 			}},
 			Members: []Member{
-				{Status: MemberStatusOwner, Instance: srv.URL},
+				{Status: MemberStatusOwner, Instance: srvURL},
 				{
 					Status:   MemberStatusReady,
 					Name:     "Bob",

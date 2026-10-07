@@ -74,12 +74,16 @@ func (s *Sharing) AddGroup(inst *instance.Instance, groupID string, readOnly boo
 
 // RevokeGroup revokes a group of members on the sharer Cozy. After that, the
 // sharing is disabled if there are no longer any active recipient. Revoking
-// an already revoked group is a no-op.
+// an already revoked group is a no-op. It returns ErrInvalidGroupIndex if the
+// index does not refer to a group of the sharing.
 func (s *Sharing) RevokeGroup(inst *instance.Instance, index int) error {
 	if !s.Owner {
 		return ErrInvalidSharing
 	}
-	if index >= len(s.Groups) || s.Groups[index].Revoked {
+	if index < 0 || index >= len(s.Groups) {
+		return ErrInvalidGroupIndex
+	}
+	if s.Groups[index].Revoked {
 		return nil
 	}
 
