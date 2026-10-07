@@ -151,6 +151,43 @@ func TestProvisionDrive(t *testing.T) {
 			"carol@acme.test": true,
 		}, readOnly)
 	})
+
+	t.Run("RedeliveryAddsOnlyTheMissingMembers", func(t *testing.T) {
+		org := newOrgInstance(t)
+		for _, name := range []string{"alice", "bob"} {
+			_, err := orgdirectory.UpsertManagedContact(org, orgdirectory.ContactPatch{
+				OrganizationID: org.OrgID,
+				Email:          name + "@acme.test",
+				Name:           name,
+				CozyURL:        "https://" + name + ".cozy.local/",
+			})
+			require.NoError(t, err)
+		}
+		sp := Space{
+			ID:             "space-" + utils.RandomString(8),
+			OrganizationID: org.OrgID,
+			Name:           "Ops",
+			Members:        []Member{{Email: "alice@acme.test", Role: RoleEditor}},
+		}
+		_, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+
+		sp.Members = []Member{
+			{Email: "alice@acme.test", Role: RoleViewer},
+			{Email: "bob@acme.test", Role: RoleViewer},
+		}
+		s, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+
+		readOnly := map[string]bool{}
+		for _, m := range s.Members[1:] {
+			readOnly[m.Email] = m.ReadOnly
+		}
+		require.Equal(t, map[string]bool{
+			"alice@acme.test": false,
+			"bob@acme.test":   true,
+		}, readOnly)
+	})
 }
 
 func newOrgInstance(t *testing.T) *instance.Instance {
