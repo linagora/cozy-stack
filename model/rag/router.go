@@ -260,26 +260,10 @@ func keepsAnswer(actions []ActionDefinition, d routeDecision) bool {
 }
 
 func routerPrompt(actions []ActionDefinition) string {
-	var b strings.Builder
-	b.WriteString("You are the router of the Twake assistant. Read the last user message of the conversation and decide what to do with it.\n\n")
-	b.WriteString("Answer with a JSON object: {\"intent\": \"...\", \"needs_documents\": true or false}\n\n")
-	b.WriteString("intent is one of:\n")
-	b.WriteString("- \"search\": answer the message from the user's documents. This is the default: questions, requests for information, ")
-	b.WriteString("summaries or explanations given in the chat, small talk, and questions about HOW to do something.\n")
-	for _, a := range actions {
-		fmt.Fprintf(&b, "- %q: %s\n", a.Name, strings.TrimSpace(a.Description))
-	}
-	b.WriteString("Choose an action only when the user explicitly asks the assistant to do it now. When in doubt, choose \"search\".\n")
-	b.WriteString("\nneeds_documents is true when the action may need information from the user's documents: anything about their organization, ")
-	b.WriteString("its rules and policies, their projects, clients, colleagues, meetings or files, even when the user does not say \"from my files\". ")
-	b.WriteString("It is false for \"search\", for an action made from the conversation or from the message itself, ")
-	b.WriteString("and for a general subject that does not depend on the user's organization, like general best practices.\n\n")
-	b.WriteString("Examples:\n")
-	for _, ex := range routerExamples(actions) {
-		decision, _ := json.Marshal(routeDecision{Intent: ex.intent, NeedsDocuments: ex.NeedsDocuments})
-		fmt.Fprintf(&b, "User: %q\n%s\n", ex.Message, decision)
-	}
-	return b.String()
+	return renderPrompt("router_schema.txt", map[string]interface{}{
+		"Actions":  actions,
+		"Examples": promptExamples(actions, false),
+	})
 }
 
 type routerExample struct {
@@ -305,36 +289,34 @@ func routerExamples(actions []ActionDefinition) []routerExample {
 // routerToolsPrompt is the router prompt when the LLM calls a tool: the
 // descriptions of the actions are in the tools.
 func routerToolsPrompt(actions []ActionDefinition, withParams bool, now time.Time) string {
-	var b strings.Builder
-	b.WriteString("You are the router of the Twake assistant. Read the last user message of the conversation and call the one tool that handles it.\n\n")
-	b.WriteString("\"search\" is the default: questions, requests for information, summaries or explanations given in the chat, small talk, ")
-	b.WriteString("and questions about HOW to do something. ")
-	b.WriteString("Call another tool only when the user explicitly asks the assistant to do it now. When in doubt, call \"search\".\n")
-	b.WriteString("\nThe needs_documents argument of the other tools is true when the action may need information from the user's documents: ")
-	b.WriteString("anything about their organization, its rules and policies, their projects, clients, colleagues, meetings or files, ")
-	b.WriteString("even when the user does not say \"from my files\". ")
-	b.WriteString("It is false for an action made from the conversation or from the message itself, ")
-	b.WriteString("and for a general subject that does not depend on the user's organization, like general best practices.\n\n")
-	b.WriteString("Examples:\n")
-	if withParams {
-		b.WriteString("The other arguments of a tool are filled from the conversation, as its description says. ")
-		b.WriteString("Use \"\" (or [] for a list) for an argument you cannot fill. ")
-		b.WriteString("Never invent facts, names or email addresses: use only what is in the conversation. ")
-		b.WriteString("Write in the language of the user.\n")
-		fmt.Fprintf(&b, "Today is %s.\n\n", now.Format("Monday, January 2, 2006"))
-	}
-	b.WriteString("Examples:\n")
+	return renderPrompt("router_tools.txt", map[string]interface{}{
+		"WithParams": withParams,
+		"Today":      promptDate(now),
+		"Examples":   promptExamples(actions, withParams),
+	})
+}
+
+// promptExample is an example of the router prompts.
+type promptExample struct {
+	Message        string
+	Intent         string
+	NeedsDocuments bool
+	// WithParams tells that the example tool call has other arguments.
+	WithParams bool
+}
+
+func promptExamples(actions []ActionDefinition, withParams bool) []promptExample {
+	var examples []promptExample
 	for _, ex := range routerExamples(actions) {
-		switch {
-		case ex.intent == searchIntent:
-			fmt.Fprintf(&b, "User: %q\nsearch()\n", ex.Message)
-		case withParams && actionFor(actions, ex.intent).Parameters != nil:
-			fmt.Fprintf(&b, "User: %q\n%s({\"needs_documents\":%t, ...})\n", ex.Message, ex.intent, ex.NeedsDocuments)
-		default:
-			fmt.Fprintf(&b, "User: %q\n%s({\"needs_documents\":%t})\n", ex.Message, ex.intent, ex.NeedsDocuments)
-		}
+		a := actionFor(actions, ex.intent)
+		examples = append(examples, promptExample{
+			Message:        ex.Message,
+			Intent:         ex.intent,
+			NeedsDocuments: ex.NeedsDocuments,
+			WithParams:     withParams && a != nil && a.Parameters != nil,
+		})
 	}
-	return b.String()
+	return examples
 }
 
 // transcript writes the conversation for the router and the LLM: the
@@ -772,29 +754,11 @@ func hasRelevantDocuments(ctx context.Context, inst *instance.Instance, text, wo
 // the user's documents or from the conversation and what the LLM knows of a
 // general subject.
 func writingPrompt(a *ActionDefinition, fromDocuments bool, now time.Time) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "The user asks for this action: %s\n", strings.TrimSpace(a.Description))
-	fmt.Fprintf(&b, "Today is %s.\n\n", now.Format("Monday, January 2, 2006"))
-	b.WriteString("Write the content of the action itself, in full:\n")
-	b.WriteString("- In Markdown, in the language of the user.\n")
-	b.WriteString("- Start with one line \"# \" followed by its title, nothing before it.\n")
-	if instructions := strings.TrimSpace(a.Instructions); instructions != "" {
-		fmt.Fprintf(&b, "- %s\n", instructions)
-	}
-	b.WriteString("- Use only headings, paragraphs, \"- \" and \"1. \" lists, **bold** and *italic*: no table, no code block, no link.\n")
-	b.WriteString("- No introduction like \"Here is\", no comment after the content, no question to the user.\n")
-	b.WriteString("- When the user asks to summarize or use the conversation, use only the conversation: ")
-	b.WriteString("its key points, decisions, figures and open questions, in a logical order.\n")
-	if fromDocuments {
-		b.WriteString("- When the user gives a subject, write about it from the user's documents only.\n")
-		b.WriteString("- Never invent facts, names or figures about the user, their work or their documents.\n")
-	} else {
-		b.WriteString("- When the user gives a general subject, write about it from what you know.\n")
-		b.WriteString("- You do not know the user's organization: its rules, projects, clients and people. ")
-		b.WriteString("When the content needs them and they are not in the conversation, do not invent them: ")
-		b.WriteString("answer in one sentence, without a title, that you need to search the user's documents for it.\n")
-	}
-	return b.String()
+	return renderPrompt("writing.txt", map[string]interface{}{
+		"Action":        a,
+		"FromDocuments": fromDocuments,
+		"Today":         promptDate(now),
+	})
 }
 
 func contentTokens(a *ActionDefinition) int {
@@ -861,30 +825,33 @@ func contentTitle(content string) string {
 }
 
 func fillPrompt(a *ActionDefinition, now time.Time) string {
-	var b strings.Builder
-	b.WriteString("You prepare an action that the user asked for. The user will review it before it runs.\n")
-	fmt.Fprintf(&b, "Today is %s.\n\n", now.Format("Monday, January 2, 2006"))
-	fmt.Fprintf(&b, "Action %q: %s\n", a.Name, strings.TrimSpace(a.Description))
-	if instructions := strings.TrimSpace(a.Instructions); instructions != "" {
-		fmt.Fprintf(&b, "%s\n", instructions)
-	}
-	b.WriteString("\nAnswer with a JSON object with these fields:\n")
+	var params []promptParam
 	for _, name := range a.Parameters.paramNames() {
 		prop := a.Parameters.Properties[name]
 		kind := "string"
 		if prop.Type == "array" {
 			kind = "list of strings"
 		}
-		required := ""
-		if a.Parameters.isRequired(name) {
-			required = ", required"
-		}
-		fmt.Fprintf(&b, "- %q (%s%s): %s\n", name, kind, required, strings.TrimSpace(prop.Description))
+		params = append(params, promptParam{
+			Name:        name,
+			Kind:        kind,
+			Required:    a.Parameters.isRequired(name),
+			Description: prop.Description,
+		})
 	}
-	b.WriteString("Use \"\" (or [] for a list) for a field you cannot fill. ")
-	b.WriteString("Never invent facts, names or email addresses: use only what is in the conversation. ")
-	b.WriteString("Write in the language of the user.\n")
-	return b.String()
+	return renderPrompt("fill.txt", map[string]interface{}{
+		"Action": a,
+		"Today":  promptDate(now),
+		"Params": params,
+	})
+}
+
+// promptParam is a parameter of an action in the fill prompt.
+type promptParam struct {
+	Name        string
+	Kind        string
+	Description string
+	Required    bool
 }
 
 // paramsSchema is the schema the answer of the LLM must follow: every field

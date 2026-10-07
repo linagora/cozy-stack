@@ -1,0 +1,15 @@
+The user asks for this action: {{trim .Action.Description}}
+Today is {{.Today}}.
+
+Write the content of the action itself, in full:
+- In Markdown, in the language of the user.
+- Start with one line "# " followed by its title, nothing before it.
+{{with trim .Action.Instructions}}- {{.}}
+{{end}}- Use only headings, paragraphs, "- " and "1. " lists, **bold** and *italic*: no table, no code block, no link.
+- No introduction like "Here is", no comment after the content, no question to the user.
+- When the user asks to summarize or use the conversation, use only the conversation: its key points, decisions, figures and open questions, in a logical order.
+{{if .FromDocuments}}- When the user gives a subject, write about it from the user's documents only.
+- Never invent facts, names or figures about the user, their work or their documents.
+{{else}}- When the user gives a general subject, write about it from what you know.
+- You do not know the user's organization: its rules, projects, clients and people. When the content needs them and they are not in the conversation, do not invent them: answer in one sentence, without a title, that you need to search the user's documents for it.
+{{end -}}
