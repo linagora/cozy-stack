@@ -49,20 +49,33 @@ func (i *apiIntent) Links() *jsonapi.LinksList {
 	}
 }
 
+// apiIntentAttributes are the attributes of an intent in the JSON-API
+type apiIntentAttributes struct {
+	*intent.Intent
+	// FrameAncestors are the origins that may frame a service of the intent
+	FrameAncestors []string `json:"frameAncestors,omitempty"`
+}
+
 // In the JSON-API, the client is the domain of the client-side app that
-// asked the intent (it is used for postMessage)
+// asked the intent (it is used for postMessage), and frameAncestors the
+// origins that may frame its services
 func (i *apiIntent) MarshalJSON() ([]byte, error) {
 	output := i.doc.Clone().(*intent.Intent)
+	var ancestors []string
 	parts := strings.SplitN(output.Client, "/", 2)
 	if len(parts) < 2 {
 		output.Client = ""
 	} else {
 		output.Client = i.resolveClientURL(parts[1])
+		// As handleIntent: only a webapp client can frame a service
+		if parts[0] == consts.Apps {
+			ancestors = app.FrameAncestorOrigins(output.Client, app.DefaultClientURL(i.ins, parts[1]))
+		}
 	}
 	if i.sessionCode != "" {
 		addSessionCodeToServices(i.ins, output.Services, i.sessionCode)
 	}
-	return json.Marshal(output)
+	return json.Marshal(apiIntentAttributes{Intent: output, FrameAncestors: ancestors})
 }
 
 func (i *apiIntent) resolveClientURL(slug string) string {

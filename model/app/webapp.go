@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/spf13/afero"
+	"golang.org/x/net/idna"
 )
 
 // defaultAppListLimit is the default limit for returned documents
@@ -329,6 +331,37 @@ func DefaultClientURL(ins *instance.Instance, slug string) string {
 	u := ins.SubDomain(slug)
 	u.Path = ""
 	return u.String()
+}
+
+// FrameAncestorOrigins returns the origins of the given URLs, as browsers
+// serialize them (location.ancestorOrigins): the host in lower case, an
+// internationalized domain name in punycode, without the default port of the
+// scheme, each origin once. The URLs that are not absolute http(s) ones are
+// left out.
+func FrameAncestorOrigins(rawURLs ...string) []string {
+	origins := []string{}
+	for _, raw := range rawURLs {
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			continue
+		}
+		host, err := idna.Lookup.ToASCII(strings.ToLower(u.Hostname()))
+		if err != nil || host == "" {
+			continue
+		}
+		port := u.Port()
+		if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+			port = ""
+		}
+		origin := strings.ToLower(u.Scheme) + "://" + host
+		if port != "" {
+			origin += ":" + port
+		}
+		if !slices.Contains(origins, origin) {
+			origins = append(origins, origin)
+		}
+	}
+	return origins
 }
 
 // NamePrefix returns the webapp name prefix.
