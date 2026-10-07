@@ -796,3 +796,21 @@ rabbitmq:
           bindings:
             - banner.materialize
             - banner.clear
+    # TwakeSpace space events. The drive of a space is announced on the
+    # `activity` exchange, which TwakeSpace declares and binds.
+    - name: space
+      kind: topic
+      durable: true
+      declare_exchange: false
+      queues:
+        - name: stack.space.lifecycle
+          declare: true
+          declare_dlx: true
+          declare_dlq: true
+          dlx_name: stack.space.dlx
+          dlq_name: stack.dead.letter.space.lifecycle
+          dl_routing_key: twake.space.dead
+          prefetch: 8
+          delivery_limit: 5
+          bindings:
+            - twake.space.created
