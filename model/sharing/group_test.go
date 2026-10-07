@@ -2,6 +2,7 @@ package sharing
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -587,4 +588,53 @@ func addEmailToContact(t *testing.T, inst *instance.Instance, c *contact.Contact
 	mail := map[string]interface{}{"address": email}
 	c.M["email"] = []interface{}{mail}
 	require.NoError(t, couchdb.UpdateDoc(inst, c))
+}
+
+func TestAddGroupFromOrgInstance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	orgID := "ag" + suffix
+	orgDomain := "acme-" + suffix + ".example"
+	newInstance := func(domain, email string) *instance.Instance {
+		inst, err := lifecycle.Create(&lifecycle.Options{Domain: domain, OrgDomain: orgDomain, OrgID: orgID, Email: email})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
+		return inst
+	}
+	org := newInstance(orgID+".ag.localhost", "")
+	alice := newInstance("alice-"+suffix+".ag.localhost", "alice@cozy.tools")
+
+	team := createGroup(t, org, "Team")
+	createContactInGroups(t, org, "Alice", []string{team.ID()})
+	createContactInGroups(t, org, "Bob", []string{team.ID()})
+	// A stale copy on the member instance, emptied by the cleanup.
+	stale := contact.NewGroup()
+	stale.SetID(team.ID())
+	stale.M["name"] = "Team"
+	require.NoError(t, couchdb.CreateNamedDocWithDB(alice, stale))
+
+	s := &Sharing{
+		Active: true,
+		Owner:  true,
+		Members: []Member{
+			{Status: MemberStatusOwner, Name: "Alice", Email: "alice@cozy.tools"},
+		},
+	}
+	require.NoError(t, s.AddGroup(alice, team.ID(), false))
+	require.Len(t, s.Groups, 1)
+	assert.Equal(t, "Team", s.Groups[0].Name)
+	require.Len(t, s.Members, 2, "the sharer is not added from the org group")
+	assert.Equal(t, "bob@cozy.tools", s.Members[1].Email)
+	assert.Equal(t, []int{0}, s.Members[1].Groups)
+
+	own := createGroup(t, alice, "Friends")
+	createContactInGroups(t, alice, "Charlie", []string{own.ID()})
+	require.NoError(t, s.AddGroup(alice, own.ID(), false))
+	require.Len(t, s.Members, 3, "a personal group is still found on the instance")
+	assert.Equal(t, "charlie@cozy.tools", s.Members[2].Email)
 }
