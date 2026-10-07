@@ -69,6 +69,25 @@ func TestProvisionDrive(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, drives, 1)
 	})
+
+	t.Run("RecoversTheDriveWhenTheRecordIsMissing", func(t *testing.T) {
+		org := newOrgInstance(t)
+		sp := Space{ID: "space-" + utils.RandomString(8), OrganizationID: org.OrgID, Name: "Hiring"}
+
+		first, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+		var rec Record
+		require.NoError(t, couchdb.GetDoc(org, consts.Spaces, sp.ID, &rec))
+		require.NoError(t, couchdb.DeleteDoc(org, &rec))
+
+		again, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+
+		require.Equal(t, first.SID, again.SID)
+		var restored Record
+		require.NoError(t, couchdb.GetDoc(org, consts.Spaces, sp.ID, &restored))
+		require.Equal(t, first.SID, restored.SharingID)
+	})
 }
 
 func newOrgInstance(t *testing.T) *instance.Instance {

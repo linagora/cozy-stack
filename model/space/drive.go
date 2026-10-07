@@ -45,6 +45,10 @@ func (r *Record) Clone() couchdb.Doc {
 
 // ProvisionDrive returns the shared drive of the space on the organization
 // instance, creating it on the first call.
+//
+// The record is written only once the sharing exists, so it always names a
+// real drive. A crash before that leaves the folder, found by its reference to
+// the space on the next delivery.
 func ProvisionDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error) {
 	var rec Record
 	err := couchdb.GetDoc(inst, consts.Spaces, sp.ID, &rec)
@@ -55,22 +59,18 @@ func ProvisionDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error)
 		return nil, err
 	}
 
-	dir, err := vfs.NewDirDocWithPath(sp.Name, consts.RootDirID, "/", nil)
+	dir, err := spaceDir(inst, sp)
 	if err != nil {
 		return nil, err
 	}
-	dir.AddReferencedBy(couchdb.DocReference{Type: consts.Spaces, ID: sp.ID})
-	if err := inst.VFS().CreateDir(dir); err != nil {
-		return nil, err
-	}
-
-	s, err := sharing.CreateDrive(inst, dir.ID(), sp.Name, "")
+	s, err := dirDrive(inst, dir)
 	if err != nil {
 		return nil, err
 	}
-	s.OrgDrive = inst.IsOrganizationInstance()
-	if _, err := s.Create(inst); err != nil {
-		return nil, err
+	if s == nil {
+		if s, err = createDrive(inst, dir, sp.Name); err != nil {
+			return nil, err
+		}
 	}
 
 	rec = Record{
@@ -83,6 +83,65 @@ func ProvisionDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error)
 		CreatedAt:      time.Now(),
 	}
 	if err := couchdb.CreateNamedDocWithDB(inst, &rec); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func spaceDir(inst *instance.Instance, sp Space) (*vfs.DirDoc, error) {
+	ref := couchdb.DocReference{Type: consts.Spaces, ID: sp.ID}
+	req := &couchdb.ViewRequest{
+		StartKey: []string{ref.Type, ref.ID},
+		EndKey:   []string{ref.Type, ref.ID, couchdb.MaxString},
+		Limit:    1,
+	}
+	var res couchdb.ViewResponse
+	err := couchdb.ExecView(inst, couchdb.FilesReferencedByView, req, &res)
+	if err != nil && !couchdb.IsNoDatabaseError(err) {
+		return nil, err
+	}
+	if len(res.Rows) > 0 {
+		return inst.VFS().DirByID(res.Rows[0].ID)
+	}
+
+	dir, err := vfs.NewDirDocWithPath(sp.Name, consts.RootDirID, "/", nil)
+	if err != nil {
+		return nil, err
+	}
+	dir.AddReferencedBy(ref)
+	if err := inst.VFS().CreateDir(dir); err != nil {
+		return nil, err
+	}
+	return dir, nil
+}
+
+// dirDrive returns the drive sharing of the folder, or nil when it has none.
+func dirDrive(inst *instance.Instance, dir *vfs.DirDoc) (*sharing.Sharing, error) {
+	for _, ref := range dir.ReferencedBy {
+		if ref.Type != consts.Sharings {
+			continue
+		}
+		s, err := sharing.FindSharing(inst, ref.ID)
+		if couchdb.IsNotFoundError(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if s.Drive && s.Active {
+			return s, nil
+		}
+	}
+	return nil, nil
+}
+
+func createDrive(inst *instance.Instance, dir *vfs.DirDoc, name string) (*sharing.Sharing, error) {
+	s, err := sharing.CreateDrive(inst, dir.ID(), name, "")
+	if err != nil {
+		return nil, err
+	}
+	s.OrgDrive = inst.IsOrganizationInstance()
+	if _, err := s.Create(inst); err != nil {
 		return nil, err
 	}
 	return s, nil
