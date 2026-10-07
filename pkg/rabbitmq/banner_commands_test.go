@@ -83,7 +83,7 @@ func TestBannerCommandsThroughTheBroker(t *testing.T) {
 		}},
 	}
 
-	specs := rabbitmq.BuildExchangeSpecs([]config.RabbitExchange{exchangeCfg})
+	specs := rabbitmq.BuildExchangeSpecs([]config.RabbitExchange{exchangeCfg}, nil)
 	require.Len(t, specs, 1)
 	require.Len(t, specs[0].Queues, 1, "the queue name must still map to a handler")
 
