@@ -1,0 +1,68 @@
+package space
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/utils"
+	"github.com/cozy/cozy-stack/tests/testutils"
+	"github.com/stretchr/testify/require"
+)
+
+func TestProvisionDrive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	t.Run("CreatesTheSpaceDriveOnTheOrganizationInstance", func(t *testing.T) {
+		org := newOrgInstance(t)
+		spaceID := "space-" + utils.RandomString(8)
+
+		s, err := ProvisionDrive(org, Space{
+			ID:             spaceID,
+			OrganizationID: org.OrgID,
+			Name:           "Design Sprint",
+			Timestamp:      time.Date(2026, 10, 5, 9, 12, 44, 0, time.UTC),
+		})
+		require.NoError(t, err)
+
+		require.True(t, s.Drive)
+		require.True(t, s.OrgDrive)
+		require.True(t, s.Owner)
+		require.Equal(t, "Design Sprint", s.Description)
+
+		rootID, err := s.DriveRootID()
+		require.NoError(t, err)
+		dir, err := org.VFS().DirByID(rootID)
+		require.NoError(t, err)
+		require.Equal(t, "/Design Sprint", dir.Fullpath)
+		require.Contains(t, dir.ReferencedBy, couchdb.DocReference{Type: consts.Spaces, ID: spaceID})
+
+		var rec Record
+		require.NoError(t, couchdb.GetDoc(org, consts.Spaces, spaceID, &rec))
+		require.Equal(t, s.SID, rec.SharingID)
+		require.Equal(t, rootID, rec.DirID)
+		require.Equal(t, org.OrgID, rec.OrganizationID)
+		require.Equal(t, "Design Sprint", rec.Name)
+	})
+}
+
+func newOrgInstance(t *testing.T) *instance.Instance {
+	t.Helper()
+	orgID := strings.ToLower("org" + utils.RandomString(10))
+	setup := testutils.NewSetup(t, t.Name())
+	return setup.GetTestInstance(&lifecycle.Options{
+		Domain:     orgID + ".cozy.local",
+		OrgID:      orgID,
+		Email:      "admin@" + orgID + ".example",
+		PublicName: "Organization",
+	})
+}

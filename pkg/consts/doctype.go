@@ -86,6 +86,8 @@ const (
 	Settings = "io.cozy.settings"
 	// Shared doc type for keepking track of documents in sharings
 	Shared = "io.cozy.shared"
+	// Spaces doc type for the TwakeSpace spaces provisioned on an organization instance
+	Spaces = "io.cozy.spaces"
 	// Sharings doc type for document and file sharing
 	Sharings = "io.cozy.sharings"
 	// SharingsMembers doc type for members of a sharing
