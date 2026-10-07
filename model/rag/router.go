@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/labstack/echo/v4"
 )
 
@@ -235,6 +236,9 @@ type routeDecision struct {
 	// confidence and documents are the confidence of the intent and the
 	// probability that the documents are needed, for a JEV decision model.
 	confidence, documents float64
+	// params are the arguments of the tool call of an action with
+	// parameters, when the router fills them, unchecked.
+	params map[string]interface{}
 }
 
 // action is the name of the action the router picked, "" for a search.
@@ -300,7 +304,7 @@ func routerExamples(actions []ActionDefinition) []routerExample {
 
 // routerToolsPrompt is the router prompt when the LLM calls a tool: the
 // descriptions of the actions are in the tools.
-func routerToolsPrompt(actions []ActionDefinition) string {
+func routerToolsPrompt(actions []ActionDefinition, withParams bool, now time.Time) string {
 	var b strings.Builder
 	b.WriteString("You are the router of the Twake assistant. Read the last user message of the conversation and call the one tool that handles it.\n\n")
 	b.WriteString("\"search\" is the default: questions, requests for information, summaries or explanations given in the chat, small talk, ")
@@ -312,10 +316,21 @@ func routerToolsPrompt(actions []ActionDefinition) string {
 	b.WriteString("It is false for an action made from the conversation or from the message itself, ")
 	b.WriteString("and for a general subject that does not depend on the user's organization, like general best practices.\n\n")
 	b.WriteString("Examples:\n")
+	if withParams {
+		b.WriteString("The other arguments of a tool are filled from the conversation, as its description says. ")
+		b.WriteString("Use \"\" (or [] for a list) for an argument you cannot fill. ")
+		b.WriteString("Never invent facts, names or email addresses: use only what is in the conversation. ")
+		b.WriteString("Write in the language of the user.\n")
+		fmt.Fprintf(&b, "Today is %s.\n\n", now.Format("Monday, January 2, 2006"))
+	}
+	b.WriteString("Examples:\n")
 	for _, ex := range routerExamples(actions) {
-		if ex.intent == searchIntent {
+		switch {
+		case ex.intent == searchIntent:
 			fmt.Fprintf(&b, "User: %q\nsearch()\n", ex.Message)
-		} else {
+		case withParams && actionFor(actions, ex.intent).Parameters != nil:
+			fmt.Fprintf(&b, "User: %q\n%s({\"needs_documents\":%t, ...})\n", ex.Message, ex.intent, ex.NeedsDocuments)
+		default:
 			fmt.Fprintf(&b, "User: %q\n%s({\"needs_documents\":%t})\n", ex.Message, ex.intent, ex.NeedsDocuments)
 		}
 	}
@@ -382,6 +397,12 @@ func truncate(s string, maxChars int) string {
 // like function calling, instead of answering a JSON object.
 const routerTools = "tools"
 
+// routerToolsParams is the tools mode where the tool of an action with
+// parameters takes them as its arguments: the router fills them in the same
+// call, and the action is prepared without a second one when it does not
+// need the documents.
+const routerToolsParams = "tools-params"
+
 // routerJEV is the router mode of the config for a decision model of the JEV
 // family (System One): it answers typed questions with probabilities, a
 // choice for the intent and a yes or no for the documents, without
@@ -407,8 +428,8 @@ func route(ctx context.Context, inst *instance.Instance, mode string, messages [
 	var decision routeDecision
 	var err error
 	switch mode {
-	case routerTools:
-		decision, err = routeWithTools(ctx, inst, messages, actions, override)
+	case routerTools, routerToolsParams:
+		decision, err = routeWithTools(ctx, inst, messages, actions, override, mode == routerToolsParams)
 	case routerJEV, routerJEVGate:
 		decision, err = routeWithJEV(ctx, inst, messages, actions, override, mode == routerJEVGate)
 	default:
@@ -449,36 +470,47 @@ func routeWithSchema(ctx context.Context, inst *instance.Instance, messages []ra
 }
 
 // routeWithTools asks the LLM to call one tool: "search" without argument,
-// or an action with its needs_documents argument.
-func routeWithTools(ctx context.Context, inst *instance.Instance, messages []ragMessage, actions []ActionDefinition, override map[string]interface{}) (routeDecision, error) {
+// or an action with its needs_documents argument. withParams adds the
+// parameters of an action to its tool, for the router to fill them.
+func routeWithTools(ctx context.Context, inst *instance.Instance, messages []ragMessage, actions []ActionDefinition, override map[string]interface{}, withParams bool) (routeDecision, error) {
 	tools := []map[string]interface{}{
 		functionTool(searchIntent, "answer the message from the user's documents", map[string]interface{}{
 			"type": "object", "properties": map[string]interface{}{},
 		}),
 	}
-	for _, a := range actions {
+	for i := range actions {
+		a := &actions[i]
+		if withParams && a.Parameters != nil {
+			tools = append(tools, functionTool(a.Name, toolDescription(a), toolParameters(a)))
+			continue
+		}
 		tools = append(tools, functionTool(a.Name, strings.TrimSpace(a.Description), map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"needs_documents": map[string]interface{}{
-					"type":        "boolean",
-					"description": "whether the action may need information from the user's documents",
-				},
+				"needs_documents": needsDocumentsArgument,
 			},
 			"required":             []string{"needs_documents"},
 			"additionalProperties": false,
 		}))
 	}
+	// The arguments come from the conversation, like the params of an
+	// action: it is given as a whole, as for the fill
+	user := transcript(messages, 600, 4000)
+	if withParams {
+		user = transcript(messages, 4000, writingHistoryChars)
+	}
 	payload := map[string]interface{}{
 		"messages": []ragMessage{
-			{Role: SystemRole, Content: routerToolsPrompt(actions)},
-			{Role: UserRole, Content: transcript(messages, 600, 4000)},
+			{Role: SystemRole, Content: routerToolsPrompt(actions, withParams, time.Now().UTC())},
+			{Role: UserRole, Content: user},
 		},
 		"stream":      false,
 		"temperature": 0,
-		"max_tokens":  32,
 		"tools":       tools,
 		"tool_choice": "required",
+	}
+	if !withParams {
+		payload["max_tokens"] = 32
 	}
 	if override != nil {
 		payload["metadata"] = map[string]interface{}{"llm_override": override}
@@ -492,16 +524,49 @@ func routeWithTools(ctx context.Context, inst *instance.Instance, messages []rag
 	}
 	call := msg.ToolCalls[0].Function
 	decision := routeDecision{Intent: call.Name}
-	if strings.TrimSpace(call.Arguments) != "" {
-		var args struct {
-			NeedsDocuments bool `json:"needs_documents"`
-		}
-		if err := decodeJSONObject(call.Arguments, &args); err != nil {
-			return routeDecision{}, err
-		}
-		decision.NeedsDocuments = args.NeedsDocuments
+	if strings.TrimSpace(call.Arguments) == "" {
+		return decision, nil
+	}
+	var args map[string]interface{}
+	if err := decodeJSONObject(call.Arguments, &args); err != nil {
+		return routeDecision{}, err
+	}
+	decision.NeedsDocuments, _ = args["needs_documents"].(bool)
+	if a := actionFor(actions, call.Name); withParams && a != nil && a.Parameters != nil {
+		delete(args, "needs_documents")
+		decision.params = args
 	}
 	return decision, nil
+}
+
+var needsDocumentsArgument = map[string]interface{}{
+	"type":        "boolean",
+	"description": "whether the action may need information from the user's documents",
+}
+
+// toolDescription is the description of the tool of an action whose
+// parameters the router fills: what the action does, then how to fill them.
+func toolDescription(a *ActionDefinition) string {
+	description := strings.TrimSpace(a.Description)
+	if instructions := strings.TrimSpace(a.Instructions); instructions != "" {
+		description += "\nTo fill the arguments: " + instructions
+	}
+	return description
+}
+
+// toolParameters is the JSON schema of the arguments of the tool of an
+// action: its params, all asked for like in the fill, and needs_documents.
+func toolParameters(a *ActionDefinition) map[string]interface{} {
+	schema := paramsSchema(a)
+	properties := schema["properties"].(map[string]interface{})
+	for name, prop := range properties {
+		if description := strings.TrimSpace(a.Parameters.Properties[name].Description); description != "" {
+			prop.(map[string]interface{})["description"] = description
+		}
+	}
+	properties["needs_documents"] = needsDocumentsArgument
+	schema["required"] = append(schema["required"].([]string), "needs_documents")
+	return schema
 }
 
 // routeWithJEV asks a JEV decision model two questions on the conversation:
@@ -862,6 +927,20 @@ func fillAction(ctx context.Context, inst *instance.Instance, a *ActionDefinitio
 		return nil, err
 	}
 	return &ChatAction{Name: a.Name, Params: params}, nil
+}
+
+// prepareAction prepares an action that does not need the documents: from
+// the arguments of the tool call when the router filled them and they pass
+// the checks, else with a call to fill its params.
+func prepareAction(ctx context.Context, inst *instance.Instance, logger logger.Logger, a *ActionDefinition, d routeDecision, messages []ragMessage, override map[string]interface{}, now time.Time) (*ChatAction, error) {
+	if d.params != nil {
+		params, err := checkParams(a, d.params, userText(messages))
+		if err == nil {
+			return &ChatAction{Name: a.Name, Params: params}, nil
+		}
+		logger.Infof("chat router: the arguments of %s are not usable, filling them: %s", a.Name, err)
+	}
+	return fillAction(ctx, inst, a, messages, "", override, now)
 }
 
 // userText is what the user wrote in the conversation, the only place the

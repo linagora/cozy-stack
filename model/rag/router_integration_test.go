@@ -268,6 +268,78 @@ func TestQueryRoutesWithTools(t *testing.T) {
 	assert.Contains(t, route.Prompt(), "Last user message:\nÉcris un mail à Paul pour faire le point")
 }
 
+func TestQueryFillsTheParamsInTheToolCall(t *testing.T) {
+	r := newRAGTest(t)
+	server := config.GetConfig().RAGServers[config.DefaultInstanceContext]
+	server.Router = "tools-params"
+	config.GetConfig().RAGServers[config.DefaultInstanceContext] = server
+	var route rag.LLMCall
+	r.fake.LLMTool = func(call rag.LLMCall) (string, string) {
+		route = call
+		return "draft_email", `{"needs_documents": false, "to": ["Paul", "Marc"], "subject": "Point", "body": "Bonjour Paul"}`
+	}
+	var fills []string
+	r.fake.LLM = func(call rag.LLMCall) string {
+		fills = append(fills, call.Step())
+		return `{"to": [], "subject": "", "body": ""}`
+	}
+	query := newRouterConversation(t, r, "conversation-tools-params", "Écris un mail à Paul pour faire le point", testActions(t))
+	events := subscribeRouterEvents(t, r)
+
+	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	published := events()
+	require.Equal(t, []string{"action", "done"}, objects(published))
+	action := published[0]["action"].(*rag.ChatAction)
+	assert.Equal(t, "draft_email", action.Name)
+	assert.Equal(t, map[string]interface{}{"to": []string{"Paul"}, "subject": "Point", "body": "Bonjour Paul"}, action.Params,
+		"the arguments are checked like filled params: the recipient the user did not write is dropped")
+	assert.Empty(t, fills, "the params are not filled again")
+
+	var email struct {
+		Description string
+		Parameters  struct {
+			Properties map[string]struct {
+				Description string `json:"description"`
+			} `json:"properties"`
+			Required []string `json:"required"`
+		}
+	}
+	for _, tool := range route.Tools {
+		if tool.Function.Name == "draft_email" {
+			email.Description = tool.Function.Description
+			require.NoError(t, json.Unmarshal(tool.Function.Parameters, &email.Parameters))
+		}
+	}
+	assert.Contains(t, email.Description, "To fill the arguments: The body is plain text")
+	assert.Equal(t, []string{"body", "subject", "to", "needs_documents"}, email.Parameters.Required)
+	assert.Equal(t, "the subject of the email", email.Parameters.Properties["subject"].Description)
+	assert.Contains(t, route.Prompt(), `draft_email({"needs_documents":false, ...})`)
+	assert.Contains(t, route.Prompt(), `User: "Fais-en une note"`+"\n"+`create_note({"needs_documents":false})`)
+}
+
+func TestQueryFillsTheParamsTheToolCallMisses(t *testing.T) {
+	r := newRAGTest(t)
+	server := config.GetConfig().RAGServers[config.DefaultInstanceContext]
+	server.Router = "tools-params"
+	config.GetConfig().RAGServers[config.DefaultInstanceContext] = server
+	r.fake.LLMTool = func(call rag.LLMCall) (string, string) {
+		return "draft_email", `{"needs_documents": false, "to": ["Paul"], "subject": "", "body": ""}`
+	}
+	var fills []string
+	r.fake.LLM = func(call rag.LLMCall) string {
+		fills = append(fills, call.Step())
+		return `{"to": ["Paul"], "subject": "Point", "body": "Bonjour Paul"}`
+	}
+	query := newRouterConversation(t, r, "conversation-tools-params-fill", "Écris un mail à Paul pour faire le point", testActions(t))
+	events := subscribeRouterEvents(t, r)
+
+	require.NoError(t, rag.Query(r.inst, rag.TestingLogger(), query))
+	published := events()
+	require.Equal(t, []string{"action", "done"}, objects(published))
+	assert.Equal(t, "Point", published[0]["action"].(*rag.ChatAction).Params["subject"])
+	assert.Equal(t, []string{"draft_email"}, fills, "the required params missing from the call are filled")
+}
+
 func TestQueryRoutesWithJEV(t *testing.T) {
 	r := newRAGTest(t)
 	server := config.GetConfig().RAGServers[config.DefaultInstanceContext]

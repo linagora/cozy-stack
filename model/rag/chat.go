@@ -683,7 +683,7 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 		}
 
 	case !waitDecision().NeedsDocuments:
-		action, err = fillAction(ctx, inst, def, messages, "", override, now)
+		action, err = prepareAction(ctx, inst, logger, def, waitDecision(), messages, override, now)
 		if err == nil {
 			publishAction(inst, msg.ID, answerID, action)
 			publishDone(inst, msg.ID)

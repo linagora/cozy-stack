@@ -153,7 +153,9 @@ type LLMCall struct {
 	} `json:"response_format"`
 	Tools []struct {
 		Function struct {
-			Name string `json:"name"`
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
 		} `json:"function"`
 	} `json:"tools"`
 	ToolChoice string `json:"tool_choice"`
