@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cozy/cozy-stack/client/request"
@@ -40,11 +41,11 @@ func (s *Sharing) AddGroup(inst *instance.Instance, groupID string, readOnly boo
 		}
 	}
 
-	group, err := contact.FindGroup(inst, groupID)
+	group, db, err := findGroup(inst, groupID)
 	if err != nil {
 		return err
 	}
-	contacts, err := group.GetAllContacts(inst)
+	contacts, err := group.GetAllContacts(db)
 	if err != nil {
 		return err
 	}
@@ -52,6 +53,9 @@ func (s *Sharing) AddGroup(inst *instance.Instance, groupID string, readOnly boo
 	groupIndex := len(s.Groups)
 	for _, contact := range contacts {
 		m := buildMemberFromContact(contact, readOnly)
+		if isSelf(inst, m) {
+			continue
+		}
 		m.Groups = []int{groupIndex}
 		m.OnlyInGroups = true
 		_, idx, err := s.addMember(inst, m)
@@ -70,6 +74,36 @@ func (s *Sharing) AddGroup(inst *instance.Instance, groupID string, readOnly boo
 	}
 	s.Groups = append(s.Groups, g)
 	return nil
+}
+
+// findGroup looks the group up on the org instance, then on the instance
+// itself, and also returns the instance where its contacts are.
+func findGroup(inst *instance.Instance, groupID string) (*contact.Group, *instance.Instance, error) {
+	orgInst, err := findOrgInstance(inst)
+	if err != nil {
+		return nil, nil, err
+	}
+	if orgInst != nil {
+		group, err := contact.FindGroup(orgInst, groupID)
+		if err == nil {
+			return group, orgInst, nil
+		}
+		if !couchdb.IsNotFoundError(err) && !couchdb.IsNoDatabaseError(err) {
+			return nil, nil, err
+		}
+	}
+	group, err := contact.FindGroup(inst, groupID)
+	return group, inst, err
+}
+
+// isSelf tells if the member is the user of inst, who is in the groups of the
+// org instance.
+func isSelf(inst *instance.Instance, m Member) bool {
+	if m.Instance != "" && m.Instance == inst.PageURL("", nil) {
+		return true
+	}
+	email, _ := inst.SettingsEMail()
+	return m.Email != "" && strings.EqualFold(m.Email, email)
 }
 
 // RevokeGroup revokes a group of members on the sharer Cozy. After that, the

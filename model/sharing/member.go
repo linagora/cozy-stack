@@ -220,15 +220,13 @@ func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact
 	if addr, err := stdmail.ParseAddress(email); err != nil || addr.Address != email {
 		return nil, false, ErrInvalidEmail
 	}
-	if inst.OrgID != "" || inst.OrgDomain != "" {
-		orgInst, err := orgdirectory.FindOrganizationInstance(context.Background(), inst.OrgID, inst.OrgDomain)
-		if err != nil && !errors.Is(err, instance.ErrNotFound) {
-			return nil, false, err
-		}
-		if orgInst != nil {
-			if c, err := findContactByEmail(orgInst, email); c != nil || err != nil {
-				return c, false, err
-			}
+	orgInst, err := findOrgInstance(inst)
+	if err != nil {
+		return nil, false, err
+	}
+	if orgInst != nil {
+		if c, err := findContactByEmail(orgInst, email); c != nil || err != nil {
+			return c, false, err
 		}
 	}
 	if c, err := findContactByEmail(inst, email); c != nil || err != nil {
@@ -236,6 +234,19 @@ func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact
 	}
 	c, err := contact.Create(inst, contact.CreateOptions{Email: email, External: true})
 	return c, err == nil, err
+}
+
+// findOrgInstance returns the organization instance of inst, or nil when it
+// has none.
+func findOrgInstance(inst *instance.Instance) (*instance.Instance, error) {
+	if inst.OrgID == "" && inst.OrgDomain == "" {
+		return nil, nil
+	}
+	orgInst, err := orgdirectory.FindOrganizationInstance(context.Background(), inst.OrgID, inst.OrgDomain)
+	if errors.Is(err, instance.ErrNotFound) {
+		return nil, nil
+	}
+	return orgInst, err
 }
 
 func findContactByEmail(db prefixer.Prefixer, email string) (*contact.Contact, error) {
@@ -412,7 +423,7 @@ func (s *Sharing) DelegateAddContactsAndGroups(inst *instance.Instance, groupIDs
 	}
 
 	for _, groupID := range groupIDs {
-		group, err := contact.FindGroup(inst, groupID)
+		group, db, err := findGroup(inst, groupID)
 		if err != nil {
 			return err
 		}
@@ -424,13 +435,16 @@ func (s *Sharing) DelegateAddContactsAndGroups(inst *instance.Instance, groupIDs
 		}
 		api.groups = append(api.groups, g)
 
-		contacts, err := group.GetAllContacts(inst)
+		contacts, err := group.GetAllContacts(db)
 		if err != nil {
 			return err
 		}
 		groupIndex := len(s.Groups)
 		for _, contact := range contacts {
 			m := buildMemberFromContact(contact, readOnly)
+			if isSelf(inst, m) {
+				continue
+			}
 			m.Groups = []int{groupIndex}
 			m.OnlyInGroups = true
 			api.members = append(api.members, m)
