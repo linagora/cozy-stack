@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/orgdirectory"
@@ -215,8 +216,10 @@ func TestProvisionDrive(t *testing.T) {
 			Name:           "Ops",
 			Members:        []Member{{Email: "alice@acme.test", Role: RoleEditor}},
 		}
-		_, err := ProvisionDrive(org, sp)
+		first, err := ProvisionDrive(org, sp)
 		require.NoError(t, err)
+		first.Members[1].Status = sharing.MemberStatusReady
+		require.NoError(t, couchdb.UpdateDoc(org, first))
 
 		sp.Members = []Member{
 			{Email: "alice@acme.test", Role: RoleViewer},
@@ -225,15 +228,100 @@ func TestProvisionDrive(t *testing.T) {
 		s, err := ProvisionDrive(org, sp)
 		require.NoError(t, err)
 
-		readOnly := map[string]bool{}
-		for _, m := range s.Members[1:] {
-			readOnly[m.Email] = m.ReadOnly
-		}
 		require.Equal(t, map[string]bool{
 			"alice@acme.test": false,
 			"bob@acme.test":   true,
-		}, readOnly)
+		}, readOnlyByEmail(s))
 	})
+
+	t.Run("RedeliveryInvitesAgainAMemberWhoseInvitationWasNotSent", func(t *testing.T) {
+		org := newOrgInstance(t)
+		_, err := orgdirectory.UpsertManagedContact(org, orgdirectory.ContactPatch{
+			OrganizationID: org.OrgID,
+			Email:          "alice@acme.test",
+			Name:           "alice",
+			CozyURL:        "https://alice.cozy.local/",
+		})
+		require.NoError(t, err)
+		sp := Space{
+			ID:             "space-" + utils.RandomString(8),
+			OrganizationID: org.OrgID,
+			Name:           "Ops",
+			Members:        []Member{{Email: "alice@acme.test", Role: RoleEditor}},
+		}
+		first, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+		require.Equal(t, sharing.MemberStatusMailNotSent, first.Members[1].Status)
+
+		sp.Members[0].Role = RoleViewer
+		s, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+
+		require.Equal(t, map[string]bool{"alice@acme.test": true}, readOnlyByEmail(s))
+	})
+
+	t.Run("SkipsTheMembersThatCannotBeAdded", func(t *testing.T) {
+		org := newOrgInstance(t)
+		for _, c := range []struct{ name, email string }{
+			{"alice", "alice@acme.test"},
+			{"dup1", "dup@acme.test"},
+			{"dup2", "dup@acme.test"},
+		} {
+			_, err := contact.Create(org, contact.CreateOptions{
+				Email:    c.email,
+				Name:     c.name,
+				CozyURL:  "https://" + c.name + ".cozy.local/",
+				External: true,
+			})
+			require.NoError(t, err)
+		}
+
+		s, err := ProvisionDrive(org, Space{
+			ID:             "space-" + utils.RandomString(8),
+			OrganizationID: org.OrgID,
+			Name:           "Launch",
+			Members: []Member{
+				{Email: "dup@acme.test", Role: RoleEditor},
+				{Email: "alice@acme.test", Role: RoleEditor},
+			},
+		})
+		require.NoError(t, err)
+
+		require.Equal(t, map[string]bool{"alice@acme.test": false}, readOnlyByEmail(s))
+	})
+
+	t.Run("PutsANewDriveOnANewFolderWhenTheFolderIsTrashed", func(t *testing.T) {
+		org := newOrgInstance(t)
+		sp := Space{ID: "space-" + utils.RandomString(8), OrganizationID: org.OrgID, Name: "Finance"}
+		first, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+		firstRoot, err := first.DriveRootID()
+		require.NoError(t, err)
+		require.NoError(t, first.Revoke(org))
+		dir, err := org.VFS().DirByID(firstRoot)
+		require.NoError(t, err)
+		_, err = vfs.TrashDir(org.VFS(), dir)
+		require.NoError(t, err)
+
+		again, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+
+		require.NotEqual(t, first.SID, again.SID)
+		root, err := again.DriveRootID()
+		require.NoError(t, err)
+		require.NotEqual(t, firstRoot, root)
+		newDir, err := org.VFS().DirByID(root)
+		require.NoError(t, err)
+		require.Equal(t, "/Finance", newDir.Fullpath)
+	})
+}
+
+func readOnlyByEmail(s *sharing.Sharing) map[string]bool {
+	readOnly := map[string]bool{}
+	for _, m := range s.Members[1:] {
+		readOnly[m.Email] = m.ReadOnly
+	}
+	return readOnly
 }
 
 func newOrgInstance(t *testing.T) *instance.Instance {

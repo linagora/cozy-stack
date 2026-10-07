@@ -28,9 +28,9 @@ type Space struct {
 
 // Member is a user of a space with their role in it.
 type Member struct {
-	UUID  string
-	Email string
-	Role  string
+	UUID  string `json:"uuid"`
+	Email string `json:"email"`
+	Role  string `json:"role"`
 }
 
 // The roles of a space member.
@@ -150,22 +150,29 @@ func activeDrive(inst *instance.Instance, sharingID string) (*sharing.Sharing, e
 }
 
 func spaceDir(inst *instance.Instance, sp Space) (*vfs.DirDoc, error) {
+	fs := inst.VFS()
 	ref := couchdb.DocReference{Type: consts.Spaces, ID: sp.ID}
 	req := &couchdb.ViewRequest{
 		StartKey: []string{ref.Type, ref.ID},
 		EndKey:   []string{ref.Type, ref.ID, couchdb.MaxString},
-		Limit:    1,
 	}
 	var res couchdb.ViewResponse
 	err := couchdb.ExecView(inst, couchdb.FilesReferencedByView, req, &res)
 	if err != nil && !couchdb.IsNoDatabaseError(err) {
 		return nil, err
 	}
-	if len(res.Rows) > 0 {
-		return inst.VFS().DirByID(res.Rows[0].ID)
+	// A trashed folder had its drive revoked, and a drive cannot be put on it
+	// again.
+	for _, row := range res.Rows {
+		dir, err := fs.DirByID(row.ID)
+		if err != nil {
+			return nil, err
+		}
+		if dir.Fullpath != vfs.TrashDirName && !strings.HasPrefix(dir.Fullpath, vfs.TrashDirName+"/") {
+			return dir, nil
+		}
 	}
 
-	fs := inst.VFS()
 	name := folderName(sp)
 	if exists, err := fs.GetIndexer().DirChildExists(consts.RootDirID, name); err != nil {
 		return nil, err
@@ -209,55 +216,67 @@ func dirDrive(inst *instance.Instance, dir *vfs.DirDoc) (*sharing.Sharing, error
 	return nil, nil
 }
 
-// shareWith skips a member with no organization-directory contact on the
-// instance: the next sync of the space adds them.
+// shareWith skips, with a warning, a member that cannot be added: no contact
+// for them in the organization directory yet, several contacts, an unknown
+// role, or a drive already full. The other members still get the drive, and
+// the space is still announced.
 func shareWith(inst *instance.Instance, s *sharing.Sharing, members []Member) error {
 	log := inst.Logger().WithNamespace("space")
-	var readWrite, readOnly []string
+	added := false
 	for _, m := range members {
-		if isMember(s, m.Email) {
+		if invited(s, m.Email) {
+			continue
+		}
+		var readOnly bool
+		switch m.Role {
+		case RoleAdmin, RoleEditor:
+		case RoleViewer:
+			readOnly = true
+		default:
+			log.Warnf("Unknown role %q for space member %s, skipped", m.Role, m.UUID)
 			continue
 		}
 		c, err := orgdirectory.FindManagedContactByEmail(inst, m.Email)
-		if errors.Is(err, contact.ErrNotFound) {
-			log.Infof("No contact for space member %s, skipped", m.UUID)
+		if errors.Is(err, contact.ErrNotFound) || errors.Is(err, orgdirectory.ErrMultipleManagedContacts) {
+			log.Warnf("Space member %s skipped: %s", m.UUID, err)
 			continue
 		}
 		if err != nil {
 			return err
 		}
-		switch m.Role {
-		case RoleAdmin, RoleEditor:
-			readWrite = append(readWrite, c.ID())
-		case RoleViewer:
-			readOnly = append(readOnly, c.ID())
-		default:
-			log.Warnf("Unknown role %q for space member %s, skipped", m.Role, m.UUID)
-		}
-	}
-	for _, ids := range []struct {
-		contacts []string
-		readOnly bool
-	}{{readWrite, false}, {readOnly, true}} {
-		if len(ids.contacts) == 0 {
-			continue
-		}
-		err := s.AddGroupsAndContacts(inst, nil, ids.contacts, ids.readOnly)
-		if errors.Is(err, sharing.ErrInvitationNotSent) {
-			log.Warnf("Some invitations to the drive %s were not sent", s.SID)
+		err = s.AddContact(inst, c.ID(), readOnly)
+		if errors.Is(err, sharing.ErrTooManyMembers) {
+			log.Warnf("Drive %s is full, space member %s skipped", s.SID, m.UUID)
 			continue
 		}
 		if err != nil {
 			return err
 		}
+		added = true
 	}
+	if !added {
+		return nil
+	}
+
+	if err := couchdb.UpdateDoc(inst, s); err != nil {
+		return err
+	}
+	err := s.SendInvitations(inst, nil)
+	if errors.Is(err, sharing.ErrInvitationNotSent) {
+		log.Warnf("Some invitations to the drive %s were not sent", s.SID)
+	} else if err != nil {
+		return err
+	}
+	go s.Clone().(*sharing.Sharing).NotifyRecipients(inst, nil)
 	return nil
 }
 
-func isMember(s *sharing.Sharing, email string) bool {
+// invited is false for a member whose invitation was never sent, so that a
+// redelivery sends it again. A member who left the drive stays out of it.
+func invited(s *sharing.Sharing, email string) bool {
 	for _, m := range s.Members[1:] {
 		if strings.EqualFold(m.Email, email) {
-			return true
+			return m.Status != sharing.MemberStatusMailNotSent
 		}
 	}
 	return false

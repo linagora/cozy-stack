@@ -209,7 +209,7 @@ func CopyOrgDirectoryFromOrgInstance(ctx context.Context, target *instance.Insta
 	if organizationID == "" || target == nil {
 		return nil
 	}
-	orgInst, err := findOrganizationInstance(ctx, organizationID)
+	orgInst, err := FindOrganizationInstance(ctx, organizationID)
 	if err != nil {
 		return err
 	}
