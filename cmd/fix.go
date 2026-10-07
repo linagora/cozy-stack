@@ -28,6 +28,7 @@ var (
 	dryRunFlag       bool
 	forceFlag        bool
 	withMetadataFlag bool
+	sinceFlag        string
 )
 
 var fixerCmdGroup = &cobra.Command{
@@ -541,6 +542,56 @@ personal contacts and contacts written for sharing. It is safe to run twice.
 	},
 }
 
+var orgContactsFixer = &cobra.Command{
+	Use:   "org-contacts <org-id>",
+	Short: "Remove the contacts Sabre no longer has from the organization instance",
+	Long: `
+This fixer deletes the contacts the twake:contacts:common feed wrote on the
+organization instance and did not send again since --since. Run it once a
+republication of the domain address books has completed without failures and
+the stack has read every message, with --since set to the start of the
+republication. Contacts the feed did not write are kept.
+`,
+	Example: `$ cozy-stack fix org-contacts 6740b0e4e0c5c1001f2ef9d1 --since 2026-10-07T08:00:00Z --dry-run`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) != 1 || sinceFlag == "" {
+			return cmd.Usage()
+		}
+		if !dryRunFlag && !forceFlag {
+			if err := askForConfirmation("Remove the stale contacts of organization " + args[0] + "?"); err != nil {
+				return err
+			}
+		}
+		c := newAdminClient()
+		q := url.Values{"since": {sinceFlag}}
+		if dryRunFlag {
+			q.Set("dry_run", "true")
+		}
+		res, err := c.Req(&request.Options{
+			Method:  "POST",
+			Path:    "/instances/fixers/org-contacts/" + url.PathEscape(args[0]),
+			Queries: q,
+		})
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		var report orgdirectory.ReconcileReport
+		if err := json.NewDecoder(res.Body).Decode(&report); err != nil {
+			return err
+		}
+		removed := "Removed"
+		if dryRunFlag {
+			removed = "Would remove"
+		}
+		for _, path := range report.Removed {
+			fmt.Fprintf(os.Stdout, "%s %s\n", removed, path)
+		}
+		fmt.Fprintf(os.Stdout, "%s: %d removed, %d kept\n", report.Domain, len(report.Removed), report.Kept)
+		return nil
+	},
+}
+
 func init() {
 	thumbnailsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Dry run")
 	thumbnailsFixer.Flags().BoolVar(&withMetadataFlag, "with-metadata", false, "Recalculate images metadata")
@@ -549,6 +600,9 @@ func init() {
 	emailsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before writing")
 	memberCopiesFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
 	memberCopiesFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
+	orgContactsFixer.Flags().StringVar(&sinceFlag, "since", "", "Start of the republication (RFC 3339)")
+	orgContactsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
+	orgContactsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
 
 	fixerCmdGroup.AddCommand(jobsFixer)
 	fixerCmdGroup.AddCommand(mimeFixerCmd)
@@ -562,6 +616,7 @@ func init() {
 	fixerCmdGroup.AddCommand(indexesFixer)
 	fixerCmdGroup.AddCommand(emailsFixer)
 	fixerCmdGroup.AddCommand(memberCopiesFixer)
+	fixerCmdGroup.AddCommand(orgContactsFixer)
 
 	RootCmd.AddCommand(fixerCmdGroup)
 }

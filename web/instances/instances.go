@@ -827,4 +827,5 @@ func Routes(router *echo.Group) {
 	router.POST("/:domain/fixers/indexes", indexesFixer)
 	router.POST("/fixers/emails", emailsFixer)
 	router.POST("/fixers/member-copies/:org_id", memberCopiesFixer)
+	router.POST("/fixers/org-contacts/:org_id", orgContactsFixer)
 }

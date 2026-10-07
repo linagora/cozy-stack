@@ -31,6 +31,7 @@ cozy-stack fix <command> [flags]
 * [cozy-stack fix jobs](cozy-stack_fix_jobs.md)	 - Take a look at the consistency of the jobs
 * [cozy-stack fix member-copies](cozy-stack_fix_member-copies.md)	 - Remove the members copied into the instances of an organization
 * [cozy-stack fix mime](cozy-stack_fix_mime.md)	 - Fix the class computed from the mime-type
+* [cozy-stack fix org-contacts](cozy-stack_fix_org-contacts.md)	 - Remove the contacts Sabre no longer has from the organization instance
 * [cozy-stack fix orphan-account](cozy-stack_fix_orphan-account.md)	 - Remove the orphan accounts
 * [cozy-stack fix password-defined](cozy-stack_fix_password-defined.md)	 - Set the password_defined setting
 * [cozy-stack fix redis](cozy-stack_fix_redis.md)	 - Rebuild scheduling data strucutures in redis
