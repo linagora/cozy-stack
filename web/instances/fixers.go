@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/account"
 	"github.com/cozy/cozy-stack/model/app"
@@ -391,6 +392,19 @@ func memberCopiesFixer(c echo.Context) error {
 	case errors.Is(err, orgdirectory.ErrNoCentralizedOrgDirectory), errors.Is(err, orgdirectory.ErrOrgInstanceNotFilled):
 		return jsonapi.PreconditionFailed("org_id", err)
 	case err != nil:
+		return err
+	}
+	return c.JSON(http.StatusOK, report)
+}
+
+func orgContactsFixer(c echo.Context) error {
+	since, err := time.Parse(time.RFC3339, c.QueryParam("since"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "since must be an RFC 3339 date")
+	}
+	dryRun := c.QueryParam("dry_run") == "true"
+	report, err := orgdirectory.ReconcileOrganizationContacts(c.Request().Context(), c.Param("org_id"), since, dryRun)
+	if err != nil {
 		return err
 	}
 	return c.JSON(http.StatusOK, report)
