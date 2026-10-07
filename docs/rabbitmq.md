@@ -410,6 +410,11 @@ Group membership is stored on managed external contacts via
 `relationships.groups.data`; existing generated-ID external contacts are reused
 by matching email or Cozy URL.
 
+When the context sets `common_contacts`, groups are written on the
+organization instance only. A member contact the feed already wrote keeps its
+fields and only gets the group, and sharing with a group looks it up on the
+organization instance first.
+
 Example payload for `user.phone.updated`:
 
 ```json
