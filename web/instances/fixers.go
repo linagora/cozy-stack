@@ -12,6 +12,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/move"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/model/stack"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -363,4 +364,13 @@ func emailsFixer(c echo.Context) error {
 	}
 	dryRun := c.QueryParam("dry_run") == "true"
 	return c.JSON(http.StatusOK, lifecycle.BackfillEmails(insts, dryRun))
+}
+
+func memberCopiesFixer(c echo.Context) error {
+	dryRun := c.QueryParam("dry_run") == "true"
+	report, err := orgdirectory.RemoveMemberCopies(c.Request().Context(), c.Param("org_id"), dryRun)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, report)
 }
