@@ -64,6 +64,12 @@ func TestCreate(t *testing.T) {
 			External: true,
 		})
 		require.NoError(t, err)
+		// The returned doc must be readable without a round trip to CouchDB
+		created, err := doc.ToMailAddress()
+		require.NoError(t, err)
+		require.Equal(t, "alice@example.com", created.Email)
+		require.Equal(t, "https://alice.example", doc.PrimaryCozyURL())
+		require.Equal(t, "+33123456789", doc.PrimaryPhoneNumber())
 
 		stored, err := Find(instPrefix, doc.ID())
 		require.NoError(t, err)

@@ -9,6 +9,8 @@ var (
 	ErrNoRecipients = errors.New("A sharing must have recipients")
 	// ErrTooManyMembers is used when a sharing has too many members
 	ErrTooManyMembers = errors.New("There are too many members for this sharing")
+	// ErrInvalidEmail is used when a recipient is given by an invalid email
+	ErrInvalidEmail = errors.New("The email address is invalid")
 	// ErrInvalidURL is used for invalid URL of a Cozy instance
 	ErrInvalidURL = errors.New("The Cozy URL is invalid")
 	// ErrInvalidRule is used when a rule is invalid when the sharing is

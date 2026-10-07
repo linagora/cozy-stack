@@ -385,8 +385,8 @@ func Create(db prefixer.Prefixer, opts CreateOptions) (*Contact, error) {
 	}
 
 	doc := New()
-	doc.JSONDoc.M["email"] = []map[string]interface{}{
-		{"address": email, "primary": true},
+	doc.JSONDoc.M["email"] = []interface{}{
+		map[string]interface{}{"address": email, "primary": true},
 	}
 
 	name := strings.TrimSpace(opts.Name)
@@ -403,13 +403,13 @@ func Create(db prefixer.Prefixer, opts CreateOptions) (*Contact, error) {
 
 	cozyURL := strings.TrimSpace(opts.CozyURL)
 	if cozyURL != "" {
-		doc.JSONDoc.M["cozy"] = []map[string]interface{}{
-			{"url": cozyURL, "primary": true},
+		doc.JSONDoc.M["cozy"] = []interface{}{
+			map[string]interface{}{"url": cozyURL, "primary": true},
 		}
 	}
 	if phone := strings.TrimSpace(opts.Phone); phone != "" {
-		doc.JSONDoc.M["phone"] = []map[string]interface{}{
-			{"number": phone, "primary": true},
+		doc.JSONDoc.M["phone"] = []interface{}{
+			map[string]interface{}{"number": phone, "primary": true},
 		}
 	}
 	if opts.External {
