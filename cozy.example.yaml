@@ -153,6 +153,7 @@ jobs:
   #
   # List of available workers:
   #
+  #   - "broker":            publishing notification center events on RabbitMQ
   #   - "clean-clients":     delete unused OAuth clients
   #   - "export":            exporting data from a cozy instance
   #   - "import":            importing data into a cozy instance

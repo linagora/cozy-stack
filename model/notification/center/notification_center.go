@@ -18,6 +18,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/mail"
+	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	multierror "github.com/hashicorp/go-multierror"
 )
 
@@ -34,6 +35,9 @@ const (
 	// NotificationAntivirusAlert category for sending alert when antivirus
 	// scanning detects an issue with a file (infected, too large, or error).
 	NotificationAntivirusAlert = "antivirus-alert"
+	// NotificationDriveFileCreated category for a file created in a shared
+	// drive. It has no mail, only the event of its event mapper.
+	NotificationDriveFileCreated = "drive-file-created"
 )
 
 var (
@@ -62,6 +66,9 @@ var (
 			Collapsible:  false,
 			Stateful:     false,
 			MailTemplate: "notifications_antivirus",
+		},
+		NotificationDriveFileCreated: {
+			Description: "Announce a file created in a shared drive",
 		},
 	}
 )
@@ -127,6 +134,18 @@ func init() {
 		}
 		PushStack(i.DomainName(), NotificationOAuthClients, n)
 	})
+}
+
+// EventMapper turns a notification of the stack into an event published on
+// RabbitMQ. It returns nil when the notification has no event.
+type EventMapper func(inst *instance.Instance, n *notification.Notification) (*rabbitmq.PublishRequest, error)
+
+var eventMappers = map[string]EventMapper{}
+
+// RegisterEventMapper sets the event mapper of a stack notification category.
+// It is called from init by the packages that this one cannot import.
+func RegisterEventMapper(category string, mapper EventMapper) {
+	eventMappers[category] = mapper
 }
 
 // PushStack creates and sends a new notification where the source is the stack.
@@ -285,8 +304,14 @@ func makePush(inst *instance.Instance, p *notification.Properties, n *notificati
 		return nil
 	}
 
-	var errm error
 	log := inst.Logger().WithNamespace("notifications")
+	// The event goes out alongside the channels, not as one of them, since
+	// the first channel that succeeds stops the others.
+	if err := publishEvent(inst, n); err != nil {
+		log.Errorf("Cannot publish the event of notification %s: %s", n.ID(), err)
+	}
+
+	var errm error
 	for _, channel := range preferredChannels {
 		switch channel {
 		case "mobile":
@@ -319,6 +344,26 @@ func makePush(inst *instance.Instance, p *notification.Properties, n *notificati
 		}
 	}
 	return errm
+}
+
+func publishEvent(inst *instance.Instance, n *notification.Notification) error {
+	if n.Originator != "stack" {
+		return nil
+	}
+	mapper, ok := eventMappers[n.Category]
+	if !ok {
+		return nil
+	}
+	req, err := mapper(inst, n)
+	if err != nil || req == nil {
+		return err
+	}
+	req.ContextName = inst.ContextName
+	msg, err := job.NewMessage(req)
+	if err != nil {
+		return err
+	}
+	return pushJobOrTrigger(inst, msg, "broker", "")
 }
 
 func findLastNotification(inst *instance.Instance, source string) (*notification.Notification, error) {

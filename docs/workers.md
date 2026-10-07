@@ -399,6 +399,13 @@ created, the flag is still true, this worker will delete the client. It will
 help to clean unused clients which can be misleading for the user when the list
 of clients in settings is displayed.
 
+## broker
+
+This internal worker publishes on RabbitMQ the events of the notification
+center, for example `com.twake.drive.file.created.v1` (see
+[RabbitMQ](rabbitmq.md#space-drives)). With `jobs.allowlist: true`, it must be
+listed for these events to be published.
+
 ## migrations
 
 The `migrations` worker can be used to migrate a cozy instance. Currently, it
