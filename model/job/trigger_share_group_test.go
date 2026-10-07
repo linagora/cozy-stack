@@ -338,6 +338,13 @@ func TestShareGroupTrigger(t *testing.T) {
 		assert.Len(t, msg.GroupsAdded, 0)
 		assert.EqualValues(t, msg.GroupsRemoved, []string{"id-friends"})
 		assert.False(t, msg.BecomeInvitable)
+
+		// BulkDeleteDocs publishes no old document: no group is revoked.
+		msg = trigger.match(&realtime.Event{
+			Doc:  deleted,
+			Verb: realtime.EventDelete,
+		})
+		assert.Nil(t, msg)
 	})
 }
 
