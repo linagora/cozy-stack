@@ -313,6 +313,32 @@ redelivery of its `twake.space.created`. The payload is a CloudEvent:
 the drive sharing, the same on the organization instance and on every
 member's instance.
 
+Routing key: `com.twake.drive.file.created.v1`. Published when a file is
+uploaded to a space drive, see [Space drives](#space-drives). It names
+the drive, not the space. `twakeactor` is the email of the member who
+uploaded the file, and is left out when the organization instance itself
+uploaded it:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "0199c1a3-1c2d-7f3e-9a4b-5c6d7e8f9a0b",
+  "source": "twake://drive",
+  "type": "com.twake.drive.file.created.v1",
+  "time": "2026-10-05T09:20:41Z",
+  "twakeorg": "evilcorp123",
+  "twakeactor": "alice@evilcorp.com",
+  "data": {
+    "object": {
+      "type": "file",
+      "id": "a1f0c3e2d4b5c6d7e8f9",
+      "title": "plan.md",
+      "container": { "kind": "drive", "id": "a1f0c3e2d4b5" }
+    }
+  }
+}
+```
+
 ### Handlers
 
 Handlers implement a simple interface:
@@ -470,6 +496,31 @@ invites again those whose invitation was not sent, and publishes the same
 drive id. Members already on the drive keep their access, and members who
 left it stay out. If the drive was revoked, the stack puts a new drive on the
 same folder, or on a new folder when that one is in the trash.
+
+A file created in a space drive through the shared drive routes
+(`POST /sharings/drives/:id/`) goes through the notification center, as a
+`drive-file-created` notification of the organization instance. That
+category has no mail. The notification center publishes an event for a
+category that has an event mapper, in addition to the usual channels.
+
+```mermaid
+sequenceDiagram
+  participant M as Member
+  participant O as Organization instance
+  participant N as Notification center
+  participant J as broker job
+  participant R as RabbitMQ
+  M->>O: POST /sharings/drives/:id/ (file)
+  O->>O: io.cozy.spaces lookup by sharing id
+  O->>N: drive-file-created (organization, sharing id, file, member email)
+  N->>N: event mapper of model/space
+  N->>J: publish request
+  J->>R: activity exchange, com.twake.drive.file.created.v1
+```
+
+A file created in another drive has no space record, so it pushes no
+notification and publishes nothing. Notes, copies and moves into a space
+drive publish nothing either.
 
 ### Lifecycle
 

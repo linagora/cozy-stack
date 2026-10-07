@@ -42,6 +42,7 @@ const (
 	RoutingKeyBannerClear                 = "banner.clear"
 	RoutingKeySpaceCreated                = "twake.space.created"
 	RoutingKeyDriveSpaceProvisioned       = "com.twake.drive.space.provisioned.v1"
+	RoutingKeyDriveFileCreated            = "com.twake.drive.file.created.v1"
 )
 
 // UserDeletionRequestedMessage is published when a user asks Twake to delete the account linked to the current cozy instance.

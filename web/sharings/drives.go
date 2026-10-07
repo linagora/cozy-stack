@@ -18,6 +18,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
+	"github.com/cozy/cozy-stack/model/space"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -563,7 +564,18 @@ func CreationHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing
 	if err := ensureDirectoryBackedSharedDrive(s); err != nil {
 		return err
 	}
-	return files.Create(c, s)
+	doc, err := files.CreateWithFile(c, s)
+	if err != nil || doc == nil {
+		return err
+	}
+	actor := GetSharedDriveMember(c)
+	go func() {
+		if err := space.NotifyFileCreated(inst, s, actor, doc); err != nil {
+			inst.Logger().WithNamespace("drives").
+				Warnf("Cannot notify the file %s created in drive %s: %s", doc.ID(), s.SID, err)
+		}
+	}()
+	return nil
 }
 
 // DestroyFileHandler handles DELETE requests to clear one element from the
