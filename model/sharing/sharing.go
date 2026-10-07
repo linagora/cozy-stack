@@ -2237,7 +2237,7 @@ func (s *Sharing) checkDriveOwnerRoot(inst *instance.Instance) (checks []map[str
 	if err != nil {
 		checks = append(checks, map[string]interface{}{
 			"id":    s.SID,
-			"type":  "missing_matching_docs_for_owner",
+			"type":  "invalid_drive_root",
 			"error": err.Error(),
 		})
 		return checks
@@ -2252,7 +2252,7 @@ func (s *Sharing) checkDriveOwnerRoot(inst *instance.Instance) (checks []map[str
 		}
 		checks = append(checks, map[string]interface{}{
 			"id":    s.SID,
-			"type":  "missing_matching_docs_for_owner",
+			"type":  "missing_matching_root_doc",
 			"error": errMsg,
 		})
 		return checks
@@ -2264,7 +2264,7 @@ func (s *Sharing) checkDriveOwnerRoot(inst *instance.Instance) (checks []map[str
 	if isTrashed {
 		checks = append(checks, map[string]interface{}{
 			"id":    s.SID,
-			"type":  "missing_matching_docs_for_owner",
+			"type":  "trashed_root_doc",
 			"error": "root file or directory is trashed",
 		})
 		return checks
@@ -2311,7 +2311,7 @@ func (s *Sharing) checkDriveMemberConsistency(inst *instance.Instance, m *instan
 	if _, err := s.FindMemberByInteractCode(inst, driveToken); err != nil {
 		checks = append(checks, map[string]interface{}{
 			"id":     s.SID,
-			"type":   "missing_access_token",
+			"type":   "invalid_access_token",
 			"member": m.Domain,
 		})
 		return checks
