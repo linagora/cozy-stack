@@ -7,6 +7,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -113,6 +114,42 @@ func TestProvisionDrive(t *testing.T) {
 			require.Equal(t, want, dir.Fullpath)
 			require.Equal(t, name, s.Description)
 		}
+	})
+
+	t.Run("SharesTheDriveWithTheMembersByRole", func(t *testing.T) {
+		org := newOrgInstance(t)
+		for _, name := range []string{"alice", "bob", "carol"} {
+			_, err := orgdirectory.UpsertManagedContact(org, orgdirectory.ContactPatch{
+				OrganizationID: org.OrgID,
+				Email:          name + "@acme.test",
+				Name:           name,
+				CozyURL:        "https://" + name + ".cozy.local/",
+			})
+			require.NoError(t, err)
+		}
+
+		s, err := ProvisionDrive(org, Space{
+			ID:             "space-" + utils.RandomString(8),
+			OrganizationID: org.OrgID,
+			Name:           "Launch",
+			Members: []Member{
+				{Email: "alice@acme.test", Role: RoleAdmin},
+				{Email: "bob@acme.test", Role: RoleEditor},
+				{Email: "carol@acme.test", Role: RoleViewer},
+				{Email: "dave@acme.test", Role: RoleEditor},
+			},
+		})
+		require.NoError(t, err)
+
+		readOnly := map[string]bool{}
+		for _, m := range s.Members[1:] {
+			readOnly[m.Email] = m.ReadOnly
+		}
+		require.Equal(t, map[string]bool{
+			"alice@acme.test": false,
+			"bob@acme.test":   false,
+			"carol@acme.test": true,
+		}, readOnly)
 	})
 }
 

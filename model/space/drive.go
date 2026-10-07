@@ -4,10 +4,13 @@
 package space
 
 import (
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -19,8 +22,23 @@ type Space struct {
 	ID             string
 	OrganizationID string
 	Name           string
+	Members        []Member
 	Timestamp      time.Time
 }
+
+// Member is a user of a space with their role in it.
+type Member struct {
+	UUID  string
+	Email string
+	Role  string
+}
+
+// The roles of a space member.
+const (
+	RoleAdmin  = "admin"
+	RoleEditor = "editor"
+	RoleViewer = "viewer"
+)
 
 // Record keeps, on the organization instance, the drive of a space.
 type Record struct {
@@ -45,12 +63,23 @@ func (r *Record) Clone() couchdb.Doc {
 }
 
 // ProvisionDrive returns the shared drive of the space on the organization
-// instance, creating it on the first call.
-//
-// The record is written only once the sharing exists, so it always names a
-// real drive. A crash before that leaves the folder, found by its reference to
-// the space on the next delivery.
+// instance, creating it on the first call, and shares it with the members not
+// on it yet. Members already on it keep their access.
 func ProvisionDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error) {
+	s, err := spaceDrive(inst, sp)
+	if err != nil {
+		return nil, err
+	}
+	if err := shareWith(inst, s, sp.Members); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// spaceDrive writes the record only once the sharing exists, so a record always
+// names a real drive. A crash before that leaves the folder, found by its
+// reference to the space on the next delivery.
+func spaceDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error) {
 	var rec Record
 	err := couchdb.GetDoc(inst, consts.Spaces, sp.ID, &rec)
 	if err == nil {
@@ -154,6 +183,60 @@ func dirDrive(inst *instance.Instance, dir *vfs.DirDoc) (*sharing.Sharing, error
 		}
 	}
 	return nil, nil
+}
+
+// shareWith skips a member with no organization-directory contact on the
+// instance: the next sync of the space adds them.
+func shareWith(inst *instance.Instance, s *sharing.Sharing, members []Member) error {
+	log := inst.Logger().WithNamespace("space")
+	var readWrite, readOnly []string
+	for _, m := range members {
+		if isMember(s, m.Email) {
+			continue
+		}
+		c, err := orgdirectory.FindManagedContactByEmail(inst, m.Email)
+		if errors.Is(err, contact.ErrNotFound) {
+			log.Infof("No contact for space member %s, skipped", m.UUID)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		switch m.Role {
+		case RoleAdmin, RoleEditor:
+			readWrite = append(readWrite, c.ID())
+		case RoleViewer:
+			readOnly = append(readOnly, c.ID())
+		default:
+			log.Warnf("Unknown role %q for space member %s, skipped", m.Role, m.UUID)
+		}
+	}
+	for _, ids := range []struct {
+		contacts []string
+		readOnly bool
+	}{{readWrite, false}, {readOnly, true}} {
+		if len(ids.contacts) == 0 {
+			continue
+		}
+		err := s.AddGroupsAndContacts(inst, nil, ids.contacts, ids.readOnly)
+		if errors.Is(err, sharing.ErrInvitationNotSent) {
+			log.Warnf("Some invitations to the drive %s were not sent", s.SID)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isMember(s *sharing.Sharing, email string) bool {
+	for _, m := range s.Members[1:] {
+		if strings.EqualFold(m.Email, email) {
+			return true
+		}
+	}
+	return false
 }
 
 func createDrive(inst *instance.Instance, dir *vfs.DirDoc, name string) (*sharing.Sharing, error) {

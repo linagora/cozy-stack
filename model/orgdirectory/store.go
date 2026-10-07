@@ -14,7 +14,9 @@ import (
 
 const managedDocsPageSize = 1000
 
-func findManagedContactByEmail(db prefixer.Prefixer, email string) (*contact.Contact, error) {
+// FindManagedContactByEmail returns the organization-directory contact with
+// this email, or contact.ErrNotFound.
+func FindManagedContactByEmail(db prefixer.Prefixer, email string) (*contact.Contact, error) {
 	matches, err := contact.FindAllByEmail(db, email)
 	if errors.Is(err, contact.ErrNotFound) {
 		return nil, contact.ErrNotFound
