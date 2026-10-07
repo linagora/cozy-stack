@@ -508,6 +508,49 @@ Content-Type: application/json
 }
 ```
 
+### POST /instances/fixers/org-contacts/:org_id
+
+Delete the contacts the `twake:contacts:common` feed wrote on the organization
+instance and did not send again since `since`, to catch the `DELETE` messages
+the stack missed. Call it once the side service republication of the domain
+address books (`POST /domains/<domain>/contacts?action=republish&scope=domain`)
+has completed without failures and the stack has read every message, with
+`since` set to the start of the republication, at most 7 days ago. It refuses
+to run when no contact was sent since then. Contacts without a `carddavPath`
+are kept. The organization instance must exist and its context must set
+`common_contacts`.
+
+`removed` lists the CardDAV paths of the deleted contacts, `kept` counts the
+contacts the feed sent again.
+
+#### Query-String
+
+| Parameter | Description                                          |
+| --------- | ---------------------------------------------------- |
+| since     | the start of the republication, in RFC 3339          |
+| dry_run   | `true` to report what would be removed, but not save |
+
+#### Request
+
+```http
+POST /instances/fixers/org-contacts/6740b0e4e0c5c1001f2ef9d1?since=2026-10-07T08:00:00Z&dry_run=true HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "domain": "6740b0e4e0c5c1001f2ef9d1.cozy.localhost",
+  "removed": ["addressbooks/domain/dave.vcf"],
+  "kept": 42
+}
+```
+
 ### POST /instances/:domain/export
 
 Starts an export for the given instance. The CouchDB documents will be saved in

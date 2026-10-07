@@ -10,6 +10,7 @@ import (
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -123,6 +124,15 @@ func TestCommonContactsHandler(t *testing.T) {
 			again := byPath(t, org, path)
 			require.Len(t, again, 1)
 			require.Equal(t, c.Rev(), again[0].Rev())
+		})
+
+		t.Run("a replay that writes nothing still counts for the reconciliation", func(t *testing.T) {
+			since := time.Now()
+			handle(t, message("ADD", domainAudience, path, card("Carol Doe", "carol@acme.example", "+33123", "carol.cc.localhost")))
+			report, err := orgdirectory.ReconcileOrganizationContacts(context.Background(), orgID, since, true)
+			require.NoError(t, err)
+			require.NotContains(t, report.Removed, path)
+			require.Equal(t, 1, report.Kept)
 		})
 
 		t.Run("an update keeps the stack fields", func(t *testing.T) {
