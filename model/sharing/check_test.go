@@ -35,6 +35,17 @@ func setupTwoTestInstances(t *testing.T) (*instance.Instance, *instance.Instance
 	return ownerInst, recipientInst
 }
 
+func TestCheckDriveOwnerRootInvalidRoot(t *testing.T) {
+	s := &Sharing{SID: "sharing-id", Drive: true}
+
+	checks := s.checkDriveOwnerRoot(nil)
+
+	require.Len(t, checks, 1)
+	assert.Equal(t, s.SID, checks[0]["id"])
+	assert.Equal(t, "invalid_drive_root", checks[0]["type"])
+	assert.Equal(t, ErrDriveRootNotFound.Error(), checks[0]["error"])
+}
+
 func TestCheckSharingsSharedDrive_Success(t *testing.T) {
 	ownerInst, recipientInst := setupTwoTestInstances(t)
 
@@ -210,7 +221,7 @@ func TestCheckSharingsSharedDrive_MissingRootOnOwner(t *testing.T) {
 	checks, err := CheckSharings(ownerInst, false)
 	require.NoError(t, err)
 	require.Len(t, checks, 1)
-	assert.Equal(t, "missing_matching_docs_for_owner", checks[0]["type"])
+	assert.Equal(t, "missing_matching_root_doc", checks[0]["type"])
 }
 
 func TestCheckSharingsSharedDrive_TrashedRootOnOwner(t *testing.T) {
@@ -299,7 +310,7 @@ func TestCheckSharingsSharedDrive_TrashedRootOnOwner(t *testing.T) {
 	checks, err := CheckSharings(ownerInst, false)
 	require.NoError(t, err)
 	require.Len(t, checks, 1)
-	assert.Equal(t, "missing_matching_docs_for_owner", checks[0]["type"])
+	assert.Equal(t, "trashed_root_doc", checks[0]["type"])
 }
 
 func TestCheckSharingsSharedDrive_MissingMemberShortcut(t *testing.T) {
@@ -483,7 +494,7 @@ func TestCheckSharingsSharedDrive_InvalidMemberToken(t *testing.T) {
 	checks, err := CheckSharings(ownerInst, false)
 	require.NoError(t, err)
 	require.Len(t, checks, 1)
-	assert.Equal(t, "missing_access_token", checks[0]["type"])
+	assert.Equal(t, "invalid_access_token", checks[0]["type"])
 	assert.Equal(t, recipientInst.Domain, checks[0]["member"])
 }
 

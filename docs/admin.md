@@ -965,8 +965,26 @@ The `parent_sharing` attribute will contain the parent sharing ID.
 ##### missing_matching_docs_for_owner
 
 This will be raised if the shared files and folders associated with the sharing
-could not be fetched on the owner's instance.
+could not be fetched on the owner's instance (for replicated sharings).
 The request error will be returned in the `error` attribute.
+No further consistency checks will be run on this sharing.
+
+##### invalid_drive_root
+
+This will be raised if the shared-drive root ID cannot be read from the sharing
+rule. The reason will be returned in the `error` attribute.
+No further consistency checks will be run on this sharing.
+
+##### missing_matching_root_doc
+
+This will be raised if the shared-drive root file or folder cannot be fetched
+on the owner's instance. The request error will be returned in the `error`
+attribute. No further consistency checks will be run on this sharing.
+
+##### trashed_root_doc
+
+This will be raised if the shared-drive root file or folder is in the trash
+on the owner's instance. The reason will be returned in the `error` attribute.
 No further consistency checks will be run on this sharing.
 
 ##### missing_sharing_for_member
@@ -993,6 +1011,13 @@ shared drives).
 The request error will be returned in the `error` attribute and the member's
 domain in the `member` attribute. No further consistency checks will be run for
 this member.
+
+##### invalid_access_token
+
+This will be raised if a member's `drive_token` is present but cannot be
+validated by the owner. The member's domain will be returned in the `member`
+attribute. An empty token is reported as `missing_access_token` instead.
+No further consistency checks will be run for this member.
 
 ##### disk_quota_exceeded
 
