@@ -259,6 +259,18 @@ directive of the Content Security Policy of every app, so that any client app
 can open them. The external host must itself allow the client apps in its
 `frame-ancestors` directive.
 
+The stack cannot set the `frame-ancestors` of a page it does not serve. For a
+service it serves, it allows the client app only: its client URL and, when it
+is hosted elsewhere (`client_url_flag`), its cozy subdomain, which can frame
+it. The intent gives these origins in `frameAncestors`, so that an external
+service can check who frames it, for example by comparing them with
+`location.ancestorOrigins` in browsers that have it. They are serialized as
+browsers serialize origins: host in lower case, internationalized domain
+names in punycode, no default port. The field is in the answers of
+`POST /intents` and `GET /intents/:id`, and in the intent inlined in the page
+of a service the stack serves. It is absent when the client is not a webapp
+(a konnector, an OAuth client not linked to an app).
+
 ### 4. Available apps
 
 In addition to the services that manage intents, a list of available (but not
@@ -405,6 +417,7 @@ Content-Type: application/vnd.api+json
             "type": "io.cozy.files",
             "permissions": ["GET"],
             "client": "https://contacts.cozy.example.net",
+            "frameAncestors": ["https://contacts.cozy.example.net"],
             "services": [
                 {
                     "slug": "files",
@@ -462,6 +475,7 @@ Content-Type: application/vnd.api+json
             "type": "io.cozy.files",
             "permissions": ["GET"],
             "client": "https://contacts.cozy.example.net",
+            "frameAncestors": ["https://contacts.cozy.example.net"],
             "services": [
                 {
                     "slug": "files",

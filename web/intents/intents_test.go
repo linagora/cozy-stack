@@ -307,6 +307,25 @@ func TestIntents(t *testing.T) {
 		checkIntentResult(obj, appPerms, false, "")
 	})
 
+	t.Run("CreateIntentWithUnlinkedOAuthClientGivesNoFrameAncestors", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		oauthClient := &oauth.Client{
+			ClientName:   "test-unlinked-intent-client",
+			RedirectURIs: []string{"https://unlinked.external.test/callback"},
+			SoftwareID:   "github.com/example/unlinked",
+		}
+		require.Nil(t, oauthClient.Create(ins))
+		tok, err := ins.MakeJWT(consts.AccessTokenAudience,
+			oauthClient.ClientID, "io.cozy.files", "", time.Now())
+		require.NoError(t, err)
+
+		obj := expectPickIntentCreated(newPickIntentRequest(e, tok))
+
+		// Not a webapp: nothing may frame a service for it
+		obj.Value("data").Object().Value("attributes").Object().
+			NotContainsKey("frameAncestors")
+	})
+
 	t.Run("CreateIntentWithOAuthLinkedApp", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
@@ -449,6 +468,22 @@ func TestIntents(t *testing.T) {
 			Object()
 
 		checkIntentResult(obj, customAppPerms, true, "https://flag.example.com")
+		// The external client, and its cozy subdomain which can frame it
+		obj.Value("data").Object().Value("attributes").Object().
+			Value("frameAncestors").Array().
+			IsEqual([]string{"https://flag.example.com", "https://custom.cozy.example.net"})
+	})
+
+	t.Run("CreateIntentWithClientURLWithPathGivesOrigins", func(t *testing.T) {
+		ins.FeatureFlags = map[string]interface{}{"custom_url_flag": "https://flag.example.com:8443/app/"}
+		t.Cleanup(func() { ins.FeatureFlags = nil })
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		obj := expectPickIntentCreated(newPickIntentRequest(e, customAppToken))
+
+		obj.Value("data").Object().Value("attributes").Object().
+			Value("frameAncestors").Array().
+			IsEqual([]string{"https://flag.example.com:8443", "https://custom.cozy.example.net"})
 	})
 
 	t.Run("CreateIntentWithClientURLNoMatchingFlag", func(t *testing.T) {
@@ -474,6 +509,10 @@ func TestIntents(t *testing.T) {
 			Object()
 
 		checkIntentResult(obj, customAppPerms, true, "https://custom.cozy.example.net")
+		// Without an external client, its cozy subdomain only
+		obj.Value("data").Object().Value("attributes").Object().
+			Value("frameAncestors").Array().
+			IsEqual([]string{"https://custom.cozy.example.net"})
 	})
 
 	t.Run("CreateIntentWithClientURLInvalidFlagValue", func(t *testing.T) {
@@ -523,8 +562,11 @@ func TestIntents(t *testing.T) {
 			Expect().Status(200).
 			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
 			Object()
-		got.Value("data").Object().Value("attributes").Object().
-			ValueEqual("client", "https://app.cozy.example.net")
+		attrs := got.Value("data").Object().Value("attributes").Object()
+		attrs.ValueEqual("client", "https://app.cozy.example.net")
+		// The service on an external origin checks who frames it
+		attrs.Value("frameAncestors").Array().
+			IsEqual([]string{"https://app.cozy.example.net"})
 	})
 
 	t.Run("GetIntentWithOAuthClientLinkedToAnotherAppIsForbidden", func(t *testing.T) {
