@@ -72,6 +72,24 @@ func TestProvisionDrive(t *testing.T) {
 		require.Len(t, drives, 1)
 	})
 
+	t.Run("RecordKeepsTheNewestEventTimestamp", func(t *testing.T) {
+		org := newOrgInstance(t)
+		t0 := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+		sp := Space{ID: "space-" + utils.RandomString(8), OrganizationID: org.OrgID, Name: "Sales", Timestamp: t0}
+		_, err := ProvisionDrive(org, sp)
+		require.NoError(t, err)
+
+		for _, ts := range []time.Time{t0.Add(time.Hour), t0.Add(time.Minute)} {
+			sp.Timestamp = ts
+			_, err = ProvisionDrive(org, sp)
+			require.NoError(t, err)
+		}
+
+		var rec Record
+		require.NoError(t, couchdb.GetDoc(org, consts.Spaces, sp.ID, &rec))
+		require.True(t, rec.LastEventAt.Equal(t0.Add(time.Hour)), rec.LastEventAt)
+	})
+
 	t.Run("RecoversTheDriveWhenTheRecordIsMissing", func(t *testing.T) {
 		org := newOrgInstance(t)
 		sp := Space{ID: "space-" + utils.RandomString(8), OrganizationID: org.OrgID, Name: "Hiring"}

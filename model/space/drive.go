@@ -85,7 +85,14 @@ func spaceDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error) {
 	switch {
 	case err == nil:
 		s, err := activeDrive(inst, rec.SharingID)
-		if s != nil || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		if s != nil {
+			if sp.Timestamp.After(rec.LastEventAt) {
+				rec.LastEventAt = sp.Timestamp
+				err = couchdb.UpdateDoc(inst, &rec)
+			}
 			return s, err
 		}
 	case !couchdb.IsNotFoundError(err) && !couchdb.IsNoDatabaseError(err):
@@ -110,7 +117,9 @@ func spaceDrive(inst *instance.Instance, sp Space) (*sharing.Sharing, error) {
 	rec.Name = sp.Name
 	rec.DirID = dir.ID()
 	rec.SharingID = s.SID
-	rec.LastEventAt = sp.Timestamp
+	if sp.Timestamp.After(rec.LastEventAt) {
+		rec.LastEventAt = sp.Timestamp
+	}
 	if rec.DocRev != "" {
 		err = couchdb.UpdateDoc(inst, &rec)
 	} else {
