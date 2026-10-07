@@ -81,7 +81,8 @@ func GroupDocID(organizationID, externalID string) string {
 }
 
 // SyncGroupCreated replicates a B2B group and its initial members to every
-// instance in the organization.
+// instance in the organization, or to the organization instance only once it
+// reads the common contacts.
 func SyncGroupCreated(ctx context.Context, msg GroupCreatedMessage) error {
 	if err := validateGroupIdentity("b2b.group.created", msg.OrganizationID, msg.ID); err != nil {
 		return err
@@ -282,6 +283,10 @@ func forEachOrgInstance(ctx context.Context, eventName, organizationID string, f
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		// With the feed, the groups live on the organization instance only.
+		if inst.HasCommonContacts() && !inst.IsOrganizationInstance() {
+			continue
+		}
 		if err := fn(inst); err != nil {
 			errs = append(errs, fmt.Errorf("%s on %s: %w", eventName, inst.Domain, err))
 		}
@@ -386,7 +391,13 @@ func UpsertManagedContact(inst *instance.Instance, input ContactPatch) (*contact
 	if err != nil {
 		return nil, err
 	}
-	applyManagedContactFields(c, input)
+	if _, ok := c.M[contact.CardDAVPathKey]; ok {
+		// The feed owns the fields of this contact, it only joins the directory.
+		c.M[contact.TrustedForSharingKey] = true
+		setContactDirectoryMetadata(&c.JSONDoc, input, input.Email)
+	} else {
+		applyManagedContactFields(c, input)
+	}
 	if err := couchdb.UpdateDoc(inst, c); err != nil {
 		return nil, err
 	}

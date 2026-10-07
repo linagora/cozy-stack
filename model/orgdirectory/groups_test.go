@@ -303,3 +303,75 @@ func needCouchDB(t *testing.T) {
 		t.Skipf("couchdb is required for this test: %v", err)
 	}
 }
+
+func TestSyncGroupWithCommonContacts(t *testing.T) {
+	config.UseTestFile(t)
+	needCouchDB(t)
+
+	const feedCtx = "groups-common-contacts"
+	conf := config.GetConfig()
+	previous := conf.Contexts
+	conf.Contexts = map[string]interface{}{feedCtx: map[string]interface{}{"common_contacts": true}}
+	t.Cleanup(func() { conf.Contexts = previous })
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	orgID := "feedgroups" + suffix
+	orgDomain := "feed-groups-" + suffix + ".example"
+	newInstance := func(domain string) *instance.Instance {
+		inst, err := lifecycle.Create(&lifecycle.Options{
+			Domain:      domain,
+			OrgDomain:   orgDomain,
+			OrgID:       orgID,
+			ContextName: feedCtx,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
+		return inst
+	}
+	org := newInstance(orgID + ".local")
+	bob := newInstance("bob-feed-groups-" + suffix + ".local")
+
+	fromFeed := contact.New()
+	fromFeed.M["fullname"] = "Alice Liddell"
+	fromFeed.M["email"] = []interface{}{
+		map[string]interface{}{"address": "alice@acme.test", "primary": true},
+		map[string]interface{}{"address": "alice@home.test", "primary": false},
+	}
+	fromFeed.M["metadata"] = map[string]interface{}{"external": true}
+	fromFeed.M[contact.CardDAVPathKey] = "addressbooks/domain/alice.vcf"
+	require.NoError(t, couchdb.CreateDoc(org, fromFeed))
+
+	err := SyncGroupCreated(testCtx(t), GroupCreatedMessage{
+		OrganizationID: orgID,
+		ID:             "engineering",
+		Name:           "Engineering",
+		Members: []GroupMember{
+			{Username: "alice", Email: "alice@acme.test", FirstName: "Alice", WorkplaceFQDN: "alice-" + suffix + ".local"},
+			{Username: "carol", Email: "carol@acme.test", FirstName: "Carol"},
+		},
+	})
+	require.NoError(t, err)
+
+	groupID := GroupDocID(orgID, "engineering")
+	_, err = contact.FindGroup(org, groupID)
+	require.NoError(t, err)
+	_, err = contact.FindGroup(bob, groupID)
+	require.True(t, couchdb.IsNotFoundError(err) || couchdb.IsNoDatabaseError(err), "member instances get no copy: %v", err)
+
+	stored, err := contact.Find(org, fromFeed.ID())
+	require.NoError(t, err)
+	require.Contains(t, stored.GroupIDs(), groupID)
+	require.True(t, stored.IsTrusted())
+	require.Equal(t, "Alice Liddell", stored.M["fullname"], "the feed fields are kept")
+	require.Len(t, stored.M["email"], 2)
+	require.Empty(t, stored.PrimaryCozyURL())
+
+	carol, err := findManagedContactByEmail(org, "carol@acme.test")
+	require.NoError(t, err, "a member the feed has not sent yet is written right away")
+	require.Contains(t, carol.GroupIDs(), groupID)
+
+	require.NoError(t, SyncGroupDeleted(testCtx(t), GroupDeletedMessage{OrganizationID: orgID, ID: "engineering"}))
+	stored, err = contact.Find(org, fromFeed.ID())
+	require.NoError(t, err)
+	require.NotContains(t, stored.GroupIDs(), groupID)
+}
