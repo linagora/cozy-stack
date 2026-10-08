@@ -3216,6 +3216,30 @@ func TestSharedDriveDeletedRecipientAddedGroup(t *testing.T) {
 		erin := findSharingMemberByEmail(t, env.acme, sharingID, "erin@example.net")
 		require.NotEqual(t, sharing.MemberStatusRevoked, erin.Status)
 	})
+
+	t.Run("DeletedBeforeCreationIsPropagated", func(t *testing.T) {
+		_, eBetty, _ := env.createClients(t)
+		sharingID := setupDrive(t, "Deleted Before Propagation Drive")
+
+		// Betty adds her own group to the drive and deletes it right away,
+		// before the replication has brought the group back to her copy of
+		// the sharing.
+		group := createGroupOnInstance(t, env.betty, "Betty Race Team")
+		addRecipientGroup(t, eBetty, env.bettyToken, sharingID, env.betty, group, "Fay", "fay@example.net")
+		require.NoError(t, couchdb.DeleteDoc(env.betty, group))
+		require.NoError(t, sharing.UpdateGroups(env.betty, job.ShareGroupMessage{
+			DeletedGroupID: group.ID(),
+		}))
+
+		// Owner: the group is revoked and Fay, only in that group, too.
+		groupIndex := findGroupIndex(env.acme, sharingID, group.ID())
+		require.NotEqual(t, -1, groupIndex)
+		ownerSharing, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		assert.True(t, ownerSharing.Groups[groupIndex].Revoked)
+		fay := findSharingMemberByEmail(t, env.acme, sharingID, "fay@example.net")
+		require.Equal(t, sharing.MemberStatusRevoked, fay.Status)
+	})
 }
 
 func TestSharedDriveDelegatedPendingRecipientManagement(t *testing.T) {

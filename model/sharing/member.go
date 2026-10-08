@@ -429,6 +429,20 @@ func (s *Sharing) SendDelegated(inst *instance.Instance, api *APIDelegateAddCont
 		return err
 	}
 
+	// The sharer replicates the updated sharing document to this instance
+	// asynchronously: track the delegated groups on the local copy right
+	// away, so that deleting a group before that replication can still
+	// delegate its revocation to the sharer.
+	selfIndex := 0
+	if self := s.MemberFor(inst); self != nil {
+		for j := range s.Members {
+			if s.Members[j].Same(*self) {
+				selfIndex = j
+				break
+			}
+		}
+	}
+
 	// We can have conflicts when updating the sharing document, so we are
 	// retrying when it is the case.
 	maxRetries := 3
@@ -455,6 +469,19 @@ func (s *Sharing) SendDelegated(inst *instance.Instance, api *APIDelegateAddCont
 			}
 			if !found {
 				s.Members = append(s.Members, m)
+			}
+		}
+		for _, g := range api.groups {
+			found := false
+			for _, group := range s.Groups {
+				if group.ID == g.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				g.AddedBy = selfIndex
+				s.Groups = append(s.Groups, g)
 			}
 		}
 		if err := couchdb.UpdateDoc(inst, s); err == nil {
