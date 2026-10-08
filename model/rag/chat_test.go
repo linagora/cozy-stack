@@ -5,10 +5,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/account"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/realtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -325,12 +329,12 @@ data: {"object": "chat.completion.chunk", "choices": [{"delta": {}, "finish_reas
 
 data: [DONE]
 `
-			completion, sources, err := handleStreamResponse(inst, msg, strings.NewReader(body))
+			answer, err := handleStreamResponse(inst, msg, strings.NewReader(body), &publishGate{})
 			require.NoError(t, err)
-			assert.Equal(t, "Hello world", completion)
-			require.Len(t, sources, 1)
-			assert.Equal(t, "file-1", sources[0].ID)
-			assert.Equal(t, "a.pdf", sources[0].Filename)
+			assert.Equal(t, "Hello world", answer.Content)
+			require.Len(t, answer.Sources, 1)
+			assert.Equal(t, "file-1", answer.Sources[0].ID)
+			assert.Equal(t, "a.pdf", answer.Sources[0].Filename)
 		})
 	}
 }
@@ -382,4 +386,149 @@ func TestRAGMessages(t *testing.T) {
 			{Role: SystemRole, Content: "a note in the middle"},
 		}, ragMessages(chat, nil))
 	})
+}
+
+func TestInsertAfter(t *testing.T) {
+	messages := []ChatMessage{{ID: "q1", Role: UserRole}, {ID: "a1", Role: AssistantRole}, {ID: "q2", Role: UserRole}}
+	answer := ChatMessage{ID: "a2", Role: AssistantRole}
+
+	ids := func(messages []ChatMessage) []string {
+		var ids []string
+		for _, msg := range messages {
+			ids = append(ids, msg.ID)
+		}
+		return ids
+	}
+	assert.Equal(t, []string{"q1", "a1", "a2", "q2"}, ids(insertAfter(messages, "a1", answer)))
+	assert.Equal(t, []string{"q1", "a1", "q2", "a2"}, ids(insertAfter(messages, "q2", answer)))
+	assert.Equal(t, []string{"q1", "a1", "q2", "a2"}, ids(insertAfter(messages, "unknown", answer)), "appended when the message is not there")
+	assert.Equal(t, []string{"q1", "a1", "q2"}, ids(messages), "the conversation is not changed in place")
+}
+
+// chatEvents returns a function giving the chat events published for the
+// instance so far.
+func chatEvents(t *testing.T, inst *instance.Instance) func() []map[string]interface{} {
+	t.Helper()
+	sub := realtime.GetHub().Subscriber(inst)
+	sub.Subscribe(consts.ChatEvents)
+	t.Cleanup(sub.Close)
+	return func() []map[string]interface{} {
+		var events []map[string]interface{}
+		for {
+			select {
+			case e := <-sub.Channel:
+				events = append(events, e.Doc.(*couchdb.JSONDoc).M)
+			case <-time.After(50 * time.Millisecond):
+				return events
+			}
+		}
+	}
+}
+
+func objectsOf(events []map[string]interface{}) []string {
+	out := make([]string, len(events))
+	for i, e := range events {
+		out[i], _ = e["object"].(string)
+	}
+	return out
+}
+
+func TestHandleStreamResponseGate(t *testing.T) {
+	config.UseTestFile(t)
+	inst := &instance.Instance{Domain: "rag-gate.example.net"}
+	msg := ChatMessage{ID: "msg-1"}
+	source := `{"source_type": "document", "chunk": {"file_id": "file-1", "filename": "a.pdf"}}`
+	// The stream opens with an empty delta, as the OpenAI API does
+	body := `data: {"object": "chat.completion.chunk", "choices": [{"delta": {"role": "assistant", "content": ""}}], "extra": {}}
+
+data: {"object": "chat.completion.chunk", "choices": [{"delta": {"content": "Hello "}}], "extra": {"sources": [` + source + `]}}
+
+data: {"object": "chat.completion.chunk", "choices": [{"delta": {"content": "world"}}], "extra": {}}
+
+data: {"object": "chat.completion.chunk", "choices": [{"delta": {}, "finish_reason": "stop"}], "extra": {}}
+
+data: [DONE]
+`
+
+	t.Run("the gate is asked once, for the first token", func(t *testing.T) {
+		events := chatEvents(t, inst)
+		asked := 0
+		gate := &publishGate{allowed: func() bool { asked++; return true }}
+		answer, err := handleStreamResponse(inst, msg, strings.NewReader(body), gate)
+		require.NoError(t, err)
+		assert.Equal(t, "Hello world", answer.Content)
+		assert.Equal(t, 1, asked)
+		published := events()
+		require.Len(t, published, 3)
+		assert.Equal(t, map[string]interface{}{"_id": "msg-1", "object": "delta", "content": "Hello ", "position": 0}, published[0],
+			"the empty delta is not published and takes no position")
+		assert.Equal(t, "sources", published[1]["object"])
+		assert.Equal(t, map[string]interface{}{"_id": "msg-1", "object": "delta", "content": "world", "position": 1}, published[2])
+	})
+
+	t.Run("nothing is published when the gate refuses", func(t *testing.T) {
+		events := chatEvents(t, inst)
+		answer, err := handleStreamResponse(inst, msg, strings.NewReader(body), &publishGate{allowed: func() bool { return false }})
+		require.NoError(t, err)
+		assert.Equal(t, "Hello world", answer.Content, "the answer is still read")
+		assert.Len(t, answer.Sources, 1)
+		assert.Empty(t, events())
+	})
+
+	t.Run("an error after a published part is told", func(t *testing.T) {
+		events := chatEvents(t, inst)
+		broken := `data: {"object": "chat.completion.chunk", "choices": [{"delta": {"content": "Hel"}}], "extra": {}}
+
+data: {"error": {"message": "LLM down", "type": "error", "code": "LLM_ERROR"}}
+
+data: [DONE]
+`
+		_, err := handleStreamResponse(inst, msg, strings.NewReader(broken), &publishGate{})
+		assert.EqualError(t, err, "LLM_ERROR: LLM down")
+		assert.Len(t, events(), 1)
+	})
+
+	t.Run("the sources of the last chunk are published", func(t *testing.T) {
+		events := chatEvents(t, inst)
+		late := `data: {"object": "chat.completion.chunk", "choices": [{"delta": {"content": "Hello"}}], "extra": {}}
+
+data: {"object": "chat.completion.chunk", "choices": [{"delta": {}, "finish_reason": "stop"}], "extra": {"sources": [` + source + `]}}
+
+data: [DONE]
+`
+		answer, err := handleStreamResponse(inst, msg, strings.NewReader(late), &publishGate{})
+		require.NoError(t, err)
+		assert.Len(t, answer.Sources, 1)
+		assert.Equal(t, []string{"delta", "sources"}, objectsOf(events()))
+
+		broken := strings.Replace(late, `"extra": {"sources": [`+source+`]}`, `"extra": "not json"`, 1)
+		answer, err = handleStreamResponse(inst, msg, strings.NewReader(broken), &publishGate{})
+		require.NoError(t, err, "a bad extra on the last chunk does not lose the answer")
+		assert.Equal(t, "Hello", answer.Content)
+		assert.Nil(t, answer.Sources)
+	})
+
+	t.Run("an error before any token is not published", func(t *testing.T) {
+		events := chatEvents(t, inst)
+		broken := `data: {"object": "chat.completion.chunk", "choices": [{"delta": {"role": "assistant", "content": ""}}], "extra": {}}
+
+data: {"error": {"message": "LLM down", "type": "error", "code": "LLM_ERROR"}}
+
+data: [DONE]
+`
+		_, err := handleStreamResponse(inst, msg, strings.NewReader(broken), &publishGate{})
+		assert.Error(t, err)
+		assert.Empty(t, events())
+	})
+}
+
+func TestRAGRequest(t *testing.T) {
+	inst := &instance.Instance{Domain: "rag-request.example.net"}
+	messages := []ragMessage{{Role: UserRole, Content: "Hello"}}
+	body, err := ragRequest(inst, messages, true, map[string]interface{}{"workspace": "ws-1"})
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"model":"ragondin-rag-request.example.net"`)
+	assert.Contains(t, string(body), `"metadata":{"workspace":"ws-1"}`)
+	assert.Contains(t, string(body), `"stream":true`)
+	assert.NotContains(t, string(body), "max_tokens", "the default of openRAG")
 }

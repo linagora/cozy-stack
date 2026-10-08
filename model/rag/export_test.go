@@ -1,6 +1,8 @@
 package rag
 
 import (
+	"time"
+
 	"github.com/cozy/cozy-stack/model/instance"
 )
 
@@ -30,4 +32,20 @@ func SetReconcilePushForTest(fn func(inst *instance.Instance, dirID string) erro
 // transient failure), as opposed to one that is logged and skipped.
 func IsRetryableForTest(err error) bool {
 	return isRetryable(err)
+}
+
+// SetUpdateConversationForTest replaces the write of the conversation that
+// saves an answer; it returns a function restoring the real one.
+func SetUpdateConversationForTest(fn func(inst *instance.Instance, chat *ChatConversation) error) func() {
+	old := updateConversation
+	updateConversation = fn
+	return func() { updateConversation = old }
+}
+
+// SetRouterTimeoutForTest shortens the wait for the chat router; it returns
+// a function restoring the real one.
+func SetRouterTimeoutForTest(d time.Duration) func() {
+	old := routerTimeout
+	routerTimeout = d
+	return func() { routerTimeout = old }
 }
