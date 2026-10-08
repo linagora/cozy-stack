@@ -166,7 +166,7 @@ func wsWrite(ws *websocket.Conn, ch chan *wsResponse, errc chan *wsError) error 
 	}
 }
 
-func filterMapEvents(ds *realtime.Subscriber, ch chan *wsResponse, inst *instance.Instance, s *sharing.Sharing) {
+func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsResponse, inst *instance.Instance, s *sharing.Sharing) {
 	log := inst.Logger().WithNamespace("sharing-realtime")
 
 	if s.HasFileDriveRoot() {
@@ -177,22 +177,12 @@ func filterMapEvents(ds *realtime.Subscriber, ch chan *wsResponse, inst *instanc
 		}
 		log.Debugf("filterMapEvents: watching file %s for sharing %s", rootFileID, s.SID)
 
-		match := func(doc realtime.Doc) bool {
+		isRoot := func(doc realtime.Doc) bool {
 			return doc != nil && doc.ID() == rootFileID
 		}
-
-		for e := range ds.Channel {
-			if match(e.Doc) || match(e.OldDoc) {
-				ch <- &wsResponse{
-					Event: e.Verb,
-					Payload: wsResponsePayload{
-						Type: e.Doc.DocType(),
-						ID:   e.Doc.ID(),
-						Doc:  e.Doc,
-					},
-				}
-			}
-		}
+		forwardEvents(ctx, ds, ch, func(e *realtime.Event) bool {
+			return isRoot(e.Doc) || isRoot(e.OldDoc)
+		})
 		return
 	}
 
@@ -257,15 +247,33 @@ func filterMapEvents(ds *realtime.Subscriber, ch chan *wsResponse, inst *instanc
 		return false
 	}
 
-	for e := range ds.Channel {
-		if match(e) {
-			ch <- &wsResponse{
+	forwardEvents(ctx, ds, ch, match)
+}
+
+// forwardEvents sends the matching events of ds to ch until ctx is done. The
+// websocket writer stops reading ch when the client disconnects, so every
+// send must also watch ctx.
+func forwardEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsResponse, match func(*realtime.Event) bool) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e := <-ds.Channel:
+			if !match(e) {
+				continue
+			}
+			res := &wsResponse{
 				Event: e.Verb,
 				Payload: wsResponsePayload{
 					Type: e.Doc.DocType(),
 					ID:   e.Doc.ID(),
 					Doc:  e.Doc,
 				},
+			}
+			select {
+			case ch <- res:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}
@@ -306,7 +314,7 @@ func wsOwner(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error 
 			}
 		}
 		ds.Subscribe(consts.Files)
-		filterMapEvents(ds, ch, inst, s)
+		filterMapEvents(ctx, ds, ch, inst, s)
 	}()
 
 	return wsWrite(ws, ch, errc)
@@ -377,7 +385,6 @@ func wsHijack(c echo.Context, inst, owner *instance.Instance, s *sharing.Sharing
 	defer cancel()
 	errc := make(chan *wsError)
 	ch := make(chan *wsResponse)
-	defer close(ch)
 
 	go func() {
 		defer close(errc)
@@ -393,7 +400,7 @@ func wsHijack(c echo.Context, inst, owner *instance.Instance, s *sharing.Sharing
 			return
 		}
 		ds.Subscribe(consts.Files)
-		filterMapEvents(ds, ch, owner, s)
+		filterMapEvents(ctx, ds, ch, owner, s)
 	}()
 
 	return wsWrite(ws, ch, errc)
