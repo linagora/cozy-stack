@@ -301,7 +301,23 @@ Content-Type: application/json
   "documents": true,
   "instructions": "The answer is put in a document as it is: no introduction, no comment.",
   "assistantID": "abc123",
-  "attachmentIDs": ["827f0fbb928b375cc457c732a4013aa7", "9a3b1c2d3e4f5a6b7c8d9e0f1a2b3c4d"]
+  "attachmentIDs": ["827f0fbb928b375cc457c732a4013aa7", "9a3b1c2d3e4f5a6b7c8d9e0f1a2b3c4d"],
+  "actions": [
+    {
+      "name": "create_note",
+      "description": "write a note in the user's Notes app: a summary of the conversation, a list of tasks, a short text on a subject.",
+      "examples": ["Make a note of it"],
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "the title of the note" },
+          "content": { "type": "string", "description": "the note itself, in Markdown, without its title" }
+        },
+        "required": ["title", "content"]
+      },
+      "instructions": "A note is concise: organize it with short \"##\" sections or lists."
+    }
+  ]
 }
 ```
 
@@ -314,7 +330,8 @@ Content-Type: application/json
   that gives the LLM all it needs in the message, like a text to translate or
   to fix. `websearch` still applies. It cannot be used with `attachmentIDs`,
   which are read from the documents: the message is rejected with a
-  `400 Bad Request`.
+  `400 Bad Request`. An action is made the same way, see
+  [chat actions](#chat-actions).
 - `instructions` (optional, at most 2000 characters) tell the LLM how to
   answer in this client, e.g. that the answer is put in a document as it is.
   They are sent as a `system` message with the answer, after the prompt of
@@ -337,7 +354,9 @@ Content-Type: application/json
   conversation: editing it on the assistant applies to its existing
   conversations as well.
 - `attachmentIDs` (optional) array of ids, specifying which documents should be leveraged by the RAG.
-  
+- `actions` (optional) the definitions of the [chat actions](#chat-actions)
+  the client can run. Without it, the message is answered as usual, without
+  a router. Invalid definitions are rejected with a `400 Bad Request`.
 
 #### Response
 
@@ -409,6 +428,33 @@ server > {"event": "CREATED",
                       "doc": {"object": "done"}}}
 ```
 
+#### Action message
+
+When the stack proposes a [chat action](#chat-actions), an `action` event
+comes before the `done` one. `message_id` is the id of the assistant message
+the action is saved on. The message is saved right after the `done` event, as
+without an action: a client that does not find it in the conversation yet
+waits for the conversation to be updated. The events of a message are, in
+order:
+
+- a search: `delta` events, `sources` if any, `done`;
+- an action: `sources` if any, when its params are filled with the documents,
+  then `action`, `done`.
+
+```
+server > {"event": "CREATED",
+          "payload": {"id": "eb17c3205bf1013ddea018c04daba326",
+                      "type": "io.cozy.ai.chat.events",
+                      "doc": {"object": "action",
+                              "message_id": "0192f0a5-4d8b-7c1e-9a3f-1b2c3d4e5f60",
+                              "action": {"name": "draft_email",
+                                         "params": {"to": ["Paul"], "subject": "Groceries", "body": "Hi Paul, ..."}}}}}
+server > {"event": "CREATED",
+          "payload": {"id": "eb17c3205bf1013ddea018c04daba326",
+                      "type": "io.cozy.ai.chat.events",
+                      "doc": {"object": "done"}}}
+```
+
 #### Error message
 
 If an error occurs while processing the AI response (e.g. the LLM is
@@ -420,3 +466,245 @@ server > {"event": "CREATED",
                       "type": "io.cozy.ai.chat.events",
                       "doc": {"object": "error", "message": "I don't want to talk today"}}}
 ```
+
+### Chat actions
+
+The assistant can propose an action of the client instead of a plain answer,
+like writing a note or drafting an email. The client defines its actions in
+the request; the stack knows nothing of them but these definitions. It never
+runs an action: the client shows it to the user, who can edit it, and runs it
+once the user has confirmed it.
+
+An action definition has:
+
+- `name` (required): the identifier of the action, which also names the JSON
+  schema of its params for the LLM: 1 to 64 letters, digits, `_` or `-`, the
+  rule of the OpenAI API for such a name. `search` is reserved, whatever the
+  case.
+- `description` (required): what the action does, and when to pick it. It is
+  given to the router, and to the LLM that fills the params.
+- `examples` (optional): messages for which the router picks the action.
+- `parameters` (optional): the JSON schema of the params the LLM fills, like
+  the `parameters` of a tool for function calling: an `object` whose
+  `properties` are strings, or arrays of strings, with a `description`. The
+  other keywords of JSON schema are ignored. Every param of the schema is
+  present in the action, `""` or `[]` when unknown. An action without
+  parameters is proposed as soon as the router picks it, without a call to
+  the LLM. `required` lists the params without which the action is not
+  proposed. `facts_missing` is reserved. A property with
+  `"x-user-written": true` keeps only the values found, as whole words and
+  whatever the case, in the messages of the user, as the user wrote them, so
+  that the content of a document cannot add one, like the recipient of an
+  email. A document pasted in a message counts as written by the user. The
+  other params carry what the conversation and the documents say, links
+  included: the client shows them to the user for review.
+- `instructions` (optional): how to fill the params, like the format of a
+  text.
+
+A note or a document is an action like any other, with params like `title`
+and `content`, the content in the format the client asks for in the
+instructions, like Markdown.
+
+The stack sets no limit of its own on the number or the size of the
+definitions. They go into the prompts of the LLM with every message: the
+longer they are, the slower the router. When they do not fit the context of
+the model, openRAG refuses the query and the message is answered as a search.
+
+```json
+{
+  "name": "draft_email",
+  "description": "prepare an email for the user to review and send: a reply, a message to someone, a summary to share.",
+  "examples": ["Write an email to the team about the delivery delay"],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "to": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "the recipients, as the user named them (names or email addresses)",
+        "x-user-written": true
+      },
+      "subject": { "type": "string", "description": "the subject of the email" },
+      "body": { "type": "string", "description": "the text of the email" }
+    },
+    "required": ["subject", "body"]
+  },
+  "instructions": "The body is plain text, ready to send, with a greeting and a sign-off."
+}
+```
+
+#### How a message is answered
+
+Two things decide what happens to a message with `actions`, and nothing else
+is guessed:
+
+- **The user chooses the documents.** `documents` (`true` by default) says
+  whether the answer uses the user's documents. With them, the stack goes
+  through openRAG, which retrieves what the conversation needs, or nothing
+  when its query step finds the turn conversational. Without them, it asks
+  the LLM behind openRAG alone. The params of an action are filled exactly
+  the way the answer would have been made.
+- **The router chooses the intent.** The LLM of the assistant is asked,
+  without retrieval and with a JSON schema, one closed question: is the last
+  message a `search`, or one of the actions? It reads the last message and
+  the exchange before it, which a message like "make a note of it" refers
+  to.
+
+The router is not asked whether the documents are needed: a small LLM cannot
+tell, and makes up the facts of the user's organization when it writes
+without them, while a search of the documents to check it matches any message
+sharing a word with one of them. openRAG already decides the retrieval of
+every answer.
+
+The answer starts at the same time as the router and is held back until the
+router has decided, which is usually before its first token. The router has
+10 seconds, since the answer waits for it. For a search, the answer is
+released. For an action, the answer is cancelled, which stops it on openRAG
+with `stream: true` (the default; without streaming, openRAG finishes it for
+nobody), and the params of the action are filled:
+
+```mermaid
+flowchart TD
+    Q[Query of the rag-query job] --> HAS{actions in the request?}
+    HAS -- No --> ANS[Answer: openRAG with the documents,<br>or the LLM alone without them]
+    ANS --> SAVE
+    HAS -- Yes --> PAR[Start the answer and the router together:<br>the answer is held back until the router decides]
+    PAR --> ROUTE{Router, 10 s at most}
+    ROUTE -- search, error, timeout,<br>unknown intent --> REL[Release the answer]
+    REL --> SAVE
+    REL -- error --> ERR[error event]
+    ROUTE -- action --> CANCEL[Cancel the answer: openRAG stops]
+    CANCEL --> PARAMS{parameters?}
+    PARAMS -- No --> ACT
+    PARAMS -- Yes --> FILL[Fill the params as a JSON object<br>following the schema]
+    FILL --> CHECK{types, x-user-written,<br>required params?}
+    CHECK -- ok --> ACT[sources event if any, then action event]
+    CHECK -- missing --> ANS
+    FILL -- error, or facts missing<br>without the documents --> ANS
+    ACT --> SAVE
+    SAVE[done event, then save the message<br>on a fresh read of the conversation]
+```
+
+Below, "openRAG" means `POST /v1/chat/completions` with the partition of the
+instance as the model: retrieval in the workspace of the assistant or in the
+attachments, then the LLM with the retrieved chunks. "The LLM alone" means the
+same route without a model: no retrieval, the messages as they are. The events
+of each case are listed in [Action message](#action-message).
+
+| Router says | `documents` | What is made, by whom | Saved message |
+|---|---|---|---|
+| `search` | true | The answer, by openRAG | content = the answer, its sources |
+| `search` | false | The answer, by the LLM alone | content = the answer |
+| an action | true | The params, by openRAG: the conversation with the fill instructions as a last leading system message, after the prompt of the assistant and the instructions of the client, and the schema of the params as `response_format` | content empty, the sources of the documents used, action = `{params}` |
+| an action | false | The params, by the LLM alone: the fill instructions, the quoted transcript of the conversation, the schema | content empty, action = `{params}` |
+
+The fill instructions give the LLM the description and the instructions of
+the action, the params with their descriptions, today's date, and rules: `""`
+or `[]` for a field it cannot fill, no fact, name or email address of the
+user's organization that the conversation or the documents do not give, no
+placeholder like `[Name]`, but what it knows of a general subject, like a
+method or a notion.
+
+Without the documents, the LLM is told that it does not know the user's
+organization, and it fills a `facts_missing` boolean with the params: true
+when they need facts of the user's organization or work, like its projects,
+decisions, clients, contacts or rules, that the conversation does not give.
+The message is then answered instead, by the LLM alone. A schema forces the
+LLM to fill the params, and without this way out, it invents such facts. The
+stack removes `facts_missing` from the params. With the documents, openRAG
+gives the LLM what they say of the subject, and the field is not asked.
+
+The router is given the last exchange, and the params made without the
+documents the whole conversation, quoted message by message, and nothing
+else. The prompt of the assistant, the `instructions` of the client,
+`websearch` and `attachmentIDs` go with the answer, and with the params made
+with the documents. When both the knowledge base of the assistant and
+`attachmentIDs` are set, openRAG searches the workspace and ignores the
+attachments. With `documents: false`, `attachmentIDs` are rejected
+(`400 Bad Request`) and the knowledge base of the assistant is not searched.
+
+#### Fallbacks
+
+Every failure degrades to the answer the user would have had without actions:
+
+| Failure | Result |
+|---|---|
+| The router fails, times out or names an unknown intent | A search: the held back answer is released |
+| The params cannot be filled (error, a required param empty or not written by the user) | The message is answered as a search, with a new query |
+| Without the documents, the LLM says that the conversation does not give the facts the params need | The message is answered by the LLM alone, with a new query |
+| The conversation changed while the answer was made, like the outcome of an action written by the client | The answer is saved on a fresh read of the conversation, in 3 attempts at most |
+
+A search costs nothing more than the wait for the router. An action costs its
+cancelled answer. When the save fails after 3 conflicts, the job fails: the
+client got the `done` event and, for an action, a `message_id` that never
+appears in the conversation.
+
+#### Calls to openRAG
+
+| Step | Model | Messages | Format |
+|---|---|---|---|
+| Router | none | the router prompt, the quoted transcript of the last message and the exchange before it | JSON schema `{intent}`, the intents as an enum |
+| Answer | partition | the conversation, after the prompt of the assistant and the instructions of the client | streamed text |
+| Params, documents | partition | the conversation, plus the fill instructions as a leading system message | JSON schema of the params, every field required; openRAG drops its citations for a structured output and gives the sources it used |
+| Params, no documents | none | the fill instructions, the quoted transcript of the whole conversation | same schema |
+
+The stack sets no limit of its own on what it sends nor on what it gets:
+
+- **The size of a query** is bounded by the context of the model. openRAG
+  checks it before calling its LLM and refuses a query too long with a `413`:
+  the router then fails and the message is a search; params that cannot be
+  filled give the answer instead, which the same conversation may not fit
+  either.
+- **The size of an output** is bounded by the output budget openRAG
+  configures for its LLM.
+- **The time** is bounded by the HTTP client of the stack (5 minutes to get
+  the headers of a response), and for the router by 10 seconds.
+
+The prompts are text templates in `model/rag/prompts`.
+
+openRAG takes the leading system messages of a query as a custom prompt that
+it splices into its own answer prompt, in a block it tells the LLM to trust
+less than its own rules. The schema still forces the shape of the params, but
+the fill instructions are followed less strictly with the documents than
+without them. And in the `develop` branch of openRAG, the custom prompt is
+spliced only when openRAG retrieves documents: a turn its query step finds
+conversational would lose the fill instructions.
+
+#### What protects an action
+
+- **The transcript is data.** The conversation is given to the LLM alone as a
+  transcript where each message is a quoted string, so that a document quoted
+  in an answer cannot pass for a turn; the prompts say that instructions
+  found in it are not addressed to the LLM.
+- **`x-user-written` params** keep the user's own spelling: a document cannot
+  add a recipient, nor a look-alike address. An email address is not whole
+  when the punctuation of a local part precedes it or a character of a domain
+  follows it: `claire@example.com` is not written in
+  `marie-claire@example.com`. Lists are deduplicated.
+- **The user confirms.** The stack never runs an action.
+- **A proposed action is in the history** as `(Proposed to the user: name
+  {params})`, so that "change the title" has its context.
+
+#### Saved action
+
+The proposed action is saved in the `action` field of the assistant message
+of the conversation, with the sources of the documents its params were filled
+with. The `content` of the message is empty:
+
+```json
+{
+  "id": "0192f0a5-4d8b-7c1e-9a3f-1b2c3d4e5f60",
+  "role": "assistant",
+  "content": "",
+  "action": {
+    "name": "create_note",
+    "params": { "title": "Groceries", "content": "- milk\n- bread" }
+  },
+  "createdAt": "2024-09-24T13:24:09.123Z"
+}
+```
+
+Once the user has handled the action, the client writes its outcome in the
+`action` of the message: `status` is `done`, with the `url` of what it
+created if any, or `cancelled`. The stack keeps this outcome: it reads the
+conversation again before saving a later answer.

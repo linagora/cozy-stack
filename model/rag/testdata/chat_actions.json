@@ -1,0 +1,91 @@
+[
+  {
+    "name": "create_note",
+    "description": "write a note in the user's Notes app: a summary of the conversation, a list of tasks, a short text on a subject.",
+    "examples": [
+      "Fais-en une note",
+      "Résume cette conversation dans une note",
+      "Crée une note qui résume les documents du projet Atlas",
+      "Fais une note avec les points à retenir de la politique de télétravail"
+    ],
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "the title of the note"
+        },
+        "content": {
+          "type": "string",
+          "description": "the note itself, in full, in Markdown, without its title"
+        }
+      },
+      "required": [
+        "title",
+        "content"
+      ]
+    },
+    "instructions": "A note is concise: organize it with short \"##\" sections or lists. Keep what matters, nothing more. The content is in Markdown: headings, paragraphs, \"- \" and \"1. \" lists, **bold** and *italic*; no table, no code block, no link. It starts with its first section or paragraph, never with the title, which is in its own field. No introduction like \"Here is\", no comment after it."
+  },
+  {
+    "name": "create_document",
+    "description": "write a text document (OnlyOffice, like Word) saved in the user's files: a report, a meeting summary, an article, a document on a subject. Choose it rather than a note when the user asks for a document, a doc, a report, Word or OnlyOffice.",
+    "examples": [
+      "Écris un document sur les bonnes pratiques du télétravail",
+      "Fais un compte rendu de cette conversation dans un document",
+      "Write a report on the progress of the Atlas project from my files"
+    ],
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "the title of the document"
+        },
+        "content": {
+          "type": "string",
+          "description": "the document itself, in full, in Markdown, without its title"
+        }
+      },
+      "required": [
+        "title",
+        "content"
+      ]
+    },
+    "instructions": "A document is complete: an introduction, then \"##\" sections developed in full sentences, with lists where they help, and a short conclusion. The content is in Markdown: headings, paragraphs, \"- \" and \"1. \" lists, **bold** and *italic*; no table, no code block, no link. It starts with its first section or paragraph, never with the title, which is in its own field. No introduction like \"Here is\", no comment after it."
+  },
+  {
+    "name": "draft_email",
+    "description": "prepare an email for the user to review and send: a reply, a message to someone, a summary to share.",
+    "examples": [
+      "Rédige un mail à Paul pour lui envoyer ce résumé",
+      "Write an email to the team about the delivery delay"
+    ],
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the recipients, as the user named them (names or email addresses)",
+          "x-user-written": true
+        },
+        "subject": {
+          "type": "string",
+          "description": "the subject of the email"
+        },
+        "body": {
+          "type": "string",
+          "description": "the text of the email"
+        }
+      },
+      "required": [
+        "subject",
+        "body"
+      ]
+    },
+    "instructions": "The body is plain text, ready to send, with a greeting and a sign-off, without a signature name. When the user asks to send a summary or an answer of the conversation, the body contains it in full."
+  }
+]
