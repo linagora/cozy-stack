@@ -77,6 +77,7 @@ type ChatMessage struct {
 	ID            string    `json:"id"`
 	Role          string    `json:"role"`
 	Content       string    `json:"content"`
+	Reasoning     string    `json:"reasoning,omitempty"`
 	Sources       []Source  `json:"sources,omitempty"`
 	AttachmentIDs []string  `json:"attachmentIDs,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
@@ -634,11 +635,11 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 		publishError(inst, msg.ID, ragErr)
 		return ragErr
 	}
-	var completion string
+	var completion, reasoning string
 	var sources []Source
 
 	if query.Stream {
-		completion, sources, err = handleStreamResponse(inst, msg, res.Body)
+		completion, reasoning, sources, err = handleStreamResponse(inst, msg, res.Body)
 	} else {
 		completion, sources, err = handleNonStreamResponse(inst, msg, res.Body)
 	}
@@ -653,6 +654,7 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 		ID:        uuidv7.String(),
 		Role:      AssistantRole,
 		Content:   completion,
+		Reasoning: reasoning,
 		Sources:   sources,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -660,12 +662,14 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	return couchdb.UpdateDoc(inst, &chat)
 }
 
-func publishDelta(inst *instance.Instance, msgID string, content string, position int) {
+// publishDelta sends a chunk of the answer (`delta`) or of the model's
+// reasoning (`reasoning`).
+func publishDelta(inst *instance.Instance, msgID string, object string, content string, position int) {
 	doc := couchdb.JSONDoc{
 		Type: consts.ChatEvents,
 		M: map[string]interface{}{
 			"_id":      msgID,
-			"object":   "delta",
+			"object":   object,
 			"content":  content,
 			"position": position,
 		},
@@ -713,9 +717,10 @@ func publishDone(inst *instance.Instance, msgID string) {
 	realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
 }
 
-func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (string, []Source, error) {
+func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (string, string, []Source, error) {
 	position := 0
-	var completion string
+	reasoningPosition := 0
+	var completion, reasoning string
 	var sources []Source
 	var sseErr error
 
@@ -736,12 +741,17 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 			if reason, ok := choice["finish_reason"].(string); ok && reason != "" {
 				publishDone(inst, msg.ID)
 			} else if delta, ok := choice["delta"].(map[string]interface{}); ok {
+				if chunk, _ := delta["reasoning_content"].(string); chunk != "" {
+					publishDelta(inst, msg.ID, "reasoning", chunk, reasoningPosition)
+					reasoning += chunk
+					reasoningPosition++
+				}
 				// The content is progressively reveived through a delta stream
 				content, ok := delta["content"].(string)
 				if !ok {
 					return
 				}
-				publishDelta(inst, msg.ID, content, position)
+				publishDelta(inst, msg.ID, "delta", content, position)
 				completion += content
 				position++
 
@@ -760,12 +770,12 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 	})
 
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	if sseErr != nil {
-		return "", nil, sseErr
+		return "", "", nil, sseErr
 	}
-	return completion, sources, nil
+	return completion, reasoning, sources, nil
 }
 
 func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (string, []Source, error) {
@@ -791,7 +801,7 @@ func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.R
 		return "", nil, err
 	}
 
-	publishDelta(inst, msg.ID, completion, 0)
+	publishDelta(inst, msg.ID, "delta", completion, 0)
 	if sources != nil {
 		publishSources(inst, msg.ID, sources)
 	}
