@@ -161,6 +161,57 @@ func (s *Sharing) AddGroupsAndContacts(inst *instance.Instance, groupIDs, contac
 			return err
 		}
 	}
+	return s.inviteAddedMembers(inst)
+}
+
+// AddMembers adds members already resolved from contacts on another instance and invites them.
+func (s *Sharing) AddMembers(inst *instance.Instance, members []Member) error {
+	for _, m := range members {
+		if m.Email == "" && m.Instance == "" {
+			return contact.ErrNoMailAddress
+		}
+		// Only keep the identity fields: the members come from a request body
+		m = Member{Status: MemberStatusMailNotSent, Name: m.Name, Email: m.Email, Instance: m.Instance, ReadOnly: m.ReadOnly}
+		if _, _, err := s.addMember(inst, m); err != nil {
+			return err
+		}
+	}
+	return s.inviteAddedMembers(inst)
+}
+
+// MembersFromContacts resolves the contacts and the groups (expanded to their contacts) to members.
+func MembersFromContacts(inst *instance.Instance, groupIDs, contactIDs []string, readOnly bool) ([]Member, error) {
+	var members []Member
+	for _, id := range contactIDs {
+		c, err := contact.Find(inst, id)
+		if err != nil {
+			return nil, err
+		}
+		m := buildMemberFromContact(c, readOnly)
+		if m.Email == "" && m.Instance == "" {
+			return nil, contact.ErrNoMailAddress
+		}
+		members = append(members, m)
+	}
+	for _, id := range groupIDs {
+		group, err := contact.FindGroup(inst, id)
+		if err != nil {
+			return nil, err
+		}
+		contacts, err := group.GetAllContacts(inst)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range contacts {
+			if m := buildMemberFromContact(c, readOnly); m.Email != "" || m.Instance != "" {
+				members = append(members, m)
+			}
+		}
+	}
+	return members, nil
+}
+
+func (s *Sharing) inviteAddedMembers(inst *instance.Instance) error {
 	var err error
 	var perms *permission.Permission
 	if s.PreviewPath != "" {

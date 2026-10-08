@@ -3,6 +3,7 @@ package sharings_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/gavv/httpexpect/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -1621,5 +1623,135 @@ func TestSharedDriveShareByLinkRevoke(t *testing.T) {
 		deleteSharedDrivePermissionExpectStatus(
 			t, f.eOwner, f.sharingID, "non-existent-id", f.ownerAppToken, http.StatusNotFound,
 		)
+	})
+}
+
+func TestCreateNestedSharedDrive(t *testing.T) {
+	t.Run("SameStack", func(t *testing.T) {
+		runCreateNestedSharedDriveTests(t, true)
+	})
+	t.Run("HTTP", func(t *testing.T) {
+		runCreateNestedSharedDriveTests(t, false)
+	})
+}
+
+func runCreateNestedSharedDriveTests(t *testing.T, sameStack bool) {
+	t.Helper()
+	f := setupSharedDrivePermissionFixture(t)
+	eBetty, bettyToken := f.newBettyClient(t)
+	ownerURL := "http://" + f.env.acme.Domain
+	if !sameStack {
+		var ownerHost string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Host != ownerHost {
+				http.Error(w, "request was not addressed to the owner", http.StatusBadRequest)
+				return
+			}
+			f.env.tsA.Config.Handler.ServeHTTP(w, r)
+		}))
+		t.Cleanup(server.Close)
+		ownerURL = server.URL
+		ownerHost = strings.TrimPrefix(ownerURL, "http://")
+	}
+	recipientSharing, err := sharing.FindSharing(f.env.betty, f.sharingID)
+	require.NoError(t, err)
+	recipientSharing.Members[0].Instance = ownerURL
+	recipientSharing.AppSlug = "recipient-app"
+	require.NoError(t, couchdb.UpdateDoc(f.env.betty, recipientSharing))
+	ownerSharing, err := sharing.FindSharing(f.env.acme, f.sharingID)
+	require.NoError(t, err)
+
+	payload := func(rels map[string]interface{}) []byte {
+		return mustJSON(t, map[string]interface{}{
+			"data": map[string]interface{}{
+				"type":          consts.Sharings,
+				"attributes":    map[string]interface{}{"description": "Nested"},
+				"relationships": rels,
+			},
+		})
+	}
+	contactRefs := func(id string) map[string]interface{} {
+		return map[string]interface{}{
+			"data": []map[string]interface{}{{"id": id, "type": consts.Contacts}},
+		}
+	}
+	create := func(e *httpexpect.Expect, token, sharingID, dirID string, body []byte) *httpexpect.Response {
+		return e.POST("/sharings/drives/"+sharingID+"/"+dirID+"/drives").
+			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(body).
+			Expect()
+	}
+
+	t.Run("MemberInvitesItsOwnContacts", func(t *testing.T) {
+		dirID := createDirectory(t, f.eOwner, f.productID, "nested-by-betty", f.ownerAppToken)
+		carol := createContact(t, f.env.betty, "Carol", "carol@example.net")
+		erin := createContact(t, f.env.betty, "Erin", "erin@example.net")
+
+		created := create(eBetty, bettyToken, f.sharingID, dirID, payload(map[string]interface{}{
+			"recipients":           contactRefs(carol.ID()),
+			"read_only_recipients": contactRefs(erin.ID()),
+		})).Status(http.StatusCreated).
+			JSON(httpexpect.ContentOpts{MediaType: jsonAPIContentType}).
+			Object()
+
+		created.Path("$.data.attributes.app_slug").String().IsEqual(ownerSharing.AppSlug)
+		members := created.Path("$.data.attributes.members").Array()
+		members.Length().IsEqual(3)
+		members.Value(1).Object().Value("email").String().IsEqual("carol@example.net")
+		members.Value(1).Object().NotContainsKey("read_only")
+		members.Value(2).Object().Value("email").String().IsEqual("erin@example.net")
+		members.Value(2).Object().Value("read_only").Boolean().IsTrue()
+	})
+
+	t.Run("UnknownContactDoesNotCreateTheDrive", func(t *testing.T) {
+		dirID := createDirectory(t, f.eOwner, f.productID, "nested-unknown-contact", f.ownerAppToken)
+		create(eBetty, bettyToken, f.sharingID, dirID, payload(map[string]interface{}{
+			"recipients": contactRefs("0123456789abcdef0123456789abcdef"),
+		})).Status(http.StatusNotFound)
+
+		dir, err := f.env.acme.VFS().DirByID(dirID)
+		require.NoError(t, err)
+		require.Empty(t, dir.ReferencedBy)
+	})
+
+	t.Run("OwnerInvitesItsOwnContacts", func(t *testing.T) {
+		dirID := createDirectory(t, f.eOwner, f.productID, "nested-by-owner", f.ownerAppToken)
+		frank := createContact(t, f.env.acme, "Frank", "frank@example.net")
+
+		create(f.eOwner, f.ownerAppToken, f.sharingID, dirID, payload(map[string]interface{}{
+			"recipients": contactRefs(frank.ID()),
+		})).Status(http.StatusCreated).
+			JSON(httpexpect.ContentOpts{MediaType: jsonAPIContentType}).
+			Object().Path("$.data.attributes.members[1].email").String().IsEqual("frank@example.net")
+	})
+
+	t.Run("FolderOutsideTheDriveIsNotFound", func(t *testing.T) {
+		create(eBetty, bettyToken, f.sharingID, f.env.outsideOfShareID, payload(nil)).
+			Status(http.StatusNotFound)
+	})
+
+	t.Run("AppWithoutFilePermissionsCannotResolveContacts", func(t *testing.T) {
+		token := generateAppToken(f.env.betty, "contacts-only", consts.Contacts)
+		create(eBetty, token, f.sharingID, f.productID, payload(map[string]interface{}{
+			"recipients": contactRefs("0123456789abcdef0123456789abcdef"),
+		})).Status(http.StatusForbidden)
+	})
+
+	t.Run("OwnerErrorPreservesStatusAndDetail", func(t *testing.T) {
+		create(eBetty, bettyToken, f.sharingID, f.productID, payload(nil)).
+			Status(http.StatusConflict).
+			JSON(httpexpect.ContentOpts{MediaType: jsonAPIContentType}).
+			Object().Path("$.errors[0].detail").String().IsEqual(sharing.ErrFolderAlreadyShared.Error())
+	})
+
+	t.Run("ReadOnlyMemberIsForbidden", func(t *testing.T) {
+		daveSharingID, daveRootID := createReadOnlyDriveForDave(t, f)
+		FakeOwnerInstanceForSharing(t, f.env.dave, ownerURL, daveSharingID)
+		dirID := createDirectory(t, f.eOwner, daveRootID, "nested-by-dave", f.ownerAppToken)
+		eDave, daveToken := f.newDaveClient(t)
+
+		create(eDave, daveToken, daveSharingID, dirID, payload(nil)).
+			Status(http.StatusForbidden)
 	})
 }
