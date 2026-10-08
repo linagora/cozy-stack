@@ -118,6 +118,8 @@ func Secure(conf *SecureConfig) echo.MiddlewareFunc {
 		validCSPList(conf.CSPStyleSrc, conf.CSPDefaultSrc, conf.CSPStyleSrcAllowList)
 	conf.CSPWorkerSrc, conf.CSPWorkerSrcAllowList =
 		validCSPList(conf.CSPWorkerSrc, nil, conf.CSPWorkerSrcAllowList)
+	conf.CSPFrameAncestors, conf.CSPFrameAncestorsAllowList =
+		validCSPList(conf.CSPFrameAncestors, nil, conf.CSPFrameAncestorsAllowList)
 	conf.CSPFormAction, conf.CSPFormActionAllowList =
 		validCSPList(conf.CSPFormAction, nil, conf.CSPFormActionAllowList)
 
@@ -301,6 +303,8 @@ func (b cspBuilder) makeCSPHeader(header, cspAllowList string, sources []CSPSour
 				src = "font"
 			case "frame-src":
 				src = "frame"
+			case "frame-ancestors":
+				src = "frame_ancestors"
 			}
 			if list, ok := context[src]; ok && list != "" {
 				headers = append(headers, list)

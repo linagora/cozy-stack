@@ -144,6 +144,8 @@ func SetupAppsHandler(appsHandler echo.HandlerFunc) echo.HandlerFunc {
 			CSPFrameSrcAllowList:   config.GetConfig().CSPAllowList["frame"] + " " + frameSrc,
 			CSPFormActionAllowList: config.GetConfig().CSPAllowList["form"] + " " + formAction,
 
+			CSPFrameAncestorsAllowList: config.GetConfig().CSPAllowList["frame_ancestors"],
+
 			CSPPerContext: perContext,
 		})
 		mws = append([]echo.MiddlewareFunc{secure}, mws...)
