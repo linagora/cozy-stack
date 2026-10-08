@@ -131,6 +131,19 @@ func PutSharing(c echo.Context) error {
 		return wrapErrors(err)
 	}
 
+	if c.QueryParam("shortcut") == "true" {
+		if s.Drive {
+			if err := s.CreateDriveShortcut(inst, false); err != nil {
+				return wrapErrors(err)
+			}
+		} else {
+			u := c.QueryParam("url")
+			if err := s.CreateShortcut(inst, u, false); err != nil {
+				return wrapErrors(err)
+			}
+		}
+	}
+
 	if s.Drive && len(s.Members) > 0 {
 		sender := &s.Members[0]
 		if sharing.IsTrustedMember(inst, sender) {
@@ -144,19 +157,6 @@ func PutSharing(c echo.Context) error {
 				}
 			} else {
 				log.Warnf("Drive sharing from trusted sender but State not available")
-			}
-		}
-	}
-
-	if c.QueryParam("shortcut") == "true" {
-		if s.Drive {
-			if err := s.CreateDriveShortcut(inst, false); err != nil {
-				return wrapErrors(err)
-			}
-		} else {
-			u := c.QueryParam("url")
-			if err := s.CreateShortcut(inst, u, false); err != nil {
-				return wrapErrors(err)
 			}
 		}
 	}

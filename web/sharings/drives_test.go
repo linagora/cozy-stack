@@ -2148,6 +2148,28 @@ func TestDriveAutoAcceptTrusted(t *testing.T) {
 	state := recipientSharing.Credentials[0].State
 	require.NotEmpty(t, state)
 
+	fs := env.recipientInstance.VFS()
+	require.Eventually(t, func() bool {
+		fileDoc, err := fs.FileByID(recipientSharing.ShortcutID)
+		if err != nil {
+			return false
+		}
+		file, err := fs.OpenFile(fileDoc)
+		if err != nil {
+			return false
+		}
+		defer file.Close()
+		link, err := shortcut.Parse(file)
+		return err == nil && link.URL == recipientSharing.DriveTargetURL(env.recipientInstance).String()
+	}, 5*time.Second, 25*time.Millisecond, "Auto-accept should update the shortcut destination")
+
+	fileDoc, err := fs.FileByID(recipientSharing.ShortcutID)
+	require.NoError(t, err)
+	require.Equal(t, "new", fileDoc.Metadata["sharing"].(map[string]interface{})["status"])
+	count, err := sharing.CountNewShortcuts(env.recipientInstance)
+	require.NoError(t, err)
+	require.Equal(t, 1, count, "Auto-accept should preserve the unread badge")
+
 	location := env.eRecipient.GET("/auth/authorize/sharing").
 		WithQuery("sharing_id", sharingID).
 		WithQuery("state", state).
@@ -2157,6 +2179,34 @@ func TestDriveAutoAcceptTrusted(t *testing.T) {
 		Header("Location").
 		Raw()
 	assertSharedDriveRedirectLocation(t, location, sharingID)
+
+	setShortcutSharingStatus(t, env.recipientInstance, fileDoc.DocID, "seen")
+	folder, err := vfs.NewDirDocWithPath("Shortcuts", consts.RootDirID, "/", nil)
+	require.NoError(t, err)
+	require.NoError(t, fs.CreateDir(folder))
+	fileDoc, err = fs.FileByID(fileDoc.DocID)
+	require.NoError(t, err)
+	name := "My shared drive.url"
+	fileDoc, err = vfs.ModifyFileMetadata(fs, fileDoc, &vfs.DocPatch{Name: &name, DirID: &folder.DocID})
+	require.NoError(t, err)
+	msg := &sharing.AutoAcceptMsg{
+		SharingID: sharingID,
+		State:     state,
+	}
+	require.NoError(t, sharing.HandleAutoAccept(env.recipientInstance, msg))
+	fileDoc, err = fs.FileByID(fileDoc.DocID)
+	require.NoError(t, err)
+	require.Equal(t, "seen", fileDoc.Metadata["sharing"].(map[string]interface{})["status"], "Retry should preserve a shortcut already seen by the user")
+	require.Equal(t, name, fileDoc.DocName)
+	require.Equal(t, folder.DocID, fileDoc.DirID)
+	updatedSharing, err := sharing.FindSharing(env.recipientInstance, sharingID)
+	require.NoError(t, err)
+	require.Equal(t, recipientSharing.Credentials, updatedSharing.Credentials, "Retry should not repeat the handshake")
+
+	require.NoError(t, fs.DestroyFile(fileDoc))
+	require.NoError(t, sharing.HandleAutoAccept(env.recipientInstance, msg))
+	_, err = fs.FileByID(fileDoc.DocID)
+	require.ErrorIs(t, err, os.ErrNotExist, "Retry should not recreate a deleted shortcut")
 }
 
 func TestDriveAutoAcceptSameOrganizationWithPort(t *testing.T) {

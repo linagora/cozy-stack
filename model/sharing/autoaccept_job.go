@@ -2,9 +2,12 @@ package sharing
 
 import (
 	"errors"
+	"os"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/vfs"
+	"github.com/cozy/cozy-stack/pkg/shortcut"
 )
 
 // AutoAcceptMsg is the payload for auto-accepting a drive sharing from a trusted sender
@@ -46,12 +49,34 @@ func HandleAutoAccept(inst *instance.Instance, msg *AutoAcceptMsg) error {
 		return err
 	}
 
-	// Send the acceptance answer using the state provided by the owner
-	if err := s.SendAnswer(inst, msg.State); err != nil {
-		if errors.Is(err, ErrAlreadyAccepted) {
-			return nil // Already accepted, not an error
+	if !s.Active {
+		if err := s.SendAnswer(inst, msg.State); err != nil {
+			if errors.Is(err, ErrAlreadyAccepted) {
+				return nil
+			}
+			return err
 		}
+	}
+	if s.ShortcutID == "" {
+		return nil
+	}
+
+	fs := inst.VFS()
+	fileDoc, err := fs.FileByID(s.ShortcutID)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
-	return nil
+	if !isReusableShortcut(fileDoc) {
+		return nil
+	}
+
+	// Accepting a sharing does not mean the user has seen its shortcut.
+	body := shortcut.Generate(s.DriveTargetURL(inst).String())
+	updated := fileDoc.Clone().(*vfs.FileDoc)
+	updated.ByteSize = int64(len(body))
+	updated.MD5Sum = nil
+	return writeShortcutFile(fs, updated, fileDoc, body)
 }
