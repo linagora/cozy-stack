@@ -143,7 +143,7 @@ func (s *sharingIndexer) TrashUsage() (int64, error) {
 	return s.indexer.TrashUsage()
 }
 
-func (s *sharingIndexer) DirSize(doc *vfs.DirDoc) (int64, error) {
+func (s *sharingIndexer) DirSize(doc *vfs.DirDoc) (int64, int64, error) {
 	return s.indexer.DirSize(doc)
 }
 

@@ -376,6 +376,11 @@ Content-Type: application/vnd.api+json
 This endpoint returns the size taken by the files in a directory, including
 those in subdirectories.
 
+The `files_count` attribute is the number of files in the directory, including
+those in subdirectories (directories are not counted). If the directory has
+more than 10 000 subdirectories, only the first 10 000 are taken into account
+for `size` and `files_count`.
+
 #### Request
 
 ```http
@@ -396,7 +401,8 @@ Content-Type: application/vnd.api+json
     "type": "io.cozy.files.sizes",
     "id": "fce1a6c0-dfc5-11e5-8d1a-1f854d4aaf81",
     "attributes": {
-      "size": "1234567890"
+      "size": "1234567890",
+      "files_count": 42
     },
     "meta": {}
   }
