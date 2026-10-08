@@ -124,6 +124,24 @@ func TestSecure(t *testing.T) {
 		assert.Equal(t, "script '*'; toto;frame-ancestors new-rule;", r)
 	})
 
+	t.Run("SecureMiddlewareCSPFrameAncestorsAllowList", func(t *testing.T) {
+		e := echo.New()
+		req, _ := http.NewRequest(echo.GET, "http://app.cozy.local/", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.Set("instance", &instance.Instance{Domain: "cozy.local", ContextName: "dev"})
+		h := Secure(&SecureConfig{
+			CSPFrameAncestors:          []CSPSource{CSPSrcSelf},
+			CSPFrameAncestorsAllowList: "https://global.example.com/",
+			CSPPerContext: map[string]map[string]string{
+				"dev": {"frame_ancestors": "http://localhost:3000"},
+			},
+		})(echo.NotFoundHandler)
+		_ = h(c)
+		assert.Equal(t, "frame-ancestors 'self' https://global.example.com/ http://localhost:3000;",
+			rec.Header().Get(echo.HeaderContentSecurityPolicy))
+	})
+
 	t.Run("SecureMiddlewareCSPWithOrgDomain", func(t *testing.T) {
 		e := echo.New()
 		req, _ := http.NewRequest(echo.GET, "http://app.cozy.local/", nil)

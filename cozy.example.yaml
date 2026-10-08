@@ -471,6 +471,7 @@ csp_allowlist:
   # img:    https://allowed.domain.com/
   # style:  https://allowed.domain.com/
   # font:   https://allowed.domain.com/
+  # frame_ancestors: https://allowed.domain.com/
 
   # It is also possible to configure the CSP policy per context. The values are
   # cumulative with the global csp allowlist.
