@@ -413,7 +413,8 @@ server > {"event": "CREATED",
 
 When the LLM is a reasoning model, what it thinks before it answers comes
 first, in `reasoning` events, with their own positions. It is not a part of
-the answer, and is not saved in the conversation.
+the answer: it is saved apart, in the `reasoning` field of the assistant
+message of the conversation, and is not sent back to the LLM.
 
 ```
 server > {"event": "CREATED",

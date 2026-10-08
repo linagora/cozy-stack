@@ -330,7 +330,7 @@ data: {"object": "chat.completion.chunk", "choices": [{"delta": {}, "finish_reas
 
 data: [DONE]
 `
-			completion, sources, err := handleStreamResponse(inst, msg, strings.NewReader(body))
+			completion, _, sources, err := handleStreamResponse(inst, msg, strings.NewReader(body))
 			require.NoError(t, err)
 			assert.Equal(t, "Hello world", completion)
 			require.Len(t, sources, 1)
@@ -362,9 +362,10 @@ data: {"object": "chat.completion.chunk", "choices": [{"delta": {"content": "391
 
 data: [DONE]
 `
-	completion, _, err := handleStreamResponse(inst, ChatMessage{ID: "msg-1"}, strings.NewReader(body))
+	completion, reasoning, _, err := handleStreamResponse(inst, ChatMessage{ID: "msg-1"}, strings.NewReader(body))
 	require.NoError(t, err)
 	assert.Equal(t, "391", completion)
+	assert.Equal(t, "17 x 23 = 391", reasoning)
 
 	var events []string
 	for len(events) < 3 {
