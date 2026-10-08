@@ -2,13 +2,18 @@ package rag
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/account"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/realtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -340,6 +345,38 @@ func parseEvent(t *testing.T, body string) map[string]interface{} {
 	var event map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(body), &event))
 	return event
+}
+
+func TestHandleStreamResponseReasoning(t *testing.T) {
+	config.UseTestFile(t)
+	inst := &instance.Instance{Domain: "rag-reasoning.example.net"}
+	sub := realtime.GetHub().Subscriber(inst)
+	sub.Subscribe(consts.ChatEvents)
+	t.Cleanup(sub.Close)
+
+	body := `data: {"object": "chat.completion.chunk", "choices": [{"delta": {"reasoning_content": "17 x 23"}}]}
+
+data: {"object": "chat.completion.chunk", "choices": [{"delta": {"reasoning_content": " = 391"}}]}
+
+data: {"object": "chat.completion.chunk", "choices": [{"delta": {"content": "391"}}]}
+
+data: [DONE]
+`
+	completion, _, err := handleStreamResponse(inst, ChatMessage{ID: "msg-1"}, strings.NewReader(body))
+	require.NoError(t, err)
+	assert.Equal(t, "391", completion)
+
+	var events []string
+	for len(events) < 3 {
+		select {
+		case ev := <-sub.Channel:
+			doc := ev.Doc.(*couchdb.JSONDoc)
+			events = append(events, fmt.Sprintf("%s %v %q", doc.M["object"], doc.M["position"], doc.M["content"]))
+		case <-time.After(time.Second):
+			t.Fatalf("missing events, got %v", events)
+		}
+	}
+	assert.Equal(t, []string{`reasoning 0 "17 x 23"`, `reasoning 1 " = 391"`, `delta 0 "391"`}, events)
 }
 
 func TestRAGMessages(t *testing.T) {

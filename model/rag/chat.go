@@ -660,12 +660,14 @@ func Query(inst *instance.Instance, logger logger.Logger, query QueryMessage) er
 	return couchdb.UpdateDoc(inst, &chat)
 }
 
-func publishDelta(inst *instance.Instance, msgID string, content string, position int) {
+// publishDelta sends a chunk of the answer (`delta`) or of the model's
+// reasoning (`reasoning`), which is streamed only, never saved.
+func publishDelta(inst *instance.Instance, msgID string, object string, content string, position int) {
 	doc := couchdb.JSONDoc{
 		Type: consts.ChatEvents,
 		M: map[string]interface{}{
 			"_id":      msgID,
-			"object":   "delta",
+			"object":   object,
 			"content":  content,
 			"position": position,
 		},
@@ -715,6 +717,7 @@ func publishDone(inst *instance.Instance, msgID string) {
 
 func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (string, []Source, error) {
 	position := 0
+	reasoningPosition := 0
 	var completion string
 	var sources []Source
 	var sseErr error
@@ -736,12 +739,16 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 			if reason, ok := choice["finish_reason"].(string); ok && reason != "" {
 				publishDone(inst, msg.ID)
 			} else if delta, ok := choice["delta"].(map[string]interface{}); ok {
+				if reasoning, _ := delta["reasoning_content"].(string); reasoning != "" {
+					publishDelta(inst, msg.ID, "reasoning", reasoning, reasoningPosition)
+					reasoningPosition++
+				}
 				// The content is progressively reveived through a delta stream
 				content, ok := delta["content"].(string)
 				if !ok {
 					return
 				}
-				publishDelta(inst, msg.ID, content, position)
+				publishDelta(inst, msg.ID, "delta", content, position)
 				completion += content
 				position++
 
@@ -791,7 +798,7 @@ func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.R
 		return "", nil, err
 	}
 
-	publishDelta(inst, msg.ID, completion, 0)
+	publishDelta(inst, msg.ID, "delta", completion, 0)
 	if sources != nil {
 		publishSources(inst, msg.ID, sources)
 	}

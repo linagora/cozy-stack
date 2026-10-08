@@ -409,6 +409,19 @@ server > {"event": "CREATED",
                       "doc": {"object": "done"}}}
 ```
 
+#### Reasoning
+
+When the LLM is a reasoning model, what it thinks before it answers comes
+first, in `reasoning` events, with their own positions. It is not a part of
+the answer, and is not saved in the conversation.
+
+```
+server > {"event": "CREATED",
+          "payload": {"id": "eb17c3205bf1013ddea018c04daba326",
+                      "type": "io.cozy.ai.chat.events",
+                      "doc": {"object": "reasoning", "content": "The user asks", "position": 0}}}
+```
+
 #### Error message
 
 If an error occurs while processing the AI response (e.g. the LLM is
