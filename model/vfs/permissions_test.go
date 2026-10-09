@@ -36,6 +36,7 @@ func TestPermissions(t *testing.T) {
 		fs := tt.fs
 		t.Run("Permissions", func(t *testing.T) {
 			origtree := H{
+				"root.txt": nil,
 				"O/": H{
 					"A/": H{
 						"a1/": H{},
@@ -283,6 +284,19 @@ func TestPermissions(t *testing.T) {
 			require.NoError(t, err)
 			assert.Error(t, vfs.Allows(fs, psetTwoSelectors, permission.GET, root))
 			assert.ErrorIs(t, vfs.AllowsRule(fs, psetTwoSelectors, byID(get, consts.RootDirID)), permission.ErrNotSubset)
+			rootFile, err := fs.FileByPath("/root.txt")
+			require.NoError(t, err)
+			assert.Error(t, vfs.Allows(fs, psetTwoSelectors, permission.GET, rootFile))
+			psetRoot := permission.Set{permission.Rule{
+				Type: consts.Files, Verbs: get, Selector: "name", Values: []string{root.DocName},
+			}}
+			assert.NoError(t, vfs.Allows(fs, psetRoot, permission.GET, root))
+			assert.NoError(t, vfs.Allows(fs, psetRoot, permission.GET, rootFile))
+			assert.NoError(t, vfs.Allows(fs, psetRoot, permission.GET, f))
+			assert.Error(t, vfs.Allows(fs, psetRoot, permission.POST, rootFile))
+			assert.NoError(t, vfs.AllowsRule(fs, psetRoot, byID(get, consts.RootDirID)))
+			assert.NoError(t, vfs.AllowsRule(fs, psetRoot, byID(get, rootFile.ID())))
+			assert.ErrorIs(t, vfs.AllowsRule(fs, psetRoot, byID(permission.Verbs(permission.POST), consts.RootDirID)), permission.ErrNotSubset)
 
 			withSelector := byID(get, "testtag")
 			withSelector.Selector = "tags"

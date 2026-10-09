@@ -80,7 +80,7 @@ It's possible to restrict the permissions to only some documents of a doctype,
 or to just some files and folders. You can give a list of ids in `values`.
 
 **Note**: a permission for a folder also gives permissions with same verbs for
-files and folders inside it.
+files and folders inside it, including when a selector matches the root folder.
 
 ### Selector
 

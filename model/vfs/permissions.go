@@ -98,11 +98,14 @@ func Allows(fs VFS, pset permission.Set, v permission.Verb, fd Fetcher) error {
 		if err != nil {
 			return err
 		}
-		for cur.ID() != consts.RootDirID {
+		for {
 			for _, rule := range otherRules {
 				if rule.ValuesMatch(cur) {
 					return nil
 				}
+			}
+			if cur.ID() == consts.RootDirID {
+				break
 			}
 			cur, err = cur.Parent(fs)
 			if err != nil {
