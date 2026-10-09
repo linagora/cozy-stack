@@ -71,7 +71,7 @@ func FindOrganizationInstance(ctx context.Context, organizationID, organizationD
 			return nil, err
 		}
 		if inst.IsOrganizationInstance() {
-			return inst, nil
+			return lifecycle.GetInstance(inst.Domain)
 		}
 	}
 	return nil, nil

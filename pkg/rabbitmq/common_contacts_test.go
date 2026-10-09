@@ -51,10 +51,10 @@ func TestCommonContactsHandler(t *testing.T) {
 	org := newInstance(t, orgID+".cc.localhost", enabledCtx)
 	alice := newInstance(t, "alice-"+suffix+".cc.localhost", enabledCtx)
 	aliceEmail := "alice-" + suffix + "@acme.example"
-	require.NoError(t, lifecycle.SetEmail(alice, aliceEmail))
+	require.NoError(t, instance.SetEmail(alice, aliceEmail))
 	bob := newInstance(t, "bob-"+suffix+".cc.localhost", disabledCtx)
 	bobEmail := "bob-" + suffix + "@acme.example"
-	require.NoError(t, lifecycle.SetEmail(bob, bobEmail))
+	require.NoError(t, instance.SetEmail(bob, bobEmail))
 
 	handle := func(t *testing.T, msg map[string]interface{}) {
 		t.Helper()
@@ -153,6 +153,31 @@ func TestCommonContactsHandler(t *testing.T) {
 			handle(t, message("DELETE", domainAudience, path, nil))
 			require.Empty(t, byPath(t, org, path))
 		})
+	})
+
+	t.Run("a domain contact upgrades existing organization indexes", func(t *testing.T) {
+		indexes := couchdb.Indexes
+		t.Cleanup(func() { couchdb.Indexes = indexes })
+		couchdb.Indexes = nil
+		for _, index := range indexes {
+			if index.Request.DDoc != "by-carddav-path" {
+				couchdb.Indexes = append(couchdb.Indexes, index)
+			}
+		}
+		oldID := "ccold" + suffix
+		oldDomain := "old-" + orgDomain
+		old := newOrgInstance(t, oldID+".cc.localhost", enabledCtx, oldID, oldDomain)
+		couchdb.Indexes = indexes
+		old.IndexViewsVersion = couchdb.IndexViewsVersion - 1
+		require.NoError(t, instance.Update(old))
+
+		path := "addressbooks/domain/members/upgrade-" + suffix + ".vcf"
+		handle(t, message("ADD", map[string]interface{}{"domain": oldDomain}, path, card("Carol Doe", "carol@acme.example", "", "")))
+
+		require.Len(t, byPath(t, old, path), 1)
+		updated, err := instance.Get(old.Domain)
+		require.NoError(t, err)
+		require.Equal(t, couchdb.IndexViewsVersion, updated.IndexViewsVersion)
 	})
 
 	t.Run("a domain message for an org without common_contacts is dropped", func(t *testing.T) {
