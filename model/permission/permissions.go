@@ -714,7 +714,7 @@ func CheckSetPermissionsWithFallback(set Set, parent *Permission, fallback func(
 		if !isShareInteractSubset(set, parent.Permissions) {
 			return ErrNotSubset
 		}
-	} else if !set.IsSubSetOf(parent.Permissions) {
+	} else {
 		if set.IsMaximal() {
 			return ErrNotSubset
 		}
