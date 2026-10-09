@@ -336,11 +336,14 @@ func TestPermissions(t *testing.T) {
 
 		shareLink(outside, "GET").Status(403)
 		shareLink(inside, "PUT").Status(403)
+		shareLink(inside, "ALL").Status(403)
+		shareLink(outside, "ALL").Status(403)
+		shareLink(consts.RootDirID, "ALL").Status(403)
 		permID := shareLink(inside, "GET").Status(200).
 			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
 			Object().Path("$.data.id").String().NotEmpty().Raw()
 
-		patchLink := func(id string) *httpexpect.Response {
+		patchLink := func(id, verb string) *httpexpect.Response {
 			return e.PATCH("/permissions/"+permID).
 				WithHeader("Authorization", "Bearer "+appToken).
 				WithHeader("Content-Type", "application/json").
@@ -348,16 +351,19 @@ func TestPermissions(t *testing.T) {
           "data": {
             "attributes": {
               "permissions": {
-                "other": {"type": "io.cozy.files", "verbs": ["GET"], "values": [%q]}
+                "other": {"type": "io.cozy.files", "verbs": [%q], "values": [%q]}
               }
             }
           }
-        }`, id))).
+        }`, verb, id))).
 				Expect()
 		}
 
-		patchLink(inside2).Status(200)
-		patchLink(outside).Status(403)
+		patchLink(inside2, "GET").Status(200)
+		patchLink(outside, "GET").Status(403)
+		patchLink(inside2, "ALL").Status(403)
+		patchLink(outside, "ALL").Status(403)
+		patchLink(consts.RootDirID, "ALL").Status(403)
 	})
 
 	t.Run("CreateSubPermission", func(t *testing.T) {
