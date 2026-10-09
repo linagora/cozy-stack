@@ -499,15 +499,17 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 			for _, r := range patch.Permissions {
 				if r.Type == "" {
 					toPatch.RemoveRule(r)
-				} else if err := permission.CheckDoctypeName(r.Type, true); err != nil {
-					return err
-				} else if current.Permissions.RuleInSubset(r) {
-					toPatch.AddRules(r)
-				} else if err := vfs.AllowsRule(instance.VFS(), current.Permissions, r); err != nil {
-					return err
-				} else {
-					toPatch.AddRules(r)
+					continue
 				}
+				if err := permission.CheckDoctypeName(r.Type, true); err != nil {
+					return err
+				}
+				if !current.Permissions.RuleInSubset(r) {
+					if err := vfs.AllowsRule(instance.VFS(), current.Permissions, r); err != nil {
+						return err
+					}
+				}
+				toPatch.AddRules(r)
 			}
 		}
 
