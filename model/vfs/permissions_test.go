@@ -260,7 +260,11 @@ func TestPermissions(t *testing.T) {
 				return permission.Rule{Type: consts.Files, Verbs: verbs, Values: ids}
 			}
 			get := permission.Verbs(permission.GET)
-			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, byID(permission.ALL, f.ID())), permission.ErrNotSubset)
+			for _, verbs := range []permission.VerbSet{permission.ALL, nil, permission.Verbs()} {
+				assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, byID(verbs, f.ID())), permission.ErrNotSubset)
+				assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, byID(verbs, B2.ID())), permission.ErrNotSubset)
+				assert.NoError(t, vfs.AllowsRule(fs, psetWholeType, byID(verbs, f.ID())))
+			}
 			assert.NoError(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, f.ID())))
 			assert.NoError(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, a1.ID())))
 			assert.ErrorIs(t, vfs.AllowsRule(fs, psetReferencedApp, byID(get, f.ID(), B2.ID())), permission.ErrNotSubset)

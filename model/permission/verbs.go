@@ -40,6 +40,9 @@ func (vs VerbSet) ContainsAll(verbs VerbSet) bool {
 	if len(vs) == 0 {
 		return true // empty set = ALL
 	}
+	if len(verbs) == 0 {
+		verbs = ALL
+	}
 
 	for v := range verbs {
 		_, has := vs[v]

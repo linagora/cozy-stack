@@ -140,7 +140,10 @@ func AllowsRule(fs VFS, parent permission.Set, r permission.Rule) error {
 		if dir != nil {
 			fd = dir
 		}
-		for v := range r.Verbs {
+		for v := range permission.ALL {
+			if !r.Verbs.Contains(v) {
+				continue
+			}
 			err := Allows(fs, parent, v, fd)
 			if errors.Is(err, errNoPermission) {
 				return permission.ErrNotSubset

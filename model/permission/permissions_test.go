@@ -435,6 +435,26 @@ func TestShareSetPermissions(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestShareSetPermissionsAllVerbs(t *testing.T) {
+	for _, verbField := range []string{`"verbs":["ALL"],`, `"verbs":[],`, `"verbs":null,`, ``} {
+		t.Run(verbField, func(t *testing.T) {
+			var rule Rule
+			require.NoError(t, json.Unmarshal([]byte(`{`+verbField+`"type":"io.cozy.files","values":["file-id"]}`), &rule))
+			for _, parentType := range []string{TypeWebapp, TypeShareInteract} {
+				parent := &Permission{
+					Type: parentType,
+					Permissions: Set{Rule{
+						Type: consts.Files, Verbs: Verbs(GET), Values: []string{"file-id"},
+					}},
+				}
+				assert.ErrorIs(t, CheckSetPermissions(Set{rule}, parent), ErrNotSubset, parentType)
+				parent.Permissions[0].Verbs = ALL
+				assert.NoError(t, CheckSetPermissions(Set{rule}, parent), parentType)
+			}
+		})
+	}
+}
+
 func TestGetForShareInteractRepairsDuplicateDocs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
