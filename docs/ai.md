@@ -558,7 +558,8 @@ every answer.
 
 The answer starts at the same time as the router and is held back until the
 router has decided, which is usually before its first token. The router has
-10 seconds, since the answer waits for it. For a search, the answer is
+45 seconds, since the answer waits for it: a reasoning LLM thinks before it
+decides. For a search, the answer is
 released. For an action, the answer is cancelled, which stops it on openRAG
 with `stream: true` (the default; without streaming, openRAG finishes it for
 nobody), and the params of the action are filled:
@@ -569,7 +570,7 @@ flowchart TD
     HAS -- No --> ANS[Answer: openRAG with the documents,<br>or the LLM alone without them]
     ANS --> SAVE
     HAS -- Yes --> PAR[Start the answer and the router together:<br>the answer is held back until the router decides]
-    PAR --> ROUTE{Router, 10 s at most}
+    PAR --> ROUTE{Router, 45 s at most}
     ROUTE -- search, error, timeout,<br>unknown intent --> REL[Release the answer]
     REL --> SAVE
     REL -- error --> ERR[error event]
@@ -658,7 +659,7 @@ The stack sets no limit of its own on what it sends nor on what it gets:
 - **The size of an output** is bounded by the output budget openRAG
   configures for its LLM.
 - **The time** is bounded by the HTTP client of the stack (5 minutes to get
-  the headers of a response), and for the router by 10 seconds.
+  the headers of a response), and for the router by 45 seconds.
 
 The prompts are text templates in `model/rag/prompts`.
 

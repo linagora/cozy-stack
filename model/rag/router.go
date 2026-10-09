@@ -36,8 +36,10 @@ const factsMissing = "facts_missing"
 var errFactsMissing = errors.New("the conversation does not give the facts the action needs")
 
 // routerTimeout bounds the decision of the router, which holds back the
-// answer. A variable so that tests can shorten it.
-var routerTimeout = 10 * time.Second
+// answer. A reasoning LLM, as qwen3.8, thinks before it decides: from 1 to
+// 16 seconds measured, and more when its gateway is slow. A variable so that
+// tests can shorten it.
+var routerTimeout = 45 * time.Second
 
 // actionNameRegexp is the rule of the name of a JSON schema in the OpenAI
 // API: the name of an action names the schema of its params.
