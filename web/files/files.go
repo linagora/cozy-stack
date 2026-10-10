@@ -946,8 +946,9 @@ func GetChildrenHandler(c echo.Context) error {
 }
 
 type ApiDiskSize struct {
-	DocID string `json:"id,omitempty"`
-	Size  int64  `json:"size,string"`
+	DocID      string `json:"id,omitempty"`
+	Size       int64  `json:"size,string"`
+	FilesCount int64  `json:"files_count"`
 }
 
 func (d *ApiDiskSize) ID() string                             { return d.DocID }
@@ -977,12 +978,12 @@ func GetDirSize(c echo.Context) error {
 		return err
 	}
 
-	size, err := fs.DirSize(dir)
+	size, count, err := fs.DirSize(dir)
 	if err != nil {
 		return WrapVfsError(err)
 	}
 
-	result := ApiDiskSize{DocID: fileID, Size: size}
+	result := ApiDiskSize{DocID: fileID, Size: size, FilesCount: count}
 	return jsonapi.Data(c, http.StatusOK, &result, nil)
 }
 

@@ -14,7 +14,7 @@ import (
 
 // IndexViewsVersion is the version of current definition of views & indexes.
 // This number should be incremented when this file changes.
-const IndexViewsVersion int = 39
+const IndexViewsVersion int = 40
 
 // Indexes is the index list required by an instance to run properly.
 var Indexes = []*mango.Index{
@@ -90,6 +90,22 @@ function(doc) {
 }
 `,
 	Reduce: "_sum",
+}
+
+// DirFilesStatsView is the view used for computing the size and the number of
+// files of a directory. It has the same map as DiskUsageView, but a _stats
+// reduce, so that DiskUsageView, used for the quota, is not rebuilt.
+var DirFilesStatsView = &View{
+	Name:    "dir-files-stats",
+	Doctype: consts.Files,
+	Map: `
+function(doc) {
+  if (doc.type === 'file') {
+    emit(doc.dir_id, +doc.size);
+  }
+}
+`,
+	Reduce: "_stats",
 }
 
 // OldVersionsDiskUsageView is the view used for computing the disk usage for
@@ -281,6 +297,7 @@ function(doc) {
 // Views is the list of all views that are created by the stack.
 var Views = []*View{
 	DiskUsageView,
+	DirFilesStatsView,
 	OldVersionsDiskUsageView,
 	DirNotSynchronizedOnView,
 	FilesReferencedByView,

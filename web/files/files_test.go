@@ -4008,6 +4008,7 @@ func TestFiles(t *testing.T) {
 			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object()
 		obj.Path("$.data.id").String().Equal(dirID)
 		obj.Path("$.data.attributes.size").String().Equal("3")
+		obj.Path("$.data.attributes.files_count").Number().Equal(1)
 
 		// The next uploads reuse the folder, even after it has been renamed
 		upload("second.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
@@ -4200,6 +4201,7 @@ func TestFiles(t *testing.T) {
 		data.ValueEqual("type", consts.DirSizes)
 		data.ValueEqual("id", subsubID)
 		data.Value("attributes").Object().ValueEqual("size", "30")
+		data.Value("attributes").Object().ValueEqual("files_count", 10)
 
 		// validate the sub dir
 		obj = e.GET("/files/"+subID+"/size").
@@ -4212,6 +4214,7 @@ func TestFiles(t *testing.T) {
 		data.ValueEqual("type", consts.DirSizes)
 		data.ValueEqual("id", subID)
 		data.Value("attributes").Object().ValueEqual("size", "60")
+		data.Value("attributes").Object().ValueEqual("files_count", 20)
 
 		// validate the parent dir
 		obj = e.GET("/files/"+parentID+"/size").
@@ -4224,6 +4227,7 @@ func TestFiles(t *testing.T) {
 		data.ValueEqual("type", consts.DirSizes)
 		data.ValueEqual("id", parentID)
 		data.Value("attributes").Object().ValueEqual("size", "90")
+		data.Value("attributes").Object().ValueEqual("files_count", 30)
 	})
 }
 

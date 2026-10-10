@@ -4699,6 +4699,7 @@ func TestSharedDriveMetadata(t *testing.T) {
 		data.Value("type").IsEqual("io.cozy.files.sizes")
 		// Size should be at least 3 bytes (from Checklist.txt)
 		data.Value("attributes").Object().Value("size").NotNull()
+		data.Value("attributes").Object().Value("files_count").Number().Gt(0)
 	})
 
 	t.Run("MoveFileWithinDrive", func(t *testing.T) {

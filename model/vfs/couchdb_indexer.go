@@ -147,7 +147,7 @@ func (c *couchdbIndexer) prepareFileDoc(doc *FileDoc) error {
 	return nil
 }
 
-func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, error) {
+func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, int64, error) {
 	start := doc.Fullpath + "/"
 	stop := doc.Fullpath + "/\ufff0"
 	if doc.DocID == consts.RootDirID {
@@ -170,7 +170,7 @@ func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, error) {
 	var children []couchdb.JSONDoc
 	err := couchdb.FindDocs(c.db, consts.Files, req, &children)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	keys := make([]interface{}, len(children)+1)
 	keys[0] = doc.DocID
@@ -178,30 +178,31 @@ func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, error) {
 		keys[i+1] = child.ID()
 	}
 
-	// Get the size for the directory and each of its sub-directory, and sum them
-	var resp couchdb.ViewResponse
-	err = couchdb.ExecView(c.db, couchdb.DiskUsageView, &couchdb.ViewRequest{
+	// Get the size and number of files for the directory and each of its
+	// sub-directory, and sum them
+	var resp struct {
+		Rows []struct {
+			Value struct {
+				Sum   float64 `json:"sum"`
+				Count float64 `json:"count"`
+			} `json:"value"`
+		} `json:"rows"`
+	}
+	err = couchdb.ExecView(c.db, couchdb.DirFilesStatsView, &couchdb.ViewRequest{
 		Keys:   keys,
 		Group:  true,
 		Reduce: true,
 	}, &resp)
 	if err != nil {
-		return 0, err
-	}
-	if len(resp.Rows) == 0 {
-		return 0, nil
+		return 0, 0, err
 	}
 
-	// Reduce of _sum should give us a number value
-	var size int64
+	var size, count int64
 	for _, row := range resp.Rows {
-		value, ok := row.Value.(float64)
-		if !ok {
-			return 0, ErrWrongCouchdbState
-		}
-		size += int64(value)
+		size += int64(row.Value.Sum)
+		count += int64(row.Value.Count)
 	}
-	return size, nil
+	return size, count, nil
 }
 
 func (c *couchdbIndexer) CreateFileDoc(doc *FileDoc) error {
