@@ -102,7 +102,12 @@ func CreateSharedDrive(c echo.Context) error {
 	if rootID == "" {
 		rootID = attrs.FolderID
 	}
-	newSharing, err := sharing.CreateDrive(inst, rootID, attrs.Description, "")
+	return createDriveFromContacts(c, inst, obj, rootID, attrs.Description)
+}
+
+// createDriveFromContacts resolves recipients on the owner's instance and checks the app's permissions.
+func createDriveFromContacts(c echo.Context, inst *instance.Instance, obj *jsonapi.ObjectMarshalling, rootID, description string) error {
+	newSharing, err := sharing.CreateDrive(inst, rootID, description, "")
 	if err != nil {
 		return wrapDriveRootErrors(err)
 	}
@@ -148,6 +153,113 @@ func CreateSharedDrive(c echo.Context) error {
 		SharedDocs:  nil,
 	}
 	return jsonapi.Data(c, http.StatusCreated, as, nil)
+}
+
+// delegatedDriveRequest is what a member's instance sends to the owner to create a nested drive.
+type delegatedDriveRequest struct {
+	Description string           `json:"description"`
+	Members     []sharing.Member `json:"members"`
+}
+
+// prepareNestedDriveRecipients resolves contacts where they live, before proxy switches to the owner.
+func prepareNestedDriveRecipients(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		inst := middlewares.GetInstance(c)
+		parent, err := sharing.FindSharing(inst, c.Param("id"))
+		if err != nil {
+			return wrapErrors(err)
+		}
+		if !parent.Owner {
+			if err := prepareDelegatedDriveRequest(c, inst, parent); err != nil {
+				return err
+			}
+		}
+		return next(c)
+	}
+}
+
+// prepareDelegatedDriveRequest replaces local contact IDs with members the owner can use.
+func prepareDelegatedDriveRequest(c echo.Context, inst *instance.Instance, parent *sharing.Sharing) error {
+	if !parent.Drive {
+		return jsonapi.NotFound(errors.New("not a drive"))
+	}
+	if !parent.Active || len(parent.Credentials) == 0 {
+		return jsonapi.Forbidden(middlewares.ErrForbidden)
+	}
+	if err := middlewares.AllowWholeType(c, permission.POST, consts.Files); err != nil {
+		return err
+	}
+
+	r := c.Request()
+	defer r.Body.Close()
+	var req delegatedDriveRequest
+	obj, err := jsonapi.Bind(r.Body, &req)
+	if err != nil {
+		return jsonapi.BadJSON()
+	}
+	rwGroupIDs, rwContactIDs := extractRecipientIDs(obj, "recipients")
+	roGroupIDs, roContactIDs := extractRecipientIDs(obj, "read_only_recipients")
+	if req.Members, err = sharing.MembersFromContacts(inst, rwGroupIDs, rwContactIDs, false); err != nil {
+		return wrapErrors(err)
+	}
+	roMembers, err := sharing.MembersFromContacts(inst, roGroupIDs, roContactIDs, true)
+	if err != nil {
+		return wrapErrors(err)
+	}
+	req.Members = append(req.Members, roMembers...)
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return wrapErrors(err)
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	r.TransferEncoding = nil
+	r.Header.Del(echo.HeaderContentLength)
+	r.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	return nil
+}
+
+// CreateNestedSharedDriveHandler runs on the owner for both app tokens and forwarded member tokens.
+func CreateNestedSharedDriveHandler(c echo.Context, owner *instance.Instance, parent *sharing.Sharing) error {
+	if GetSharedDriveMember(c) != nil {
+		return createDriveFromMembers(c, owner, parent)
+	}
+	var attrs struct {
+		Description string `json:"description"`
+	}
+	obj, err := jsonapi.Bind(c.Request().Body, &attrs)
+	if err != nil {
+		return jsonapi.BadJSON()
+	}
+	return createDriveFromContacts(c, owner, obj, c.Param("file-id"), attrs.Description)
+}
+
+// createDriveFromMembers accepts resolved recipients after proxy has authorized the member.
+func createDriveFromMembers(c echo.Context, owner *instance.Instance, parent *sharing.Sharing) error {
+	var req delegatedDriveRequest
+	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
+		return jsonapi.BadJSON()
+	}
+	for _, m := range req.Members {
+		if m.Email == "" && m.Instance == "" {
+			return jsonapi.BadRequest(errors.New("a recipient has no email address or instance"))
+		}
+	}
+	newSharing, err := sharing.CreateDrive(owner, c.Param("file-id"), req.Description, parent.AppSlug)
+	if err != nil {
+		return wrapDriveRootErrors(err)
+	}
+	newSharing.OrgDrive = owner.IsOrganizationInstance()
+	if _, err = newSharing.Create(owner); err != nil {
+		return wrapErrors(err)
+	}
+	if len(req.Members) > 0 {
+		if err = newSharing.AddMembers(owner, req.Members); err != nil {
+			return wrapErrors(err)
+		}
+	}
+	return jsonapi.Data(c, http.StatusCreated, &sharing.APISharing{Sharing: newSharing}, nil)
 }
 
 func wrapDriveNameErrors(err error) error {
@@ -1464,6 +1576,7 @@ func drivesRoutes(router *echo.Group) {
 	drive.PUT("/:file-id", proxy(OverwriteFileContentHandler, true))
 	drive.POST("/upload/metadata", proxy(UploadMetadataHandler, true))
 	drive.POST("/:file-id/copy", proxy(CopyFile, true))
+	drive.POST("/:file-id/drives", proxy(CreateNestedSharedDriveHandler, true), prepareNestedDriveRecipients)
 
 	drive.GET("/:file-id/thumbnails/:secret/:format", proxy(ThumbnailHandler, true))
 
@@ -1567,7 +1680,7 @@ func proxy(fn func(c echo.Context, inst *instance.Instance, s *sharing.Sharing) 
 			if err := guardSharedDriveRouteForMember(c, owner, ownerSharing); err != nil {
 				return err
 			}
-			return fn(c, owner, s)
+			return fn(c, owner, ownerSharing)
 		}
 
 		director := func(req *http.Request) {
@@ -1576,7 +1689,7 @@ func proxy(fn func(c echo.Context, inst *instance.Instance, s *sharing.Sharing) 
 			req.URL.RawQuery = c.Request().URL.RawQuery
 			req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
 			req.Header.Del(echo.HeaderCookie)
-			req.Header.Del("Host")
+			req.Host = u.Host
 		}
 		proxy := &httputil.ReverseProxy{Director: director}
 		logger := inst.Logger().WithNamespace("drive-proxy").Writer()
