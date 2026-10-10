@@ -209,7 +209,7 @@ func CopyOrgDirectoryFromOrgInstance(ctx context.Context, target *instance.Insta
 	if organizationID == "" || target == nil {
 		return nil
 	}
-	orgInst, err := findOrganizationInstance(ctx, organizationID)
+	orgInst, err := FindOrganizationInstance(ctx, organizationID)
 	if err != nil {
 		return err
 	}
@@ -395,7 +395,7 @@ func UpsertManagedContact(inst *instance.Instance, input ContactPatch) (*contact
 
 func findManagedContact(inst *instance.Instance, input ContactPatch) (*contact.Contact, error) {
 	if input.Email != "" {
-		c, err := findManagedContactByEmail(inst, input.Email)
+		c, err := FindManagedContactByEmail(inst, input.Email)
 		if err == nil || !errors.Is(err, contact.ErrNotFound) {
 			return c, err
 		}

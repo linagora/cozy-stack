@@ -12,32 +12,32 @@ type RabbitMQService struct {
 }
 
 func NewService(cfg config.RabbitMQ) (*RabbitMQService, error) {
-	managers := map[string]*RabbitMQManager{}
+	svc := &RabbitMQService{Managers: map[string]*RabbitMQManager{}}
 	for context, node := range cfg.Nodes {
 		if !node.Enabled {
 			log.Infof("No RabbitMQ manager for context %s", context)
 			continue
 		}
 
-		manager, err := buildManager(node, cfg.Exchanges)
+		manager, err := buildManager(node, cfg.Exchanges, svc)
 		if err != nil {
 			log.Errorf("Error while building RabbitMQ manager: %v", err)
 			return nil, err
 		}
 
-		managers[context] = manager
+		svc.Managers[context] = manager
 	}
 
-	return &RabbitMQService{Managers: managers}, nil
+	return svc, nil
 }
 
-func buildManager(node config.RabbitMQNode, exchangesCfg []config.RabbitExchange) (*RabbitMQManager, error) {
+func buildManager(node config.RabbitMQNode, exchangesCfg []config.RabbitExchange, publisher Publisher) (*RabbitMQManager, error) {
 	connection, err := BuildConnection(node)
 	if err != nil {
 		return nil, err
 	}
 
-	exchanges := BuildExchangeSpecs(exchangesCfg)
+	exchanges := BuildExchangeSpecs(exchangesCfg, publisher)
 
 	return NewRabbitMQManager(connection, exchanges), nil
 }

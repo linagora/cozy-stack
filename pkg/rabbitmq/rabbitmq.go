@@ -235,7 +235,23 @@ func BuildConnection(node config.RabbitMQNode) (*RabbitMQConnection, error) {
 	return connection, nil
 }
 
-func BuildExchangeSpecs(exchangesCfg []config.RabbitExchange) []ExchangeSpec {
+// Publisher publishes a message on RabbitMQ.
+type Publisher interface {
+	Publish(ctx context.Context, req PublishRequest) error
+}
+
+// HandlerFactory builds the handler of a queue with the publisher of the stack.
+type HandlerFactory func(Publisher) Handler
+
+var registeredHandlers = map[string]HandlerFactory{}
+
+// RegisterHandler sets the handler of a queue. It is called from init by the
+// packages that this one cannot import without an import cycle.
+func RegisterHandler(queue string, factory HandlerFactory) {
+	registeredHandlers[queue] = factory
+}
+
+func BuildExchangeSpecs(exchangesCfg []config.RabbitExchange, publisher Publisher) []ExchangeSpec {
 	var exchanges []ExchangeSpec
 
 	for i := range exchangesCfg {
@@ -277,6 +293,10 @@ func BuildExchangeSpecs(exchangesCfg []config.RabbitExchange) []ExchangeSpec {
 				handler = NewAppInstallHandler()
 			case QueueBannerCommands:
 				handler = NewBannerCommandHandler()
+			default:
+				if factory, ok := registeredHandlers[configQueue.Name]; ok {
+					handler = factory(publisher)
+				}
 			}
 
 			if handler == nil {

@@ -7,6 +7,10 @@ const (
 	ExchangeMigration = "migration"
 	// ExchangePlatform carries the banner commands.
 	ExchangePlatform = "platform"
+	// ExchangeSpace carries the TwakeSpace space events.
+	ExchangeSpace = "space"
+	// ExchangeActivity carries the CloudEvents read by TwakeSpace.
+	ExchangeActivity = "activity"
 )
 
 const (
@@ -20,6 +24,7 @@ const (
 	QueueB2BGroupLifecycle         = "stack.b2b.group.lifecycle"
 	QueueAppCommands               = "stack.app.commands.queue"
 	QueueBannerCommands            = "stack.banner.commands"
+	QueueSpaceLifecycle            = "stack.space.lifecycle"
 )
 
 const (
@@ -35,6 +40,9 @@ const (
 	RoutingKeyNextcloudMigrationCanceled  = "nextcloud.migration.canceled"
 	RoutingKeyBannerMaterialize           = "banner.materialize"
 	RoutingKeyBannerClear                 = "banner.clear"
+	RoutingKeySpaceCreated                = "twake.space.created"
+	RoutingKeyDriveSpaceProvisioned       = "com.twake.drive.space.provisioned.v1"
+	RoutingKeyDriveFileCreated            = "com.twake.drive.file.created.v1"
 )
 
 // UserDeletionRequestedMessage is published when a user asks Twake to delete the account linked to the current cozy instance.

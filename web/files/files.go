@@ -78,12 +78,24 @@ func SharedDrivesCreationHandler(c echo.Context) error {
 // parameter of the request, it will either upload a new file or
 // create a new directory.
 func Create(c echo.Context, sharedDrive *sharing.Sharing) error {
+	_, err := CreateWithFile(c, sharedDrive)
+	return err
+}
+
+// CreateWithFile is Create, also returning the created file, or nil when it
+// created a folder.
+func CreateWithFile(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) {
 	instance := middlewares.GetInstance(c)
 	var doc jsonapi.Object
+	var created *vfs.FileDoc
 	var err error
 	switch c.QueryParam("Type") {
 	case consts.FileType:
-		doc, err = createFileHandler(c, instance.VFS(), sharedDrive)
+		var f *file
+		f, err = createFileHandler(c, instance.VFS(), sharedDrive)
+		if f != nil {
+			doc, created = f, f.doc
+		}
 	case consts.DirType:
 		doc, err = createDirHandler(c, instance.VFS(), sharedDrive)
 	default:
@@ -91,10 +103,10 @@ func Create(c echo.Context, sharedDrive *sharing.Sharing) error {
 	}
 
 	if err != nil {
-		return WrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
 
-	return jsonapi.Data(c, http.StatusCreated, doc, nil)
+	return created, jsonapi.Data(c, http.StatusCreated, doc, nil)
 }
 
 func CreationHandler(c echo.Context) error {

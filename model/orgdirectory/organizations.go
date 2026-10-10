@@ -59,7 +59,9 @@ func ResolveOrganizationInstances(organizationID, organizationDomain string) (Or
 	}, nil
 }
 
-func findOrganizationInstance(ctx context.Context, organizationID string) (*instance.Instance, error) {
+// FindOrganizationInstance returns the organization instance of the
+// organization, or nil when it has none.
+func FindOrganizationInstance(ctx context.Context, organizationID string) (*instance.Instance, error) {
 	scope, err := ResolveOrganizationInstances(organizationID, "")
 	if err != nil {
 		return nil, fmt.Errorf("org-directory: %w", err)

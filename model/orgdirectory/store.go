@@ -14,7 +14,13 @@ import (
 
 const managedDocsPageSize = 1000
 
-func findManagedContactByEmail(db prefixer.Prefixer, email string) (*contact.Contact, error) {
+// ErrMultipleManagedContacts is returned when several organization-directory
+// contacts match.
+var ErrMultipleManagedContacts = errors.New("multiple managed contacts found")
+
+// FindManagedContactByEmail returns the organization-directory contact with
+// this email, or contact.ErrNotFound.
+func FindManagedContactByEmail(db prefixer.Prefixer, email string) (*contact.Contact, error) {
 	matches, err := contact.FindAllByEmail(db, email)
 	if errors.Is(err, contact.ErrNotFound) {
 		return nil, contact.ErrNotFound
@@ -61,7 +67,7 @@ func singleManagedContact(matches []*contact.Contact, label string) (*contact.Co
 		return nil, contact.ErrNotFound
 	}
 	if len(managed) > 1 {
-		return nil, fmt.Errorf("multiple managed contacts found for %s", label)
+		return nil, fmt.Errorf("%w for %s", ErrMultipleManagedContacts, label)
 	}
 	return managed[0], nil
 }

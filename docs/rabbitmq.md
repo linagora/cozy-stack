@@ -166,6 +166,22 @@ rabbitmq:
           bindings:
             - banner.materialize
             - banner.clear
+    - name: space
+      kind: topic
+      durable: true
+      declare_exchange: false
+      queues:
+        - name: stack.space.lifecycle
+          declare: true
+          declare_dlx: true
+          declare_dlq: true
+          dlx_name: stack.space.dlx
+          dlq_name: stack.dead.letter.space.lifecycle
+          dl_routing_key: twake.space.dead
+          prefetch: 8
+          delivery_limit: 5
+          bindings:
+            - twake.space.created
 ```
 
 ### Dead Letter Exchange (DLX) and Dead Letter Queue (DLQ)
@@ -272,6 +288,57 @@ for declaring its queue, binding it to this exchange, and processing the
 messages; if no queue is bound when the Stack publishes, the user receives
 `503` and the tracking document is marked `failed`.
 
+#### `activity` exchange
+
+Routing key: `com.twake.drive.space.provisioned.v1`. Published when the drive
+of a TwakeSpace space is ready, and again with the same drive id on each
+redelivery of its `twake.space.created`. The payload is a CloudEvent:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "0199c1a2-7b3d-7e9a-8f61-2d5b9c0e4a17",
+  "source": "twake://drive",
+  "type": "com.twake.drive.space.provisioned.v1",
+  "time": "2026-10-05T09:15:03Z",
+  "twakeorg": "evilcorp123",
+  "data": {
+    "space_id": "3b9e2c71-5d4a-4f0e-9c8b-1a2d6e7f8091",
+    "resource": { "kind": "drive", "id": "a1f0c3e2d4b5" }
+  }
+}
+```
+
+`twakeorg` is the space's `organizationId`, and `resource.id` is the id of
+the drive sharing, the same on the organization instance and on every
+member's instance.
+
+Routing key: `com.twake.drive.file.created.v1`. Published when a file is
+uploaded to a space drive, see [Space drives](#space-drives). It names
+the drive, not the space. `twakeactor` is the email of the member who
+uploaded the file, and is left out when the organization instance itself
+uploaded it:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "0199c1a3-1c2d-7f3e-9a4b-5c6d7e8f9a0b",
+  "source": "twake://drive",
+  "type": "com.twake.drive.file.created.v1",
+  "time": "2026-10-05T09:20:41Z",
+  "twakeorg": "evilcorp123",
+  "twakeactor": "alice@evilcorp.com",
+  "data": {
+    "object": {
+      "type": "file",
+      "id": "a1f0c3e2d4b5c6d7e8f9",
+      "title": "plan.md",
+      "container": { "kind": "drive", "id": "a1f0c3e2d4b5" }
+    }
+  }
+}
+```
+
 ### Handlers
 
 Handlers implement a simple interface:
@@ -297,6 +364,7 @@ Queue names are mapped to handlers in the stack. For example:
 - `user.phone.updated` → updates the phone number stored in user settings.
 - `domain.user.deleted` on the `b2b` exchange → removes externally managed organization contacts.
 - `banner.materialize` and `banner.clear` on the `platform` exchange → materializes or clears a platform banner, see [Banners](banners.md).
+- `twake.space.created` on the `space` exchange → creates the space's shared drive on the organization instance, see [Space drives](#space-drives).
 
 Message schemas are JSON and validated in the handler. Example payload for `user.password.updated`:
 
@@ -392,6 +460,68 @@ Example payload for `user.phone.updated`:
 }
 ```
 
+### Space drives
+
+On `twake.space.created`, the stack gives the space a shared drive on the
+organization instance, the instance whose slug is the `organizationId`:
+
+- A folder at the root, named after the space, or "Name (2)" when the name is
+  taken. It is referenced by `io.cozy.spaces/<space id>`.
+- A drive sharing on the folder. Viewers get read only access, editors and
+  admins get read and write. Each member is looked up by email among the
+  organization directory contacts of the organization instance. A member who
+  cannot be added (no contact or several contacts there, an unknown role, a
+  full drive) is skipped with a warning, and the others still get the drive.
+  Nothing adds a skipped member later, until the space is sent again.
+- An `io.cozy.spaces` document, with the space id as its id, that keeps the
+  folder id, the sharing id and the newest event timestamp.
+
+Then the stack publishes `com.twake.drive.space.provisioned.v1` on `activity`.
+
+```mermaid
+sequenceDiagram
+  participant R as RabbitMQ
+  participant S as Stack
+  participant O as Organization instance
+  R->>S: space exchange, twake.space.created
+  S->>O: folder, drive sharing, io.cozy.spaces document
+  S->>O: share with the members
+  S->>R: activity exchange, com.twake.drive.space.provisioned.v1
+```
+
+On a redelivery, the stack finds the drive from the `io.cozy.spaces`
+document, or from the folder reference when a crash happened before the
+document was written. It adds the members who are not on the drive yet,
+invites again those whose invitation was not sent, and publishes the same
+drive id. Members already on the drive keep their access, and members who
+left it stay out. If the drive was revoked, the stack puts a new drive on the
+same folder, or on a new folder when that one is in the trash.
+
+A file created in a space drive through the shared drive routes
+(`POST /sharings/drives/:id/`) goes through the notification center, as a
+`drive-file-created` notification of the organization instance. That
+category has no mail. The notification center publishes an event for a
+category that has an event mapper, in addition to the usual channels.
+
+```mermaid
+sequenceDiagram
+  participant M as Member
+  participant O as Organization instance
+  participant N as Notification center
+  participant J as broker job
+  participant R as RabbitMQ
+  M->>O: POST /sharings/drives/:id/ (file)
+  O->>O: io.cozy.spaces lookup by sharing id
+  O->>N: drive-file-created (organization, sharing id, file, member email)
+  N->>N: event mapper of model/space
+  N->>J: publish request
+  J->>R: activity exchange, com.twake.drive.file.created.v1
+```
+
+A file created in another drive has no space record, so it pushes no
+notification and publishes nothing. Notes, copies and moves into a space
+drive publish nothing either.
+
 ### Lifecycle
 
 On startup, if `rabbitmq.enabled` is true:
@@ -448,6 +578,22 @@ case "example.queue":
     handler = NewExampleHandler()
 }
 ```
+
+A handler built on `model/sharing` cannot live in `pkg/rabbitmq`:
+`model/sharing` already depends on `pkg/rabbitmq` (its tests through
+`model/stack`), so importing it back would be a cycle. Its package registers
+the handler from `init` instead, and the factory gets the stack's publisher:
+
+```go
+func init() {
+    rabbitmq.RegisterHandler("example.queue", func(p rabbitmq.Publisher) rabbitmq.Handler {
+        return NewExampleHandler(p)
+    })
+}
+```
+
+The server must import that package, as `web/routing.go` does for
+`model/space`.
 
 3) Configure the exchange and queue in `cozy.yaml`
 

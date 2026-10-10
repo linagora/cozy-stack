@@ -31,6 +31,7 @@ import (
 	// import workers
 	_ "github.com/cozy/cozy-stack/worker/antivirus"
 	_ "github.com/cozy/cozy-stack/worker/archive"
+	_ "github.com/cozy/cozy-stack/worker/broker"
 	"github.com/cozy/cozy-stack/worker/exec"
 	_ "github.com/cozy/cozy-stack/worker/log"
 	_ "github.com/cozy/cozy-stack/worker/mails"
