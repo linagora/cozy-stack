@@ -73,10 +73,18 @@ func (s *Sharing) AddGroup(inst *instance.Instance, groupID string, readOnly boo
 }
 
 // RevokeGroup revokes a group of members on the sharer Cozy. After that, the
-// sharing is disabled if there are no longer any active recipient.
+// sharing is disabled if there are no longer any active recipient. Revoking
+// an already revoked group is a no-op. It returns ErrInvalidGroupIndex if the
+// index does not refer to a group of the sharing.
 func (s *Sharing) RevokeGroup(inst *instance.Instance, index int) error {
 	if !s.Owner {
 		return ErrInvalidSharing
+	}
+	if index < 0 || index >= len(s.Groups) {
+		return ErrInvalidGroupIndex
+	}
+	if s.Groups[index].Revoked {
+		return nil
 	}
 
 	var errm error
@@ -193,14 +201,15 @@ func revokeDeletedGroup(inst *instance.Instance, groupID string) error {
 
 	var errm error
 	for _, s := range sharings {
-		if !s.Owner {
-			continue
-		}
 		for idx, group := range s.Groups {
 			if group.ID != groupID || group.Revoked {
 				continue
 			}
-			if err := s.RevokeGroup(inst, idx); err != nil {
+			if s.Owner {
+				if err := s.RevokeGroup(inst, idx); err != nil {
+					errm = multierror.Append(errm, err)
+				}
+			} else if err := s.DelegateRevokeGroup(inst, idx); err != nil {
 				errm = multierror.Append(errm, err)
 			}
 		}
@@ -405,7 +414,45 @@ func (s *Sharing) SendRemoveMemberFromGroup(inst *instance.Instance, groupIndex,
 		ParseError: ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	if res != nil && res.StatusCode/100 == 4 {
+	if res != nil && ShouldRefreshToken(res.StatusCode) {
+		res, err = RefreshToken(inst, res, err, s, &s.Members[0], c, opts, nil)
+	}
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		return ErrInternalServerError
+	}
+	return nil
+}
+
+// DelegateRevokeGroup is used by a recipient to ask the sharer to revoke a
+// whole group of members of the sharing.
+func (s *Sharing) DelegateRevokeGroup(inst *instance.Instance, groupIndex int) error {
+	u, err := url.Parse(s.Members[0].Instance)
+	if err != nil {
+		return err
+	}
+	if len(s.Credentials) == 0 {
+		return ErrInvalidSharing
+	}
+	c := &s.Credentials[0]
+	if c.AccessToken == nil {
+		return ErrInvalidSharing
+	}
+	opts := &request.Options{
+		Method: http.MethodDelete,
+		Scheme: u.Scheme,
+		Domain: u.Host,
+		Path:   fmt.Sprintf("/sharings/%s/groups/%d", s.SID, groupIndex),
+		Headers: request.Headers{
+			echo.HeaderAuthorization: "Bearer " + c.AccessToken.AccessToken,
+		},
+		ParseError: ParseRequestError,
+	}
+	res, err := request.Req(opts)
+	if res != nil && ShouldRefreshToken(res.StatusCode) {
 		res, err = RefreshToken(inst, res, err, s, &s.Members[0], c, opts, nil)
 	}
 	if err != nil {
@@ -519,7 +566,7 @@ func (s *Sharing) DelegateAddInvitation(inst *instance.Instance, memberIndex int
 		ParseError: ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	if res != nil && res.StatusCode/100 == 4 {
+	if res != nil && ShouldRefreshToken(res.StatusCode) {
 		res, err = RefreshToken(inst, res, err, s, &s.Members[0], c, opts, body)
 	}
 	if err != nil {

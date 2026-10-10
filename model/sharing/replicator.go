@@ -490,7 +490,7 @@ func (s *Sharing) callRevsDiff(inst *instance.Instance, m *Member, creds *Creden
 	}
 	var res *http.Response
 	res, err = request.Req(opts)
-	if res != nil && res.StatusCode/100 == 4 {
+	if res != nil && ShouldRefreshToken(res.StatusCode) {
 		res, err = RefreshToken(inst, res, err, s, m, creds, opts, body)
 	}
 	if err != nil {
@@ -652,7 +652,7 @@ func (s *Sharing) sendBulkDocs(inst *instance.Instance, m *Member, creds *Creden
 		Client:     safehttp.ClientWithKeepAlive,
 	}
 	res, err := request.Req(opts)
-	if res != nil && res.StatusCode/100 == 4 {
+	if res != nil && ShouldRefreshToken(res.StatusCode) {
 		res, err = RefreshToken(inst, res, err, s, m, creds, opts, body)
 	}
 	if err != nil {

@@ -1529,7 +1529,7 @@ func (s *Sharing) ReplicateDescriptionChange(inst *instance.Instance) {
 		}
 
 		res, err := request.Req(opts)
-		if res != nil && res.StatusCode/100 == 4 {
+		if res != nil && ShouldRefreshToken(res.StatusCode) {
 			res, err = RefreshToken(inst, res, err, s, &s.Members[i], c, opts, body)
 		}
 		if err != nil {
@@ -1683,7 +1683,7 @@ func (s *Sharing) sendPublicKeyToOwner(inst *instance.Instance, publicKey string
 		ParseError: ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	if res != nil && res.StatusCode/100 == 4 {
+	if res != nil && ShouldRefreshToken(res.StatusCode) {
 		res, err = RefreshToken(inst, res, err, s, &s.Members[0], &s.Credentials[0], opts, body)
 	}
 	if err != nil {

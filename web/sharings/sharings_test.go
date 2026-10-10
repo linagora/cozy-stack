@@ -1000,6 +1000,27 @@ func TestSharings(t *testing.T) {
 		gaby.HasValue("name", "Gaby")
 	})
 
+	t.Run("RevokeGroup_InvalidIndex", func(t *testing.T) {
+		sharedDocs := []string{"forgroupinvalid"}
+		s := createSharing(t, aliceInstance, sharedDocs, tsB.URL)
+		eA := httpexpect.Default(t, tsA.URL)
+
+		// The sharing has no group, any index is invalid (422 from jsonapi.InvalidParameter)
+		eA.DELETE("/sharings/"+s.ID()+"/groups/0").
+			WithHeader("Authorization", "Bearer "+aliceAppToken).
+			Expect().Status(422)
+
+		// Negative index is also invalid
+		eA.DELETE("/sharings/"+s.ID()+"/groups/-1").
+			WithHeader("Authorization", "Bearer "+aliceAppToken).
+			Expect().Status(422)
+
+		// Non-numeric index (422 from jsonapi.InvalidParameter)
+		eA.DELETE("/sharings/"+s.ID()+"/groups/invalid").
+			WithHeader("Authorization", "Bearer "+aliceAppToken).
+			Expect().Status(422)
+	})
+
 	t.Run("RevocationFromRecipient", func(t *testing.T) {
 		sharedDocs := []string{"mygreatid5", "mygreatid6"}
 		sharedRefs := []*sharing.SharedRef{}

@@ -15,6 +15,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestShouldRefreshToken(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   bool
+	}{
+		{http.StatusBadRequest, true},
+		{http.StatusUnauthorized, true},
+		{http.StatusGone, true},
+		{http.StatusForbidden, false},
+		{http.StatusNotFound, false},
+		{http.StatusConflict, false},
+		{http.StatusUnprocessableEntity, false},
+		{http.StatusInternalServerError, false},
+	} {
+		require.Equal(t, tc.want, ShouldRefreshToken(tc.status), "unexpected result for status %d", tc.status)
+	}
+}
+
 func TestCreateSharingRequestPropagatesAccessMode(t *testing.T) {
 	config.UseTestFile(t)
 	inst := &instance.Instance{Domain: "alice.example.net"}

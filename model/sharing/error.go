@@ -60,6 +60,9 @@ var (
 	// ErrGroupCannotBeAddedTwice is used when trying to add a group to a
 	// sharing, but the group is already active for this sharing.
 	ErrGroupCannotBeAddedTwice = errors.New("The group cannot be added twice to the same sharing")
+	// ErrInvalidGroupIndex is used when trying to revoke a group with an
+	// index that does not match a group of the sharing.
+	ErrInvalidGroupIndex = errors.New("The group index is invalid for this sharing")
 	// ErrMemberAlreadyAdded is used when trying to add a group with a member
 	// already in the sharing as an individual with different rights (read-only
 	// vs read-write).

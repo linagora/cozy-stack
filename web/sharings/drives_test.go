@@ -3041,6 +3041,207 @@ func TestSharedDriveDelegatedRecipientRemoval(t *testing.T) {
 	})
 }
 
+// TestSharedDriveDeletedRecipientAddedGroup tests that when a group added by a
+// recipient of a shared drive is deleted on that recipient's instance, the
+// group is revoked on the owner and the change is propagated.
+func TestSharedDriveDeletedRecipientAddedGroup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+
+	addRecipientGroup := func(t *testing.T, e *httpexpect.Expect, token, sharingID string, contactInst *instance.Instance, group *contact.Group, contactName, contactEmail string) {
+		t.Helper()
+		createContactInGroupWithCozy(t, contactInst, group, contactName, contactEmail, "")
+		e.POST("/sharings/"+sharingID+"/recipients").
+			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(mustJSON(t, map[string]interface{}{
+				"data": map[string]interface{}{
+					"type": consts.Sharings,
+					"id":   sharingID,
+					"relationships": map[string]interface{}{
+						"recipients": map[string]interface{}{
+							"data": []map[string]interface{}{
+								{"id": group.ID(), "type": consts.Groups},
+							},
+						},
+					},
+				},
+			})).
+			Expect().Status(http.StatusOK)
+	}
+
+	findGroupIndex := func(inst *instance.Instance, sharingID, groupID string) int {
+		s, err := sharing.FindSharing(inst, sharingID)
+		require.NoError(t, err)
+		for i, g := range s.Groups {
+			if g.ID == groupID {
+				return i
+			}
+		}
+		return -1
+	}
+
+	setupDrive := func(t *testing.T, description string) string {
+		t.Helper()
+		// Both Betty and Dave must be read-write: the tests add groups on
+		// their behalf, which a read-only recipient cannot do.
+		recipients := []RecipientInfo{
+			{Name: "Betty", Email: "betty@example.net", ReadOnly: false},
+			{Name: "Dave", Email: "dave@example.net", ReadOnly: false},
+		}
+		sharingID, _, _ := createSharedDrive(
+			t,
+			DriveCreationMethodLegacy,
+			env.acme,
+			env.acmeToken,
+			env.tsA.URL,
+			description,
+			"Drive for deleted recipient group tests",
+			recipients,
+		)
+		acceptSharedDriveForBetty(t, env.acme, env.betty, env.tsA.URL, env.tsB.URL, sharingID)
+		acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, sharingID)
+		return sharingID
+	}
+
+	t.Run("DeletedGroupAddedByRecipientIsRevokedOnOwner", func(t *testing.T) {
+		_, eBetty, _ := env.createClients(t)
+		sharingID := setupDrive(t, "Deleted Recipient Group Drive")
+
+		// Betty adds her own group to the drive
+		group := createGroupOnInstance(t, env.betty, "Betty Team")
+		addRecipientGroup(t, eBetty, env.bettyToken, sharingID, env.betty, group, "Carol", "carol@example.net")
+
+		groupIndex := findGroupIndex(env.acme, sharingID, group.ID())
+		require.NotEqual(t, -1, groupIndex, "group should be on the owner sharing")
+		ownerSharing, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		require.False(t, ownerSharing.Groups[groupIndex].Revoked)
+		require.Equal(t, 1, ownerSharing.Groups[groupIndex].AddedBy, "group should be added by Betty")
+
+		// Wait for the group to be replicated to Betty's copy of the sharing:
+		// the deletion is processed against her local copy.
+		require.Eventually(t, func() bool {
+			recipientSharing, err := sharing.FindSharing(env.betty, sharingID)
+			if err != nil {
+				return false
+			}
+			for _, g := range recipientSharing.Groups {
+				if g.ID == group.ID() && !g.Revoked {
+					return true
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond, "Betty's group should be replicated to her copy")
+
+		// Betty deletes the group on her instance: the share-group worker
+		// processes the deletion event on her instance.
+		require.NoError(t, couchdb.DeleteDoc(env.betty, group))
+		require.NoError(t, sharing.UpdateGroups(env.betty, job.ShareGroupMessage{
+			DeletedGroupID: group.ID(),
+		}))
+
+		// Owner: the group is revoked and Carol, only in that group, too.
+		ownerSharing, err = sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		assert.True(t, ownerSharing.Groups[groupIndex].Revoked)
+		carol := findSharingMemberByEmail(t, env.acme, sharingID, "carol@example.net")
+		require.Equal(t, sharing.MemberStatusRevoked, carol.Status)
+		betty := findSharingMemberByEmail(t, env.acme, sharingID, "betty@example.net")
+		require.NotEqual(t, sharing.MemberStatusRevoked, betty.Status)
+
+		// Replaying the deletion event is a no-op.
+		require.NoError(t, sharing.UpdateGroups(env.betty, job.ShareGroupMessage{
+			DeletedGroupID: group.ID(),
+		}))
+		ownerSharing, err = sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		assert.True(t, ownerSharing.Groups[groupIndex].Revoked)
+		assert.Equal(t, sharing.MemberStatusRevoked, carol.Status)
+
+		// The revocation is propagated to Betty's copy of the sharing.
+		require.Eventually(t, func() bool {
+			recipientSharing, err := sharing.FindSharing(env.betty, sharingID)
+			if err != nil {
+				return false
+			}
+			if groupIndex >= len(recipientSharing.Groups) {
+				return false
+			}
+			return recipientSharing.Groups[groupIndex].Revoked
+		}, 10*time.Second, 100*time.Millisecond, "revocation should be propagated to Betty")
+	})
+
+	t.Run("GroupAddedByAnotherRecipientCannotBeRevoked", func(t *testing.T) {
+		_, _, eDave := env.createClients(t)
+		sharingID := setupDrive(t, "Foreign Recipient Group Drive")
+
+		// Dave adds his own group to the drive
+		group := createGroupOnInstance(t, env.dave, "Dave Team")
+		addRecipientGroup(t, eDave, env.daveToken, sharingID, env.dave, group, "Erin", "erin@example.net")
+
+		groupIndex := findGroupIndex(env.acme, sharingID, group.ID())
+		require.NotEqual(t, -1, groupIndex)
+		daveIndex := findSharingMemberIndexByEmail(t, env.acme, sharingID, "dave@example.net")
+		ownerSharing, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		require.Equal(t, daveIndex, ownerSharing.Groups[groupIndex].AddedBy)
+
+		// Betty's local copy must know the group before the deletion event.
+		require.Eventually(t, func() bool {
+			recipientSharing, err := sharing.FindSharing(env.betty, sharingID)
+			if err != nil {
+				return false
+			}
+			for _, g := range recipientSharing.Groups {
+				if g.ID == group.ID() && !g.Revoked {
+					return true
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond, "Dave's group should be propagated to Betty")
+
+		// Betty cannot revoke the group added by Dave.
+		err = sharing.UpdateGroups(env.betty, job.ShareGroupMessage{
+			DeletedGroupID: group.ID(),
+		})
+		require.Error(t, err)
+
+		ownerSharing, err = sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		assert.False(t, ownerSharing.Groups[groupIndex].Revoked)
+		erin := findSharingMemberByEmail(t, env.acme, sharingID, "erin@example.net")
+		require.NotEqual(t, sharing.MemberStatusRevoked, erin.Status)
+	})
+
+	t.Run("DeletedBeforeCreationIsPropagated", func(t *testing.T) {
+		_, eBetty, _ := env.createClients(t)
+		sharingID := setupDrive(t, "Deleted Before Propagation Drive")
+
+		// Betty adds her own group to the drive and deletes it right away,
+		// before the replication has brought the group back to her copy of
+		// the sharing.
+		group := createGroupOnInstance(t, env.betty, "Betty Race Team")
+		addRecipientGroup(t, eBetty, env.bettyToken, sharingID, env.betty, group, "Fay", "fay@example.net")
+		require.NoError(t, couchdb.DeleteDoc(env.betty, group))
+		require.NoError(t, sharing.UpdateGroups(env.betty, job.ShareGroupMessage{
+			DeletedGroupID: group.ID(),
+		}))
+
+		// Owner: the group is revoked and Fay, only in that group, too.
+		groupIndex := findGroupIndex(env.acme, sharingID, group.ID())
+		require.NotEqual(t, -1, groupIndex)
+		ownerSharing, err := sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		assert.True(t, ownerSharing.Groups[groupIndex].Revoked)
+		fay := findSharingMemberByEmail(t, env.acme, sharingID, "fay@example.net")
+		require.Equal(t, sharing.MemberStatusRevoked, fay.Status)
+	})
+}
+
 func TestSharedDriveDelegatedPendingRecipientManagement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")

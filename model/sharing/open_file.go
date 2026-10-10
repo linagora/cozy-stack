@@ -423,7 +423,7 @@ func (o *FileOpener) PrepareRequestForSharedFile() (*PreparedRequest, error) {
 func (o *FileOpener) RequestSharedFile(prepared *PreparedRequest, path string) (*http.Response, error) {
 	prepared.Opts.Path = path
 	res, err := request.Req(prepared.Opts)
-	if res != nil && res.StatusCode/100 == 4 {
+	if res != nil && ShouldRefreshToken(res.StatusCode) {
 		res, err = RefreshToken(o.Inst, res, err, o.Sharing, prepared.Creator,
 			prepared.Creds, prepared.Opts, nil)
 	}
