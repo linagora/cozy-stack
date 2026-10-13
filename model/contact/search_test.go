@@ -67,7 +67,7 @@ func TestSearch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoSearch, "an instance without email calls nothing")
 }
 
-func TestFindByEmails(t *testing.T) {
+func TestFindByEmailsAndText(t *testing.T) {
 	config.UseTestFile(t)
 	db := prefixer.NewPrefixer(0, "contact-search", "contact-search")
 	require.NoError(t, couchdb.ResetDB(db, consts.Contacts))
@@ -89,11 +89,25 @@ func TestFindByEmails(t *testing.T) {
 	}
 	jean := create("Jean Dupont", "jean@acme.example")
 	marie := create("Marie", "m.dupont@acme.example", "marie@home.example")
+	create("Pierre Dupuis")
 	create("Paul", "paul@acme.example")
+	create("Axb", "axb@acme.example")
 
 	found, err := FindByEmails(db, []string{"jean@acme.example", "marie@home.example", "nobody@acme.example"})
 	require.NoError(t, err)
 	assert.Len(t, found, 2)
 	assert.Equal(t, jean.ID(), found["jean@acme.example"].ID())
 	assert.Equal(t, marie.ID(), found["marie@home.example"].ID())
+
+	docs, err := FindByText(db, "DUP", 10)
+	require.NoError(t, err)
+	var ids []string
+	for _, doc := range docs {
+		ids = append(ids, doc.ID())
+	}
+	assert.ElementsMatch(t, []string{jean.ID(), marie.ID()}, ids, "by name or email, never without an email")
+
+	docs, err = FindByText(db, "a.b", 10)
+	require.NoError(t, err)
+	assert.Empty(t, docs, "the text is not a regexp")
 }

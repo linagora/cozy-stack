@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 )
 
@@ -122,4 +125,28 @@ func FindByEmails(db prefixer.Prefixer, emails []string) (map[string]*Contact, e
 		found[email] = doc
 	}
 	return found, nil
+}
+
+// FindByText returns the contacts with an email whose name or email address
+// contains text, ignoring case. No index can serve a $regex, so it scans the
+// database.
+func FindByText(db prefixer.Prefixer, text string, limit int) ([]*Contact, error) {
+	re := mango.Map{"$regex": "(?i)" + regexp.QuoteMeta(text)}
+	selector := mango.And(
+		mango.Map{"email": mango.Map{"$elemMatch": mango.Map{"address": mango.Map{"$gt": ""}}}},
+		mango.Or(
+			mango.Map{"fullname": re},
+			mango.Map{"displayName": re},
+			mango.Map{"email": mango.Map{"$elemMatch": mango.Map{"address": re}}},
+		),
+	)
+	var docs []*Contact
+	err := couchdb.FindDocsUnoptimized(db, consts.Contacts, &couchdb.FindRequest{
+		Selector: selector,
+		Limit:    limit,
+	}, &docs)
+	if couchdb.IsNoDatabaseError(err) {
+		return nil, nil
+	}
+	return docs, err
 }

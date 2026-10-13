@@ -48,8 +48,10 @@ Content-Type: application/vnd.api+json
 This endpoint suggests the people the user can share with, for the text they
 are typing. It asks the autocomplete API of the calendar side service when the
 context sets `contacts_search` (see `cozy.example.yaml`), and looks each result
-up by email on the organization instance, then on the instance. People without
-an email, and the user, are left out.
+up by email on the organization instance, then on the instance. Without
+`contacts_search`, or when the call fails or times out, it searches the names
+and emails of the contacts of both instances instead. People without an email,
+and the user, are left out.
 
 A permission on the whole `io.cozy.contacts` doctype is required.
 
