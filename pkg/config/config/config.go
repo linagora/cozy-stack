@@ -148,6 +148,7 @@ type Config struct {
 	Authentication map[string]interface{}
 	RAGServers     map[string]RAGServer
 	CommonSettings map[string]CommonSettings
+	ContactsSearch map[string]ContactsSearch
 	Office         map[string]Office
 	Registries     map[string][]*url.URL
 	Clouderies     map[string]ClouderyConfig
@@ -314,6 +315,10 @@ type CommonSettings struct {
 	URL   string `mapstructure:"url"`
 	Token string `mapstructure:"token"`
 }
+
+// ContactsSearch contains the configuration of the autocomplete API of the
+// calendar side service for a context
+type ContactsSearch = CommonSettings
 
 // Notifications contains the configuration for the mobile push-notification
 // center, for Android and iOS
@@ -584,6 +589,13 @@ func GetRateLimiter() *limits.RateLimiter {
 // GetCommonSettings returns the CommonSettings configuration
 func GetCommonSettings() map[string]CommonSettings {
 	return config.CommonSettings
+}
+
+// GetContactsSearch returns the autocomplete API of the calendar side service
+// for the given context, and false when the context has none.
+func GetContactsSearch(contextName string) (ContactsSearch, bool) {
+	cfg, ok := config.ContactsSearch[contextName]
+	return cfg, ok && cfg.URL != ""
 }
 
 // GetOIDC returns the OIDC config for the given context (with a boolean to say
@@ -945,7 +957,12 @@ func UseViper(v *viper.Viper) error {
 		return err
 	}
 
-	commonSettings, err := makeCommonSettings(v)
+	commonSettings, err := makeCommonSettings(v, "common_settings")
+	if err != nil {
+		return err
+	}
+
+	contactsSearch, err := makeCommonSettings(v, "contacts_search")
 	if err != nil {
 		return err
 	}
@@ -1235,6 +1252,7 @@ func UseViper(v *viper.Viper) error {
 		},
 		RAGServers:     rag,
 		CommonSettings: commonSettings,
+		ContactsSearch: contactsSearch,
 		Move: Move{
 			URL: v.GetString("move.url"),
 		},
@@ -1519,14 +1537,14 @@ func makeSMS(raw map[string]interface{}) map[string]SMS {
 	return sms
 }
 
-func makeCommonSettings(v *viper.Viper) (map[string]CommonSettings, error) {
+func makeCommonSettings(v *viper.Viper, section string) (map[string]CommonSettings, error) {
 	settings := make(map[string]CommonSettings)
 
-	for k, v := range v.GetStringMap("common_settings") {
+	for k, v := range v.GetStringMap(section) {
 		ctx, ok := v.(map[string]interface{})
 		if !ok {
-			return settings, fmt.Errorf("Bad format in the common_settings section of the configuration file: "+
-				"should be a map, got %#v", v)
+			return settings, fmt.Errorf("Bad format in the %s section of the configuration file: "+
+				"should be a map, got %#v", section, v)
 		}
 		url, _ := ctx["url"].(string)
 		token, _ := ctx["token"].(string)
