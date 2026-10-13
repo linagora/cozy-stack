@@ -10,6 +10,8 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 )
 
 // ErrNoSearch is returned when the context of the instance has no
@@ -83,4 +85,41 @@ func Search(inst *instance.Instance, q string, limit int) ([]Person, error) {
 		people = append(people, p)
 	}
 	return people, nil
+}
+
+// FindByEmails returns the contacts with the given email addresses, by
+// address, in a single request. When several contacts share an address, the
+// first one wins.
+func FindByEmails(db prefixer.Prefixer, emails []string) (map[string]*Contact, error) {
+	found := make(map[string]*Contact)
+	if len(emails) == 0 {
+		return found, nil
+	}
+	keys := make([]interface{}, len(emails))
+	for i, email := range emails {
+		keys[i] = email
+	}
+	var res couchdb.ViewResponse
+	err := couchdb.ExecView(db, couchdb.ContactByEmail, &couchdb.ViewRequest{
+		Keys:        keys,
+		IncludeDocs: true,
+	}, &res)
+	if couchdb.IsNoDatabaseError(err) {
+		return found, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range res.Rows {
+		email, _ := row.Key.(string)
+		if _, ok := found[email]; ok {
+			continue
+		}
+		doc := &Contact{}
+		if err := json.Unmarshal(row.Doc, doc); err != nil {
+			return nil, err
+		}
+		found[email] = doc
+	}
+	return found, nil
 }
