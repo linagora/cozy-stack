@@ -382,6 +382,14 @@ office:
 #     url: https://sign-up.example.org/
 #     token: f95880b7fa9e8a51e103ac5383bc5956d849267e99b336f31df8bd86c2e9ec50
 
+# The autocomplete API of the calendar side service, used to suggest the
+# recipients of a sharing. The key is the context name, with no fallback on
+# default: a context without it searches its own contacts instead.
+# contacts_search:
+#   my-context:
+#     url: https://calendar-side-service.example.org:81/api/people/search
+#     token: abcdef
+
 # All the deprecated apps listed here will see their OAUTH2 Authorization
 # flow interupted and redirected to a page proposing to move to the new
 # cozy application.
