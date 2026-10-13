@@ -96,6 +96,11 @@ func TestContacts(t *testing.T) {
 			WithHeader("Authorization", "Bearer "+token).
 			Expect().Status(422)
 
+		// Without contacts_search, the contacts of the instance are searched.
+		local := suggest("DUPONT")
+		local.Length().Equal(1)
+		local.Value(0).Object().ValueEqual("id", jean.ID())
+
 		side := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`[
 				{"names": [{"displayName": "Jean Dupont"}], "emailAddresses": [{"value": "jean@example.com"}]},

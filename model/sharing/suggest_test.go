@@ -48,7 +48,9 @@ func TestSuggest(t *testing.T) {
 	create(alice, "Bob Durand", "bob@acme.example") // a member copy
 	carol := create(alice, "Carol Durand", "carol@friends.example")
 
+	status := http.StatusOK
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`[
 			{"names": [{"displayName": "Alice Durand"}], "emailAddresses": [{"value": "alice@acme.example"}]},
 			{"names": [{"displayName": "Bob Durand"}], "emailAddresses": [{"value": "bob@acme.example"}]},
@@ -83,6 +85,17 @@ func TestSuggest(t *testing.T) {
 			{bob.ID(), SuggestionMember, "Bob Durand", "bob@acme.example"},
 			{carol.ID(), SuggestionContact, "Carol Durand", "carol@friends.example"},
 			{"", "", "Dave Durand", "dave@unknown.example"},
+		}, results(suggestions))
+	})
+
+	t.Run("FallsBackToTheLocalSearch", func(t *testing.T) {
+		status = http.StatusServiceUnavailable
+		t.Cleanup(func() { status = http.StatusOK })
+		suggestions, err := Suggest(alice, "DURAN", 20)
+		require.NoError(t, err)
+		assert.Equal(t, []result{
+			{bob.ID(), SuggestionMember, "Bob Durand", "bob@acme.example"},
+			{carol.ID(), SuggestionContact, "Carol Durand", "carol@friends.example"},
 		}, results(suggestions))
 	})
 }
