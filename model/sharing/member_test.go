@@ -700,6 +700,38 @@ func TestMemberMatching(t *testing.T) {
 	assert.Nil(t, s.MemberMatching(&Member{}))
 }
 
+func TestFindOrgInstance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	orgID := "fe" + suffix
+	newInstance := func(domain, orgID string) *instance.Instance {
+		inst, err := lifecycle.Create(&lifecycle.Options{Domain: domain, OrgID: orgID})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
+		return inst
+	}
+	org := newInstance(orgID+".fe.localhost", orgID)
+	alice := newInstance("alice-"+suffix+".fe.localhost", orgID)
+	// Not next to the org instance: found by listing the organization.
+	bob := newInstance("bob-"+suffix+".other.localhost", orgID)
+	lone := newInstance("lone-"+suffix+".fe.localhost", "lone"+suffix)
+
+	for _, inst := range []*instance.Instance{org, alice, bob} {
+		found, err := findOrgInstance(inst)
+		require.NoError(t, err)
+		require.NotNil(t, found, inst.Domain)
+		assert.Equal(t, org.Domain, found.Domain)
+	}
+	found, err := findOrgInstance(lone)
+	require.NoError(t, err)
+	assert.Nil(t, found)
+}
+
 func TestFindContactByEmail(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")

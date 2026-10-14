@@ -42,3 +42,65 @@ Content-Type: application/vnd.api+json
   }
 }
 ```
+
+### GET /contacts/suggest
+
+This endpoint suggests the people the user can share with, for the text they
+are typing. It asks the autocomplete API of the calendar side service when the
+context sets `contacts_search` (see `cozy.example.yaml`), and looks each result
+up by email on the organization instance, then on the instance. Without
+`contacts_search`, or when the call fails or times out, it searches the names
+and emails of the contacts of both instances instead. People without an email,
+and the user, are left out.
+
+A permission on the whole `io.cozy.contacts` doctype is required.
+
+#### Query-String
+
+| Parameter | Description                                         |
+| --------- | --------------------------------------------------- |
+| q         | the text to search, with at least 3 characters      |
+| limit     | the maximal number of results (default 20, max 256) |
+
+#### Request
+
+```http
+GET /contacts/suggest?q=dup HTTP/1.1
+```
+
+#### Response
+
+The results keep the order of the search. `meta.kind` is `member` when the
+document was found on the organization instance, and `contact` when it was
+found on the instance. A person with no matching document comes back without
+`id` and `meta`, with their name and email: the client shares with them by
+email.
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/vnd.api+json
+```
+
+```json
+{
+  "data": [
+    {
+      "type": "io.cozy.contacts",
+      "id": "6f2a3c0e9b1d4e5f8a7b6c5d4e3f2a1b",
+      "attributes": {
+        "fullname": "Jean Dupont",
+        "email": [{ "address": "jean.dupont@org.example", "primary": true }],
+        "cozy": [{ "url": "https://jdupont.org.example", "primary": true }]
+      },
+      "meta": { "kind": "member" }
+    },
+    {
+      "type": "io.cozy.contacts",
+      "attributes": {
+        "fullname": "Paul Dupuis",
+        "email": [{ "address": "paul@friends.example", "primary": true }]
+      }
+    }
+  ]
+}
+```

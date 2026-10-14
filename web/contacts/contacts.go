@@ -1,13 +1,19 @@
-// Package contacts exposes a route for the myself document.
+// Package contacts exposes the routes for the myself document and the
+// suggestions of recipients.
 package contacts
 
 import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/sharing"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/web/middlewares"
@@ -46,7 +52,59 @@ func MyselfHandler(c echo.Context) error {
 	return jsonapi.Data(c, http.StatusOK, &apiMyself{myself}, nil)
 }
 
+// apiSuggestion has no id and no kind when no document matches the email.
+type apiSuggestion struct {
+	Type       string                 `json:"type"`
+	ID         string                 `json:"id,omitempty"`
+	Attributes map[string]interface{} `json:"attributes"`
+	Meta       map[string]string      `json:"meta,omitempty"`
+}
+
+// SuggestHandler is the handler for GET /contacts/suggest. It returns the
+// people the user can share with, for what they are typing.
+func SuggestHandler(c echo.Context) error {
+	if err := middlewares.AllowWholeType(c, permission.GET, consts.Contacts); err != nil {
+		return err
+	}
+	q := strings.TrimSpace(c.QueryParam("q"))
+	if utf8.RuneCountInString(q) < 3 {
+		return jsonapi.InvalidParameter("q", errors.New("at least 3 characters are required"))
+	}
+	limit := 20
+	if l := c.QueryParam("limit"); l != "" {
+		n, err := strconv.Atoi(l)
+		if err != nil || n < 1 || n > 256 {
+			return jsonapi.InvalidParameter("limit", errors.New("must be between 1 and 256"))
+		}
+		limit = n
+	}
+
+	suggestions, err := sharing.Suggest(middlewares.GetInstance(c), q, limit)
+	if err != nil {
+		return err
+	}
+	data := make([]apiSuggestion, len(suggestions))
+	for i, s := range suggestions {
+		data[i] = apiSuggestion{Type: consts.Contacts}
+		if s.Contact == nil {
+			data[i].Attributes = map[string]interface{}{
+				"fullname": s.Name,
+				"email":    []interface{}{map[string]interface{}{"address": s.Email, "primary": true}},
+			}
+			continue
+		}
+		data[i].ID = s.Contact.ID()
+		delete(s.Contact.M, "_id")
+		delete(s.Contact.M, "_rev")
+		data[i].Attributes = s.Contact.M
+		data[i].Meta = map[string]string{"kind": s.Kind}
+	}
+	c.Response().Header().Set(echo.HeaderContentType, jsonapi.ContentType)
+	return c.JSON(http.StatusOK, echo.Map{"data": data})
+}
+
 // Routes sets the routing for the contacts.
 func Routes(router *echo.Group) {
 	router.POST("/myself", MyselfHandler)
+	router.GET("/suggest", SuggestHandler)
 }
