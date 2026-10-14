@@ -19,6 +19,7 @@ import (
 	"github.com/cozy/cozy-stack/model/bitwarden"
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/model/permission"
@@ -319,6 +320,14 @@ func FindContactByEmail(inst *instance.Instance, email string) (*contact.Contact
 func findOrgInstance(inst *instance.Instance) (*instance.Instance, error) {
 	if inst.OrgID == "" && inst.OrgDomain == "" {
 		return nil, nil
+	}
+	// The org instance is named after the organization, next to its members
+	// (as in the CSP): try it before listing every instance of the org.
+	if _, parent, ok := strings.Cut(inst.Domain, "."); ok && inst.OrgID != "" {
+		orgInst, err := lifecycle.GetInstance(inst.OrgID + "." + parent)
+		if err == nil && orgInst.OrgID == inst.OrgID && orgInst.IsOrganizationInstance() {
+			return orgInst, nil
+		}
 	}
 	orgInst, err := orgdirectory.FindOrganizationInstance(context.Background(), inst.OrgID, inst.OrgDomain)
 	if errors.Is(err, instance.ErrNotFound) {
