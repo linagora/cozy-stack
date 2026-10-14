@@ -67,7 +67,7 @@ func singleManagedContact(matches []*contact.Contact, label string) (*contact.Co
 }
 
 func listManagedGroups(inst *instance.Instance, organizationID string) ([]*contact.Group, error) {
-	docs, err := listManagedDocs[contact.Group](inst, consts.Groups, organizationID)
+	docs, err := findAllDocs[contact.Group](inst, consts.Groups, managedDocsRequest(organizationID))
 	for _, doc := range docs {
 		doc.Type = consts.Groups
 	}
@@ -75,19 +75,20 @@ func listManagedGroups(inst *instance.Instance, organizationID string) ([]*conta
 }
 
 func listManagedContacts(inst *instance.Instance, organizationID string) ([]*contact.Contact, error) {
-	docs, err := listManagedDocs[contact.Contact](inst, consts.Contacts, organizationID)
+	docs, err := findAllDocs[contact.Contact](inst, consts.Contacts, managedDocsRequest(organizationID))
 	for _, doc := range docs {
 		doc.Type = consts.Contacts
 	}
 	return docs, err
 }
 
-func listManagedDocs[T any](inst *instance.Instance, doctype, organizationID string) ([]*T, error) {
+func findAllDocs[T any](inst *instance.Instance, doctype string, req *couchdb.FindRequest) ([]*T, error) {
 	var docs []*T
 	var bookmark string
 	for {
 		var page []*T
-		req := managedDocsRequest(organizationID, bookmark)
+		req.Limit = managedDocsPageSize
+		req.Bookmark = bookmark
 		res, err := couchdb.FindDocsUnoptimizedRaw(inst, doctype, req, &page)
 		if couchdb.IsNoDatabaseError(err) || couchdb.IsNotFoundError(err) {
 			return nil, nil
@@ -108,13 +109,11 @@ func listManagedDocs[T any](inst *instance.Instance, doctype, organizationID str
 	}
 }
 
-func managedDocsRequest(organizationID, bookmark string) *couchdb.FindRequest {
+func managedDocsRequest(organizationID string) *couchdb.FindRequest {
 	return &couchdb.FindRequest{
 		Selector: mango.And(
 			mango.Equal(DirectoryMetadataKey+".managed", true),
 			mango.Equal(DirectoryMetadataKey+".organizationId", organizationID),
 		),
-		Limit:    managedDocsPageSize,
-		Bookmark: bookmark,
 	}
 }

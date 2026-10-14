@@ -103,7 +103,13 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 			log.Warnf("contacts.common: dropping %s without payload for %s", msg.Action, msg.Path)
 			return nil
 		}
-		return upsertCommonContact(inst, msg.Path, msg.Payload)
+		if err := upsertCommonContact(inst, msg.Path, msg.Payload); err != nil {
+			return err
+		}
+		if msg.Audience.Domain != "" {
+			orgdirectory.MarkContactSeen(inst, msg.Path)
+		}
+		return nil
 	case "DELETE":
 		c, err := contact.FindByCardDAVPath(inst, msg.Path)
 		if errors.Is(err, contact.ErrNotFound) {
