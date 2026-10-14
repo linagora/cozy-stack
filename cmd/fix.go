@@ -17,6 +17,7 @@ import (
 	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 
@@ -485,12 +486,69 @@ If a settings email can't be read, nothing is written and the command fails.
 	},
 }
 
+var memberCopiesFixer = &cobra.Command{
+	Use:   "member-copies <org-id>",
+	Short: "Remove the members copied into the instances of an organization",
+	Long: `
+This fixer deletes the members the organization directory copied into each
+member instance, once the twake:contacts:common feed has filled the
+organization instance. Run it after a republication of the organization.
+It skips the instances whose context does not set common_contacts, and keeps
+personal contacts and contacts written for sharing. It is safe to run twice.
+`,
+	Example: `$ cozy-stack fix member-copies 6740b0e4e0c5c1001f2ef9d1 --dry-run`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) != 1 {
+			return cmd.Usage()
+		}
+		if !dryRunFlag && !forceFlag {
+			if err := askForConfirmation("Remove the member copies of organization " + args[0] + "?"); err != nil {
+				return err
+			}
+		}
+		c := newAdminClient()
+		q := url.Values{}
+		if dryRunFlag {
+			q.Set("dry_run", "true")
+		}
+		res, err := c.Req(&request.Options{
+			Method:  "POST",
+			Path:    "/instances/fixers/member-copies/" + url.PathEscape(args[0]),
+			Queries: q,
+		})
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		var report orgdirectory.MemberCopiesReport
+		if err := json.NewDecoder(res.Body).Decode(&report); err != nil {
+			return err
+		}
+		removed := "Removed"
+		if dryRunFlag {
+			removed = "Would remove"
+		}
+		for domain, n := range report.Removed {
+			fmt.Fprintf(os.Stdout, "%s %d from %s\n", removed, n, domain)
+		}
+		for _, e := range report.Errors {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", e)
+		}
+		if len(report.Errors) > 0 {
+			return fmt.Errorf("%d errors, see above", len(report.Errors))
+		}
+		return nil
+	},
+}
+
 func init() {
 	thumbnailsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Dry run")
 	thumbnailsFixer.Flags().BoolVar(&withMetadataFlag, "with-metadata", false, "Recalculate images metadata")
 	redisFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before fixing redis on all instances")
 	emailsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would change without writing")
 	emailsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before writing")
+	memberCopiesFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
+	memberCopiesFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
 
 	fixerCmdGroup.AddCommand(jobsFixer)
 	fixerCmdGroup.AddCommand(mimeFixerCmd)
@@ -503,6 +561,7 @@ func init() {
 	fixerCmdGroup.AddCommand(sharingsMovedFixer)
 	fixerCmdGroup.AddCommand(indexesFixer)
 	fixerCmdGroup.AddCommand(emailsFixer)
+	fixerCmdGroup.AddCommand(memberCopiesFixer)
 
 	RootCmd.AddCommand(fixerCmdGroup)
 }
