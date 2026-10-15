@@ -662,8 +662,8 @@ func (s *Sharing) CreateRequest(inst *instance.Instance) error {
 	return err
 }
 
-// Revoke remove the credentials for all members, contact them, removes the
-// triggers and set the active flag to false.
+// Revoke disables access and cleans up the owner synchronously, then lets
+// background jobs notify the recipients in batches.
 func (s *Sharing) Revoke(inst *instance.Instance) error {
 	return s.revoke(inst, revokeOptions{removeRootReference: true})
 }
@@ -676,18 +676,27 @@ type revokeOptions struct {
 }
 
 func (s *Sharing) revoke(inst *instance.Instance, opts revokeOptions) error {
-	var errm error
-
 	if !s.Owner {
 		return ErrInvalidSharing
 	}
+	// Keep the notification credentials until every batch is durably queued.
+	s.Active = false
+	if err := couchdb.UpdateDoc(inst, s); err != nil {
+		return err
+	}
 	for i := range s.Credentials {
-		if err := s.RevokeMember(inst, i+1); err != nil {
-			errm = multierror.Append(errm, err)
+		m := &s.Members[i+1]
+		if m.Status == MemberStatusReady {
+			if err := DeleteOAuthClient(inst, m, &s.Credentials[i]); err != nil {
+				return err
+			}
 		}
-		if err := s.ClearLastSequenceNumbers(inst, &s.Members[i+1]); err != nil {
+		if err := s.ClearLastSequenceNumbers(inst, m); err != nil {
 			return err
 		}
+	}
+	if err := s.enqueueRevocations(inst); err != nil {
+		return err
 	}
 	if err := s.RemoveTriggers(inst); err != nil {
 		return err
@@ -713,14 +722,17 @@ func (s *Sharing) revoke(inst *instance.Instance, opts revokeOptions) error {
 			return err
 		}
 	}
-	s.Active = false
+	for i := 1; i < len(s.Members); i++ {
+		s.Members[i].Status = MemberStatusRevoked
+		s.Credentials[i-1] = Credentials{}
+	}
 	if err := couchdb.UpdateDoc(inst, s); err != nil {
 		return err
 	}
-	if s.Drive && errm == nil {
+	if s.Drive {
 		return s.deleteRevokedDriveSharing(inst)
 	}
-	return errm
+	return nil
 }
 
 // RevokePreviewPermissions ensure that the permissions for the preview page
@@ -728,6 +740,9 @@ func (s *Sharing) revoke(inst *instance.Instance, opts revokeOptions) error {
 func (s *Sharing) RevokePreviewPermissions(inst *instance.Instance) error {
 	perms, err := permission.GetForSharePreview(inst, s.SID)
 	if err != nil {
+		if couchdb.IsNotFoundError(err) || errors.Is(err, permission.ErrExpiredToken) {
+			return nil
+		}
 		return err
 	}
 	now := time.Now()
@@ -740,7 +755,7 @@ func (s *Sharing) RevokePreviewPermissions(inst *instance.Instance) error {
 func (s *Sharing) RevokeInteractPermissions(inst *instance.Instance) error {
 	perms, err := permission.GetForShareInteract(inst, s.SID)
 	if err != nil {
-		if couchdb.IsNotFoundError(err) {
+		if couchdb.IsNotFoundError(err) || errors.Is(err, permission.ErrExpiredToken) {
 			return nil
 		}
 		return err

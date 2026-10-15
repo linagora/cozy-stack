@@ -724,7 +724,8 @@ func ShouldRefreshToken(status int) bool {
 
 // It checks if the targeted instance has moved, and tries on the new instance
 // if it is the case. And, if needed, it renews the access token and retries
-// the request.
+// the request. A nil sharing refreshes only the outgoing credentials, without
+// persisting them; revocation jobs can outlive the owner sharing.
 func RefreshToken(
 	inst *instance.Instance,
 	res *http.Response,
@@ -759,8 +760,14 @@ func RefreshToken(
 		tryUpdateMemberInstance(err, m, opts)
 	}
 
-	if err := creds.Refresh(inst, s, m); err != nil {
-		return nil, err
+	var refreshErr error
+	if s == nil {
+		refreshErr = creds.refresh(m)
+	} else {
+		refreshErr = creds.Refresh(inst, s, m)
+	}
+	if refreshErr != nil {
+		return nil, refreshErr
 	}
 	// Safety check: credentials may have been cleared by a concurrent revocation
 	if creds.AccessToken == nil {

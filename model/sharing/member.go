@@ -994,6 +994,16 @@ func (s *Sharing) FindCredentials(m *Member) *Credentials {
 // Refresh will refresh the access token, and persist the new access token in
 // the sharing
 func (c *Credentials) Refresh(inst *instance.Instance, s *Sharing, m *Member) error {
+	if err := c.refresh(m); err != nil {
+		return err
+	}
+	if err := couchdb.UpdateDoc(inst, s); err != nil && !couchdb.IsConflictError(err) {
+		return err
+	}
+	return nil
+}
+
+func (c *Credentials) refresh(m *Member) error {
 	if c.Client == nil || c.AccessToken == nil {
 		return ErrNoOAuthClient
 	}
@@ -1014,9 +1024,6 @@ func (c *Credentials) Refresh(inst *instance.Instance, s *Sharing, m *Member) er
 	// instance domain has changed and a new refresh token is issued)
 	if token.RefreshToken != "" {
 		c.AccessToken.RefreshToken = token.RefreshToken
-	}
-	if err = couchdb.UpdateDoc(inst, s); err != nil && !couchdb.IsConflictError(err) {
-		return err
 	}
 	return nil
 }
@@ -1498,23 +1505,31 @@ func (s *Sharing) RevokeOwner(inst *instance.Instance) error {
 // NotifyMemberRevocation send a notification to this member that he/she was
 // revoked from this sharing
 func (s *Sharing) NotifyMemberRevocation(inst *instance.Instance, m *Member, c *Credentials) error {
-	u, err := url.Parse(m.Instance)
-	if m.Instance == "" || err != nil {
-		return ErrInvalidSharing
+	token, err := s.revocationToken(inst, m, c)
+	if err != nil {
+		return err
 	}
+	return notifyMemberRevocation(inst, s.SID, m, c, token)
+}
+
+func (s *Sharing) revocationToken(inst *instance.Instance, m *Member, c *Credentials) (string, error) {
 	var token string
 	if s.Drive {
 		if m.Status == MemberStatusOwner {
 			// Recipient notifying owner - use DriveToken from credentials
 			if c == nil || c.DriveToken == "" {
-				return ErrNoOAuthClient
+				return "", ErrNoOAuthClient
 			}
 			token = c.DriveToken
 		} else {
 			// Owner notifying recipient - use interact codes
 			interact, err := permission.GetForShareInteract(inst, s.ID())
+			if errors.Is(err, permission.ErrExpiredToken) {
+				// A retry may follow a failed cleanup that already expired owner permissions.
+				interact, err = permission.GetPermissionByIDIncludingExpired(inst, permission.ShareInteractPermissionID(s.ID()))
+			}
 			if err != nil {
-				return err
+				return "", err
 			}
 			if code, ok := interact.Codes[m.Instance]; ok {
 				token = code
@@ -1524,16 +1539,26 @@ func (s *Sharing) NotifyMemberRevocation(inst *instance.Instance, m *Member, c *
 		}
 	} else {
 		if c.Client == nil || c.AccessToken == nil {
-			return ErrNoOAuthClient
+			return "", ErrNoOAuthClient
 		}
 		token = c.AccessToken.AccessToken
 	}
 
+	return token, nil
+}
+
+// Revocation notifications must not write credentials back to a revoked sharing.
+func notifyMemberRevocation(inst *instance.Instance, sharingID string, m *Member, c *Credentials, token string) error {
+	u, err := url.Parse(m.Instance)
+	if m.Instance == "" || err != nil {
+		return ErrInvalidSharing
+	}
+
 	var path string
 	if m.Status == MemberStatusOwner {
-		path = "/sharings/" + s.SID + "/answer"
+		path = "/sharings/" + sharingID + "/answer"
 	} else {
-		path = "/sharings/" + s.SID
+		path = "/sharings/" + sharingID
 	}
 
 	opts := &request.Options{
@@ -1547,8 +1572,8 @@ func (s *Sharing) NotifyMemberRevocation(inst *instance.Instance, m *Member, c *
 		ParseError: ParseRequestError,
 	}
 	res, err := request.Req(opts)
-	if res != nil && ShouldRefreshToken(res.StatusCode) {
-		res, err = RefreshToken(inst, res, err, s, m, c, opts, nil)
+	if res != nil && ShouldRefreshToken(res.StatusCode) && c.Client != nil && c.AccessToken != nil {
+		res, err = RefreshToken(inst, res, err, nil, m, c, opts, nil)
 	}
 	if err != nil {
 		if res != nil && res.StatusCode/100 == 5 {
