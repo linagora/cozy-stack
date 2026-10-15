@@ -245,3 +245,32 @@ func TestChatLimitsTheInstructionsOfTheClient(t *testing.T) {
 	require.NoError(t, rag.ChatPayload{Query: "Hello", Instructions: strings.Repeat("é", 2000)}.Validate())
 	require.Error(t, rag.ChatPayload{Query: "Hello", Instructions: strings.Repeat("é", 2001)}.Validate())
 }
+
+func TestChatKeepsTheAttributesOfTheClient(t *testing.T) {
+	r := newRAGTest(t)
+	chat, err := rag.Chat(r.inst, rag.ChatPayload{
+		ChatConversationID: "conversation-renamed-by-the-user",
+		Query:              "Hello",
+	})
+	require.NoError(t, err)
+
+	// The client names the conversation and pins it
+	var doc couchdb.JSONDoc
+	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, chat.ID(), &doc))
+	doc.Type = consts.ChatConversations
+	doc.M["name"] = "My conversation"
+	doc.M["pinned"] = true
+	require.NoError(t, couchdb.UpdateDoc(r.inst, &doc))
+
+	// The answer of the first message and a second message are saved
+	query := rag.QueryMessage{Task: "chat-completion", DocID: chat.ID()}
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
+	_, err = rag.Chat(r.inst, rag.ChatPayload{ChatConversationID: chat.ID(), Query: "Again"})
+	require.NoError(t, err)
+
+	doc = couchdb.JSONDoc{}
+	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, chat.ID(), &doc))
+	require.Equal(t, "My conversation", doc.M["name"])
+	require.Equal(t, true, doc.M["pinned"])
+	require.Len(t, doc.M["messages"], 3)
+}

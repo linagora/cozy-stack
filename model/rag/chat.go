@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -75,6 +77,59 @@ type ChatConversation struct {
 	Messages     []ChatMessage           `json:"messages"`
 	CozyMetadata *metadata.CozyMetadata  `json:"cozyMetadata"`
 	Rels         jsonapi.RelationshipMap `json:"relationships,omitempty"`
+	// Attributes are the fields a client writes on the conversation that the
+	// stack does not use, like the name the user gives it: kept as they are
+	// when the stack saves the conversation.
+	Attributes map[string]json.RawMessage `json:"-"`
+}
+
+// chatConversationFields are the fields of a conversation the stack reads
+// and writes itself.
+var chatConversationFields = []string{"_id", "_rev", "messages", "cozyMetadata", "relationships"}
+
+// isChatConversationField tells whether a key is one of the stack: compared
+// without case, as encoding/json matches the keys of a struct.
+func isChatConversationField(key string, _ json.RawMessage) bool {
+	return slices.ContainsFunc(chatConversationFields, func(field string) bool {
+		return strings.EqualFold(field, key)
+	})
+}
+
+// chatConversationJSON has the fields of a conversation, without its
+// methods.
+type chatConversationJSON ChatConversation
+
+func (c *ChatConversation) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, (*chatConversationJSON)(c)); err != nil {
+		return err
+	}
+	var attributes map[string]json.RawMessage
+	if err := json.Unmarshal(data, &attributes); err != nil {
+		return err
+	}
+	maps.DeleteFunc(attributes, isChatConversationField)
+	c.Attributes = attributes
+	return nil
+}
+
+func (c *ChatConversation) MarshalJSON() ([]byte, error) {
+	data, err := json.Marshal((*chatConversationJSON)(c))
+	if err != nil {
+		return nil, err
+	}
+	// The fields of the stack win over attributes of the same name
+	attributes := maps.Clone(c.Attributes)
+	maps.DeleteFunc(attributes, isChatConversationField)
+	if len(attributes) == 0 {
+		return data, nil
+	}
+	extra, err := json.Marshal(attributes)
+	if err != nil {
+		return nil, err
+	}
+	// Both are JSON objects: join them without decoding the messages again
+	data = append(data[:len(data)-1], ',')
+	return append(data, extra[1:]...), nil
 }
 
 type ChatMessage struct {
@@ -111,6 +166,7 @@ func (c *ChatConversation) Clone() couchdb.Doc {
 	cloned.Messages = make([]ChatMessage, len(c.Messages))
 	copy(cloned.Messages, c.Messages)
 	cloned.Rels = c.Rels.Clone()
+	cloned.Attributes = maps.Clone(c.Attributes)
 	return &cloned
 }
 func (c *ChatConversation) Included() []jsonapi.Object             { return nil }

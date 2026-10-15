@@ -415,6 +415,9 @@ Content-Type: application/vnd.api+json
 }
 ```
 
+A client may write other attributes on a conversation, like the `name` the
+user gives it: the stack keeps them when it saves a message or an answer.
+
 ### POST /ai/chat/conversations/:id/cancel
 
 Stops the answer to the last message of the conversation, when the user
