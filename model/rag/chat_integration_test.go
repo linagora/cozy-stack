@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/rag"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -273,4 +274,35 @@ func TestChatKeepsTheAttributesOfTheClient(t *testing.T) {
 	require.Equal(t, "My conversation", doc.M["name"])
 	require.Equal(t, true, doc.M["pinned"])
 	require.Len(t, doc.M["messages"], 3)
+}
+
+func TestChatRetriesTheSaveOnConflict(t *testing.T) {
+	r := newRAGTest(t)
+	chat, err := rag.Chat(r.inst, rag.ChatPayload{
+		ChatConversationID: "conversation-renamed-meanwhile",
+		Query:              "Hello",
+	})
+	require.NoError(t, err)
+	writes := 0
+	t.Cleanup(rag.SetUpdateConversationForTest(func(inst *instance.Instance, chat *rag.ChatConversation) error {
+		writes++
+		if writes == 1 {
+			// The client renames the conversation between the read and the write
+			var doc couchdb.JSONDoc
+			require.NoError(t, couchdb.GetDoc(inst, consts.ChatConversations, chat.DocID, &doc))
+			doc.Type = consts.ChatConversations
+			doc.M["name"] = "My conversation"
+			require.NoError(t, couchdb.UpdateDoc(inst, &doc))
+		}
+		return couchdb.UpdateDoc(inst, chat)
+	}))
+
+	_, err = rag.Chat(r.inst, rag.ChatPayload{ChatConversationID: chat.ID(), Query: "Again"})
+	require.NoError(t, err)
+	require.Equal(t, 2, writes, "the first write conflicts")
+
+	var doc couchdb.JSONDoc
+	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, chat.ID(), &doc))
+	require.Equal(t, "My conversation", doc.M["name"])
+	require.Len(t, doc.M["messages"], 2)
 }

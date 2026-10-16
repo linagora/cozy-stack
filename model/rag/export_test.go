@@ -35,7 +35,7 @@ func IsRetryableForTest(err error) bool {
 }
 
 // SetUpdateConversationForTest replaces the write of the conversation that
-// saves an answer; it returns a function restoring the real one.
+// saves a message or an answer; it returns a function restoring the real one.
 func SetUpdateConversationForTest(fn func(inst *instance.Instance, chat *ChatConversation) error) func() {
 	old := updateConversation
 	updateConversation = fn

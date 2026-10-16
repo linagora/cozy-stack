@@ -297,32 +297,6 @@ func (a *chatAssistant) knowledgeBaseDirID(logger logger.Logger) string {
 var ErrAssistantNotFound = errors.New("assistant not found")
 
 func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, error) {
-	var chat ChatConversation
-	err := couchdb.GetDoc(inst, consts.ChatConversations, payload.ChatConversationID, &chat)
-	if couchdb.IsNotFoundError(err) {
-		chat.DocID = payload.ChatConversationID
-		md := metadata.New()
-		md.DocTypeVersion = DocTypeVersion
-		md.UpdatedAt = md.CreatedAt
-		chat.CozyMetadata = md
-		if payload.AssistantID != "" {
-			chat.Rels = jsonapi.RelationshipMap{
-				"assistant": jsonapi.Relationship{
-					Data: struct {
-						ID   string `json:"_id"`
-						Type string `json:"_type"`
-					}{
-						ID:   payload.AssistantID,
-						Type: consts.ChatAssistants,
-					},
-				},
-			}
-		}
-	} else if err != nil {
-		return nil, err
-	} else {
-		chat.CozyMetadata.UpdatedAt = time.Now().UTC()
-	}
 	uuidv7, _ := uuid.NewV7()
 	msg := ChatMessage{
 		ID:            uuidv7.String(),
@@ -331,11 +305,46 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 		AttachmentIDs: payload.AttachmentIDs,
 		CreatedAt:     time.Now().UTC(),
 	}
-	chat.Messages = append(chat.Messages, msg)
-	if chat.DocRev == "" {
-		err = couchdb.CreateNamedDocWithDB(inst, &chat)
-	} else {
-		err = couchdb.UpdateDoc(inst, &chat)
+	// As for the answer, the conversation is read again on a conflict: the
+	// client writes it too, e.g. to rename or pin it.
+	var chat ChatConversation
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		chat = ChatConversation{}
+		err = couchdb.GetDoc(inst, consts.ChatConversations, payload.ChatConversationID, &chat)
+		if couchdb.IsNotFoundError(err) {
+			chat.DocID = payload.ChatConversationID
+			md := metadata.New()
+			md.DocTypeVersion = DocTypeVersion
+			md.UpdatedAt = md.CreatedAt
+			chat.CozyMetadata = md
+			if payload.AssistantID != "" {
+				chat.Rels = jsonapi.RelationshipMap{
+					"assistant": jsonapi.Relationship{
+						Data: struct {
+							ID   string `json:"_id"`
+							Type string `json:"_type"`
+						}{
+							ID:   payload.AssistantID,
+							Type: consts.ChatAssistants,
+						},
+					},
+				}
+			}
+		} else if err != nil {
+			return nil, err
+		} else {
+			chat.CozyMetadata.UpdatedAt = time.Now().UTC()
+		}
+		chat.Messages = append(chat.Messages, msg)
+		if chat.DocRev == "" {
+			err = couchdb.CreateNamedDocWithDB(inst, &chat)
+		} else {
+			err = updateConversation(inst, &chat)
+		}
+		if !couchdb.IsConflictError(err) {
+			break
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -936,7 +945,7 @@ func saveAnswer(inst *instance.Instance, conversationID, msgID string, answer Ch
 }
 
 // updateConversation is a variable so that tests can write the conversation
-// while a query saves its answer.
+// while the stack saves a message or an answer.
 var updateConversation = func(inst *instance.Instance, chat *ChatConversation) error {
 	return couchdb.UpdateDoc(inst, chat)
 }
