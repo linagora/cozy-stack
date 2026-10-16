@@ -218,8 +218,8 @@ konnectors:
 
 # rag are the URL of the RAG server(s) for AI.
 rag:
-  # A cozy will use the rag server for its context, or if the context is not
-  # declared, for default.
+  # A cozy will use the rag server named by its rag.server feature flag, else
+  # the one of its context, or if the context is not declared, default.
   default:
     url: http://localhost:8000
     api_key: $3cr3t

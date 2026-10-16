@@ -87,6 +87,32 @@ can be indexed by enabling the following feature flags:
 - `rag.index.video.enabled`
 - `rag.index.audio.enabled`
 
+### Choosing the RAG server
+
+The `rag` section of the config file maps names to openRAG servers. An
+instance uses the server named by its `rag.server` feature flag, else the one
+named after its context, else `default`:
+
+```yaml
+rag:
+  default:
+    url: http://openrag-a:8000
+    api_key: $3cr3t
+  beta:
+    url: http://openrag-b:8000
+    api_key: $3cr3t
+```
+
+```sh
+$ cozy-stack features flags --domain alice.cozy.localhost '{"rag.server": "beta"}'
+```
+
+Setting the flag to `null` sends the instance back to its context's server.
+A name missing from the config is ignored. The stack does not move the index:
+purge the instance on the old server, then switch, then reset (see below), or
+the old server keeps the instance's data and the new one only gets the files
+changed after the switch.
+
 ### Operator tools
 
 The admin API exposes them (see [admin.md](admin.md) for the details):

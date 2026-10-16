@@ -547,9 +547,16 @@ func (i *Instance) Registries() []*url.URL {
 	return context
 }
 
-// RAGServer returns the RAG server for the instance (AI features).
+// RAGServer returns the RAG server for the instance (AI features): the entry
+// named by the instance's rag.server feature flag, else its context's entry,
+// else the default one.
 func (i *Instance) RAGServer() config.RAGServer {
 	contexts := config.GetConfig().RAGServers
+	if name, ok := i.FeatureFlags["rag.server"].(string); ok {
+		if server, ok := contexts[name]; ok {
+			return server
+		}
+	}
 	if i.ContextName != "" {
 		if server, ok := contexts[i.ContextName]; ok {
 			return server

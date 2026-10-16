@@ -24,6 +24,26 @@ func TestInstance(t *testing.T) {
 		}
 	})
 
+	t.Run("RAGServer", func(t *testing.T) {
+		cfg := config.GetConfig()
+		prev := cfg.RAGServers
+		t.Cleanup(func() { cfg.RAGServers = prev })
+		cfg.RAGServers = map[string]config.RAGServer{
+			"default": {URL: "http://default"},
+			"ctx":     {URL: "http://ctx"},
+			"beta":    {URL: "http://beta"},
+		}
+
+		inst := &instance.Instance{ContextName: "ctx"}
+		assert.Equal(t, "http://ctx", inst.RAGServer().URL)
+		inst.FeatureFlags = map[string]interface{}{"rag.server": "beta"}
+		assert.Equal(t, "http://beta", inst.RAGServer().URL)
+		inst.FeatureFlags["rag.server"] = "unknown"
+		assert.Equal(t, "http://ctx", inst.RAGServer().URL)
+		inst.ContextName = "other"
+		assert.Equal(t, "http://default", inst.RAGServer().URL)
+	})
+
 	t.Run("Subdomain", func(t *testing.T) {
 		inst := &instance.Instance{
 			Domain: "foo.example.com",
