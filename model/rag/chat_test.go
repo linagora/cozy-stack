@@ -620,3 +620,39 @@ func TestRAGRequest(t *testing.T) {
 	assert.Contains(t, string(body), `"stream":true`)
 	assert.NotContains(t, string(body), "max_tokens", "the default of openRAG")
 }
+
+func TestChatConversationJSON(t *testing.T) {
+	t.Run("keeps the attributes the stack does not use", func(t *testing.T) {
+		var chat ChatConversation
+		require.NoError(t, json.Unmarshal([]byte(`{"_id":"c1","_rev":"1-a","messages":[],"name":"Mine","pinned":true}`), &chat))
+		require.Equal(t, "c1", chat.ID())
+
+		chat.Messages = append(chat.Messages, ChatMessage{ID: "m1", Role: UserRole, Content: "Hello"})
+		data, err := json.Marshal(&chat)
+		require.NoError(t, err)
+
+		var doc map[string]interface{}
+		require.NoError(t, json.Unmarshal(data, &doc))
+		require.Equal(t, "Mine", doc["name"])
+		require.Equal(t, true, doc["pinned"])
+		require.Len(t, doc["messages"], 1)
+	})
+
+	t.Run("the fields of the stack win", func(t *testing.T) {
+		chat := ChatConversation{
+			DocID:      "c1",
+			Messages:   []ChatMessage{},
+			Attributes: map[string]json.RawMessage{"_id": json.RawMessage(`"other"`)},
+		}
+		data, err := json.Marshal(&chat)
+		require.NoError(t, err)
+		require.Contains(t, string(data), `"_id":"c1"`)
+		require.NotContains(t, string(data), "other")
+	})
+
+	t.Run("does not keep a field of the stack written in another case", func(t *testing.T) {
+		var chat ChatConversation
+		require.NoError(t, json.Unmarshal([]byte(`{"_id":"c1","Messages":[]}`), &chat))
+		require.Empty(t, chat.Attributes)
+	})
+}

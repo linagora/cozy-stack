@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -75,6 +77,59 @@ type ChatConversation struct {
 	Messages     []ChatMessage           `json:"messages"`
 	CozyMetadata *metadata.CozyMetadata  `json:"cozyMetadata"`
 	Rels         jsonapi.RelationshipMap `json:"relationships,omitempty"`
+	// Attributes are the fields a client writes on the conversation that the
+	// stack does not use, like the name the user gives it: kept as they are
+	// when the stack saves the conversation.
+	Attributes map[string]json.RawMessage `json:"-"`
+}
+
+// chatConversationFields are the fields of a conversation the stack reads
+// and writes itself.
+var chatConversationFields = []string{"_id", "_rev", "messages", "cozyMetadata", "relationships"}
+
+// isChatConversationField tells whether a key is one of the stack: compared
+// without case, as encoding/json matches the keys of a struct.
+func isChatConversationField(key string, _ json.RawMessage) bool {
+	return slices.ContainsFunc(chatConversationFields, func(field string) bool {
+		return strings.EqualFold(field, key)
+	})
+}
+
+// chatConversationJSON has the fields of a conversation, without its
+// methods.
+type chatConversationJSON ChatConversation
+
+func (c *ChatConversation) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, (*chatConversationJSON)(c)); err != nil {
+		return err
+	}
+	var attributes map[string]json.RawMessage
+	if err := json.Unmarshal(data, &attributes); err != nil {
+		return err
+	}
+	maps.DeleteFunc(attributes, isChatConversationField)
+	c.Attributes = attributes
+	return nil
+}
+
+func (c *ChatConversation) MarshalJSON() ([]byte, error) {
+	data, err := json.Marshal((*chatConversationJSON)(c))
+	if err != nil {
+		return nil, err
+	}
+	// The fields of the stack win over attributes of the same name
+	attributes := maps.Clone(c.Attributes)
+	maps.DeleteFunc(attributes, isChatConversationField)
+	if len(attributes) == 0 {
+		return data, nil
+	}
+	extra, err := json.Marshal(attributes)
+	if err != nil {
+		return nil, err
+	}
+	// Both are JSON objects: join them without decoding the messages again
+	data = append(data[:len(data)-1], ',')
+	return append(data, extra[1:]...), nil
 }
 
 type ChatMessage struct {
@@ -111,6 +166,7 @@ func (c *ChatConversation) Clone() couchdb.Doc {
 	cloned.Messages = make([]ChatMessage, len(c.Messages))
 	copy(cloned.Messages, c.Messages)
 	cloned.Rels = c.Rels.Clone()
+	cloned.Attributes = maps.Clone(c.Attributes)
 	return &cloned
 }
 func (c *ChatConversation) Included() []jsonapi.Object             { return nil }
@@ -241,32 +297,6 @@ func (a *chatAssistant) knowledgeBaseDirID(logger logger.Logger) string {
 var ErrAssistantNotFound = errors.New("assistant not found")
 
 func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, error) {
-	var chat ChatConversation
-	err := couchdb.GetDoc(inst, consts.ChatConversations, payload.ChatConversationID, &chat)
-	if couchdb.IsNotFoundError(err) {
-		chat.DocID = payload.ChatConversationID
-		md := metadata.New()
-		md.DocTypeVersion = DocTypeVersion
-		md.UpdatedAt = md.CreatedAt
-		chat.CozyMetadata = md
-		if payload.AssistantID != "" {
-			chat.Rels = jsonapi.RelationshipMap{
-				"assistant": jsonapi.Relationship{
-					Data: struct {
-						ID   string `json:"_id"`
-						Type string `json:"_type"`
-					}{
-						ID:   payload.AssistantID,
-						Type: consts.ChatAssistants,
-					},
-				},
-			}
-		}
-	} else if err != nil {
-		return nil, err
-	} else {
-		chat.CozyMetadata.UpdatedAt = time.Now().UTC()
-	}
 	uuidv7, _ := uuid.NewV7()
 	msg := ChatMessage{
 		ID:            uuidv7.String(),
@@ -275,11 +305,46 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 		AttachmentIDs: payload.AttachmentIDs,
 		CreatedAt:     time.Now().UTC(),
 	}
-	chat.Messages = append(chat.Messages, msg)
-	if chat.DocRev == "" {
-		err = couchdb.CreateNamedDocWithDB(inst, &chat)
-	} else {
-		err = couchdb.UpdateDoc(inst, &chat)
+	// As for the answer, the conversation is read again on a conflict: the
+	// client writes it too, e.g. to rename or pin it.
+	var chat ChatConversation
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		chat = ChatConversation{}
+		err = couchdb.GetDoc(inst, consts.ChatConversations, payload.ChatConversationID, &chat)
+		if couchdb.IsNotFoundError(err) {
+			chat.DocID = payload.ChatConversationID
+			md := metadata.New()
+			md.DocTypeVersion = DocTypeVersion
+			md.UpdatedAt = md.CreatedAt
+			chat.CozyMetadata = md
+			if payload.AssistantID != "" {
+				chat.Rels = jsonapi.RelationshipMap{
+					"assistant": jsonapi.Relationship{
+						Data: struct {
+							ID   string `json:"_id"`
+							Type string `json:"_type"`
+						}{
+							ID:   payload.AssistantID,
+							Type: consts.ChatAssistants,
+						},
+					},
+				}
+			}
+		} else if err != nil {
+			return nil, err
+		} else {
+			chat.CozyMetadata.UpdatedAt = time.Now().UTC()
+		}
+		chat.Messages = append(chat.Messages, msg)
+		if chat.DocRev == "" {
+			err = couchdb.CreateNamedDocWithDB(inst, &chat)
+		} else {
+			err = updateConversation(inst, &chat)
+		}
+		if !couchdb.IsConflictError(err) {
+			break
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -880,7 +945,7 @@ func saveAnswer(inst *instance.Instance, conversationID, msgID string, answer Ch
 }
 
 // updateConversation is a variable so that tests can write the conversation
-// while a query saves its answer.
+// while the stack saves a message or an answer.
 var updateConversation = func(inst *instance.Instance, chat *ChatConversation) error {
 	return couchdb.UpdateDoc(inst, chat)
 }

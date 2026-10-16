@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/rag"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -244,4 +245,64 @@ func TestQuerySendsTheInstructionsOfTheClientAsASystemMessage(t *testing.T) {
 func TestChatLimitsTheInstructionsOfTheClient(t *testing.T) {
 	require.NoError(t, rag.ChatPayload{Query: "Hello", Instructions: strings.Repeat("é", 2000)}.Validate())
 	require.Error(t, rag.ChatPayload{Query: "Hello", Instructions: strings.Repeat("é", 2001)}.Validate())
+}
+
+func TestChatKeepsTheAttributesOfTheClient(t *testing.T) {
+	r := newRAGTest(t)
+	chat, err := rag.Chat(r.inst, rag.ChatPayload{
+		ChatConversationID: "conversation-renamed-by-the-user",
+		Query:              "Hello",
+	})
+	require.NoError(t, err)
+
+	// The client names the conversation and pins it
+	var doc couchdb.JSONDoc
+	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, chat.ID(), &doc))
+	doc.Type = consts.ChatConversations
+	doc.M["name"] = "My conversation"
+	doc.M["pinned"] = true
+	require.NoError(t, couchdb.UpdateDoc(r.inst, &doc))
+
+	// The answer of the first message and a second message are saved
+	query := rag.QueryMessage{Task: "chat-completion", DocID: chat.ID()}
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
+	_, err = rag.Chat(r.inst, rag.ChatPayload{ChatConversationID: chat.ID(), Query: "Again"})
+	require.NoError(t, err)
+
+	doc = couchdb.JSONDoc{}
+	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, chat.ID(), &doc))
+	require.Equal(t, "My conversation", doc.M["name"])
+	require.Equal(t, true, doc.M["pinned"])
+	require.Len(t, doc.M["messages"], 3)
+}
+
+func TestChatRetriesTheSaveOnConflict(t *testing.T) {
+	r := newRAGTest(t)
+	chat, err := rag.Chat(r.inst, rag.ChatPayload{
+		ChatConversationID: "conversation-renamed-meanwhile",
+		Query:              "Hello",
+	})
+	require.NoError(t, err)
+	writes := 0
+	t.Cleanup(rag.SetUpdateConversationForTest(func(inst *instance.Instance, chat *rag.ChatConversation) error {
+		writes++
+		if writes == 1 {
+			// The client renames the conversation between the read and the write
+			var doc couchdb.JSONDoc
+			require.NoError(t, couchdb.GetDoc(inst, consts.ChatConversations, chat.DocID, &doc))
+			doc.Type = consts.ChatConversations
+			doc.M["name"] = "My conversation"
+			require.NoError(t, couchdb.UpdateDoc(inst, &doc))
+		}
+		return couchdb.UpdateDoc(inst, chat)
+	}))
+
+	_, err = rag.Chat(r.inst, rag.ChatPayload{ChatConversationID: chat.ID(), Query: "Again"})
+	require.NoError(t, err)
+	require.Equal(t, 2, writes, "the first write conflicts")
+
+	var doc couchdb.JSONDoc
+	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, chat.ID(), &doc))
+	require.Equal(t, "My conversation", doc.M["name"])
+	require.Len(t, doc.M["messages"], 2)
 }
