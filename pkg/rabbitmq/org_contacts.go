@@ -100,6 +100,10 @@ func SyncDeletedOrgContact(ctx context.Context, msg UserDeletedMessage) error {
 			log.Debugf("user.deleted: skipping own instance %s for organization contact %s", inst.Domain, msg.WorkplaceFqdn)
 			continue
 		}
+		// The feed deletes the member.
+		if inst.HasCommonContacts() {
+			continue
+		}
 
 		existing, err := findExternalOrgContactByEmail(inst, email)
 		if err != nil {

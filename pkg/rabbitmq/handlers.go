@@ -248,6 +248,11 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 		return fmt.Errorf("user.created: update settings: %w", err)
 	}
 
+	// The feed writes the members.
+	if inst.HasCommonContacts() {
+		return nil
+	}
+
 	if strings.TrimSpace(msg.OrganizationID) != "" || strings.TrimSpace(msg.OrganizationDomain) != "" {
 		scope, err := orgdirectory.ResolveOrganizationInstances(msg.OrganizationID, msg.OrganizationDomain)
 		if err != nil {
