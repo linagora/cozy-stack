@@ -13,6 +13,13 @@ type Claims struct {
 	Scope     string `json:"scope,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	SStamp    string `json:"stamp,omitempty"`
+	Actor     *Actor `json:"act,omitempty"`
+	IntentID  string `json:"intent_id,omitempty"`
+}
+
+// Actor identifies the service acting on behalf of the token subject (RFC 8693).
+type Actor struct {
+	Subject string `json:"sub"`
 }
 
 // IssuedAtUTC returns a time.Time struct of the IssuedAt field in UTC
@@ -62,6 +69,9 @@ func (claims *Claims) Expired() bool {
 
 	default:
 		validityDuration = consts.DefaultValidityDuration
+	}
+	if claims.IssuedAt == nil {
+		return true
 	}
 	validUntil := claims.IssuedAtUTC().Add(validityDuration)
 	return validUntil.Before(time.Now().UTC())

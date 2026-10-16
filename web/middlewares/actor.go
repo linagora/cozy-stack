@@ -43,7 +43,7 @@ func ResolveRequestActor(c echo.Context, inst *instance.Instance, pdoc *permissi
 	}
 
 	switch pdoc.Type {
-	case permission.TypeOauth, permission.TypeCLI, permission.TypeWebapp, permission.TypeKonnector:
+	case permission.TypeOauth, permission.TypeCLI, permission.TypeWebapp, permission.TypeKonnector, permission.TypeIntent:
 		SetActor(c, actorFromInstance(inst))
 		return nil
 

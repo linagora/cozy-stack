@@ -8,13 +8,17 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/registry"
 	"github.com/cozy/cozy-stack/pkg/utils"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // Service is a struct for an app that can serve an intent
@@ -62,6 +66,42 @@ func (in *Intent) Clone() couchdb.Doc {
 	cloned.AvailableApps = make([]AvailableApp, len(in.AvailableApps))
 	copy(cloned.AvailableApps, in.AvailableApps)
 	return &cloned
+}
+
+// HasService reports whether the app is registered to handle this intent.
+func (in *Intent) HasService(slug string) bool {
+	for _, service := range in.Services {
+		if service.Slug == slug {
+			return true
+		}
+	}
+	return false
+}
+
+// ServiceToken delegates the initiating app's permissions to an intent service.
+func (in *Intent) ServiceToken(inst *instance.Instance, slug, sessionID string) (string, error) {
+	caller, isApp := strings.CutPrefix(in.Client, consts.Apps+"/")
+	if !isApp || caller == "" || sessionID == "" || in.ID() == "" || !in.HasService(slug) {
+		return "", permission.ErrInvalidToken
+	}
+	now := time.Now()
+	claims := permission.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    inst.Domain,
+			Audience:  jwt.ClaimStrings{consts.AppAudience},
+			Subject:   caller,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(consts.IntentTokenValidityDuration)),
+		},
+		SessionID: sessionID,
+		Actor:     &permission.Actor{Subject: slug},
+		IntentID:  in.ID(),
+	}
+	secret, err := inst.PickKey(consts.AppAudience)
+	if err != nil {
+		return "", err
+	}
+	return crypto.NewJWT(secret, claims)
 }
 
 // SetID is used to implement the couchdb.Doc interface

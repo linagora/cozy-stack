@@ -808,7 +808,8 @@ func openWebapp(c echo.Context) error {
 	}
 
 	isLoggedIn := true
-	params := buildServeParams(c, inst, webapp, nil, isLoggedIn, sess.ID())
+	params := buildServeParams(inst, webapp, nil, isLoggedIn)
+	params.Token = getServeToken(c, inst, webapp, isLoggedIn, sess.ID())
 	obj := &apiOpenParams{
 		slug:   slug,
 		cookie: cookie.String(),

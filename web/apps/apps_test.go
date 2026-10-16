@@ -13,9 +13,13 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,12 +38,15 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/filetype"
+	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web"
 	webApps "github.com/cozy/cozy-stack/web/apps"
 	"github.com/cozy/cozy-stack/web/auth"
 	"github.com/gavv/httpexpect/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/sirupsen/logrus"
 
@@ -256,6 +263,7 @@ func TestApps(t *testing.T) {
 	})
 
 	t.Run("ServeWithAnIntents", func(t *testing.T) {
+		require.NoError(t, permission.ForceWebapp(testInstance, "test-app", permission.Set{}))
 		e := testutils.CreateTestClient(t, ts.URL)
 
 		intent := &intent.Intent{
@@ -331,6 +339,7 @@ func TestApps(t *testing.T) {
 			},
 		}
 		require.NoError(t, couchdb.CreateNamedDoc(testInstance, clientURLApp))
+		require.NoError(t, permission.ForceWebapp(testInstance, "clienturl-app", permission.Set{}))
 		t.Cleanup(func() { _ = couchdb.DeleteDoc(testInstance, clientURLApp) })
 
 		testutils.WithFlag(t, testInstance, "clienturl_csp_flag", "https://external.example.com")
@@ -380,6 +389,8 @@ func TestApps(t *testing.T) {
 		}
 		require.NoError(t, couchdb.CreateNamedDoc(testInstance, containerApp))
 		t.Cleanup(func() { _ = couchdb.DeleteDoc(testInstance, containerApp) })
+		require.NoError(t, permission.ForceWebapp(testInstance, "container-app", permission.Set{}))
+		t.Cleanup(func() { _ = permission.DestroyWebapp(testInstance, "container-app") })
 
 		testutils.WithFlag(t, testInstance, "container_csp_flag", "https://external.example.com")
 
@@ -405,6 +416,24 @@ func TestApps(t *testing.T) {
 		csp.Contains("https://container-app.cozywithapps.example.net")
 		// Apps without a client_url_flag are not added
 		csp.NotContains("https://mini.cozywithapps.example.net")
+
+		t.Run("LoggedIn", func(t *testing.T) {
+			e := testutils.CreateTestClient(t, ts.URL)
+			response := e.GET("/").WithHost(consts.DataProxySlug+"."+testInstance.Domain).
+				WithQuery("intent", intent.ID()).WithCookie("cozysessid", cozysessID).
+				Expect().Status(http.StatusOK)
+			response.Header(echo.HeaderContentSecurityPolicy).Contains("https://external.example.com")
+			match := regexp.MustCompile(`"token":"([^"]+)"`).FindStringSubmatch(html.UnescapeString(response.Body().Raw()))
+			require.Len(t, match, 2)
+			var claims permission.Claims
+			require.NoError(t, crypto.ParseJWT(match[1], func(*jwt.Token) (interface{}, error) { return testInstance.PickKey(consts.AppAudience) }, &claims))
+			require.Equal(t, "container-app", claims.Subject)
+			require.Equal(t, consts.DataProxySlug, claims.Actor.Subject)
+			require.Equal(t, intent.ID(), claims.IntentID)
+			e.GET("/intents/"+intent.ID()).WithHost(testInstance.Domain).
+				WithCookie("cozysessid", cozysessID).WithHeader("Authorization", "Bearer "+match[1]).
+				Expect().Status(http.StatusOK)
+		})
 	})
 
 	t.Run("ServeAddsNoExternalIntentServiceWithoutServiceURLFlag", func(t *testing.T) {
@@ -1045,4 +1074,298 @@ func assertRedirect(e *httpexpect.Expect, slug, domain, path string, code int, l
 		WithRedirectPolicy(httpexpect.DontFollowRedirects).
 		Expect().Status(code).
 		Header("Location").IsEqual(location)
+}
+
+func TestIntentPermissions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires CouchDB")
+	}
+	config.UseTestFile(t)
+	cfg := config.GetConfig()
+	oldAssets, oldURL := cfg.Assets, cfg.Fs.URL
+	t.Cleanup(func() { cfg.Assets, cfg.Fs.URL = oldAssets, oldURL })
+	cfg.Assets = "../../assets"
+	cfg.Fs.URL = &url.URL{Scheme: "file", Path: t.TempDir()}
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	inst.OnboardingFinished = true
+	inst.RegisterToken = nil
+	require.NoError(t, instance.Update(inst))
+	service, err := setup.InstallMiniApp()
+	require.NoError(t, err)
+	manifest := &couchdb.JSONDoc{Type: consts.Apps}
+	require.NoError(t, couchdb.GetDoc(inst, consts.Apps, consts.Apps+"/"+service, manifest))
+	manifest.M["routes"].(map[string]interface{})["/"] = apps.Route{Folder: "/public", Index: "index.html", Public: true}
+	manifest.M["intents"] = []apps.Intent{
+		{Action: "UPLOAD", Types: []string{consts.Files}, Href: "/public"},
+		{Action: "PICK", Types: []string{consts.Files}, Href: "/public"},
+	}
+	require.NoError(t, couchdb.UpdateDoc(inst, manifest))
+	servicePermissions := permission.Set{{Type: consts.Files, Verbs: permission.ALL}}
+	require.NoError(t, permission.ForceWebapp(inst, service, servicePermissions))
+	mailPermissions := permission.Set{{Type: consts.Files, Verbs: permission.Verbs(permission.GET, permission.POST), Selector: "referenced_by", Values: []string{consts.Apps + "/mail"}}}
+	require.NoError(t, permission.ForceWebapp(inst, "mail", mailPermissions))
+	mailDir, err := inst.ResolveDirID(consts.Apps + "/mail")
+	require.NoError(t, err)
+	notesDir, err := inst.ResolveDirID(consts.Apps + "/notes")
+	require.NoError(t, err)
+	sess, err := session.New(inst, session.NormalRun, "")
+	require.NoError(t, err)
+	cookie, err := sess.ToCookie()
+	require.NoError(t, err)
+	ts := setup.GetTestServer("/apps", webApps.WebappsRoutes, func(r *echo.Echo) *echo.Echo {
+		proxy, err := web.CreateSubdomainProxy(r, &stack.Services{}, webApps.Serve)
+		require.NoError(t, err)
+		return proxy
+	})
+	newClient := func(t *testing.T) *httpexpect.Expect {
+		t.Helper()
+		return testutils.CreateTestClient(t, ts.URL).Builder(func(r *httpexpect.Request) {
+			r.WithHost(inst.Domain).WithCookie(cookie.Name, cookie.Value)
+		})
+	}
+	var downloads atomic.Int32
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downloads.Add(1)
+		_, _ = io.WriteString(w, "attachment")
+	}))
+	t.Cleanup(source.Close)
+	require.NoError(t, safehttp.SetTrustedPrivateNetworks([]string{"127.0.0.1/32"}))
+	t.Cleanup(func() { _ = safehttp.SetTrustedPrivateNetworks(config.GetConfig().SafeHTTPTrustedNetworks) })
+
+	createIntent := func(t *testing.T, callerToken, action string) string {
+		t.Helper()
+		obj := newClient(t).POST("/intents").WithHeader("Authorization", "Bearer "+callerToken).
+			WithJSON(map[string]interface{}{"data": map[string]interface{}{
+				"type": consts.Intents,
+				"attributes": map[string]interface{}{
+					"action": action, "type": consts.Files,
+					"client": consts.Apps + "/" + service,
+				},
+			}}).Expect().Status(http.StatusOK).JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object()
+		return obj.Path("$.data.id").String().Raw()
+	}
+	serveToken := func(t *testing.T, id string) string {
+		t.Helper()
+		body := newClient(t).GET("/public").WithHost(service+"."+inst.Domain).
+			WithQuery("intent", id).Expect().Status(http.StatusOK).Body().Raw()
+		match := regexp.MustCompile(`"token":"([^"]+)"`).FindStringSubmatch(html.UnescapeString(body))
+		require.Len(t, match, 2)
+		return match[1]
+	}
+	upload := func(t *testing.T, token, folder, name string, status int) {
+		t.Helper()
+		before := downloads.Load()
+		newClient(t).POST("/files/"+folder).WithHeader("Authorization", "Bearer "+token).
+			WithQuery("Type", "file").WithQuery("Name", name).
+			WithQuery("SourceURL", source.URL).Expect().Status(status)
+		if status == http.StatusCreated {
+			require.Equal(t, before+1, downloads.Load())
+		} else {
+			require.Equal(t, before, downloads.Load())
+			dir, err := inst.VFS().DirByID(folder)
+			require.NoError(t, err)
+			_, err = inst.VFS().FileByPath(path.Join(dir.Fullpath, name))
+			require.Error(t, err)
+		}
+	}
+	parseToken := func(t *testing.T, token string) permission.Claims {
+		t.Helper()
+		var claims permission.Claims
+		require.NoError(t, crypto.ParseJWT(token, func(*jwt.Token) (interface{}, error) { return inst.PickKey(consts.AppAudience) }, &claims))
+		return claims
+	}
+	mailToken := inst.BuildAppToken("mail", sess.ID())
+
+	t.Run("RejectUnsupportedCallersBeforeParsingBody", func(t *testing.T) {
+		require.NoError(t, permission.ForceKonnector(inst, "mail", mailPermissions))
+		for _, audience := range []string{consts.KonnectorAudience, consts.CLIAudience} {
+			t.Run(audience, func(t *testing.T) {
+				callerToken, err := inst.MakeJWT(audience, "mail", consts.Files+":ALL", "", time.Now())
+				require.NoError(t, err)
+				e := newClient(t)
+				e.GET("/files/"+mailDir).WithHeader("Authorization", "Bearer "+callerToken).Expect().Status(http.StatusOK)
+				e.POST("/intents").WithHeader("Authorization", "Bearer "+callerToken).
+					WithText("invalid JSON").Expect().Status(http.StatusForbidden)
+			})
+		}
+	})
+
+	t.Run("UploadUsesCallerPermissionsAndAttribution", func(t *testing.T) {
+		id := createIntent(t, mailToken, "UPLOAD")
+		token := serveToken(t, id)
+		claims := parseToken(t, token)
+		require.Equal(t, "mail", claims.Subject)
+		require.Equal(t, service, claims.Actor.Subject)
+		require.Equal(t, consts.AppAudience, claims.AudienceString())
+		require.Equal(t, id, claims.IntentID)
+		require.WithinDuration(t, claims.IssuedAt.Add(consts.IntentTokenValidityDuration), claims.ExpiresAt.Time, time.Second)
+		newClient(t).GET("/intents/"+id).WithHeader("Authorization", "Bearer "+token).Expect().Status(http.StatusOK)
+		var stored intent.Intent
+		require.NoError(t, couchdb.GetDoc(inst, consts.Intents, id, &stored))
+		require.Equal(t, consts.Apps+"/mail", stored.Client)
+
+		upload(t, token, mailDir, "allowed.txt", http.StatusCreated)
+		mailFolder, err := inst.VFS().DirByID(mailDir)
+		require.NoError(t, err)
+		created, err := inst.VFS().FileByPath(path.Join(mailFolder.Fullpath, "allowed.txt"))
+		require.NoError(t, err)
+		require.Equal(t, "mail", created.CozyMetadata.CreatedByApp)
+		require.Equal(t, "mail", created.CozyMetadata.UpdatedByApps[0].Slug)
+		upload(t, token, consts.RootDirID, "denied-root.txt", http.StatusForbidden)
+		upload(t, token, notesDir, "denied-notes.txt", http.StatusForbidden)
+	})
+
+	t.Run("RejectNestedIntentsBeforeParsingBody", func(t *testing.T) {
+		token := serveToken(t, createIntent(t, mailToken, "UPLOAD"))
+		newClient(t).POST("/intents").WithHeader("Authorization", "Bearer "+token).
+			WithText("invalid JSON").Expect().Status(http.StatusForbidden)
+	})
+
+	t.Run("PickUsesCallerPermissionsAndCannotReadAnotherIntent", func(t *testing.T) {
+		token := serveToken(t, createIntent(t, mailToken, "PICK"))
+		upload(t, token, consts.RootDirID, "denied-picker.txt", http.StatusForbidden)
+		otherID := createIntent(t, mailToken, "PICK")
+		newClient(t).GET("/intents/"+otherID).WithHeader("Authorization", "Bearer "+token).Expect().Status(http.StatusForbidden)
+	})
+
+	t.Run("PermissionChangesApplyToExistingAndNewTokens", func(t *testing.T) {
+		token := serveToken(t, createIntent(t, mailToken, "UPLOAD"))
+		t.Cleanup(func() { require.NoError(t, permission.ForceWebapp(inst, "mail", mailPermissions)) })
+		require.NoError(t, permission.ForceWebapp(inst, "mail", permission.Set{}))
+		upload(t, token, mailDir, "revoked.txt", http.StatusForbidden)
+		noWriteToken := serveToken(t, createIntent(t, mailToken, "UPLOAD"))
+		upload(t, noWriteToken, mailDir, "no-write.txt", http.StatusForbidden)
+	})
+
+	t.Run("LinkedOAuthIntentUsesAppPermissionsAfterClientDeletion", func(t *testing.T) {
+		client := &oauth.Client{ClientName: "Mail", SoftwareID: "registry://mail/stable", RedirectURIs: []string{"https://mail.example.test/callback"}}
+		require.Nil(t, client.Create(inst, oauth.SoftwareIDPrevalidated))
+		oauthToken, err := inst.MakeJWT(consts.AccessTokenAudience, client.ClientID, consts.Files+":GET", "", time.Now())
+		require.NoError(t, err)
+		id := createIntent(t, oauthToken, "UPLOAD")
+		client, err = oauth.FindClient(inst, client.ClientID)
+		require.NoError(t, err)
+		require.NoError(t, couchdb.DeleteDoc(inst, client))
+		token := serveToken(t, id)
+		upload(t, token, mailDir, "oauth-app-upload.txt", http.StatusCreated)
+		upload(t, token, notesDir, "denied-oauth-app.txt", http.StatusForbidden)
+	})
+
+	t.Run("UnlinkedOAuthIntentCannotReceiveServiceToken", func(t *testing.T) {
+		client := &oauth.Client{ClientName: "Unlinked", SoftwareID: "github.com/example/unlinked", RedirectURIs: []string{"https://client.example.test/callback"}}
+		require.Nil(t, client.Create(inst))
+		oauthToken, err := inst.MakeJWT(consts.AccessTokenAudience, client.ClientID, consts.Files+":ALL", "", time.Now())
+		require.NoError(t, err)
+		id := createIntent(t, oauthToken, "UPLOAD")
+		newClient(t).GET("/public").WithHost(service+"."+inst.Domain).
+			WithQuery("intent", id).Expect().Status(http.StatusForbidden)
+	})
+
+	t.Run("CallerCanHaveBroaderPermissionsThanService", func(t *testing.T) {
+		require.NoError(t, permission.ForceWebapp(inst, "broad-caller", servicePermissions))
+		t.Cleanup(func() { require.NoError(t, permission.ForceWebapp(inst, service, servicePermissions)) })
+		require.NoError(t, permission.ForceWebapp(inst, service, permission.Set{}))
+		id := createIntent(t, inst.BuildAppToken("broad-caller", sess.ID()), "UPLOAD")
+		token := serveToken(t, id)
+		upload(t, token, consts.RootDirID, "broad-caller.txt", http.StatusCreated)
+		newClient(t).GET("/files/"+consts.RootDirID).
+			WithHeader("Authorization", "Bearer "+inst.BuildAppToken(service, sess.ID())).Expect().Status(http.StatusForbidden)
+	})
+
+	t.Run("RejectExpiredAndForgedTokens", func(t *testing.T) {
+		id := createIntent(t, mailToken, "UPLOAD")
+		claims := parseToken(t, serveToken(t, id))
+		claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(-time.Minute))
+		expired, err := crypto.NewJWT(inst.SessionSecret(), claims)
+		require.NoError(t, err)
+		newClient(t).GET("/intents/"+id).WithHeader("Authorization", "Bearer "+expired).
+			Expect().Status(http.StatusForbidden).Header(echo.HeaderWWWAuthenticate).
+			Equal(`Bearer error="invalid_token" error_description="The access token expired"`)
+		forged, err := crypto.NewJWT([]byte("wrong-key"), claims)
+		require.NoError(t, err)
+		newClient(t).GET("/intents/"+id).WithHeader("Authorization", "Bearer "+forged).
+			Expect().Status(http.StatusForbidden).Header(echo.HeaderWWWAuthenticate).
+			Equal(`Bearer error="invalid_token"`)
+	})
+
+	t.Run("MissingIntentCannotReceiveToken", func(t *testing.T) {
+		newClient(t).GET("/public").WithHost(service+"."+inst.Domain).
+			WithQuery("intent", "missing").Expect().Status(http.StatusForbidden)
+	})
+
+	t.Run("IssuedTokensSurviveIntentDeletionButRespectAppRevocation", func(t *testing.T) {
+		id := createIntent(t, mailToken, "UPLOAD")
+		token := serveToken(t, id)
+		var stored intent.Intent
+		require.NoError(t, couchdb.GetDoc(inst, consts.Intents, id, &stored))
+		require.NoError(t, couchdb.DeleteDoc(inst, &stored))
+		upload(t, token, mailDir, "after-intent-deletion.txt", http.StatusCreated)
+		upload(t, token, consts.RootDirID, "denied-after-intent-deletion.txt", http.StatusForbidden)
+		t.Cleanup(func() { require.NoError(t, permission.ForceWebapp(inst, "mail", mailPermissions)) })
+		require.NoError(t, permission.ForceWebapp(inst, "mail", permission.Set{}))
+		upload(t, token, mailDir, "revoked-after-intent-deletion.txt", http.StatusForbidden)
+	})
+
+	t.Run("NormalAppPagesKeepServiceToken", func(t *testing.T) {
+		body := newClient(t).GET("/public").WithHost(service + "." + inst.Domain).Expect().Status(http.StatusOK).Body().Raw()
+		match := regexp.MustCompile(`"token":"([^"]+)"`).FindStringSubmatch(html.UnescapeString(body))
+		require.Len(t, match, 2)
+		claims := parseToken(t, match[1])
+		require.Equal(t, service, claims.Subject)
+		require.Nil(t, claims.Actor)
+	})
+
+	t.Run("RefreshWithIntentKeepsCallerPermissions", func(t *testing.T) {
+		id := createIntent(t, mailToken, "UPLOAD")
+		body := newClient(t).GET("/").WithHost(service+"."+inst.Domain).
+			WithQuery("refreshToken", "").WithQuery("intent", id).Expect().Status(http.StatusOK).Body().Raw()
+		match := regexp.MustCompile(`"token":"([^"]+)"`).FindStringSubmatch(html.UnescapeString(body))
+		require.Len(t, match, 2)
+		claims := parseToken(t, match[1])
+		require.Equal(t, "mail", claims.Subject)
+		require.Equal(t, service, claims.Actor.Subject)
+		require.Equal(t, id, claims.IntentID)
+		upload(t, match[1], mailDir, "refreshed.txt", http.StatusCreated)
+		upload(t, match[1], consts.RootDirID, "denied-refreshed.txt", http.StatusForbidden)
+		t.Cleanup(func() { require.NoError(t, permission.ForceWebapp(inst, "mail", mailPermissions)) })
+		require.NoError(t, permission.ForceWebapp(inst, "mail", permission.Set{}))
+		body = newClient(t).GET("/").WithHost(service+"."+inst.Domain).
+			WithQuery("refreshToken", "").WithQuery("intent", id).Expect().Status(http.StatusOK).Body().Raw()
+		match = regexp.MustCompile(`"token":"([^"]+)"`).FindStringSubmatch(html.UnescapeString(body))
+		require.Len(t, match, 2)
+		upload(t, match[1], mailDir, "denied-refreshed-revoked.txt", http.StatusForbidden)
+	})
+
+	t.Run("RefreshWithoutIntentReturnsOrdinaryServiceToken", func(t *testing.T) {
+		// shortcut: cozy-client drops intent on refresh; preserve it there before relying on delegation across refreshes.
+		body := newClient(t).GET("/").WithHost(service+"."+inst.Domain).
+			WithQuery("refreshToken", "").Expect().Status(http.StatusOK).Body().Raw()
+		match := regexp.MustCompile(`"token":"([^"]+)"`).FindStringSubmatch(html.UnescapeString(body))
+		require.Len(t, match, 2)
+		claims := parseToken(t, match[1])
+		require.Equal(t, service, claims.Subject)
+		require.Nil(t, claims.Actor)
+	})
+
+	t.Run("SessionIsRequiredAndRevocable", func(t *testing.T) {
+		ownSession, err := session.New(inst, session.NormalRun, "")
+		require.NoError(t, err)
+		id := createIntent(t, mailToken, "UPLOAD")
+		var stored intent.Intent
+		require.NoError(t, couchdb.GetDoc(inst, consts.Intents, id, &stored))
+		token, err := stored.ServiceToken(inst, service, ownSession.ID())
+		require.NoError(t, err)
+		ownCookie, err := ownSession.ToCookie()
+		require.NoError(t, err)
+		e := testutils.CreateTestClient(t, ts.URL).Builder(func(r *httpexpect.Request) {
+			r.WithHost(inst.Domain).WithHeader("Authorization", "Bearer "+token)
+		})
+		e.GET("/intents/" + id).Expect().Status(http.StatusForbidden)
+		e.GET("/intents/"+id).WithCookie(cookie.Name, cookie.Value).Expect().Status(http.StatusForbidden)
+		e.GET("/intents/"+id).WithCookie(ownCookie.Name, ownCookie.Value).Expect().Status(http.StatusOK)
+		require.NoError(t, couchdb.DeleteDoc(inst, ownSession))
+		e.GET("/intents/"+id).WithCookie(ownCookie.Name, ownCookie.Value).Expect().Status(http.StatusForbidden)
+	})
 }

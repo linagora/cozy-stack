@@ -12,6 +12,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -760,4 +761,15 @@ func (t *validableFile) Fetch(field string) []string {
 		prefixes = append(prefixes, prefix)
 	}
 	return prefixes
+}
+
+func TestClaimsExpiredWithoutIssuedAt(t *testing.T) {
+	for _, audience := range []string{consts.AppAudience, consts.AccessTokenAudience, consts.KonnectorAudience, consts.CLIAudience} {
+		t.Run(audience, func(t *testing.T) {
+			claims := Claims{RegisteredClaims: jwt.RegisteredClaims{Audience: jwt.ClaimStrings{audience}}}
+			require.True(t, claims.Expired())
+			claims.IssuedAt = jwt.NewNumericDate(time.Now())
+			require.False(t, claims.Expired())
+		})
+	}
 }

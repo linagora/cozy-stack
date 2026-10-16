@@ -7,9 +7,12 @@ import (
 
 	"github.com/cozy/cozy-stack/model/app"
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/crypto"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -107,6 +110,8 @@ func TestIntents(t *testing.T) {
 		assert.Len(t, intent.Services, 1)
 		service := intent.Services[0]
 		assert.Equal(t, "files", service.Slug)
+		assert.True(t, intent.HasService("files"))
+		assert.False(t, intent.HasService("photos"))
 		assert.Equal(t, "https://files.cozy.example.net/pick?intent=6b44d8d0-148b-11e7-a1cf-a38d75a77df6", service.Href)
 
 		intent = &Intent{
@@ -119,6 +124,8 @@ func TestIntents(t *testing.T) {
 		assert.Len(t, intent.Services, 1)
 		service = intent.Services[0]
 		assert.Equal(t, "photos", service.Slug)
+		assert.True(t, intent.HasService("photos"))
+		assert.False(t, intent.HasService("files"))
 		assert.Equal(t, "https://photos.cozy.example.net/viewer?intent=6b44d8d0-148b-11e7-a1cf-a38d75a77df6", service.Href)
 
 		intent = &Intent{
@@ -200,4 +207,30 @@ func TestIntents(t *testing.T) {
 
 		assert.Contains(t, res, "home")
 	})
+}
+
+func TestServiceToken(t *testing.T) {
+	inst := &instance.Instance{Domain: "alice.example.test"}
+	in := &Intent{IID: "intent-id", Client: consts.Apps + "/mail", Services: []Service{{Slug: "drive"}}}
+	token, err := in.ServiceToken(inst, "drive", "session-id")
+	require.NoError(t, err)
+	var claims permission.Claims
+	require.NoError(t, crypto.ParseJWT(token, func(*jwt.Token) (interface{}, error) { return inst.SessionSecret(), nil }, &claims))
+	require.Equal(t, "mail", claims.Subject)
+	require.Equal(t, &permission.Actor{Subject: "drive"}, claims.Actor)
+	require.Equal(t, "intent-id", claims.IntentID)
+	require.Equal(t, "session-id", claims.SessionID)
+	require.Equal(t, consts.AppAudience, claims.AudienceString())
+	require.Equal(t, claims.IssuedAt.Add(consts.IntentTokenValidityDuration), claims.ExpiresAt.Time)
+	require.False(t, claims.Expired())
+
+	_, err = in.ServiceToken(inst, "another-service", "session-id")
+	require.Error(t, err)
+	_, err = in.ServiceToken(inst, "drive", "")
+	require.Error(t, err)
+	for _, caller := range []string{"", consts.Apps + "/", consts.Konnectors + "/mail", "oauth-client-id"} {
+		in.Client = caller
+		_, err = in.ServiceToken(inst, "drive", "session-id")
+		require.Error(t, err)
+	}
 }

@@ -115,20 +115,13 @@ func handleAppNotFound(c echo.Context, i *instance.Instance, slug string) error 
 
 // handleIntent will allow iframes from another app if the current app is
 // opened as an intent. It returns the loaded intent so the caller can inline
-// it into the served page. A nil return means the intent could not be used
-// in that case the caller simply skips inlining, preserving the previous behavior.
+// it into the served page. A nil return means the request must be rejected.
 func handleIntent(c echo.Context, i *instance.Instance, slug, intentID string) *intent.Intent {
 	intent := &intent.Intent{}
 	if err := couchdb.GetDoc(i, consts.Intents, intentID, intent); err != nil {
 		return nil
 	}
-	allowed := false
-	for _, service := range intent.Services {
-		if slug == service.Slug {
-			allowed = true
-		}
-	}
-	if !allowed {
+	if !intent.HasService(slug) {
 		return nil
 	}
 	parts := strings.SplitN(intent.Client, "/", 2)
@@ -316,8 +309,11 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 	var intentDoc *intent.Intent
 	if intentID := c.QueryParam("intent"); intentID != "" {
 		intentDoc = handleIntent(c, i, slug, intentID)
+		if intentDoc == nil {
+			return echo.NewHTTPError(http.StatusForbidden, "Invalid intent")
+		}
 
-		if intentDoc != nil && slug == consts.DataProxySlug {
+		if slug == consts.DataProxySlug {
 			allowContainerAppsFrame(c, i)
 		}
 	}
@@ -383,7 +379,19 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 			}
 		}
 	}
-	params := buildServeParams(c, i, webapp, intentDoc, isLoggedIn, sessID)
+	params := buildServeParams(i, webapp, intentDoc, isLoggedIn)
+	if intentDoc == nil {
+		params.Token = getServeToken(c, i, webapp, isLoggedIn, sessID)
+	} else if isLoggedIn {
+		token, err := intentDoc.ServiceToken(i, slug, sessID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusForbidden, "Invalid intent authorization")
+		}
+		if _, err := middlewares.ParseJWT(c, i, token); err != nil {
+			return echo.NewHTTPError(http.StatusForbidden, "Invalid intent authorization")
+		}
+		params.Token = token
+	}
 
 	generated := &bytes.Buffer{}
 	if err := tmpl.Execute(generated, params); err != nil {
@@ -418,14 +426,11 @@ func sessionCodeRedirectQuery(query url.Values) url.Values {
 }
 
 func buildServeParams(
-	c echo.Context,
 	inst *instance.Instance,
 	webapp *app.WebappManifest,
 	intentDoc *intent.Intent,
 	isLoggedIn bool,
-	sessID string,
 ) serveParams {
-	token := getServeToken(c, inst, webapp, isLoggedIn, sessID)
 	tracking := false
 	settings, err := inst.SettingsDocument()
 	if err == nil {
@@ -442,7 +447,6 @@ func buildServeParams(
 	}
 
 	return serveParams{
-		Token:      token,
 		SubDomain:  subdomainsType,
 		Tracking:   tracking,
 		intent:     intentDoc,

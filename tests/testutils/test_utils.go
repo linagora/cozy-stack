@@ -436,7 +436,7 @@ func (c *TestSetup) InstallMiniDataProxy(t *testing.T) error {
 	if _, err := vfs.MkdirAll(instance.VFS(), appdir); err != nil {
 		return err
 	}
-	return createFile(instance, appdir, "index.html", "this is the dataproxy index")
+	return createFile(instance, appdir, "index.html", "this is the dataproxy index {{.CozyData}}")
 }
 
 func (c *TestSetup) InstallMiniKonnector() (string, error) {

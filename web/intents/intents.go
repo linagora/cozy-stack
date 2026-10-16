@@ -105,6 +105,9 @@ func createIntent(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	if grant.Permission.Type != permission.TypeWebapp && grant.Permission.Type != permission.TypeOauth {
+		return echo.NewHTTPError(http.StatusForbidden)
+	}
 	intent := &intent.Intent{}
 	if _, err = jsonapi.Bind(c.Request().Body, intent); err != nil {
 		return jsonapi.BadRequest(err)
@@ -200,16 +203,14 @@ func getIntent(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusForbidden)
 	}
+	if pdoc.Type == permission.TypeIntent && pdoc.IntentID != id {
+		return echo.NewHTTPError(http.StatusForbidden)
+	}
 	if err = couchdb.GetDoc(instance, consts.Intents, id, intent); err != nil {
 		return wrapIntentsError(err)
 	}
-	allowed := false
-	for _, service := range intent.Services {
-		if RequestAppSourceID(pdoc) == consts.Apps+"/"+service.Slug {
-			allowed = true
-		}
-	}
-	if !allowed {
+	slug, isApp := strings.CutPrefix(RequestAppSourceID(pdoc), consts.Apps+"/")
+	if !isApp || !intent.HasService(slug) {
 		return echo.NewHTTPError(http.StatusForbidden)
 	}
 	api := &apiIntent{doc: intent, ins: instance}

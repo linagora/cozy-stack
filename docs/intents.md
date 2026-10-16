@@ -346,6 +346,40 @@ start of the intent, if any.
 
 ### 5. Processing & Terminating
 
+#### Authorization of hosted services
+
+When Stack serves an authenticated app page with `?intent=...`, it supplies a
+short-lived app token using the initiating app recorded in `intent.Client`.
+For Mail calling Drive, the token has `aud: "app"`, `sub: "mail"` and
+`act.sub: "drive"`. Its `intent_id` restricts access to that intent's data.
+The token is bound to the browser session and expires after five minutes.
+
+Token refresh requests must preserve `?intent=...` on the service page URL.
+The current cozy-client refresh request (`/?refreshToken`) drops that context
+and receives the service's ordinary app token. A companion cozy-client change
+is required before caller permissions are preserved across automatic refreshes.
+
+Each API request loads the initiating app's current permissions through the
+normal app-token handling, without loading the intent document. Mail can upload
+only where its app permissions allow, even if Drive has broader access. File
+metadata attributes the operation to Mail. This applies to all intent actions,
+including `PICK`; broader access requires a separate user-consent flow.
+
+The caller must use an app or OAuth access token to create the intent. Linked
+OAuth clients resolve to their app through `intent.Client`. The intent does not
+store the original token's authorization: its OAuth scope, expiry and client
+revocation do not restrict later service execution. Existing intents with a valid
+app client continue to work without recreation. Changes to the app's permissions
+still apply immediately to issued tokens.
+
+Delegated tokens cannot create another intent or access endpoints reserved for
+ordinary app or OAuth tokens. Anonymous public pages receive no intent token.
+External service pages are not served by Stack and do not receive this token
+automatically. Deleting an intent does not revoke an issued token; its expiry
+and browser-session checks still apply.
+
+#### Completion
+
 After this handshake, there is a confirmed communication channel between the
 client and the service, and the service knows what it has to do. This is the
 phase where the user interacts with the service.
@@ -520,9 +554,9 @@ Mobile app                cozy-stack                WebView (service app)
                                                     2. SetCookieForNewSession(NormalRun)
                                                     3. redirect to ?intent=<id> (code stripped)
                                                     4. on reload: serve app with cozyData.token
-                   ◀── index.html with cozyData.token = <app token> ────
-                                                    cozy-client in WebView uses app token
-                                                    for all API calls (scoped to service slug)
+                   ◀── index.html with cozyData.token = <intent token> ────
+                                                    cozy-client in WebView uses intent token
+                                                    for all API calls (caller permissions)
 ```
 
 ### Prerequisites
@@ -553,7 +587,7 @@ on an external origin (see `service_url_flag`) do not receive a
 - The `session_code` is single-use (atomic delete in Redis on read) with a 7-day TTL.
 - The cookie is a `NormalRun` session (browser-session, 30-day max age) cleared
   when the WebView is destroyed.
-- The service page only receives a service-app-scoped token via `BuildAppToken`;
+- The service page receives a delegated app token using the initiating app's permissions;
   the underlying cookie grants a full user session, but the page code never
   accesses it directly.
 - Only tokens minted by `token_exchange` for a currently configured linked app

@@ -160,7 +160,18 @@ func ExtractClaims(c echo.Context, instance *instance.Instance, token string) (*
 
 	if err != nil {
 		logger.WithNamespace("permissions").Debugf("invalid token: %s", err)
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			return nil, permission.ErrExpiredToken
+		}
 		return nil, permission.ErrInvalidToken
+	}
+	if claims.Actor != nil || claims.IntentID != "" {
+		if claims.Actor == nil || claims.Actor.Subject == "" || claims.IntentID == "" || claims.ExpiresAt == nil || claims.SessionID == "" {
+			return nil, permission.ErrInvalidToken
+		}
+		if claims.AudienceString() != consts.AppAudience {
+			return nil, permission.ErrInvalidToken
+		}
 	}
 
 	// check if the claim is valid
@@ -264,6 +275,22 @@ func ParseJWT(c echo.Context, instance *instance.Instance, token string) (*permi
 		return nil, err
 	}
 
+	pdoc, err := getPermissionForClaims(c, instance, claims, token)
+	if err != nil {
+		return nil, err
+	}
+	if claims.Actor != nil {
+		return &permission.Permission{
+			Type:        permission.TypeIntent,
+			IntentID:    claims.IntentID,
+			SourceID:    consts.Apps + "/" + claims.Actor.Subject,
+			Permissions: pdoc.Permissions,
+		}, nil
+	}
+	return pdoc, nil
+}
+
+func getPermissionForClaims(c echo.Context, instance *instance.Instance, claims *permission.Claims, token string) (*permission.Permission, error) {
 	switch claims.AudienceString() {
 	case consts.AccessTokenAudience:
 		if err := instance.MovedError(); err != nil {

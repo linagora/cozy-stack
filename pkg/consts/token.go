@@ -18,6 +18,7 @@ var (
 	DefaultValidityDuration = 24 * time.Hour
 
 	AppTokenValidityDuration       = 24 * time.Hour
+	IntentTokenValidityDuration    = 5 * time.Minute
 	KonnectorTokenValidityDuration = 30 * time.Minute
 	CLITokenValidityDuration       = 30 * time.Minute
 

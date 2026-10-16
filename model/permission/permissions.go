@@ -42,6 +42,7 @@ type Permission struct {
 	Password    interface{}       `json:"password,omitempty"`
 
 	Client   interface{}            `json:"-"` // Contains the *oauth.Client client pointer for Oauth permission type
+	IntentID string                 `json:"-"` // Contains the intent ID for TypeIntent permissions
 	Metadata *metadata.CozyMetadata `json:"cozyMetadata,omitempty"`
 }
 
@@ -52,6 +53,9 @@ const (
 
 	// TypeWebapp is the value of Permission.Type for an application
 	TypeWebapp = "app"
+
+	// TypeIntent uses the caller's permissions while identifying the serving app.
+	TypeIntent = "intent"
 
 	// TypeKonnector is the value of Permission.Type for an application
 	TypeKonnector = "konnector"
