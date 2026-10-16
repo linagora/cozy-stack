@@ -2,6 +2,7 @@ package sharing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
 	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -327,6 +329,68 @@ func TestReadOnlyFlagUpdatesPendingRecipientLocally(t *testing.T) {
 			require.Nil(t, stored.Credentials[0].AccessToken)
 		})
 	}
+}
+
+// TestAddReadOnlyFlagSendsReadOnlyRefreshToken checks that a recipient made
+// read-only can still renew its token, with a read-only scope, to call the
+// sharer later (e.g. to open an office document created by the sharer).
+func TestAddReadOnlyFlagSendsReadOnlyRefreshToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+
+	// safehttp blocks loopback addresses outside dev mode; enable it so the
+	// in-memory httptest server is reachable.
+	oldBuildMode := build.BuildMode
+	build.BuildMode = build.ModeDev
+	t.Cleanup(func() { build.BuildMode = oldBuildMode })
+
+	var received struct {
+		Data struct {
+			Attributes Credentials `json:"attributes"`
+		} `json:"data"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	s := &Sharing{
+		SID:    "sharing-readonly-refresh",
+		Owner:  true,
+		Active: true,
+		Members: []Member{
+			{Status: MemberStatusOwner, Instance: "https://" + inst.Domain},
+			{Status: MemberStatusReady, Email: "recipient@example.test", Instance: srv.URL},
+		},
+		Credentials: []Credentials{{
+			AccessToken: &auth.AccessToken{AccessToken: "token"},
+		}},
+	}
+	require.NoError(t, couchdb.CreateNamedDoc(inst, s))
+
+	require.NoError(t, s.AddReadOnlyFlag(inst, 1))
+	require.True(t, s.Members[1].ReadOnly)
+
+	sent := received.Data.Attributes
+	require.NotNil(t, sent.Client)
+	require.NotNil(t, sent.AccessToken)
+	require.NotEmpty(t, sent.AccessToken.RefreshToken)
+
+	cli, err := oauth.FindClient(inst, sent.Client.ClientID)
+	require.NoError(t, err)
+	claims, ok := cli.ValidToken(inst, consts.RefreshTokenAudience, sent.AccessToken.RefreshToken)
+	require.True(t, ok)
+	require.Equal(t, consts.Sharings+":GET:"+s.SID, claims.Scope)
 }
 
 func TestProcessAnswerRejectsBrokenPayloads(t *testing.T) {

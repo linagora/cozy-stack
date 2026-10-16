@@ -1112,7 +1112,9 @@ func (s *Sharing) AddReadOnlyFlag(inst *instance.Instance, index int) error {
 	// We can't just revoke the tokens for the recipient (they are persisted
 	// on this cozy), so we have to revoke the client. And we create a new
 	// client for the temporary access token used to synchronize the last
-	// changes (the recipient won't have a refresh token).
+	// changes. The refresh token only gives a read access, like for a
+	// recipient who joins the sharing as read-only, so that the recipient
+	// can still call this cozy later (e.g. to open a shared office document).
 	cli, err := CreateOAuthClient(inst, m)
 	if err != nil {
 		return err
@@ -1125,11 +1127,16 @@ func (s *Sharing) AddReadOnlyFlag(inst *instance.Instance, index int) error {
 	if err != nil {
 		return err
 	}
+	cli.CouchID = cli.ClientID // XXX CouchID is required by CreateJWT
+	refresh, err := cli.CreateJWT(inst, consts.RefreshTokenAudience, consts.Sharings+":GET:"+s.SID)
+	if err != nil {
+		return err
+	}
 	ac.Credentials.AccessToken = &auth.AccessToken{
-		TokenType:   "bearer",
-		AccessToken: access,
-		// No refresh token
-		Scope: scope,
+		TokenType:    "bearer",
+		AccessToken:  access,
+		RefreshToken: refresh,
+		Scope:        scope,
 	}
 
 	data, err := jsonapi.MarshalObject(&ac)
