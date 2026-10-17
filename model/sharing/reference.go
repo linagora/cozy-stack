@@ -16,6 +16,14 @@ type Reference struct {
 	Revision int64  `json:"revision"`
 	// Ready is set once the broker confirmed the reply announcing the drive.
 	Ready bool `json:"ready,omitempty"`
+	// Activity turns on the activity digest of the drive.
+	Activity bool `json:"activity,omitempty"`
+}
+
+// ReportsActivity is true for a drive whose changes go to the activity
+// digest: the app asked for it and knows the drive.
+func (s *Sharing) ReportsActivity() bool {
+	return s.Reference != nil && s.Reference.Activity && s.Reference.Ready
 }
 
 // Provisioned is true for a drive that another app manages through

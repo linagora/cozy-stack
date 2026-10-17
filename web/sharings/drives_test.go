@@ -20,6 +20,7 @@ import (
 	"github.com/cozy/cozy-stack/client"
 	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/contact"
+	"github.com/cozy/cozy-stack/model/driveactivity"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
@@ -1460,6 +1461,42 @@ func runCoreSharedDrivesTests(t *testing.T, method DriveCreationMethod) {
 			WithHeader("Content-Type", "application/vnd.api+json").
 			WithBytes(rename(meetingsID, "Meetings 2026")).
 			Expect().Status(200)
+	})
+
+	t.Run("MemberChangesOpenAnActivityWindow", func(t *testing.T) {
+		s, err := sharing.FindSharing(ownerInstance, sharingID)
+		require.NoError(t, err)
+		s.Reference = &sharing.Reference{Source: "twake-space", ID: "space-1", Revision: 1, Ready: true, Activity: true}
+		require.NoError(t, couchdb.UpdateDoc(ownerInstance, s))
+		t.Cleanup(func() {
+			s.Reference = nil
+			_ = couchdb.UpdateDoc(ownerInstance, s)
+		})
+
+		eBetty.POST("/sharings/drives/"+sharingID+"/"+meetingsID).
+			WithQuery("Name", "Minutes.txt").
+			WithQuery("Type", "file").
+			WithHeader("Content-Type", "text/plain").
+			WithHeader("Authorization", "Bearer "+bettyAppToken).
+			WithBytes([]byte("foo")).
+			Expect().Status(201)
+
+		triggers, err := job.System().GetAllTriggers(ownerInstance)
+		require.NoError(t, err)
+		var windows int
+		for _, trigger := range triggers {
+			infos := trigger.Infos()
+			if infos.WorkerType != driveactivity.WorkerFlush {
+				continue
+			}
+			var msg driveactivity.FlushMessage
+			require.NoError(t, infos.Message.Unmarshal(&msg))
+			if msg.SharingID == sharingID {
+				windows++
+				require.NoError(t, job.System().DeleteTrigger(ownerInstance, infos.TID))
+			}
+		}
+		assert.Equal(t, 1, windows)
 	})
 }
 

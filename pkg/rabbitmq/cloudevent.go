@@ -26,20 +26,25 @@ func NewActivityRequest(contextName, eventType, org string, data any) (PublishRe
 	if err != nil {
 		return PublishRequest{}, err
 	}
-	event := CloudEvent{
-		SpecVersion: "1.0",
-		ID:          id.String(),
-		Source:      "twake://drive",
-		Type:        eventType,
-		Time:        time.Now().UTC(),
-		TwakeOrg:    org,
-		Data:        data,
-	}
+	return ActivityRequest(contextName, CloudEvent{
+		ID:       id.String(),
+		Type:     eventType,
+		Time:     time.Now().UTC(),
+		TwakeOrg: org,
+		Data:     data,
+	}), nil
+}
+
+// ActivityRequest returns the request publishing this event on the activity
+// exchange, with its type as routing key.
+func ActivityRequest(contextName string, event CloudEvent) PublishRequest {
+	event.SpecVersion = "1.0"
+	event.Source = "twake://drive"
 	return PublishRequest{
 		ContextName: contextName,
 		Exchange:    ExchangeActivity,
-		RoutingKey:  eventType,
+		RoutingKey:  event.Type,
 		Payload:     event,
 		MessageID:   event.ID,
-	}, nil
+	}
 }

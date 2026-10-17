@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/driveactivity"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/permission"
@@ -720,7 +721,9 @@ func CreationHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing
 	if err := ensureDirectoryBackedSharedDrive(s); err != nil {
 		return err
 	}
-	return files.Create(c, s)
+	file, err := files.Create(c, s)
+	driveactivity.Count(inst, s, GetSharedDriveMember(c), driveactivity.Created, file)
+	return err
 }
 
 // DestroyFileHandler handles DELETE requests to clear one element from the
@@ -732,7 +735,9 @@ func DestroyFileHandler(c echo.Context, inst *instance.Instance, s *sharing.Shar
 // OverwriteFileContentHandler handles PUT requests to overwrite the content of
 // a file given its identifier.
 func OverwriteFileContentHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
-	return files.OverwriteFileContent(c, s)
+	file, err := files.OverwriteFileContent(c, s)
+	driveactivity.Count(inst, s, GetSharedDriveMember(c), driveactivity.Updated, file)
+	return err
 }
 
 // RestoreTrashFileHandler handles POST requests to restore a file or directory
@@ -744,7 +749,9 @@ func RestoreTrashFileHandler(c echo.Context, inst *instance.Instance, s *sharing
 // TrashHandler handles all DELETE requests to move the file or directory with
 // the specified file-id to the trash.
 func TrashHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
-	return files.Trash(c, s)
+	file, err := files.Trash(c, s)
+	driveactivity.Count(inst, s, GetSharedDriveMember(c), driveactivity.Deleted, file)
+	return err
 }
 
 // UploadMetadataHandler accepts a metadata objet and persists it, so that it

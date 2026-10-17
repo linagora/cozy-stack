@@ -93,10 +93,11 @@ func ensureDrive(inst *instance.Instance, cmd *Command) (*sharing.Sharing, error
 		return create(inst, cmd)
 	}
 
-	if drive.Reference.Revision == cmd.Revision && drive.Description == cmd.Name {
+	if drive.Reference.Revision == cmd.Revision && drive.Description == cmd.Name && drive.Reference.Activity == cmd.Activity {
 		return drive, nil
 	}
 	drive.Reference.Revision = cmd.Revision
+	drive.Reference.Activity = cmd.Activity
 	if drive.Description != cmd.Name {
 		err = rename(inst, drive, cmd.Name)
 	} else {
@@ -161,6 +162,7 @@ func shareDir(inst *instance.Instance, dir *vfs.DirDoc, cmd *Command) (*sharing.
 		Source:   cmd.Reference.Source,
 		ID:       cmd.Reference.ID,
 		Revision: cmd.Revision,
+		Activity: cmd.Activity,
 	}
 	if _, err := s.Create(inst); err != nil {
 		return nil, err

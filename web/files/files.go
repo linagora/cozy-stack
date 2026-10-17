@@ -90,14 +90,19 @@ func SharedDrivesCreationHandler(c echo.Context) error {
 // Create handle all POST requests on /files/:file-id
 // aiming at creating a new document in the FS. Given the Type
 // parameter of the request, it will either upload a new file or
-// create a new directory.
-func Create(c echo.Context, sharedDrive *sharing.Sharing) error {
+// create a new directory. It returns the created file, nil for a directory.
+func Create(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) {
 	instance := middlewares.GetInstance(c)
 	var doc jsonapi.Object
+	var created *vfs.FileDoc
 	var err error
 	switch c.QueryParam("Type") {
 	case consts.FileType:
-		doc, err = createFileHandler(c, instance.VFS(), sharedDrive)
+		var f *file
+		f, err = createFileHandler(c, instance.VFS(), sharedDrive)
+		if err == nil {
+			doc, created = f, f.doc
+		}
 	case consts.DirType:
 		doc, err = createDirHandler(c, instance.VFS(), sharedDrive)
 	default:
@@ -105,14 +110,15 @@ func Create(c echo.Context, sharedDrive *sharing.Sharing) error {
 	}
 
 	if err != nil {
-		return WrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
 
-	return jsonapi.Data(c, http.StatusCreated, doc, nil)
+	return created, jsonapi.Data(c, http.StatusCreated, doc, nil)
 }
 
 func CreationHandler(c echo.Context) error {
-	return Create(c, nil)
+	_, err := Create(c, nil)
+	return err
 }
 
 func resolveDirID(c echo.Context) (string, error) {
@@ -305,7 +311,7 @@ func createDirHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing) 
 
 // OverwriteFileContent handles PUT requests on /files/:file-id
 // to overwrite the content of a file given its identifier.
-func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) error {
+func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) {
 	instance := middlewares.GetInstance(c)
 
 	fileID := c.Param("file-id")
@@ -315,12 +321,12 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) error {
 
 	olddoc, err := instance.VFS().FileByID(fileID)
 	if err != nil {
-		return WrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
 
 	newdoc, err := FileDocFromReq(c, olddoc.DocName, olddoc.DirID)
 	if err != nil {
-		return WrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
 
 	if updated := c.QueryParam("UpdatedAt"); updated != "" {
@@ -332,7 +338,7 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) error {
 	newdoc.ReferencedBy = olddoc.ReferencedBy
 
 	if err := CheckIfMatch(c, olddoc.Rev()); err != nil {
-		return WrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
 
 	if olddoc.CozyMetadata != nil {
@@ -342,13 +348,13 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) error {
 
 	err = checkPerm(c, permission.PUT, nil, olddoc)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	newdoc.SetID(olddoc.ID()) // The ID can be useful to check permissions
 	err = checkPerm(c, permission.PUT, nil, newdoc)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if filepath.Ext(newdoc.DocName) == ".cozy-note" {
@@ -356,27 +362,28 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) error {
 		if err != nil {
 			instance.Logger().WithNamespace("files").
 				Infof("Cannot import note: %s", err)
-			return WrapVfsError(err)
+			return nil, WrapVfsError(err)
 		}
-		return FileData(c, http.StatusOK, newdoc, true, nil, sharedDrive)
+		return newdoc, FileData(c, http.StatusOK, newdoc, true, nil, sharedDrive)
 	}
 
 	file, err := instance.VFS().CreateFile(newdoc, olddoc)
 	if err != nil {
-		return WrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
 	_, err = io.Copy(file, c.Request().Body)
 	if cerr := file.Close(); cerr != nil && err == nil {
 		err = cerr
 	}
 	if err != nil {
-		return WrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
-	return FileData(c, http.StatusOK, newdoc, true, nil, sharedDrive)
+	return newdoc, FileData(c, http.StatusOK, newdoc, true, nil, sharedDrive)
 }
 
 func OverwriteFileContentHandler(c echo.Context) error {
-	return OverwriteFileContent(c, nil)
+	_, err := OverwriteFileContent(c, nil)
+	return err
 }
 
 // UploadMetadataHandler accepts a metadata objet and persist it, so that it
@@ -1521,29 +1528,29 @@ func versionDownloadHandler(c echo.Context, secret string) error {
 
 // Trash handles all DELETE requests on /files/:file-id and
 // moves the file or directory with the specified file-id to the
-// trash.
-func Trash(c echo.Context, sharedDrive *sharing.Sharing) error {
+// trash. It returns the file as it was before, nil for a directory.
+func Trash(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) {
 	instance := middlewares.GetInstance(c)
 
 	fileID := c.Param("file-id")
 	dir, file, err := instance.VFS().DirOrFileByID(fileID)
 	if err != nil {
-		return WrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
 
 	err = checkPerm(c, permission.PATCH, dir, file)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := CheckProvisionedRoot(c, dir); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Check antivirus status for files
 	if file != nil {
 		if err = CheckAntivirusAction(instance, file, ActionDelete); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -1555,7 +1562,7 @@ func Trash(c echo.Context, sharedDrive *sharing.Sharing) error {
 	}
 
 	if err := CheckIfMatch(c, rev); err != nil {
-		return WrapVfsError(err)
+		return nil, WrapVfsError(err)
 	}
 
 	job.EnsureCleanOldTrashedTrigger(instance)
@@ -1564,21 +1571,22 @@ func Trash(c echo.Context, sharedDrive *sharing.Sharing) error {
 		UpdateDirTrashCozyMetadata(c, dir)
 		doc, errt := vfs.TrashDir(instance.VFS(), dir)
 		if errt != nil {
-			return WrapVfsError(errt)
+			return nil, WrapVfsError(errt)
 		}
-		return DirData(c, http.StatusOK, doc, sharedDrive)
+		return nil, DirData(c, http.StatusOK, doc, sharedDrive)
 	}
 
 	UpdateFileTrashCozyMetadata(c, file)
 	doc, errt := vfs.TrashFile(instance.VFS(), file)
 	if errt != nil {
-		return WrapVfsError(errt)
+		return nil, WrapVfsError(errt)
 	}
-	return FileData(c, http.StatusOK, doc, false, nil, sharedDrive)
+	return file, FileData(c, http.StatusOK, doc, false, nil, sharedDrive)
 }
 
 func TrashHandler(c echo.Context) error {
-	return Trash(c, nil)
+	_, err := Trash(c, nil)
+	return err
 }
 
 // ReadTrashFilesHandler handle GET requests on /files/trash and return the

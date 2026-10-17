@@ -29,6 +29,21 @@ func TestEnsure(t *testing.T) {
 	config.UseTestFile(t)
 	testutils.NeedCouchdb(t)
 
+	t.Run("StoresTheActivityFlag", func(t *testing.T) {
+		org := newOrgInstance(t)
+		cmd := &Command{Reference: Reference{Source: "app", ID: "object"}, Revision: 1, Name: "Activity", Activity: true}
+		s, _, err := Ensure(org, cmd)
+		require.NoError(t, err)
+		assert.True(t, s.Reference.Activity)
+
+		cmd.Activity = false
+		_, _, err = Ensure(org, cmd)
+		require.NoError(t, err)
+		s, err = sharing.FindSharing(org, s.SID)
+		require.NoError(t, err)
+		assert.False(t, s.Reference.Activity)
+	})
+
 	t.Run("ConcurrentCreationUsesOneDrive", func(t *testing.T) {
 		org := newOrgInstance(t)
 		org.VFS()

@@ -295,6 +295,8 @@ CloudEvents read by other apps, with the event type as routing key and
 
 - `com.twake.drive.org_drive.ready.v1`: the reply to `drive.org_drive.ensure`,
   see below.
+- `com.twake.drive.folder.changed.v1`: the activity digest of an organization
+  drive, see below.
 
 ### Handlers
 
@@ -482,7 +484,8 @@ of its objects by sending `drive.org_drive.ensure` on the `drive` exchange
   "state": "created",
   "name": "Product launch",
   "members": [{ "email": "alice@example.net", "role": "write" }],
-  "groups": [{ "id": "marketing", "role": "read" }]
+  "groups": [{ "id": "marketing", "role": "read" }],
+  "activity": true
 }
 ```
 
@@ -526,6 +529,48 @@ of its objects by sending `drive.org_drive.ensure` on the `drive` exchange
   An older revision is ignored, and a reference without a drive still gets the reply.
 - A malformed command (no reference, no revision, unknown state or role) goes
   to the dead letter queue at once.
+- `activity` turns on the activity digest of the drive, below. Each command
+  sets it again.
+
+#### Drive activity digest
+
+For a drive with `activity` on, whose `ready` reply was confirmed, the Stack
+counts the files that members create, update and send to the trash through
+`/sharings/drives/:id/`, and publishes the counts at the end of a time window
+([ADR 010](adr/010-adr-drive-activity-digest.md)):
+
+```json
+{
+  "specversion": "1.0",
+  "id": "5c0e9f3a-2b71-5d4e-8a96-7f1c3d2e4b50",
+  "source": "twake://drive",
+  "type": "com.twake.drive.folder.changed.v1",
+  "time": "2026-10-12T09:15:30Z",
+  "twakeorg": "org123",
+  "twakeactor": "alice@example.net",
+  "data": {
+    "object": {
+      "type": "folder",
+      "id": "8ff66e0ee58e",
+      "title": "Q4 assets",
+      "container": { "kind": "drive", "id": "a1f0c3e2d4b5" }
+    },
+    "files": { "created": 1200, "updated": 3, "deleted": 0 },
+    "samples": ["logo.svg", "banner.png", "brief.pdf", "budget.xlsx", "notes.md"]
+  }
+}
+```
+
+- There is one event per member and top folder (the folder directly under the
+  root of the drive) that changed in the window. A file at the root counts
+  under the root folder.
+- `container.id` is the drive id of the `ready` reply.
+- `samples` holds up to five file names.
+- `id` is the same when a flush is retried, so a consumer can drop the events
+  it has already seen.
+- The window is the context setting `drive_activity.window`, 30 seconds by
+  default. The counts are held in Redis when the Stack has one, in memory
+  otherwise.
 
 ### Lifecycle
 
