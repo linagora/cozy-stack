@@ -62,9 +62,10 @@ func Suggest(inst *instance.Instance, q string, limit int) ([]Suggestion, error)
 	var suggestions []Suggestion
 	for _, p := range people {
 		s := Suggestion{Name: p.Name, Email: p.Email}
-		if c, ok := members[p.Email]; ok {
+		key := strings.ToLower(p.Email)
+		if c, ok := members[key]; ok {
 			s.Contact, s.Kind = c, SuggestionMember
-		} else if c, ok := contacts[p.Email]; ok {
+		} else if c, ok := contacts[key]; ok {
 			s.Contact, s.Kind = c, SuggestionContact
 		}
 		suggestions = appendSuggestion(suggestions, seen, s)

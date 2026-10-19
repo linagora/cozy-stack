@@ -54,7 +54,7 @@ func TestSuggest(t *testing.T) {
 		_, _ = w.Write([]byte(`[
 			{"names": [{"displayName": "Alice Durand"}], "emailAddresses": [{"value": "alice@acme.example"}]},
 			{"names": [{"displayName": "Bob Durand"}], "emailAddresses": [{"value": "bob@acme.example"}]},
-			{"names": [{"displayName": "Carol Durand"}], "emailAddresses": [{"value": "carol@friends.example"}]},
+			{"names": [{"displayName": "Carol Durand"}], "emailAddresses": [{"value": "Carol@Friends.example"}]},
 			{"names": [{"displayName": "Dave Durand"}], "emailAddresses": [{"value": "dave@unknown.example"}]},
 			{"names": [{"displayName": "Bob"}], "emailAddresses": [{"value": "BOB@acme.example"}]}
 		]`))
@@ -83,7 +83,7 @@ func TestSuggest(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []result{
 			{bob.ID(), SuggestionMember, "Bob Durand", "bob@acme.example"},
-			{carol.ID(), SuggestionContact, "Carol Durand", "carol@friends.example"},
+			{carol.ID(), SuggestionContact, "Carol Durand", "Carol@Friends.example"},
 			{"", "", "Dave Durand", "dave@unknown.example"},
 		}, results(suggestions))
 	})

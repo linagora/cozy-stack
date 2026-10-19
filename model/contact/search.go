@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -91,16 +92,20 @@ func Search(inst *instance.Instance, q string, limit int) ([]Person, error) {
 }
 
 // FindByEmails returns the contacts with the given email addresses, by
-// address, in a single request. When several contacts share an address, the
-// first one wins.
+// lowercased address, in a single request. The view emits the addresses as
+// stored, so each one is also looked up in lowercase. When several contacts
+// share an address, the first one wins.
 func FindByEmails(db prefixer.Prefixer, emails []string) (map[string]*Contact, error) {
 	found := make(map[string]*Contact)
 	if len(emails) == 0 {
 		return found, nil
 	}
-	keys := make([]interface{}, len(emails))
-	for i, email := range emails {
-		keys[i] = email
+	keys := make([]interface{}, 0, 2*len(emails))
+	for _, email := range emails {
+		keys = append(keys, email)
+		if lower := strings.ToLower(email); lower != email {
+			keys = append(keys, lower)
+		}
 	}
 	var res couchdb.ViewResponse
 	err := couchdb.ExecView(db, couchdb.ContactByEmail, &couchdb.ViewRequest{
@@ -115,6 +120,7 @@ func FindByEmails(db prefixer.Prefixer, emails []string) (map[string]*Contact, e
 	}
 	for _, row := range res.Rows {
 		email, _ := row.Key.(string)
+		email = strings.ToLower(email)
 		if _, ok := found[email]; ok {
 			continue
 		}

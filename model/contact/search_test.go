@@ -93,10 +93,10 @@ func TestFindByEmailsAndText(t *testing.T) {
 	create("Paul", "paul@acme.example")
 	create("Axb", "axb@acme.example")
 
-	found, err := FindByEmails(db, []string{"jean@acme.example", "marie@home.example", "nobody@acme.example"})
+	found, err := FindByEmails(db, []string{"Jean@Acme.example", "marie@home.example", "nobody@acme.example"})
 	require.NoError(t, err)
 	assert.Len(t, found, 2)
-	assert.Equal(t, jean.ID(), found["jean@acme.example"].ID())
+	assert.Equal(t, jean.ID(), found["jean@acme.example"].ID(), "by lowercased address")
 	assert.Equal(t, marie.ID(), found["marie@home.example"].ID())
 
 	docs, err := FindByText(db, "DUP", 10)
