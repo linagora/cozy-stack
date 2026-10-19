@@ -321,7 +321,7 @@ Queue names are mapped to handlers in the stack. For example:
 - `user.password.updated` → updates an instance passphrase when a `user.password.updated` routing key is received.
 - `user.created` → validates and processes user creation events. Copies no organization contact when the context sets `common_contacts`.
 - `user.phone.updated` → updates the phone number stored in user settings.
-- `domain.user.deleted` on the `b2b` exchange → removes externally managed organization contacts, except on instances whose context sets `common_contacts`.
+- `domain.user.deleted` on the `b2b` exchange → removes externally managed organization contacts, except the ones written by the `twake:contacts:common` feed.
 - `banner.materialize` and `banner.clear` on the `platform` exchange → materializes or clears a platform banner, see [Banners](banners.md).
 - every message of the `twake:contacts:common` fanout exchange → writes a contact, see below.
 - `drive.org_drive.ensure` on the `drive` exchange → creates or updates a shared drive on an organization instance, see below.

@@ -100,10 +100,6 @@ func SyncDeletedOrgContact(ctx context.Context, msg UserDeletedMessage) error {
 			log.Debugf("user.deleted: skipping own instance %s for organization contact %s", inst.Domain, msg.WorkplaceFqdn)
 			continue
 		}
-		// The feed deletes the member.
-		if inst.HasCommonContacts() {
-			continue
-		}
 
 		existing, err := findExternalOrgContactByEmail(inst, email)
 		if err != nil {
@@ -114,6 +110,10 @@ func SyncDeletedOrgContact(ctx context.Context, msg UserDeletedMessage) error {
 		}
 		if existing == nil {
 			log.Infof("user.deleted: no external contact for %s in %s, skipping", email, inst.Domain)
+			continue
+		}
+		// The feed deletes the contacts it wrote.
+		if _, ok := existing.M[contact.CardDAVPathKey]; ok {
 			continue
 		}
 		if err := couchdb.DeleteDoc(inst, existing); err != nil {

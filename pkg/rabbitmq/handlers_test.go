@@ -15,6 +15,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/settings/common"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -241,6 +242,7 @@ func TestCommonContactsStopsMemberCopies(t *testing.T) {
 	bobEmail := "bob-" + suffix + "@acme.example"
 	alice := newMember("alice", aliceEmail)
 	bob := newMember("bob", bobEmail)
+	carol := newMember("carol", "carol-"+suffix+"@acme.example")
 
 	t.Run("user.created copies no contact", func(t *testing.T) {
 		body, err := json.Marshal(rabbitmq.UserCreatedMessage{
@@ -259,18 +261,24 @@ func TestCommonContactsStopsMemberCopies(t *testing.T) {
 		assert.ErrorIs(t, err, contact.ErrNotFound)
 	})
 
-	t.Run("user.deleted leaves the other instances alone", func(t *testing.T) {
-		copied := createContact(t, bob, aliceEmail, alice.PageURL("", nil), true, "Alice")
+	t.Run("user.deleted leaves the contacts of the feed alone", func(t *testing.T) {
+		createContact(t, bob, aliceEmail, alice.PageURL("", nil), true, "Alice")
+		fromFeed := createContact(t, carol, aliceEmail, alice.PageURL("", nil), true, "Alice")
+		fromFeed.M[contact.CardDAVPathKey] = "addressbooks/carol/collected/alice.vcf"
+		require.NoError(t, couchdb.UpdateDoc(carol, fromFeed))
+
 		require.NoError(t, rabbitmq.SyncDeletedOrgContact(context.Background(), rabbitmq.UserDeletedMessage{
 			WorkplaceFqdn:  alice.Domain,
 			InternalEmail:  aliceEmail,
 			OrganizationID: orgID,
 		}))
 
-		found, err := contact.FindAllByEmail(bob, aliceEmail)
+		_, err := contact.FindAllByEmail(bob, aliceEmail)
+		assert.ErrorIs(t, err, contact.ErrNotFound)
+		found, err := contact.FindAllByEmail(carol, aliceEmail)
 		require.NoError(t, err)
 		require.Len(t, found, 1)
-		assert.Equal(t, copied.ID(), found[0].ID())
+		assert.Equal(t, fromFeed.ID(), found[0].ID())
 	})
 }
 
