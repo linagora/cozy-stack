@@ -240,7 +240,7 @@ func TestCommonContactsStopsMemberCopies(t *testing.T) {
 	}
 	aliceEmail := "alice-" + suffix + "@acme.example"
 	bobEmail := "bob-" + suffix + "@acme.example"
-	alice := newMember("alice", aliceEmail)
+	alice := newMember("alice", "before-"+aliceEmail)
 	bob := newMember("bob", bobEmail)
 	carol := newMember("carol", "carol-"+suffix+"@acme.example")
 
@@ -249,12 +249,17 @@ func TestCommonContactsStopsMemberCopies(t *testing.T) {
 			TwakeID:        "alice",
 			WorkplaceFqdn:  alice.Domain,
 			InternalEmail:  aliceEmail,
+			MatrixID:       "@alice:acme.example",
 			OrganizationID: orgID,
 		})
 		require.NoError(t, err)
 		require.NoError(t, rabbitmq.NewUserCreatedHandler().
 			Handle(context.Background(), amqp.Delivery{Body: body}))
 
+		settings, err := alice.SettingsDocument()
+		require.NoError(t, err)
+		assert.Equal(t, aliceEmail, settings.M["email"])
+		assert.Equal(t, "@alice:acme.example", settings.M["matrix_id"])
 		_, err = contact.FindAllByEmail(bob, aliceEmail)
 		assert.ErrorIs(t, err, contact.ErrNotFound)
 		_, err = contact.FindAllByEmail(alice, bobEmail)
