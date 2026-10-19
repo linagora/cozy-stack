@@ -52,7 +52,7 @@ func TestReconcileOrganizationContacts(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, false)
-	require.Error(t, err, "nothing sent since, so no republication reached the stack")
+	require.ErrorIs(t, err, ErrNothingSeen, "nothing sent since, so no republication reached the stack")
 	require.True(t, exists(gone))
 
 	MarkContactSeen(org, sent.M[contact.CardDAVPathKey].(string))
@@ -74,5 +74,5 @@ func TestReconcileOrganizationContacts(t *testing.T) {
 	require.Empty(t, report.Removed)
 
 	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, time.Now().Add(-8*24*time.Hour), false)
-	require.Error(t, err, "the seen markers do not go back that far")
+	require.ErrorIs(t, err, ErrSinceTooOld, "the seen markers do not go back that far")
 }

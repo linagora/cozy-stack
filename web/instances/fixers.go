@@ -404,7 +404,14 @@ func orgContactsFixer(c echo.Context) error {
 	}
 	dryRun := c.QueryParam("dry_run") == "true"
 	report, err := orgdirectory.ReconcileOrganizationContacts(c.Request().Context(), c.Param("org_id"), since, dryRun)
-	if err != nil {
+	switch {
+	case errors.Is(err, orgdirectory.ErrSinceTooOld):
+		return jsonapi.BadRequest(err)
+	case errors.Is(err, instance.ErrNotFound):
+		return jsonapi.NotFound(err)
+	case errors.Is(err, orgdirectory.ErrNoCommonContacts), errors.Is(err, orgdirectory.ErrNothingSeen):
+		return jsonapi.PreconditionFailed("org_id", err)
+	case err != nil:
 		return err
 	}
 	return c.JSON(http.StatusOK, report)

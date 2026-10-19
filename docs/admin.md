@@ -557,6 +557,12 @@ are kept. The organization instance must exist and its context must set
 `removed` lists the CardDAV paths of the deleted contacts, `kept` counts the
 contacts the feed sent again.
 
+It responds with `400 Bad Request` when `since` is not a date or is more than 7
+days ago, with `404 Not Found` when the organization has no instance or no
+organization instance, and with `412 Precondition Failed` when the context of
+the organization instance does not set `common_contacts` or no contact was sent
+since `since`.
+
 #### Query-String
 
 | Parameter | Description                                          |
