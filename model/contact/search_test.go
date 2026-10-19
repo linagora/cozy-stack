@@ -45,6 +45,7 @@ func TestSearch(t *testing.T) {
 	config.GetConfig().ContactsSearch = map[string]config.ContactsSearch{
 		"acme": {URL: ts.URL + "/api/people/search", Token: "s3cr3t"},
 	}
+	t.Cleanup(func() { config.GetConfig().ContactsSearch = nil })
 	inst := &instance.Instance{Domain: "jean.acme.example", ContextName: "acme", Email: "jean@acme.example"}
 
 	people, err := Search(inst, "dup", 20)
