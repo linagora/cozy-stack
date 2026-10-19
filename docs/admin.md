@@ -500,12 +500,14 @@ Content-Type: application/json
 
 Delete the members the organization directory copied into the member instances
 of an organization, once the `twake:contacts:common` feed has filled its
-organization instance. Run it after a republication of the organization. The
-organization instance must exist and its context must set `common_contacts`.
-Instances whose context does not set it are skipped. Personal contacts,
-contacts written for sharing and copies the feed took over (with a
-`carddavPath`) are kept. The contacts are deleted in bulk, so the `share-group`
-trigger does not revoke the members of the groups. It is safe to run twice.
+organization instance. Run it after a republication of the organization is
+fully consumed. The organization instance must exist, its context must set
+`common_contacts`, and the feed must have written at least one contact (with a
+`carddavPath`) on it. Instances whose context does not set `common_contacts`
+are skipped. Personal contacts, contacts written for sharing and copies the
+feed took over (with a `carddavPath`) are kept. The contacts are deleted in
+bulk, so the `share-group` trigger does not revoke the members of the groups.
+It is safe to run twice.
 
 `removed` counts the deleted contacts by instance.
 

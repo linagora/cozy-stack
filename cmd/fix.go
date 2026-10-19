@@ -533,7 +533,8 @@ var memberCopiesFixer = &cobra.Command{
 	Long: `
 This fixer deletes the members the organization directory copied into each
 member instance, once the twake:contacts:common feed has filled the
-organization instance. Run it after a republication of the organization.
+organization instance. Run it after a republication of the organization is
+fully consumed: it only refuses to run while the feed has written nothing.
 It skips the instances whose context does not set common_contacts, and keeps
 personal contacts and contacts written for sharing. It is safe to run twice.
 `,

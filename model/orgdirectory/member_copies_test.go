@@ -65,6 +65,13 @@ func TestRemoveMemberCopies(t *testing.T) {
 	shared, err := contact.Create(alice, contact.CreateOptions{Email: "frank@example.test", External: true})
 	require.NoError(t, err)
 
+	_, err = RemoveMemberCopies(testCtx(t), orgID, false)
+	require.ErrorIs(t, err, ErrOrgInstanceNotFilled)
+	require.True(t, exists(alice, aliceCopy), "nothing is deleted before the feed fills the org instance")
+
+	orgMember.M[contact.CardDAVPathKey] = "addressbooks/org/common/carol.vcf"
+	require.NoError(t, couchdb.UpdateDoc(org, orgMember))
+
 	report, err := RemoveMemberCopies(testCtx(t), orgID, true)
 	require.NoError(t, err)
 	require.Equal(t, map[string]int{alice.Domain: 1}, report.Removed)
@@ -96,5 +103,8 @@ func TestRemoveMemberCopiesNeedsTheOrgInstanceOnTheFeed(t *testing.T) {
 	createOrgDirectoryInstance(t, orgID+".local", orgDomain, orgID, "owner@acme.test", "Owner")
 
 	_, err := RemoveMemberCopies(testCtx(t), orgID, false)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNoCommonContacts)
+
+	_, err = RemoveMemberCopies(testCtx(t), "unknown"+suffix, false)
+	require.ErrorIs(t, err, instance.ErrNotFound)
 }

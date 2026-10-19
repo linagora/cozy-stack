@@ -9,6 +9,16 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
+)
+
+var (
+	// ErrNoCommonContacts is returned when the context of the organization
+	// instance does not set common_contacts.
+	ErrNoCommonContacts = errors.New("the organization instance does not read the common contacts")
+	// ErrOrgInstanceNotFilled is returned when the twake:contacts:common feed
+	// has written no contact on the organization instance yet.
+	ErrOrgInstanceNotFilled = errors.New("the twake:contacts:common feed has not filled the organization instance yet")
 )
 
 // MemberCopiesReport tells how many member copies were removed on each
@@ -37,7 +47,21 @@ func RemoveMemberCopies(ctx context.Context, organizationID string, dryRun bool)
 		return nil, fmt.Errorf("organization %s has no organization instance: %w", organizationID, instance.ErrNotFound)
 	}
 	if !orgInst.HasCommonContacts() {
-		return nil, errors.New("the organization instance does not read the common contacts")
+		return nil, ErrNoCommonContacts
+	}
+	// Only the feed writes a carddavPath. One contact shows the feed has
+	// started, not that it is done.
+	var fed []couchdb.JSONDoc
+	err = couchdb.FindDocs(orgInst, consts.Contacts, &couchdb.FindRequest{
+		UseIndex: "by-carddav-path",
+		Selector: mango.Exists(contact.CardDAVPathKey),
+		Limit:    1,
+	}, &fed)
+	if err != nil {
+		return nil, err
+	}
+	if len(fed) == 0 {
+		return nil, ErrOrgInstanceNotFilled
 	}
 
 	report := &MemberCopiesReport{Removed: map[string]int{}}
