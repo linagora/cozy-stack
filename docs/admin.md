@@ -549,10 +549,10 @@ instance and did not send again since `since`, to catch the `DELETE` messages
 the stack missed. Call it once the side service republication of the domain
 address books (`POST /domains/<domain>/contacts?action=republish&scope=domain`)
 has completed without failures and the stack has read every message, with
-`since` set to the start of the republication, at most 7 days ago. It refuses
-to run when no contact was sent since then. Contacts without a `carddavPath`
-are kept. The organization instance must exist and its context must set
-`common_contacts`.
+`since` a few minutes before the start of the republication (the stack and the
+side service clocks may differ), at most 7 days ago. It refuses to run when no
+contact was sent since then. Contacts without a `carddavPath` are kept. The
+organization instance must exist and its context must set `common_contacts`.
 
 `removed` lists the CardDAV paths of the deleted contacts, `kept` counts the
 contacts the feed sent again.
@@ -567,7 +567,7 @@ since `since`.
 
 | Parameter | Description                                          |
 | --------- | ---------------------------------------------------- |
-| since     | the start of the republication, in RFC 3339          |
+| since     | a few minutes before the republication, in RFC 3339  |
 | dry_run   | `true` to report what would be removed, but not save |
 
 #### Request

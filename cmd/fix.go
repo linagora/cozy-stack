@@ -593,8 +593,9 @@ var orgContactsFixer = &cobra.Command{
 This fixer deletes the contacts the twake:contacts:common feed wrote on the
 organization instance and did not send again since --since. Run it once a
 republication of the domain address books has completed without failures and
-the stack has read every message, with --since set to the start of the
-republication. Contacts the feed did not write are kept.
+the stack has read every message, with --since set a few minutes before the
+start of the republication, as the stack and the side service clocks may
+differ. Contacts the feed did not write are kept.
 `,
 	Example: `$ cozy-stack fix org-contacts 6740b0e4e0c5c1001f2ef9d1 --since 2026-10-07T08:00:00Z --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -644,7 +645,7 @@ func init() {
 	emailsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before writing")
 	memberCopiesFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
 	memberCopiesFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
-	orgContactsFixer.Flags().StringVar(&sinceFlag, "since", "", "Start of the republication (RFC 3339)")
+	orgContactsFixer.Flags().StringVar(&sinceFlag, "since", "", "A few minutes before the republication (RFC 3339)")
 	orgContactsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
 	orgContactsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
 
