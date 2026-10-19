@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/mail"
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/cozy/cozy-stack/client"
@@ -570,8 +572,8 @@ personal contacts and contacts written for sharing. It is safe to run twice.
 		if dryRunFlag {
 			removed = "Would remove"
 		}
-		for domain, n := range report.Removed {
-			fmt.Fprintf(os.Stdout, "%s %d from %s\n", removed, n, domain)
+		for _, domain := range slices.Sorted(maps.Keys(report.Removed)) {
+			fmt.Fprintf(os.Stdout, "%s %d from %s\n", removed, report.Removed[domain], domain)
 		}
 		for _, e := range report.Errors {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", e)
