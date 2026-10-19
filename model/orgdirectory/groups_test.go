@@ -397,7 +397,7 @@ func TestSyncGroupWithCommonContacts(t *testing.T) {
 	require.True(t, stored.IsTrusted())
 	require.Equal(t, "Alice Liddell", stored.M["fullname"], "the feed fields are kept")
 	require.Len(t, stored.M["email"], 2)
-	require.Empty(t, stored.PrimaryCozyURL())
+	require.Equal(t, "https://alice-"+suffix+".local", stored.PrimaryCozyURL(), "the cozy URL is set when the feed has none")
 
 	carol, err := findManagedContactByEmail(org, "carol@acme.test")
 	require.NoError(t, err, "a member the feed has not sent yet is written right away")

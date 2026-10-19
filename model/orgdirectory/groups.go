@@ -408,6 +408,11 @@ func UpsertManagedContact(inst *instance.Instance, input ContactPatch) (*contact
 		// The feed owns the fields of this contact, it only joins the directory.
 		c.M[contact.TrustedForSharingKey] = true
 		setContactDirectoryMetadata(&c.JSONDoc, input, input.Email)
+		// The cozy URL belongs to the stack, as in applyCard.
+		if c.PrimaryCozyURL() == "" && input.CozyURL != "" {
+			c.M["cozy"] = []interface{}{map[string]interface{}{"url": input.CozyURL, "primary": true}}
+			c.M["indexes"] = map[string]interface{}{"byFamilyNameGivenNameEmailCozyUrl": input.CozyURL}
+		}
 	} else {
 		applyManagedContactFields(c, input)
 	}
