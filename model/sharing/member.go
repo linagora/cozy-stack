@@ -211,16 +211,12 @@ func MembersFromContacts(inst *instance.Instance, groupIDs, contactIDs []string,
 		members = append(members, m)
 	}
 	for _, id := range groupIDs {
-		group, err := contact.FindGroup(inst, id)
+		_, inGroup, err := groupMembers(inst, id, readOnly)
 		if err != nil {
 			return nil, err
 		}
-		contacts, err := group.GetAllContacts(inst)
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range contacts {
-			if m := buildMemberFromContact(c, readOnly); m.Email != "" || m.Instance != "" {
+		for _, m := range inGroup {
+			if m.Email != "" || m.Instance != "" {
 				members = append(members, m)
 			}
 		}
@@ -513,7 +509,7 @@ func (s *Sharing) DelegateAddContactsAndGroups(inst *instance.Instance, groupIDs
 	}
 
 	for _, groupID := range groupIDs {
-		group, db, err := findGroup(inst, groupID)
+		group, members, err := groupMembers(inst, groupID, readOnly)
 		if err != nil {
 			return err
 		}
@@ -525,16 +521,8 @@ func (s *Sharing) DelegateAddContactsAndGroups(inst *instance.Instance, groupIDs
 		}
 		api.groups = append(api.groups, g)
 
-		contacts, err := group.GetAllContacts(db)
-		if err != nil {
-			return err
-		}
 		groupIndex := len(s.Groups)
-		for _, contact := range contacts {
-			m := buildMemberFromContact(contact, readOnly)
-			if isSelf(inst, m) {
-				continue
-			}
+		for _, m := range members {
 			m.Groups = []int{groupIndex}
 			m.OnlyInGroups = true
 			api.members = append(api.members, m)
