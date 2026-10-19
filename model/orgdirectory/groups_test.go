@@ -270,6 +270,31 @@ func TestUpsertManagedContactRequiresOnlyEmail(t *testing.T) {
 	require.Contains(t, err.Error(), "contact missing email")
 }
 
+func TestSyncGroupMembersAddedCreatesMissingGroup(t *testing.T) {
+	config.UseTestFile(t)
+	needCouchDB(t)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	orgID := "org-missing-group-" + suffix
+	orgDomain := "missing-group-" + suffix + ".example"
+	bob := createOrgDirectoryInstance(t, "bob-missing-group-"+suffix+".local", orgDomain, orgID, "bob@acme.test", "Bob")
+
+	err := SyncGroupMembersAdded(testCtx(t), GroupMembersMessage{
+		OrganizationID: orgID,
+		ID:             "engineering",
+		Members:        []GroupMember{{Username: "carol", Email: "carol@acme.test"}},
+	})
+	require.NoError(t, err)
+
+	groupID := GroupDocID(orgID, "engineering")
+	_, err = contact.FindGroup(bob, groupID)
+	require.NoError(t, err)
+	carol, err := contact.FindAllByEmail(bob, "carol@acme.test")
+	require.NoError(t, err)
+	require.Len(t, carol, 1)
+	require.Contains(t, carol[0].GroupIDs(), groupID)
+}
+
 func createOrgDirectoryInstance(t *testing.T, domain, orgDomain, orgID, email, publicName string) *instance.Instance {
 	t.Helper()
 	inst, err := lifecycle.Create(&lifecycle.Options{

@@ -334,6 +334,13 @@ func upsertGroup(inst *instance.Instance, fields GroupPatch) error {
 func ensureGroupExists(inst *instance.Instance, organizationID, externalID string) error {
 	groupID := GroupDocID(organizationID, externalID)
 	group, err := contact.FindGroup(inst, groupID)
+	// A member onboarded under common_contacts got no copy of the groups.
+	if couchdb.IsNotFoundError(err) {
+		return upsertGroup(inst, GroupPatch{
+			OrganizationID: strings.TrimSpace(organizationID),
+			ExternalID:     strings.TrimSpace(externalID),
+		})
+	}
 	if err != nil {
 		return err
 	}
