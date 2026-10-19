@@ -92,6 +92,7 @@ func TestFindByEmailsAndText(t *testing.T) {
 	create("Pierre Dupuis")
 	create("Paul", "paul@acme.example")
 	create("Axb", "axb@acme.example")
+	elodie := create("Élodie Martin", "elodie@acme.example")
 
 	found, err := FindByEmails(db, []string{"Jean@Acme.example", "marie@home.example", "nobody@acme.example"})
 	require.NoError(t, err)
@@ -110,4 +111,9 @@ func TestFindByEmailsAndText(t *testing.T) {
 	docs, err = FindByText(db, "a.b", 10)
 	require.NoError(t, err)
 	assert.Empty(t, docs, "the text is not a regexp")
+
+	docs, err = FindByText(db, "élo", 10)
+	require.NoError(t, err)
+	require.Len(t, docs, 1, "ignoring the case of accented letters")
+	assert.Equal(t, elodie.ID(), docs[0].ID())
 }

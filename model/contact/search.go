@@ -137,7 +137,8 @@ func FindByEmails(db prefixer.Prefixer, emails []string) (map[string]*Contact, e
 // contains text, ignoring case. No index can serve a $regex, so it scans the
 // database.
 func FindByText(db prefixer.Prefixer, text string, limit int) ([]*Contact, error) {
-	re := mango.Map{"$regex": "(?i)" + regexp.QuoteMeta(text)}
+	// Without (*UTF8), CouchDB ignores the case of ASCII letters only.
+	re := mango.Map{"$regex": "(*UTF8)(?i)" + regexp.QuoteMeta(text)}
 	selector := mango.And(
 		mango.Map{"email": mango.Map{"$elemMatch": mango.Map{"address": mango.Map{"$gt": ""}}}},
 		mango.Or(
