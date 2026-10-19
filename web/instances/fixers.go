@@ -17,6 +17,7 @@ import (
 	"github.com/cozy/cozy-stack/model/stack"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/labstack/echo/v4"
 )
@@ -384,7 +385,12 @@ func emailsFixer(c echo.Context) error {
 func memberCopiesFixer(c echo.Context) error {
 	dryRun := c.QueryParam("dry_run") == "true"
 	report, err := orgdirectory.RemoveMemberCopies(c.Request().Context(), c.Param("org_id"), dryRun)
-	if err != nil {
+	switch {
+	case errors.Is(err, instance.ErrNotFound):
+		return jsonapi.NotFound(err)
+	case errors.Is(err, orgdirectory.ErrNoCommonContacts), errors.Is(err, orgdirectory.ErrOrgInstanceNotFilled):
+		return jsonapi.PreconditionFailed("org_id", err)
+	case err != nil:
 		return err
 	}
 	return c.JSON(http.StatusOK, report)

@@ -511,6 +511,11 @@ It is safe to run twice.
 
 `removed` counts the deleted contacts by instance.
 
+It responds with `404 Not Found` when the organization has no instance or no
+organization instance, and with `412 Precondition Failed` when the context of
+the organization instance does not set `common_contacts` or the feed has not
+filled it yet.
+
 #### Query-String
 
 | Parameter | Description                                          |
