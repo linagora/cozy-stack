@@ -19,8 +19,9 @@ import (
 // reconciliation can only look back that far.
 const seenTTL = 7 * 24 * time.Hour
 
+// The hash tag keeps an instance's keys in one Redis Cluster slot, for MGET.
 func seenKey(inst *instance.Instance, path string) string {
-	return "common-contacts-seen:" + inst.Domain + ":" + path
+	return "common-contacts-seen:{" + inst.Domain + "}:" + path
 }
 
 // MarkContactSeen remembers that twake:contacts:common sent the contact at
