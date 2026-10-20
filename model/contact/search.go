@@ -94,7 +94,7 @@ func Search(inst *instance.Instance, q string, limit int) ([]Person, error) {
 // FindByEmails returns the contacts with the given email addresses, by
 // lowercased address, in a single request. The view emits the addresses as
 // stored, so each one is also looked up in lowercase. When several contacts
-// share an address, the first one wins.
+// share an address, the first one wins. Trashed contacts are left out.
 func FindByEmails(db prefixer.Prefixer, emails []string) (map[string]*Contact, error) {
 	found := make(map[string]*Contact)
 	if len(emails) == 0 {
@@ -128,6 +128,9 @@ func FindByEmails(db prefixer.Prefixer, emails []string) (map[string]*Contact, e
 		if err := json.Unmarshal(row.Doc, doc); err != nil {
 			return nil, err
 		}
+		if doc.Get("trashed") == true {
+			continue
+		}
 		found[email] = doc
 	}
 	return found, nil
@@ -135,12 +138,14 @@ func FindByEmails(db prefixer.Prefixer, emails []string) (map[string]*Contact, e
 
 // FindByText returns the contacts with an email whose name or email address
 // contains text, ignoring case. No index can serve a $regex, so it scans the
-// database.
+// database. Trashed contacts are left out.
 func FindByText(db prefixer.Prefixer, text string, limit int) ([]*Contact, error) {
 	// Without (*UTF8), CouchDB ignores the case of ASCII letters only.
 	re := mango.Map{"$regex": "(*UTF8)(?i)" + regexp.QuoteMeta(text)}
 	selector := mango.And(
 		mango.Map{"email": mango.Map{"$elemMatch": mango.Map{"address": mango.Map{"$gt": ""}}}},
+		// $ne alone would also skip the contacts without the field.
+		mango.Or(mango.NotExists("trashed"), mango.NotEqual("trashed", true)),
 		mango.Or(
 			mango.Map{"fullname": re},
 			mango.Map{"displayName": re},

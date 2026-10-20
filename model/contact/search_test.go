@@ -94,8 +94,11 @@ func TestFindByEmailsAndText(t *testing.T) {
 	create("Paul", "paul@acme.example")
 	create("Axb", "axb@acme.example")
 	elodie := create("Élodie Martin", "elodie@acme.example")
+	trashed := create("Old Dupont", "old@acme.example")
+	trashed.M["trashed"] = true
+	require.NoError(t, couchdb.UpdateDoc(db, trashed))
 
-	found, err := FindByEmails(db, []string{"Jean@Acme.example", "marie@home.example", "nobody@acme.example"})
+	found, err := FindByEmails(db, []string{"Jean@Acme.example", "marie@home.example", "nobody@acme.example", "old@acme.example"})
 	require.NoError(t, err)
 	assert.Len(t, found, 2)
 	assert.Equal(t, jean.ID(), found["jean@acme.example"].ID(), "by lowercased address")
@@ -107,7 +110,7 @@ func TestFindByEmailsAndText(t *testing.T) {
 	for _, doc := range docs {
 		ids = append(ids, doc.ID())
 	}
-	assert.ElementsMatch(t, []string{jean.ID(), marie.ID()}, ids, "by name or email, never without an email")
+	assert.ElementsMatch(t, []string{jean.ID(), marie.ID()}, ids, "by name or email, never trashed or without an email")
 
 	docs, err = FindByText(db, "a.b", 10)
 	require.NoError(t, err)
