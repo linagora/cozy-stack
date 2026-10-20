@@ -50,8 +50,8 @@ are typing. It asks the autocomplete API of the calendar side service when the
 context sets `contacts_search` (see `cozy.example.yaml`), and looks each result
 up by email on the organization instance, then on the instance. Without
 `contacts_search`, or when the call fails or times out, it searches the names
-and emails of the contacts of both instances instead. People without an email,
-and the user, are left out.
+and emails of the contacts of both instances instead. Trashed contacts, people
+without an email, and the user, are left out.
 
 A permission on the whole `io.cozy.contacts` doctype is required.
 
