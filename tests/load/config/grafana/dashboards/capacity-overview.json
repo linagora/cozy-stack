@@ -11,23 +11,47 @@
       "description": "Upload workers, not measured in-flight requests. Results stay separate by run and size.",
       "fieldConfig": {
         "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
           "noValue": "No run",
-          "unit": "none"
+          "unit": "none",
+          "displayName":
+            "${__field.labels.file_size} · ${__field.labels.upload_target} · ${__field.labels.status}",
+          "color": {"mode": "fixed", "fixedColor": "text"},
+          "mappings": [
+            {"type": "regex", "options": {"pattern": "^=\\s*\\d+$", "result": {"color": "green"}}},
+            {"type": "regex", "options": {"pattern": "^>=\\s*\\d+$", "result": {"color": "blue"}}},
+            {"type": "regex", "options": {"pattern": "^\\[\\s*\\d+,\\s*\\d+\\)$", "result": {"color": "blue"}}},
+            {"type": "regex", "options": {"pattern": "^Inconclusive$", "result": {"color": "orange"}}},
+            {"type": "regex", "options": {"pattern": "^Running$", "result": {"color": "blue"}}},
+            {
+              "type": "regex",
+              "options": {"pattern": "^(Unknown|No run|Not recorded)$", "result": {"color": "text"}}
+            }
+          ],
+          "links": [
+            {
+              "title": "Inspect this report",
+              "url":
+                "/d/twake-drive-capacity?${__url_time_range}&var-campaign=$campaign&var-size=$size&var-target=$target&var-run=${__field.name}",
+              "targetBlank": false
+            }
+          ]
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 0},
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
       "id": 1,
       "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": false,
+        "reduceOptions": {"values": true, "calcs": ["lastNotNull"], "fields": "/.*/"}
       },
       "targets": [
         {
-          "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"upload\"}",
+          "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$upload_run\",kind=\"upload\"}",
           "format": "table",
           "instant": true,
           "range": false,
@@ -37,49 +61,123 @@
       "title": "Upload worker capacity",
       "transformations": [
         {
-          "id": "organize",
+          "id": "rowsToFields",
           "options": {
-            "excludeByName": {
-              "Time": true, "Value": true, "__name__": true, "job": true, "instance": true,
-              "campaign": true, "kind": true, "scope": true, "bound": true,
-              "status": true, "reason": true, "upload_target": true
-            },
-            "indexByName": {"result": 0, "file_size": 1, "run": 2},
-            "renameByName": {}
+            "mappings": [
+              {"fieldName": "run", "handlerKey": "field.name"},
+              {"fieldName": "result", "handlerKey": "field.value"}
+            ]
           }
         }
       ],
-      "type": "table"
+      "type": "stat"
     },
     {
-      "description": "Current shared-drive roles reuse one identity; virtual users are not distinct people.",
-      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Virtual writer / WS / changes profile units; one identity, not distinct users.",
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No run",
+          "unit": "none",
+          "displayName": "Activity units · ${__field.labels.status}",
+          "color": {"mode": "fixed", "fixedColor": "text"},
+          "mappings": [
+            {"type": "regex", "options": {"pattern": "^=\\s*\\d+$", "result": {"color": "green"}}},
+            {"type": "regex", "options": {"pattern": "^>=\\s*\\d+$", "result": {"color": "blue"}}},
+            {"type": "regex", "options": {"pattern": "^\\[\\s*\\d+,\\s*\\d+\\)$", "result": {"color": "blue"}}},
+            {"type": "regex", "options": {"pattern": "^Inconclusive$", "result": {"color": "orange"}}},
+            {"type": "regex", "options": {"pattern": "^Running$", "result": {"color": "blue"}}},
+            {
+              "type": "regex",
+              "options": {"pattern": "^(Unknown|No run|Not recorded)$", "result": {"color": "text"}}
+            }
+          ],
+          "links": [
+            {
+              "title": "Inspect this report",
+              "url":
+                "/d/twake-drive-capacity?${__url_time_range}&var-campaign=$campaign&var-size=$size&var-target=$target&var-run=${__field.name}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
       "id": 2,
       "options": {
-        "mode": "markdown",
-        "content": "## NOT MEASURED\nOne token. Writer / WS / changes VUs are not distinct users."
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": false,
+        "reduceOptions": {"values": true, "calcs": ["lastNotNull"], "fields": "/.*/"}
       },
-      "title": "Distinct shared-drive users",
-      "type": "text"
+      "targets": [
+        {
+          "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"shared_drive\"}",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Shared-drive activity capacity",
+      "transformations": [
+        {
+          "id": "rowsToFields",
+          "options": {
+            "mappings": [
+              {"fieldName": "run", "handlerKey": "field.name"},
+              {"fieldName": "result", "handlerKey": "field.value"}
+            ]
+          }
+        }
+      ],
+      "type": "stat"
     },
     {
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description": "All N owner-ready and recipient readiness/access proofs within budget; revoke is separate.",
       "fieldConfig": {
         "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
           "noValue": "No run",
-          "unit": "none"
+          "unit": "none",
+          "displayName": "Recipient batch · ${__field.labels.status}",
+          "color": {"mode": "fixed", "fixedColor": "text"},
+          "mappings": [
+            {"type": "regex", "options": {"pattern": "^=\\s*\\d+$", "result": {"color": "green"}}},
+            {"type": "regex", "options": {"pattern": "^>=\\s*\\d+$", "result": {"color": "blue"}}},
+            {"type": "regex", "options": {"pattern": "^\\[\\s*\\d+,\\s*\\d+\\)$", "result": {"color": "blue"}}},
+            {"type": "regex", "options": {"pattern": "^Inconclusive$", "result": {"color": "orange"}}},
+            {"type": "regex", "options": {"pattern": "^Running$", "result": {"color": "blue"}}},
+            {
+              "type": "regex",
+              "options": {"pattern": "^(Unknown|No run|Not recorded)$", "result": {"color": "text"}}
+            }
+          ],
+          "links": [
+            {
+              "title": "Inspect this report",
+              "url":
+                "/d/twake-drive-capacity?${__url_time_range}&var-campaign=$campaign&var-size=$size&var-target=$target&var-run=${__field.name}",
+              "targetBlank": false
+            }
+          ]
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 0},
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
       "id": 3,
       "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": false,
+        "reduceOptions": {"values": true, "calcs": ["lastNotNull"], "fields": "/.*/"}
       },
       "targets": [
         {
@@ -93,439 +191,387 @@
       "title": "Group member batch capacity",
       "transformations": [
         {
-          "id": "organize",
+          "id": "rowsToFields",
           "options": {
-            "excludeByName": {
-              "Time": true, "Value": true, "__name__": true, "job": true, "instance": true,
-              "campaign": true, "kind": true, "scope": true, "bound": true,
-              "status": true, "reason": true, "upload_target": true, "file_size": true
-            },
-            "indexByName": {"result": 0, "run": 1},
-            "renameByName": {}
+            "mappings": [
+              {"fieldName": "run", "handlerKey": "field.name"},
+              {"fieldName": "result", "handlerKey": "field.value"}
+            ]
           }
         }
       ],
-      "type": "table"
-    },
-    {
-      "description": "No report, unmeasured scope, invalid evidence and unfinished runs are different states.",
-      "gridPos": {"h": 3, "w": 12, "x": 0, "y": 5},
-      "id": 4,
-      "options": {
-        "mode": "markdown",
-        "content": "No run / No data ≠ NOT MEASURED ≠ Inconclusive ≠ Running. Missing data: Not recorded."
-      },
-      "title": "Reading the evidence",
-      "type": "text"
-    },
-    {
-      "description":
-        "Only validated classified reports define bounds. Missing or unsafe evidence remains inconclusive.",
-      "gridPos": {"h": 3, "w": 12, "x": 12, "y": 5},
-      "id": 8,
-      "options": {
-        "mode": "markdown",
-        "content": "= N: exact. >= N: lower bound. [N, M): bracket. A point pass is not confirmed capacity."
-      },
-      "title": "Bound semantics",
-      "type": "text"
+      "type": "stat"
     },
     {
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description":
-        "Report filesystem mtime, not test start/end or measured-now. Not a live capacity measurement.",
+        "Every actual report/attempt stays separate. Select a result or load to inspect its exact run.",
       "fieldConfig": {
         "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 70},
           "noValue": "Not recorded",
           "unit": "none"
         },
         "overrides": [
+          {"matcher": {"id": "byName", "options": "run"}, "properties": [{"id": "custom.hidden", "value": true}]},
           {
-            "matcher": {"id": "byName", "options": "Report updated at"},
-            "properties": [{"id": "unit", "value": "dateTimeAsIso"}]
-          }
-        ]
-      },
-      "gridPos": {"h": 5, "w": 24, "x": 0, "y": 8},
-      "id": 5,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
-        {
-          "expr": "cozy_load_result_timestamp_seconds{campaign=~\"$campaign\",run=~\"$run\"} * 1000",
-          "format": "table",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Report update time (filesystem mtime)",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
-            "indexByName": {"campaign": 0, "run": 1, "kind": 2, "Value": 3},
-            "renameByName": {"Value": "Report updated at"}
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Separate runs, sizes and targets. Result/bound/status/reason come from classified reports.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": [
-          {
-            "matcher": {"id": "byName", "options": "run"},
+            "matcher": {"id": "byName", "options": "Result"},
             "properties": [
               {
                 "id": "links",
                 "value": [
                   {
-                    "title": "Upload telemetry for this run",
+                    "title": "Inspect this report",
                     "url":
-                    "/d/twake-drive-k6?${__url_time_range}&var-campaignid=${__value.raw}&var-executionid=$__all",
+                 "/d/twake-drive-capacity?${__url_time_range}&var-campaign=$campaign&var-size=$size&var-target=$target&var-run=${__data.fields.run}",
                     "targetBlank": false
+                  }
+                ]
+              },
+              {"id": "custom.width", "value": 115}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Load"},
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Inspect this report",
+                    "url":
+                 "/d/twake-drive-capacity?${__url_time_range}&var-campaign=$campaign&var-size=$size&var-target=$target&var-run=${__data.fields.run}",
+                    "targetBlank": false
+                  }
+                ]
+              },
+              {"id": "custom.width", "value": 115}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Workload"},
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "upload": {"text": "Upload workers"},
+                      "fanout": {"text": "Member batch"},
+                      "shared_drive": {"text": "Activity · one identity"}
+                    }
+                  }
+                ]
+              },
+              {"id": "custom.width", "value": 185}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Outcome"},
+            "properties": [
+              {"id": "custom.cellOptions", "value": {"type": "color-text"}},
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "completed": {"text": "COMPLETED", "color": "blue"},
+                      "inconclusive": {"text": "INCONCLUSIVE", "color": "orange"},
+                      "running": {"text": "RUNNING", "color": "blue"},
+                      "unknown": {"text": "UNKNOWN", "color": "text"},
+                      "passed": {"text": "PASS", "color": "green"},
+                      "failed": {"text": "FAIL", "color": "red"},
+                      "infrastructure_failure": {"text": "INFRA FAILURE", "color": "orange"},
+                      "not_run": {"text": "NOT RUN", "color": "text"},
+                      "not_measured": {"text": "NOT MEASURED", "color": "text"}
+                    }
                   }
                 ]
               }
             ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Deciding evidence"},
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "validated": {"text": "Required evidence validated"},
+                      "recorded": {"text": "Recorded in report"},
+                      "missing_evidence": {"text": "Required evidence missing"},
+                      "invalid_evidence": {"text": "Evidence invalid"},
+                      "incomplete_proof": {"text": "Proof incomplete"},
+                      "missing_result": {"text": "Result not recorded"},
+                      "unvalidated": {"text": "Evidence not validated"}
+                    }
+                  }
+                ]
+              },
+              {"id": "custom.width", "value": 220}
+            ]
           }
         ]
       },
-      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 13},
-      "id": 10,
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 6},
+      "id": 41,
       "options": {
         "cellHeight": "sm",
         "showHeader": true,
         "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
+        "sortBy": [{"displayName": "Workload", "desc": false}]
       },
       "targets": [
         {
-          "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"upload\"}",
+          "expr": "cozy_load_point_info{campaign=~\"$campaign\",run=~\"$run\",kind!=\"upload\"}",
           "format": "table",
           "instant": true,
           "range": false,
           "refId": "A"
-        }
-      ],
-      "title": "Upload runs - bounds and status",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
-            "indexByName": {
-              "result": 0,
-              "status": 1,
-              "bound": 2,
-              "reason": 3,
-              "file_size": 4,
-              "upload_target": 5,
-              "scope": 6,
-              "campaign": 7,
-              "run": 8,
-              "kind": 9
-            },
-            "renameByName": {}
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "All N owner-ready plus readiness/access within budget. No HTTP409 count threshold.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
         },
-        "overrides": []
-      },
-      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 13},
-      "id": 20,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
         {
-          "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\"}",
+          "expr": "cozy_load_point_info{campaign=~\"$campaign\",run=~\"$upload_run\",kind=\"upload\"}",
           "format": "table",
           "instant": true,
           "range": false,
-          "refId": "A"
+          "refId": "B"
         }
       ],
-      "title": "Group batch runs - bounds and status",
+      "title": "Tested points · outcome and reason",
       "transformations": [
+        {"id": "merge", "options": {}},
         {
           "id": "organize",
           "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
-            "indexByName": {
-              "result": 0,
-              "status": 1,
-              "bound": 2,
-              "reason": 3,
-              "file_size": 4,
-              "upload_target": 5,
-              "scope": 6,
-              "campaign": 7,
-              "run": 8,
-              "kind": 9
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "Value #A": true,
+              "Value #B": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "campaign": true,
+              "scope": true,
+              "file_size": true,
+              "upload_target": true
             },
-            "renameByName": {}
+            "indexByName": {"kind": 0, "load": 1, "status": 2, "reason": 3, "phase": 4, "index": 5, "run": 6},
+            "renameByName": {
+              "kind": "Workload",
+              "result": "Result",
+              "status": "Outcome",
+              "reason": "Deciding evidence",
+              "file_size": "Size",
+              "upload_target": "Target",
+              "load": "Load",
+              "phase": "Phase",
+              "index": "Attempt",
+              "bound": "Bound"
+            }
           }
         }
       ],
       "type": "table"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "id": 50,
+      "type": "xychart",
+      "pluginVersion": "13.2.0",
+      "title": "Upload p95 · by workers",
       "description":
-        "minimum_success_rate, p95_limit_ms; confirmation, cleanup and consistency must validate the bound.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 19},
-      "id": 11,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
+        "Actual recorded points by load. Separate curves per run and phase; repeated attempts remain visible.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 12},
       "targets": [
         {
-          "expr": "cozy_load_result_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"upload\"}",
+          "expr": "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$upload_run\",kind=\"upload\"}",
           "format": "table",
           "instant": true,
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Upload criteria",
+      "options": {
+        "mapping": "auto",
+        "series": [{
+          "x": {"matcher": {"id": "byName", "options": "load"}},
+          "y": {"matcher": {"id": "byName", "options": "Value"}}
+        }],
+        "legend": {"showLegend": false},
+        "tooltip": {"mode": "multi", "sort": "none", "maxHeight": 300}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Not recorded",
+          "unit": "none",
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "show": "points+lines",
+            "lineWidth": 1,
+            "pointSize": {"fixed": 5},
+            "axisBorderShow": true,
+            "axisGridShow": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "load"},
+            "properties": [
+              {"id": "unit", "value": "none"},
+              {"id": "custom.axisLabel", "value": "Upload workers"}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Value"},
+            "properties": [{"id": "unit", "value": "ms"}, {"id": "custom.axisLabel", "value": "Upload p95"}]
+          }
+        ]
+      },
       "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "include",
+            "match": "all",
+            "filters": [
+              {"fieldName": "metric", "config": {"id": "equal", "options": {"value": "upload_p95_ms"}}}
+            ]
+          }
+        },
         {
           "id": "organize",
           "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
-            "indexByName": {"metric": 0, "Value": 1, "campaign": 2, "run": 3, "kind": 4},
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "campaign": true,
+              "kind": true,
+              "metric": true
+            },
+            "indexByName": {"load": 0, "Value": 1, "run": 2, "phase": 3, "index": 4},
             "renameByName": {}
           }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {"conversions": [{"targetField": "load", "destinationType": "number"}]}
+        },
+        {"id": "sortBy", "options": {"sort": [{"field": "load", "desc": false}]}},
+        {
+          "id": "partitionByValues",
+          "options": {"fields": ["run", "phase"], "keepFields": false, "naming": {"asLabels": true}}
         }
-      ],
-      "type": "table"
+      ]
     },
     {
+      "id": 51,
+      "type": "xychart",
+      "pluginVersion": "13.2.0",
+      "title": "Upload success · by workers",
+      "description":
+        "Actual recorded points by load. Separate curves per run and phase; repeated attempts remain visible.",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "budget_ms, stable_ms, observer_concurrency: criteria, not capacity measurements.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 19},
-      "id": 21,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 12},
       "targets": [
         {
-          "expr": "cozy_load_result_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\"}",
+          "expr": "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$upload_run\",kind=\"upload\"}",
           "format": "table",
           "instant": true,
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Group batch criteria",
+      "options": {
+        "mapping": "auto",
+        "series": [{
+          "x": {"matcher": {"id": "byName", "options": "load"}},
+          "y": {"matcher": {"id": "byName", "options": "Value"}}
+        }],
+        "legend": {"showLegend": false},
+        "tooltip": {"mode": "multi", "sort": "none", "maxHeight": 300}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Not recorded",
+          "unit": "none",
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "show": "points+lines",
+            "lineWidth": 1,
+            "pointSize": {"fixed": 5},
+            "axisBorderShow": true,
+            "axisGridShow": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "load"},
+            "properties": [
+              {"id": "unit", "value": "none"},
+              {"id": "custom.axisLabel", "value": "Upload workers"}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Value"},
+            "properties": [
+              {"id": "unit", "value": "percentunit"},
+              {"id": "custom.axisLabel", "value": "Successful uploads"}
+            ]
+          }
+        ]
+      },
       "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "include",
+            "match": "all",
+            "filters": [{"fieldName": "metric", "config": {"id": "equal", "options": {"value": "success_rate"}}}]
+          }
+        },
         {
           "id": "organize",
           "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
-            "indexByName": {"metric": 0, "Value": 1, "campaign": 2, "run": 3, "kind": 4},
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "campaign": true,
+              "kind": true,
+              "metric": true
+            },
+            "indexByName": {"load": 0, "Value": 1, "run": 2, "phase": 3, "index": 4},
             "renameByName": {}
           }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {"conversions": [{"targetField": "load", "destinationType": "number"}]}
+        },
+        {"id": "sortBy", "options": {"sort": [{"field": "load", "desc": false}]}},
+        {
+          "id": "partitionByValues",
+          "options": {"fields": ["run", "phase"], "keepFields": false, "naming": {"asLabels": true}}
         }
-      ],
-      "type": "table"
+      ]
     },
     {
+      "id": 52,
+      "type": "xychart",
+      "pluginVersion": "13.2.0",
+      "title": "Group add elapsed · by recipients",
+      "description":
+        "Actual recorded points by load. Separate curves per run and phase; repeated attempts remain visible.",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Actual attempt status, load and phase. A passing point is not a confirmed bound.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 25},
-      "id": 12,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
-        {
-          "expr": "cozy_load_point_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"upload\"}",
-          "format": "table",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Upload tested points",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
-            "indexByName":
-              {"campaign": 0, "run": 1, "kind": 2, "index": 3, "load": 4, "phase": 5, "status": 6, "reason": 7},
-            "renameByName": {}
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Actual attempted batch, phase and status. Interrupted evidence remains inconclusive.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 25},
-      "id": 22,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
-        {
-          "expr": "cozy_load_point_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\"}",
-          "format": "table",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Group batch tested points",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
-            "indexByName":
-              {"campaign": 0, "run": 1, "kind": 2, "index": 3, "load": 4, "phase": 5, "status": 6, "reason": 7},
-            "renameByName": {}
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Source units: upload_p95_ms, success/consistency/cleanup rates and completed_iterations.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 32},
-      "id": 13,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
-        {
-          "expr": "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"upload\"}",
-          "format": "table",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Upload point evidence",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
-            "indexByName":
-              {"metric": 0, "Value": 1, "load": 2, "index": 3, "phase": 4, "campaign": 5, "run": 6, "kind": 7},
-            "renameByName": {}
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "owner_ready ≠ recipient_access_proofs. owner_pending is not successful access.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 32},
-      "id": 23,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 12},
       "targets": [
         {
           "expr": "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\"}",
@@ -535,276 +581,1046 @@
           "refId": "A"
         }
       ],
-      "title": "Group batch point evidence",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
-            "indexByName":
-              {"metric": 0, "Value": 1, "load": 2, "index": 3, "phase": 4, "campaign": 5, "run": 6, "kind": 7},
-            "renameByName": {}
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Revoke: not started is not success. Missing remove_* evidence means Not recorded.",
+      "options": {
+        "mapping": "auto",
+        "series": [{
+          "x": {"matcher": {"id": "byName", "options": "load"}},
+          "y": {"matcher": {"id": "byName", "options": "Value"}}
+        }],
+        "legend": {"showLegend": false},
+        "tooltip": {"mode": "multi", "sort": "none", "maxHeight": 300}
+      },
       "fieldConfig": {
         "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
           "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 41},
-      "id": 24,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
-        {
-          "expr":
-            "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\",metric=~\"remove_.*\"}",
-          "format": "table",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Group batch revoke evidence",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
-            "indexByName":
-              {"metric": 0, "Value": 1, "load": 2, "index": 3, "phase": 4, "campaign": 5, "run": 6, "kind": 7},
-            "renameByName": {}
+          "unit": "none",
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "show": "points+lines",
+            "lineWidth": 1,
+            "pointSize": {"fixed": 5},
+            "axisBorderShow": true,
+            "axisGridShow": true
           }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "description": "Run start / end: Not recorded. Do not infer these from current host or report mtime.",
-      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 41},
-      "id": 6,
-      "options":
-        {"mode": "markdown", "content": "Stack version / host resources / source revision: **Not recorded**."},
-      "title": "Recorded environment and timing",
-      "type": "text"
-    },
-    {
-      "description": "Row run IDs select telemetry campaigns; the activity dashboard has no execution filter.",
-      "gridPos": {"h": 3, "w": 24, "x": 0, "y": 47},
-      "id": 7,
-      "options": {
-        "mode": "markdown",
-        "content": "Activity drilldown: campaign only, by row run. Links keep selected range, not report mtime."
-      },
-      "title": "Diagnostic scope",
-      "type": "text"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Diagnostic: one identity. Writer / WS / changes VUs are roles, not distinct users.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
         },
         "overrides": [
           {
-            "matcher": {"id": "byName", "options": "run"},
+            "matcher": {"id": "byName", "options": "load"},
+            "properties": [{"id": "unit", "value": "none"}, {"id": "custom.axisLabel", "value": "Recipients"}]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Value"},
             "properties": [
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Activity telemetry (campaign only)",
-                    "url":
-                    "/d/twake-drive-shared-drive?${__url_time_range}&var-campaignid=${__value.raw}",
-                    "targetBlank": false
-                  }
-                ]
-              }
+              {"id": "unit", "value": "ms"},
+              {"id": "custom.axisLabel", "value": "Group add elapsed"}
             ]
           }
         ]
       },
-      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 50},
-      "id": 30,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
-        {
-          "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"shared_drive\"}",
-          "format": "table",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Activity mix runs - bounds and status",
       "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "include",
+            "match": "all",
+            "filters": [
+              {"fieldName": "metric", "config": {"id": "equal", "options": {"value": "add_elapsed_ms"}}}
+            ]
+          }
+        },
         {
           "id": "organize",
           "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
-            "indexByName": {
-              "result": 0,
-              "status": 1,
-              "bound": 2,
-              "reason": 3,
-              "file_size": 4,
-              "upload_target": 5,
-              "scope": 6,
-              "campaign": 7,
-              "run": 8,
-              "kind": 9
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "campaign": true,
+              "kind": true,
+              "metric": true
             },
+            "indexByName": {"load": 0, "Value": 1, "run": 2, "phase": 3, "index": 4},
             "renameByName": {}
           }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {"conversions": [{"targetField": "load", "destinationType": "number"}]}
+        },
+        {"id": "sortBy", "options": {"sort": [{"field": "load", "desc": false}]}},
+        {
+          "id": "partitionByValues",
+          "options": {"fields": ["run", "phase"], "keepFields": false, "naming": {"asLabels": true}}
         }
-      ],
-      "type": "table"
+      ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Role ratios, hold_ms and threshold criteria are recorded only when present in the source.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 50},
-      "id": 31,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
+      "id": 90,
+      "type": "row",
+      "title": "Expert detail · reports, criteria and diagnostics",
+      "description": "Full report IDs, source evidence, criteria and producer-scoped diagnostic links.",
+      "collapsed": true,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 20},
+      "panels": [
         {
-          "expr": "cozy_load_result_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"shared_drive\"}",
-          "format": "table",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Activity mix criteria",
-      "transformations": [
-        {
-          "id": "organize",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description":
+            "Every actual report/attempt stays separate. Select a result or load to inspect its exact run.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 70},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "run"
+                },
+                "properties": [
+                  {
+                    "id": "custom.hidden",
+                    "value": true
+                  }
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Result"},
+                "properties": [
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Inspect this report",
+                        "url":
+                     "/d/twake-drive-capacity?${__url_time_range}&var-campaign=$campaign&var-size=$size&var-target=$target&var-run=${__data.fields.run}",
+                        "targetBlank": false
+                      }
+                    ]
+                  },
+                  {"id": "custom.width", "value": 115}
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Load"},
+                "properties": [
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Inspect this report",
+                        "url":
+                     "/d/twake-drive-capacity?${__url_time_range}&var-campaign=$campaign&var-size=$size&var-target=$target&var-run=${__data.fields.run}",
+                        "targetBlank": false
+                      }
+                    ]
+                  },
+                  {"id": "custom.width", "value": 115}
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Workload"},
+                "properties": [
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "upload": {"text": "Upload workers"},
+                          "fanout": {"text": "Member batch"},
+                          "shared_drive": {"text": "Activity · one identity"}
+                        }
+                      }
+                    ]
+                  },
+                  {"id": "custom.width", "value": 185}
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Outcome"},
+                "properties": [
+                  {"id": "custom.cellOptions", "value": {"type": "color-text"}},
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "completed": {"text": "COMPLETED", "color": "blue"},
+                          "inconclusive": {"text": "INCONCLUSIVE", "color": "orange"},
+                          "running": {"text": "RUNNING", "color": "blue"},
+                          "unknown": {"text": "UNKNOWN", "color": "text"},
+                          "passed": {"text": "PASS", "color": "green"},
+                          "failed": {"text": "FAIL", "color": "red"},
+                          "infrastructure_failure": {"text": "INFRA FAILURE", "color": "orange"},
+                          "not_run": {"text": "NOT RUN", "color": "text"},
+                          "not_measured": {"text": "NOT MEASURED", "color": "text"}
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Deciding evidence"},
+                "properties": [
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "validated": {"text": "Required evidence validated"},
+                          "recorded": {"text": "Recorded in report"},
+                          "missing_evidence": {"text": "Required evidence missing"},
+                          "invalid_evidence": {"text": "Evidence invalid"},
+                          "incomplete_proof": {"text": "Proof incomplete"},
+                          "missing_result": {"text": "Result not recorded"},
+                          "unvalidated": {"text": "Evidence not validated"}
+                        }
+                      }
+                    ]
+                  },
+                  {"id": "custom.width", "value": 220}
+                ]
+              }
+            ]
+          },
+          "gridPos": {"h": 5, "w": 24, "x": 0, "y": 21},
+          "id": 40,
           "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
-            "indexByName": {"metric": 0, "Value": 1, "campaign": 2, "run": 3, "kind": 4},
-            "renameByName": {}
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "Workload", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$run\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Conclusions · each report",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "Value": true,
+                  "__name__": true,
+                  "job": true,
+                  "instance": true,
+                  "campaign": true,
+                  "scope": true
+                },
+                "indexByName": {
+                  "kind": 0,
+                  "result": 1,
+                  "status": 2,
+                  "bound": 3,
+                  "reason": 4,
+                  "file_size": 5,
+                  "upload_target": 6,
+                  "run": 7
+                },
+                "renameByName": {
+                  "kind": "Workload",
+                  "result": "Result",
+                  "status": "Outcome",
+                  "reason": "Deciding evidence",
+                  "file_size": "Size",
+                  "upload_target": "Target",
+                  "load": "Load",
+                  "phase": "Phase",
+                  "index": "Attempt",
+                  "bound": "Bound"
+                }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "description": "No report, unmeasured scope, invalid evidence and unfinished runs are different states.",
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 26},
+          "id": 4,
+          "options": {
+            "mode": "markdown",
+            "content": "No run / No data ≠ NOT MEASURED ≠ Inconclusive ≠ Running. Missing data: Not recorded."
+          },
+          "title": "Reading the evidence",
+          "type": "text"
+        },
+        {
+          "description":
+            "Only validated classified reports define bounds. Missing or unsafe evidence remains inconclusive.",
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 26},
+          "id": 8,
+          "options": {
+            "mode": "markdown",
+            "content": "= N: exact. >= N: lower bound. [N, M): bracket. A point pass is not confirmed capacity."
+          },
+          "title": "Bound semantics",
+          "type": "text"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description":
+            "Report filesystem mtime, not test start/end or measured-now. Not a live capacity measurement.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "Report updated at"},
+                "properties": [{"id": "unit", "value": "dateTimeAsIso"}]
+              }
+            ]
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 32},
+          "id": 5,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_result_timestamp_seconds{campaign=~\"$campaign\",run=~\"$run\"} * 1000",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Report update time (filesystem mtime)",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
+                "indexByName": {"campaign": 0, "run": 1, "kind": 2, "Value": 3},
+                "renameByName": {"Value": "Report updated at"}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description":
+            "Separate runs, sizes and targets. Result/bound/status/reason come from classified reports.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "run"},
+                "properties": [
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Upload telemetry for this run",
+                        "url":
+                      "/d/twake-drive-k6?${__url_time_range}&var-campaignid=${__value.raw}&var-executionid=$__all",
+                        "targetBlank": false
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 32},
+          "id": 10,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"upload\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Upload runs - bounds and status",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
+                "indexByName": {
+                  "result": 0,
+                  "status": 1,
+                  "bound": 2,
+                  "reason": 3,
+                  "file_size": 4,
+                  "upload_target": 5,
+                  "scope": 6,
+                  "campaign": 7,
+                  "run": 8,
+                  "kind": 9
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "All N owner-ready plus readiness/access within budget. No HTTP409 count threshold.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 38},
+          "id": 20,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Group batch runs - bounds and status",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
+                "indexByName": {
+                  "result": 0,
+                  "status": 1,
+                  "bound": 2,
+                  "reason": 3,
+                  "file_size": 4,
+                  "upload_target": 5,
+                  "scope": 6,
+                  "campaign": 7,
+                  "run": 8,
+                  "kind": 9
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description":
+            "minimum_success_rate, p95_limit_ms; confirmation, cleanup and consistency must validate the bound.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 38},
+          "id": 11,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_result_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"upload\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Upload criteria",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
+                "indexByName": {"metric": 0, "Value": 1, "campaign": 2, "run": 3, "kind": 4},
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "budget_ms, stable_ms, observer_concurrency: criteria, not capacity measurements.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 44},
+          "id": 21,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_result_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Group batch criteria",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
+                "indexByName": {"metric": 0, "Value": 1, "campaign": 2, "run": 3, "kind": 4},
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Actual attempt status, load and phase. A passing point is not a confirmed bound.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 44},
+          "id": 12,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_point_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"upload\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Upload tested points",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
+                "indexByName": {
+                  "campaign": 0,
+                  "run": 1,
+                  "kind": 2,
+                  "index": 3,
+                  "load": 4,
+                  "phase": 5,
+                  "status": 6,
+                  "reason": 7
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Actual attempted batch, phase and status. Interrupted evidence remains inconclusive.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 50},
+          "id": 22,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_point_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Group batch tested points",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
+                "indexByName": {
+                  "campaign": 0,
+                  "run": 1,
+                  "kind": 2,
+                  "index": 3,
+                  "load": 4,
+                  "phase": 5,
+                  "status": 6,
+                  "reason": 7
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description":
+            "Source units: upload_p95_ms, success/consistency/cleanup rates and completed_iterations.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 50},
+          "id": 13,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"upload\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Upload point evidence",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
+                "indexByName": {
+                  "metric": 0,
+                  "Value": 1,
+                  "load": 2,
+                  "index": 3,
+                  "phase": 4,
+                  "campaign": 5,
+                  "run": 6,
+                  "kind": 7
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "owner_ready ≠ recipient_access_proofs. owner_pending is not successful access.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 56},
+          "id": 23,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Group batch point evidence",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
+                "indexByName": {
+                  "metric": 0,
+                  "Value": 1,
+                  "load": 2,
+                  "index": 3,
+                  "phase": 4,
+                  "campaign": 5,
+                  "run": 6,
+                  "kind": 7
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Revoke: not started is not success. Missing remove_* evidence means Not recorded.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 56},
+          "id": 24,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr":
+              "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"fanout\",metric=~\"remove_.*\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Group batch revoke evidence",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
+                "indexByName": {
+                  "metric": 0,
+                  "Value": 1,
+                  "load": 2,
+                  "index": 3,
+                  "phase": 4,
+                  "campaign": 5,
+                  "run": 6,
+                  "kind": 7
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "description": "Run start / end: Not recorded. Do not infer these from current host or report mtime.",
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 62},
+          "id": 6,
+          "options": {
+            "mode": "markdown",
+            "content": "Stack version / host resources / source revision: **Not recorded**."
+          },
+          "title": "Recorded environment and timing",
+          "type": "text"
+        },
+        {
+          "description": "Row run IDs select telemetry campaigns; the activity dashboard has no execution filter.",
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 62},
+          "id": 7,
+          "options": {
+            "mode": "markdown",
+            "content":
+              "Activity drilldown: campaign only, by row run. Links keep selected range, not report mtime."
+          },
+          "title": "Diagnostic scope",
+          "type": "text"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Diagnostic: one identity. Writer / WS / changes VUs are roles, not distinct users.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "run"},
+                "properties": [
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Activity telemetry (campaign only)",
+                        "url": "/d/twake-drive-shared-drive?${__url_time_range}&var-campaignid=${__value.raw}",
+                        "targetBlank": false
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 68},
+          "id": 30,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_result_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"shared_drive\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Activity mix runs - bounds and status",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
+                "indexByName": {
+                  "result": 0,
+                  "status": 1,
+                  "bound": 2,
+                  "reason": 3,
+                  "file_size": 4,
+                  "upload_target": 5,
+                  "scope": 6,
+                  "campaign": 7,
+                  "run": 8,
+                  "kind": 9
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description":
+            "Role ratios, hold_ms and threshold criteria are recorded only when present in the source.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 68},
+          "id": 31,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_result_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"shared_drive\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Activity mix criteria",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
+                "indexByName": {"metric": 0, "Value": 1, "campaign": 2, "run": 3, "kind": 4},
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description":
+            "Actual scalar load, hold status and phase. Sparse completed ramps retain bracket semantics.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 74},
+          "id": 32,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_point_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"shared_drive\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Activity mix tested points",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
+                "indexByName": {
+                  "campaign": 0,
+                  "run": 1,
+                  "kind": 2,
+                  "index": 3,
+                  "load": 4,
+                  "phase": 5,
+                  "status": 6,
+                  "reason": 7
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Single-actor roles, delivery, latency and cleanup; not distinct-user capacity.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
+              "noValue": "Not recorded",
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 74},
+          "id": 33,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "footer": {"show": false},
+            "sortBy": [{"displayName": "run", "desc": false}]
+          },
+          "targets": [
+            {
+              "expr": "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"shared_drive\"}",
+              "format": "table",
+              "instant": true,
+              "range": false,
+              "refId": "A"
+            }
+          ],
+          "title": "Activity mix point evidence",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
+                "indexByName": {
+                  "metric": 0,
+                  "Value": 1,
+                  "load": 2,
+                  "index": 3,
+                  "phase": 4,
+                  "campaign": 5,
+                  "run": 6,
+                  "kind": 7
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "id": 9,
+          "type": "text",
+          "title": "Available measurement scope",
+          "description": "Recorded scalars only; absence of a measurement is not a zero.",
+          "gridPos": {"h": 4, "w": 24, "x": 0, "y": 80},
+          "options": {
+            "mode": "markdown",
+            "content":
+              "Throughput is not exported. Readiness has no full time series. Observed p95 is not an SLO gate."
           }
         }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Actual scalar load, hold status and phase. Sparse completed ramps retain bracket semantics.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 56},
-      "id": 32,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
-        {
-          "expr": "cozy_load_point_info{campaign=~\"$campaign\",run=~\"$run\",kind=\"shared_drive\"}",
-          "format": "table",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Activity mix tested points",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "Value": true},
-            "indexByName":
-              {"campaign": 0, "run": 1, "kind": 2, "index": 3, "load": 4, "phase": 5, "status": 6, "reason": 7},
-            "renameByName": {}
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Single-actor roles, delivery, latency and cleanup; not distinct-user capacity.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true, "minWidth": 90},
-          "noValue": "Not recorded",
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 56},
-      "id": 33,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "footer": {"show": false},
-        "sortBy": [{"displayName": "run", "desc": false}]
-      },
-      "targets": [
-        {
-          "expr": "cozy_load_point_value{campaign=~\"$campaign\",run=~\"$run\",kind=\"shared_drive\"}",
-          "format": "table",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Activity mix point evidence",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true},
-            "indexByName":
-              {"metric": 0, "Value": 1, "load": 2, "index": 3, "phase": 4, "campaign": 5, "run": 6, "kind": 7},
-            "renameByName": {}
-          }
-        }
-      ],
-      "type": "table"
+      ]
     }
   ],
   "refresh": "15s",
@@ -840,6 +1656,76 @@
         "sort": 2,
         "type": "query",
         "allValue": ".*"
+      },
+      {
+        "name": "size",
+        "label": "Upload size",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(cozy_load_result_info{campaign=\"$campaign\",kind=\"upload\"},file_size)",
+          "refId": "size"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "text": "1M",
+          "value": "1M"
+        },
+        "hide": 0,
+        "options": []
+      },
+      {
+        "name": "target",
+        "label": "Upload target",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(cozy_load_result_info{campaign=\"$campaign\",kind=\"upload\"},upload_target)",
+          "refId": "target"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "text": "shared-drive",
+          "value": "shared-drive"
+        },
+        "hide": 0,
+        "options": []
+      },
+      {
+        "name": "upload_run",
+        "label": "Selected upload reports",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query":
+            "label_values(cozy_load_result_info{run=~\"$run\",file_size=\"$size\",upload_target=\"$target\"},run)",
+          "refId": "upload_run"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": true,
+        "current": {
+          "text": "$__all",
+          "value": "$__all"
+        },
+        "hide": 2,
+        "options": []
       }
     ]
   },

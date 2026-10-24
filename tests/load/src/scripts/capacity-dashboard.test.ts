@@ -18,6 +18,8 @@ type Panel = {
   datasource?: { type: string, uid: string }
   gridPos: { x: number, y: number, w: number, h: number }
   targets?: Target[]
+  panels?: Panel[]
+  collapsed?: boolean
   options: { textMode?: string, mode?: string, content?: string, [key: string]: unknown }
   fieldConfig?: { defaults: Record<string, unknown>, overrides: Override[] }
   transformations?: { id: string, options: Record<string, unknown> }[]
@@ -38,19 +40,24 @@ function readDashboard(): Dashboard {
   return JSON.parse(readFileSync(dashboardPath, 'utf8')) as Dashboard
 }
 
+function allPanels(panels: Panel[]): Panel[] {
+  return panels.flatMap(panel => [panel, ...allPanels(panel.panels ?? [])])
+}
+
 function panelByTitle(dashboard: Dashboard, title: string): Panel {
-  const panel = dashboard.panels.find(panel => panel.title === title)
+  const panel = allPanels(dashboard.panels).find(panel => panel.title === title)
   assert.ok(panel, `missing native panel: ${title}`)
   return panel
 }
 
-test('native capacity summaries distinguish upload workers, unmeasured users and recipient batches', () => {
+test('native capacity summaries distinguish upload workers, activity units and recipient batches', () => {
   const dashboard = readDashboard()
   assert.equal(dashboard.uid, 'twake-drive-capacity')
   assert.equal(dashboard.title, 'Stack Capacity Overview')
-  assert.equal(new Set(dashboard.panels.map(panel => panel.id)).size, dashboard.panels.length)
-  for (const panel of dashboard.panels) {
-    assert.ok(['stat', 'table', 'timeseries', 'text'].includes(panel.type), panel.type)
+  const panels = allPanels(dashboard.panels)
+  assert.equal(new Set(panels.map(panel => panel.id)).size, panels.length)
+  for (const panel of allPanels(dashboard.panels)) {
+    assert.ok(['stat', 'table', 'text', 'row', 'xychart'].includes(panel.type), panel.type)
     assert.ok(panel.gridPos.x >= 0 && panel.gridPos.x + panel.gridPos.w <= 24)
     assert.ok(panel.gridPos.h > 0 && panel.gridPos.y >= 0)
     if (panel.targets?.length) assert.deepEqual(panel.datasource, { type: 'prometheus', uid: 'prometheus' })
@@ -60,48 +67,68 @@ test('native capacity summaries distinguish upload workers, unmeasured users and
     }
   }
   const upload = panelByTitle(dashboard, 'Upload worker capacity')
-  const users = panelByTitle(dashboard, 'Distinct shared-drive users')
+  const activity = panelByTitle(dashboard, 'Shared-drive activity capacity')
   const fanout = panelByTitle(dashboard, 'Group member batch capacity')
-  assert.deepEqual([upload.gridPos.y, users.gridPos.y, fanout.gridPos.y], [0, 0, 0])
-  assert.equal(users.type, 'text')
-  assert.match(users.options.content ?? '', /NOT MEASURED/)
-  assert.match(users.options.content ?? '', /one (identity|token)/i)
-  assert.equal(users.targets?.length ?? 0, 0, 'one-token activity is not a user capacity metric')
-  for (const [panel, kind] of [[upload, 'upload'], [fanout, 'fanout']] as const) {
-    assert.equal(panel.type, 'table', 'name-only stats render blank when no report series exists')
+  assert.deepEqual([upload.gridPos.y, activity.gridPos.y, fanout.gridPos.y], [0, 0, 0])
+  assert.match(activity.description, /profile/i)
+  assert.match(activity.description, /one identity/i)
+  assert.match(activity.description, /not distinct users/i)
+  assert.doesNotMatch(JSON.stringify(activity), /NOT MEASURED/)
+  for (const [panel, kind] of [[upload, 'upload'], [activity, 'shared_drive'], [fanout, 'fanout']] as const) {
+    assert.equal(panel.type, 'stat', 'the actual report result must lead, not a raw metadata table')
     assert.equal(panel.targets?.length, 1)
+    const selectedRun = kind === 'upload' ? '$upload_run' : '$run'
     assert.equal(panel.targets?.[0]?.expr,
-      `cozy_load_result_info{campaign=~"$campaign",run=~"$run",kind="${kind}"}`)
+      `cozy_load_result_info{campaign=~"$campaign",run=~"${selectedRun}",kind="${kind}"}`)
     assert.equal(panel.targets?.[0]?.format, 'table', 'expose each report as a row, not an info gauge')
     assert.equal(panel.fieldConfig?.defaults.noValue, 'No run')
     assert.equal(panel.fieldConfig?.defaults.unit, 'none')
-    assert.equal(panel.fieldConfig?.defaults.displayName, undefined)
-    assert.equal(panel.options.showHeader, true)
-    assert.equal(panel.options.textMode, undefined)
-    assert.equal(panel.options.reduceOptions, undefined, 'never collapse different runs into one result')
-    assert.deepEqual(panel.transformations?.map(transform => transform.id), ['organize'])
-    const organize = panel.transformations![0]!.options
-    const excluded = organize.excludeByName as Record<string, boolean>
-    for (const field of [
-      'Time', 'Value', '__name__', 'job', 'instance', 'campaign', 'kind',
-      'scope', 'bound', 'status', 'reason', 'upload_target',
-    ]) assert.equal(excluded[field], true, `summary hides ${field}, including the info-series value 1`)
-    const visible = kind === 'upload' ? ['result', 'file_size', 'run'] : ['result', 'run']
-    for (const field of visible) assert.notEqual(excluded[field], true, `summary retains ${field}`)
-    if (kind === 'fanout') assert.equal(excluded.file_size, true)
-    const order = organize.indexByName as Record<string, number>
-    assert.deepEqual(Object.keys(order).sort((a, b) => order[a]! - order[b]!), visible)
-    assert.deepEqual(organize.renameByName, {}, 'result and run labels remain distinct table columns')
+    assert.equal(panel.options.textMode, 'value_and_name', 'strings render as values, not invisible names')
+    assert.equal(panel.options.graphMode, 'none')
+    assert.deepEqual(panel.options.reduceOptions, { values: true, calcs: ['lastNotNull'], fields: '/.*/' })
+    assert.deepEqual(panel.transformations, [{
+      id: 'rowsToFields',
+      options: { mappings: [
+        { fieldName: 'run', handlerKey: 'field.name' },
+        { fieldName: 'result', handlerKey: 'field.value' },
+      ] },
+    }], 'result label is the value; every report row becomes a field with untouched metadata labels')
+    const name = String(panel.fieldConfig?.defaults.displayName)
+    assert.match(name, /\$\{__field.labels.status\}/)
+    assert.doesNotMatch(name, /__field.labels.reason/, 'raw evidence codes belong in expert detail')
+    assert.doesNotMatch(name, /__field.name|__field.labels.run/, 'raw run IDs do not dominate the cards')
+    assert.ok(Array.isArray(panel.fieldConfig?.defaults.mappings), 'bound/state colors use native mappings')
   }
   assert.match(upload.description, /not measured in-flight requests/i)
   assert.match(fanout.description, /all N/i)
   assert.match(fanout.description, /access/i)
 })
 
+test('upload summaries select one visible size and target instead of shrinking every campaign result', () => {
+  const dashboard = readDashboard()
+  const size = dashboard.templating.list.find(variable => variable.name === 'size')
+  const target = dashboard.templating.list.find(variable => variable.name === 'target')
+  const selected = dashboard.templating.list.find(variable => variable.name === 'upload_run')
+  for (const variable of [size, target]) {
+    assert.ok(variable, 'the original overview has explicit upload size and target controls')
+    assert.equal(variable.includeAll, false, 'a headline compares one declared upload workload')
+    assert.equal(variable.multi, false)
+  }
+  assert.ok(selected, 'derive the upload run selection from recorded labels, never filename patterns')
+  assert.equal(selected.includeAll, true, 'retain retries and inconclusive reports for the selected workload')
+  assert.equal(selected.allValue, undefined, 'All must expand matching options, not bypass the workload filter')
+  assert.match(selected.query.query, /run=~"\$run"/)
+  assert.match(selected.query.query, /file_size="\$size"/)
+  assert.match(selected.query.query, /upload_target="\$target"/)
+  for (const title of ['Upload worker capacity', 'Upload p95 · by workers', 'Upload success · by workers']) {
+    assert.match(panelByTitle(dashboard, title).targets![0]!.expr, /run=~"\$upload_run"/)
+  }
+})
+
 test('one campaign and optional run selection never aggregate or replace absent report evidence', () => {
   const dashboard = readDashboard()
   const variables = dashboard.templating.list
-  assert.deepEqual(variables.map(variable => variable.name), ['campaign', 'run'])
+  assert.deepEqual(variables.map(variable => variable.name), ['campaign', 'run', 'size', 'target', 'upload_run'])
   const [campaign, run] = variables
   assert.equal(campaign?.multi, false)
   assert.equal(campaign?.includeAll, false, 'campaigns cannot be silently mixed')
@@ -115,11 +142,11 @@ test('one campaign and optional run selection never aggregate or replace absent 
     'cozy_load_result_info', 'cozy_load_result_value', 'cozy_load_point_info',
     'cozy_load_point_value', 'cozy_load_result_timestamp_seconds',
   ]
-  for (const panel of dashboard.panels) {
+  for (const panel of allPanels(dashboard.panels)) {
     for (const target of panel.targets ?? []) {
       assert.ok(families.some(family => target.expr.startsWith(`${family}{`)), target.expr)
       assert.match(target.expr, /campaign=~"\$campaign"/)
-      assert.match(target.expr, /run=~"\$run"/)
+      assert.match(target.expr, /run=~"\$(run|upload_run)"/)
       assert.equal(target.instant, true)
       assert.equal(target.range, false)
       assert.doesNotMatch(target.expr, /\b(max|min|sum|avg|topk|bottomk|vector|timestamp|time)\s*\(/)
@@ -186,7 +213,7 @@ test('result tables put conclusions before repeated run metadata', () => {
 })
 
 test('scalar criteria and evidence put metrics and measured values before repeated metadata', () => {
-  const panels = readDashboard().panels.filter(panel =>
+  const panels = allPanels(readDashboard().panels).filter(panel => panel.type === 'table' &&
     panel.targets?.some(target => /^cozy_load_(result|point)_value\{/.test(target.expr)))
   assert.deepEqual(panels.map(panel => panel.title).sort(), [
     'Activity mix criteria', 'Activity mix point evidence', 'Group batch criteria',
@@ -235,20 +262,233 @@ test('freshness uses report mtime and missing provenance stays explicit', () => 
   assert.match(scope, /selected.*range/i)
 })
 
-test('the provisioned layout has no overlapping panels and both owned sources fit 115 columns', () => {
-  const dashboard = readDashboard()
-  for (const [index, panel] of dashboard.panels.entries()) {
-    for (const other of dashboard.panels.slice(index + 1)) {
-      const a = panel.gridPos
-      const b = other.gridPos
-      const overlaps = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-      assert.equal(overlaps, false, `${panel.title} overlaps ${other.title}`)
+test('the provisioned layout has no overlaps and sources fit 115 columns except native drilldown URLs', () => {
+  function checkLayout(panels: Panel[]) {
+    for (const [index, panel] of panels.entries()) {
+      for (const other of panels.slice(index + 1)) {
+        const a = panel.gridPos
+        const b = other.gridPos
+        const overlaps = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+        assert.equal(overlaps, false, `${panel.title} overlaps ${other.title}`)
+      }
+      checkLayout(panel.panels ?? [])
     }
   }
+  checkLayout(readDashboard().panels)
+  // JSON cannot split strings. Keep the explicit filters rather than duplicate var-run via __all_variables.
+  const selfLink = '/d/twake-drive-capacity?${__url_time_range}&var-campaign=$campaign' +
+    '&var-size=$size&var-target=$target&var-run='
+  const nativeUrls = new Set(['${__field.name}', '${__data.fields.run}'].map(token => `${selfLink}${token}`))
   for (const source of [dashboardPath, new URL(import.meta.url)]) {
-    const wide = readFileSync(source, 'utf8').split('\n').flatMap((line, index) =>
-      line.length > 115 ? [`${index + 1}: ${line.length} columns`] : [])
+    const wide = readFileSync(source, 'utf8').split('\n').flatMap((line, index) => {
+      const url = line.trim().match(/^"(.+)",$/u)?.[1]
+      const nativeUrl = source === dashboardPath && url !== undefined && nativeUrls.has(url)
+      return line.length > 115 && !nativeUrl ? [`${index + 1}: ${line.length} columns`] : []
+    })
     assert.deepEqual(wide, [], `${source.pathname} must remain reviewable`)
+  }
+})
+
+test('overview point evidence follows upload controls while retaining non-upload workloads', () => {
+  const points = panelByTitle(readDashboard(), 'Tested points · outcome and reason')
+  assert.deepEqual(points.targets?.map(target => target.expr), [
+    'cozy_load_point_info{campaign=~"$campaign",run=~"$run",kind!="upload"}',
+    'cozy_load_point_info{campaign=~"$campaign",run=~"$upload_run",kind="upload"}',
+  ])
+  assert.equal(points.transformations?.[0]?.id, 'merge',
+    'concatenate actual rows with run, kind and attempt intact; never reduce them into a new verdict')
+  const organize = points.transformations!.find(transform => transform.id === 'organize')!.options
+  const hidden = organize.excludeByName as Record<string, boolean>
+  for (const field of ['Value', 'Value #A', 'Value #B']) {
+    assert.equal(hidden[field], true, 'info-gauge columns must stay hidden after the native merge')
+  }
+})
+
+test('overview leads with conclusions and actual tested points, with expert detail collapsed', () => {
+  const dashboard = readDashboard()
+  const expert = panelByTitle(dashboard, 'Expert detail · reports, criteria and diagnostics')
+  assert.equal(expert.type, 'row')
+  assert.equal(expert.collapsed, true, 'technical inventory must not consume the opening viewport')
+  const conclusions = panelByTitle(dashboard, 'Conclusions · each report')
+  const points = panelByTitle(dashboard, 'Tested points · outcome and reason')
+  assert.deepEqual(dashboard.panels.filter(panel => panel.type === 'table'), [points],
+    'one compact evidence table leads; the complete report inventory stays in expert detail')
+  assert.ok(allPanels(expert.panels ?? []).includes(conclusions))
+  assert.ok(points.gridPos.y >= 5 && points.gridPos.y < expert.gridPos.y)
+  for (const panel of [conclusions, points]) {
+    assert.equal(panel.type, 'table')
+    assert.ok(panel.gridPos.h <= 6)
+    assert.equal(panel.gridPos.w, 24, 'one readable table, not two cramped metadata inventories')
+    assert.equal(panel.options.cellHeight, 'sm')
+    const organize = panel.transformations!.find(transform => transform.id === 'organize')!.options
+    const hidden = organize.excludeByName as Record<string, boolean>
+    for (const field of ['Time', 'Value', '__name__', 'job', 'instance', 'campaign']) {
+      assert.equal(hidden[field], true, `${panel.title} hides repeated technical ${field}`)
+    }
+    const run = panel.fieldConfig!.overrides.find(override => override.matcher.options === 'run')
+    assert.ok(run?.properties.some(property => property.id === 'custom.hidden' && property.value === true),
+      'retain the exact run for data links but hide it from the front-screen columns')
+    assert.equal(panel.targets?.length, panel === points ? 2 : 1,
+      'keep the selected upload scope and non-upload rows without reducing any report')
+  }
+  assert.match(conclusions.targets![0]!.expr, /^cozy_load_result_info/)
+  assert.match(points.targets![0]!.expr, /^cozy_load_point_info/)
+  const conclusionOrder = conclusions.transformations![0]!.options.indexByName as Record<string, number>
+  assert.ok(conclusionOrder.result! < conclusionOrder.run!)
+  const pointOrder = points.transformations!.find(transform => transform.id === 'organize')!
+    .options.indexByName as Record<string, number>
+  assert.ok(pointOrder.load! < pointOrder.run!)
+  for (const field of ['load', 'phase', 'status', 'reason', 'index']) {
+    assert.ok(field in pointOrder, `every actual point retains ${field}`)
+  }
+  for (const title of ['Reading the evidence', 'Bound semantics',
+    'Report update time (filesystem mtime)', 'Recorded environment and timing',
+    'Upload runs - bounds and status', 'Group batch runs - bounds and status',
+    'Activity mix runs - bounds and status']) {
+    assert.ok(allPanels(expert.panels ?? []).includes(panelByTitle(dashboard, title)), title)
+  }
+})
+
+test('native load curves plot measured scalars against numeric load without combining reports or phases', () => {
+  const dashboard = readDashboard()
+  const definitions = [
+    ['Upload p95 · by workers', 'upload', 'upload_p95_ms', 'ms'],
+    ['Upload success · by workers', 'upload', 'success_rate', 'percentunit'],
+    ['Group add elapsed · by recipients', 'fanout', 'add_elapsed_ms', 'ms'],
+  ] as const
+  for (const [title, kind, metric, unit] of definitions) {
+    const panel = panelByTitle(dashboard, title)
+    assert.equal(panel.type, 'xychart', 'a static classified report is not a chronological time series')
+    assert.ok(dashboard.panels.includes(panel))
+    assert.ok(panel.gridPos.y >= panelByTitle(dashboard, 'Tested points · outcome and reason').gridPos.y + 6)
+    assert.ok(panel.gridPos.y < panelByTitle(dashboard,
+      'Expert detail · reports, criteria and diagnostics').gridPos.y)
+    const selectedRun = kind === 'upload' ? '$upload_run' : '$run'
+    assert.equal(panel.targets?.[0]?.expr,
+      `cozy_load_point_value{campaign=~"$campaign",run=~"${selectedRun}",kind="${kind}"}`)
+    assert.equal(panel.targets?.[0]?.format, 'table')
+    assert.deepEqual(panel.transformations?.map(transform => transform.id), [
+      'filterByValue', 'organize', 'convertFieldType', 'sortBy', 'partitionByValues',
+    ])
+    const [filter, organize, convert, sort, partition] = panel.transformations!
+    assert.deepEqual(filter!.options, { type: 'include', match: 'all', filters: [
+      { fieldName: 'metric', config: { id: 'equal', options: { value: metric } } },
+    ] })
+    assert.deepEqual(convert!.options, { conversions: [{ targetField: 'load', destinationType: 'number' }] })
+    assert.deepEqual(sort!.options, { sort: [{ field: 'load', desc: false }] })
+    assert.deepEqual(partition!.options, {
+      fields: ['run', 'phase'], keepFields: false, naming: { asLabels: true },
+    }, 'never draw one curve through different runs or confirmation phases')
+    const excluded = organize!.options.excludeByName as Record<string, boolean>
+    assert.equal(excluded.Time, true, 'query evaluation time is not a report point')
+    assert.notEqual(excluded.Value, true)
+    assert.deepEqual(organize!.options.indexByName, { load: 0, Value: 1, run: 2, phase: 3, index: 4 })
+    assert.equal(panel.options.mapping, 'auto', 'native XY auto selects first numeric field as X')
+    assert.deepEqual(panel.options.legend, { showLegend: false },
+      'raw run IDs belong in tooltips, not a tall legend')
+    assert.equal(panel.fieldConfig?.defaults.unit, 'none', 'load is never formatted as milliseconds or percent')
+    const measured = panel.fieldConfig?.overrides.find(override => override.matcher.options === 'Value')
+    assert.ok(measured?.properties.some(property => property.id === 'unit' && property.value === unit))
+    assert.equal(panel.fieldConfig?.defaults.noValue, 'Not recorded')
+    assert.doesNotMatch(panel.description, /throughput|time.to.ready/i)
+  }
+  assert.equal(allPanels(dashboard.panels).some(panel => panel.type === 'timeseries'), false)
+  const notes = panelByTitle(dashboard, 'Available measurement scope').options.content ?? ''
+  assert.match(notes, /throughput.*not (exported|recorded)/i)
+  assert.match(notes, /readiness.*(no|not).*time.series/i)
+  assert.match(notes, /p95.*not.*gate/i, 'an observed p95 is not a fabricated SLO')
+})
+
+test('native XY selects worker and value fields across every frame, not only the first baseline', () => {
+  for (const panel of allPanels(readDashboard().panels).filter(panel => panel.type === 'xychart')) {
+    assert.equal((panel as Panel & { pluginVersion?: string }).pluginVersion, '13.2.0',
+      'the installed XY migration must not treat current matcher objects as legacy string fields')
+    assert.deepEqual(panel.options.series, [{
+      x: { matcher: { id: 'byName', options: 'load' } },
+      y: { matcher: { id: 'byName', options: 'Value' } },
+    }], 'explicit field matchers prevent a default frame-zero migration hiding discovery and confirmation')
+  }
+})
+
+test('native states preserve bound text and color exported statuses without green unknowns', () => {
+  const dashboard = readDashboard()
+  type RegexMapping = { type: string, options: { pattern: string, result: { color: string, text?: string } } }
+  for (const title of [
+    'Upload worker capacity', 'Shared-drive activity capacity', 'Group member batch capacity',
+  ]) {
+    const panel = panelByTitle(dashboard, title)
+    const mappings = panel.fieldConfig!.defaults.mappings as RegexMapping[]
+    for (const [result, color] of [
+      ['=57', 'green'], ['= 57', 'green'], ['>=64', 'blue'], ['>= 64', 'blue'],
+      ['[8,16)', 'blue'], ['[8, 16)', 'blue'], ['Inconclusive', 'orange'],
+      ['Running', 'blue'], ['Unknown', 'text'], ['No run', 'text'],
+    ]) {
+      const mapping = mappings.find(mapping => new RegExp(mapping.options.pattern).test(result!))
+      assert.equal(mapping?.options.result.color, color, `${title}: ${result}`)
+      assert.equal(mapping?.options.result.text, undefined, 'never replace the measured result string')
+    }
+    assert.deepEqual(panel.fieldConfig!.defaults.color, { mode: 'fixed', fixedColor: 'text' })
+    assert.ok(mappings.every(mapping => !new RegExp(mapping.options.pattern).test('1')),
+      'the info-gauge value 1 is never a displayed capacity')
+    const links = panel.fieldConfig!.defaults.links as { url: string }[]
+    assert.match(links?.[0]?.url ?? '', /var-run=\$\{__field.name\}/,
+      'a compact label still opens the exact original report run')
+  }
+  for (const title of ['Conclusions · each report', 'Tested points · outcome and reason']) {
+    const panel = panelByTitle(dashboard, title)
+    const outcome = panel.fieldConfig!.overrides.find(override => override.matcher.options === 'Outcome')!
+    const maps = outcome.properties.find(property => property.id === 'mappings')!.value as
+      { options: Record<string, { color: string, text: string }> }[]
+    const states = maps[0]!.options
+    for (const [status, color] of [
+      ['passed', 'green'], ['failed', 'red'], ['infrastructure_failure', 'orange'],
+      ['inconclusive', 'orange'], ['running', 'blue'], ['not_run', 'text'],
+      ['not_measured', 'text'], ['unknown', 'text'],
+    ]) assert.equal(states[status!]?.color, color, `${title}: actual producer status ${status}`)
+    assert.equal(states.completed?.color, 'blue', 'completed does not mean every point passed')
+    const reason = panel.fieldConfig!.overrides.find(override =>
+      override.matcher.options === 'Deciding evidence')
+    assert.ok(reason?.properties.some(property => property.id === 'mappings'),
+      'classified evidence codes have readable display labels, not rewritten source identifiers')
+  }
+})
+
+test('native self-drilldowns route to the exact report with upload filters and selected time intact', () => {
+  const panels = allPanels(readDashboard().panels)
+  const campaign = '20261023T112515Z-all-load'
+  const run = `${campaign}-personal-1K`
+  const sources = [
+    ['Upload worker capacity', '${__field.name}'],
+    ['Shared-drive activity capacity', '${__field.name}'],
+    ['Group member batch capacity', '${__field.name}'],
+    ['Conclusions · each report', '${__data.fields.run}'],
+    ['Tested points · outcome and reason', '${__data.fields.run}'],
+  ] as const
+  for (const [title, runToken] of sources) {
+    const panel = panels.find(panel => panel.title === title)!
+    const links = [panel.fieldConfig!.defaults.links,
+      ...panel.fieldConfig!.overrides.flatMap(override =>
+        override.properties.filter(property => property.id === 'links').map(property => property.value))]
+      .flat().filter(Boolean) as { title: string, url: string, targetBlank: boolean }[]
+    assert.equal(links.length, panel.type === 'stat' ? 1 : 2, `${title}: test every native report link`)
+    for (const link of links) {
+      assert.equal(link.title, 'Inspect this report')
+      assert.equal(link.targetBlank, false)
+      assert.ok(link.url.includes(runToken), `${title}: use the clicked report, not the All-run selection`)
+      for (const time of ['from=now-2d&to=now&timezone=browser', 'from=1000&to=2000']) {
+        const expanded = link.url.replaceAll(runToken, run)
+          .replaceAll('$campaign', campaign).replaceAll('$size', '1K').replaceAll('$target', 'personal')
+          .replace('${__url_time_range}', time)
+        // Grafana resolves native data links against the app base, not the current dashboard path.
+        const url = new URL(expanded, 'https://grafana.invalid/')
+        assert.equal(url.pathname, '/d/twake-drive-capacity', `${title}: never navigate to Grafana Home`)
+        assert.deepEqual([...url.searchParams], [
+          ...new URLSearchParams(time), ['var-campaign', campaign], ['var-size', '1K'],
+          ['var-target', 'personal'], ['var-run', run],
+        ], `${title}: preserve nondefault filters and time, with one exact run and no stale derived selection`)
+        assert.doesNotMatch(expanded, /\$/u, 'all native data-link tokens must be accounted for')
+      }
+    }
   }
 })
 
