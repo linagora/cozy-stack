@@ -76,6 +76,7 @@ help:
 	@echo "make seed-org SEED_USERS=50                    Build an organization with empty user instances"
 	@echo "make seed-org-cleanup SEED_DOMAIN=...          Delete the organization fixture and its users"
 	@echo "make org-drive-fanout FANOUT_LEVELS=10,50,100   Check group auto-accept and revoke convergence"
+	@echo "make dev-upload DEV_INSTANCE=... VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M  Bounded uploads on shared DEV"
 	@echo "make fixture-up FIXTURE_PROJECT=load-fixture-seed"
 	@echo "make fixture-snapshot FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
 	@echo "make fixture-restore FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
@@ -141,6 +142,13 @@ endif
 org-drive-fanout: export FANOUT_REPORT ?= data/results/$(EXECUTION_ID)-org-drive-fanout.json
 org-drive-fanout: $(NODE_MODULES_MARKER)
 	@$(RECORD_EXIT) $(NODE_BIN)/tsx src/scripts/org-drive-fanout.ts
+
+.PHONY: dev-upload
+# One shared DEV run at a time: every checkout, user and container on the runner locks this path.
+DEV_LOCK_FILE ?= /tmp/cozy-load-shared-dev.lock
+dev-upload: $(NODE_MODULES_MARKER)
+	@VUS="$(VUS)" ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" FILE_SIZE="$(FILE_SIZE)" EXECUTION_ID="$(EXECUTION_ID)" \
+		bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)" $(NODE_BIN)/tsx src/scripts/dev-upload.ts
 
 .PHONY: fixture-up fixture-snapshot fixture-restore fixture-discard
 fixture-up fixture-discard: $(NODE_MODULES_MARKER)
