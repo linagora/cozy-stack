@@ -39,6 +39,13 @@ test('Make leaves optional organization counts unset for CLI defaults', t => {
   deepEqual(result.env, {})
 })
 
+test('A Cloudery token file switches organization seeding and cleanup to the Cloudery', t => {
+  deepEqual(run(t, 'seed-org', { SEED_CLOUDERY_TOKEN_FILE: 'token.json' }).args,
+    ['src/scripts/seed-cloudery.ts', 'seed'])
+  deepEqual(run(t, 'seed-org-cleanup', { SEED_CLOUDERY_TOKEN_FILE: 'token.json' }).args,
+    ['src/scripts/seed-cloudery.ts', 'teardown'])
+})
+
 test('Make keeps an explicit organization cleanup domain in one argument', t => {
   const domain = 'seed-example.localhost:18090 with spaces'
   const result = run(t, 'seed-org-cleanup', { SEED_DOMAIN: domain })

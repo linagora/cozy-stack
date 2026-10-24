@@ -16,6 +16,31 @@ For configurable user counts with optional per-user files and shared drives, see
 [ORGANIZATIONS.md](ORGANIZATIONS.md). Organization mode defaults to empty users;
 the single-instance defaults below are unchanged.
 
+## Shared DEV through the Cloudery
+
+Where the Stack admin API is internal, a Cloudery partner token seeds one
+long-lived organization through the Cloudery API instead. It never calls the
+Stack admin API. Keep the token file (`id`, `public`, `manager_url`), the domain
+and the prefix private.
+
+```sh
+export SEED_CLOUDERY_TOKEN_FILE=~/private/cloudery-token.json
+export SEED_CLOUDERY_DOMAIN=<instance domain> SEED_CLOUDERY_PREFIX=<prefix>
+make seed-org SEED_USERS=20   # <prefix>org and members <prefix>01..20
+make seed-org-cleanup         # deletes them; the organization record stays
+```
+
+Re-runs reuse existing instances and add missing members. Only names built from
+the prefix are reused or deleted, and only after the Stack confirms their
+organization. Every request uses a token minted for that instance, refreshed
+before it expires. Until DEV trusts the organization's domain (#5070), each
+member accepts one warm-up drive from the organization instance, so later drives
+auto-accept. A member that fails the warm-up fails the seed. The seed ends with a
+1 KiB smoke test on the first member and writes the instance identities to
+`data/results/<prefix>-cloudery-fixture.json` (`SEED_CLOUDERY_MANIFEST`), without
+tokens. Offers default to `b2b_org_default` and `b2b_twake_default`
+(`SEED_CLOUDERY_ORG_OFFER`, `SEED_CLOUDERY_MEMBER_OFFER`).
+
 ## Build once
 
 Use Node 22 or newer and run `npm ci` in `tests/load`. The target must be a
