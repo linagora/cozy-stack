@@ -7,8 +7,6 @@ SEED_SETTINGS := SEED_ADMIN_URL SEED_STACK_URL SEED_ADMIN_USERNAME SEED_ADMIN_PA
                  SEED_DOMAIN SEED_USERS SEED_FILES SEED_DRIVES SEED_CONTEXT_NAME SEED_REQUEST_TIMEOUT_MS
 $(foreach setting,$(SEED_SETTINGS),$(if $(filter undefined,$(origin $(setting))),,$(eval export $(setting))))
 
-FANOUT_REPORT ?= data/results/$(EXECUTION_ID)-org-drive-fanout.json
-
 FANOUT_SETTINGS := FANOUT_ORG_DOMAIN FANOUT_LEVELS FANOUT_TIMEOUT_MS FANOUT_POLL_MS \
                    FANOUT_POLL_CONCURRENCY FANOUT_STABLE_MS FANOUT_REPORT
 $(foreach setting,$(FANOUT_SETTINGS),$(if $(filter undefined,$(origin $(setting))),,$(eval export $(setting))))
@@ -125,6 +123,9 @@ seed-org-cleanup: $(NODE_MODULES_MARKER)
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts cleanup-org "$$SEED_DOMAIN"
 
 .PHONY: org-drive-fanout
+# Defaulted here only: a global default would also be exported by `make campaign`, under the
+# campaign's EXECUTION_ID, and every fanout step would write to that one path.
+org-drive-fanout: export FANOUT_REPORT ?= data/results/$(EXECUTION_ID)-org-drive-fanout.json
 org-drive-fanout: $(NODE_MODULES_MARKER)
 	@$(NODE_BIN)/tsx src/scripts/org-drive-fanout.ts
 

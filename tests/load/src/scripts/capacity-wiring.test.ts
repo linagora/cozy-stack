@@ -3,12 +3,13 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, posix, resolve } from 'node:path'
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const cwd = fileURLToPath(new URL('../../', import.meta.url))
 
-test('Make persists standalone fanout reports in the observed results directory by default', t => {
+// A tsx stand-in that prints the report path and arguments Make hands to the fanout runner.
+function fakeTsx(t: TestContext): string {
   const bin = mkdtempSync(join(tmpdir(), 'capacity-wiring-'))
   t.after(() => rmSync(bin, { recursive: true, force: true }))
   const executable = join(bin, 'tsx')
@@ -16,11 +17,32 @@ test('Make persists standalone fanout reports in the observed results directory 
     '#!/usr/bin/env node\nconsole.log(JSON.stringify({ report: process.env.FANOUT_REPORT,' +
     ' args: process.argv.slice(2) }))\n')
   chmodSync(executable, 0o700)
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('FANOUT_')))
+  return bin
+}
+
+const fanoutFreeEnv = (): NodeJS.ProcessEnv =>
+  Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('FANOUT_')))
+
+test('Make persists standalone fanout reports in the observed results directory by default', t => {
+  const bin = fakeTsx(t)
   const result = spawnSync('make', ['--no-print-directory', '-s', '-o', 'node_modules/.load-ready',
-    `NODE_BIN=${bin}`, 'EXECUTION_ID=test-execution', 'org-drive-fanout'], { cwd, env, encoding: 'utf8' })
+    `NODE_BIN=${bin}`, 'EXECUTION_ID=test-execution', 'org-drive-fanout'],
+  { cwd, env: fanoutFreeEnv(), encoding: 'utf8' })
   equal(result.status, 0, result.stderr)
   deepEqual(JSON.parse(result.stdout), { report: 'data/results/test-execution-org-drive-fanout.json',
+    args: ['src/scripts/org-drive-fanout.ts'] })
+})
+
+test('a campaign fanout step names its report after the step, not the campaign make', t => {
+  const bin = fakeTsx(t)
+  // `make campaign` runs each step as a nested make with its own EXECUTION_ID.
+  const campaign = join(bin, 'campaign.mk')
+  writeFileSync(campaign, 'campaign-step:\n\t@$(MAKE) --no-print-directory -s -o node_modules/.load-ready' +
+    ' EXECUTION_ID=campaign-step org-drive-fanout\n')
+  const result = spawnSync('make', ['--no-print-directory', '-s', '-f', 'Makefile', '-f', campaign,
+    `NODE_BIN=${bin}`, 'campaign-step'], { cwd, env: fanoutFreeEnv(), encoding: 'utf8' })
+  equal(result.status, 0, result.stderr)
+  deepEqual(JSON.parse(result.stdout), { report: 'data/results/campaign-step-org-drive-fanout.json',
     args: ['src/scripts/org-drive-fanout.ts'] })
 })
 
