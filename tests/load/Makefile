@@ -55,6 +55,9 @@ HOST_GID ?= $(shell id -g)
 LOAD_TOPOLOGY ?= single-host
 GRAFANA_URL ?= http://localhost:$(or $(GRAFANA_PORT),3000)
 CAMPAIGN ?= quick
+# Campaign steps set a command prefix that records a producer's own exit status:
+# make reports every failed recipe as 2.
+RECORD_EXIT ?=
 
 export HOST_UID
 export HOST_GID
@@ -127,7 +130,7 @@ seed-org-cleanup: $(NODE_MODULES_MARKER)
 # campaign's EXECUTION_ID, and every fanout step would write to that one path.
 org-drive-fanout: export FANOUT_REPORT ?= data/results/$(EXECUTION_ID)-org-drive-fanout.json
 org-drive-fanout: $(NODE_MODULES_MARKER)
-	@$(NODE_BIN)/tsx src/scripts/org-drive-fanout.ts
+	@$(RECORD_EXIT) $(NODE_BIN)/tsx src/scripts/org-drive-fanout.ts
 
 .PHONY: fixture-up fixture-snapshot fixture-restore fixture-discard
 fixture-up fixture-discard: $(NODE_MODULES_MARKER)
@@ -201,7 +204,7 @@ cozy-shared-drive-load: upload-binary observability-up
 
 cozy-shared-drive-ramp: upload-binary observability-up
 	@mkdir -p data/results
-	@$(COMPOSE) run --rm \
+	@$(RECORD_EXIT) $(COMPOSE) run --rm \
 		-e BASE_URL="$(COZY_BASE_URL)" \
 		-e COZY_ACCESS_TOKEN="$(COZY_ACCESS_TOKEN)" \
 		-e UPLOAD_TARGET=shared-drive \
@@ -266,7 +269,7 @@ upload-soak:
 	@$(MAKE) upload UPLOAD_MODE=soak CAPACITY_PHASE=soak
 
 upload-capacity: $(NODE_MODULES_MARKER)
-	@BASE_URL="$(BASE_URL)" FILE_SIZE="$(FILE_SIZE)" MAX_VUS="$(MAX_VUS)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" BASELINE_ITERATIONS="$(BASELINE_ITERATIONS)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)" $(NODE_BIN)/tsx src/scripts/find-upload-capacity.ts
+	@BASE_URL="$(BASE_URL)" FILE_SIZE="$(FILE_SIZE)" MAX_VUS="$(MAX_VUS)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" BASELINE_ITERATIONS="$(BASELINE_ITERATIONS)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)" $(RECORD_EXIT) $(NODE_BIN)/tsx src/scripts/find-upload-capacity.ts
 
 upload-capacity-all:
 	@for size in 1K 100K 1M 10M 100M 1G; do \

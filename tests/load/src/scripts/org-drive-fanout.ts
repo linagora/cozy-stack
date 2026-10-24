@@ -558,7 +558,6 @@ async function main(): Promise<void> {
     else report.error = 'Fanout execution failed; artifacts retained'
     const last = report.points.at(-1)
     report.status = last?.status === 'failed' ? 'failed' : 'inconclusive'
-    process.exitCode = 1
   } finally {
     const passes = report.points.filter(p => p.status === 'passed')
     const lower = passes.at(-1)?.n ?? null
@@ -568,6 +567,8 @@ async function main(): Promise<void> {
     } else if (last?.status === 'failed' && lower !== null) {
       report.capacity = { kind: 'bracket', lower, upper_exclusive: last.n, max: null }
     }
+    // Exit contract (README): a bound or bracket is a measurement, a missed first level a failure.
+    process.exitCode = report.capacity.kind !== 'inconclusive' ? 0 : report.status === 'failed' ? 1 : 2
     let output = render()
     if (reportFD !== undefined) {
       try {
@@ -576,7 +577,7 @@ async function main(): Promise<void> {
         report.status = 'inconclusive'
         report.capacity = { kind: 'inconclusive', lower: null, upper_exclusive: null, max: null }
         report.error = 'Private report write failed'
-        process.exitCode = 1
+        process.exitCode = 2
         output = render()
       } finally {
         closeSync(reportFD)

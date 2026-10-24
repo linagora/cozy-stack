@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import { searchCapacity, type PointRequest } from './search.ts'
 import {
   classifyUploadPoint,
+  hasContentMismatch,
   isInterruptedCapacityPoint,
   readUploadPointMetrics,
   type UploadPointClassificationInput,
@@ -328,5 +329,15 @@ describe('isInterruptedCapacityPoint', (): void => {
 
   it('does not treat an incomplete successful process as an abort', (): void => {
     equal(isInterruptedCapacityPoint(0, 3, 4), false)
+  })
+})
+
+describe('hasContentMismatch', (): void => {
+  it('finds any attempt whose downloaded content differed', (): void => {
+    equal(hasContentMismatch([{ consistency_rate: 1 }, { consistency_rate: 0.99 }]), true)
+  })
+
+  it('ignores attempts without a consistency measurement', (): void => {
+    equal(hasContentMismatch([{ consistency_rate: 1 }, { consistency_rate: null }, {}]), false)
   })
 })

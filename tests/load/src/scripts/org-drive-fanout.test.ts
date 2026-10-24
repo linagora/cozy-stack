@@ -240,7 +240,7 @@ test('configuration member cap is reported as infrastructure, before drive creat
     return true
   })
   const result = await f.run()
-  equal(result.code, 1)
+  equal(result.code, 2)
   equal(result.report.status, 'inconclusive')
   equal(result.report.settings.effective_member_cap, 2)
   equal(result.report.capacity.max, null)
@@ -259,7 +259,7 @@ test('recipient canonical scheme mismatch is inconclusive, not a ready cohort', 
     return true
   })
   const result = await f.run({ FANOUT_LEVELS: '1' })
-  equal(result.code, 1, result.stdout)
+  equal(result.code, 2, result.stdout)
   equal(result.report.status, 'inconclusive')
   equal(result.report.points[0].add.status, 'inconclusive')
   equal(f.calls.filter(r => r.method === 'DELETE').length, 0)
@@ -273,7 +273,7 @@ test('unrecognized roster fields cannot leak an upstream secret into the report'
     }
   })
   const result = await f.run({ FANOUT_LEVELS: '1', FANOUT_TIMEOUT_MS: '120' })
-  equal(result.code, 1)
+  equal(result.code, 2)
   ok(!result.stdout.includes(secret), result.stdout)
   equal(result.report.status, 'inconclusive')
   equal(f.calls.filter(r => r.method === 'DELETE').length, 0)
@@ -287,7 +287,7 @@ test('healthy all-N nonconvergence yields a sparse bracket and retains running a
     }
   })
   const result = await f.run({ FANOUT_LEVELS: '1,2,4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
-  equal(result.code, 1, result.stdout)
+  equal(result.code, 0, result.stdout)
   equal(result.report.status, 'failed', result.stdout)
   deepEqual(result.report.capacity, { kind: 'bracket', lower: 1, upper_exclusive: 2, max: null })
   equal(f.drives.size, 2)
@@ -305,7 +305,7 @@ test('an observation still in flight at the phase deadline misses the SLA like a
       return true
     })
     const result = await f.run({ FANOUT_LEVELS: '1,2,4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
-    equal(result.code, 1, result.stdout)
+    equal(result.code, 0, result.stdout)
     equal(result.report.status, 'failed', result.stdout)
     deepEqual(result.report.capacity, { kind: 'bracket', lower: 1, upper_exclusive: 2, max: null })
     equal(result.report.error, 'Observation SLA deadline exceeded')
@@ -379,7 +379,7 @@ test('mixed observer failures preserve uncertainty after a passed level in eithe
         respond(secondHost, 'second')
       },
     })
-    equal(result.code, 1, result.stdout + result.stderr)
+    equal(result.code, mode === 'deadlines' ? 0 : 2, result.stdout + result.stderr)
     deepEqual(drainedFirst, { stdout: '', inflight: 1 }, 'report must wait for the other observer')
     equal(inflight, 0, 'every in-flight observer drains')
     equal(peak, 2, 'both failing observers were in flight')
@@ -451,7 +451,7 @@ test('removal without denial invalidates every usable capacity claim, retaining 
     }
   })
   const result = await f.run({ FANOUT_LEVELS: '1,2,4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
-  equal(result.code, 1)
+  equal(result.code, 2)
   equal(result.report.status, 'inconclusive', result.stdout)
   deepEqual(result.report.capacity, { kind: 'inconclusive', lower: null, upper_exclusive: null, max: null })
   equal(result.report.points[0].status, 'passed')
@@ -478,7 +478,7 @@ test('single mutation transport failures are unknown and never retried or remove
       return true
     })
     const result = await f.run({ FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '120' })
-    equal(result.code, 1)
+    equal(result.code, 2)
     equal(result.report.status, 'inconclusive', result.stdout)
     equal(result.report.capacity.max, null)
     const isHTTPError = ['redirect', 'http-error'].includes(mode)
@@ -509,7 +509,7 @@ test('malformed observations are inconclusive, never capacity saturation', async
       return true
     })
     const result = await f.run({ FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '120' })
-    equal(result.code, 1)
+    equal(result.code, 2)
     equal(result.report.status, 'inconclusive')
     equal(result.report.capacity.kind, 'inconclusive')
     equal(result.report.points[0].add.mutation, 'accepted')
@@ -528,7 +528,7 @@ test('all configuration is rejected before network or mutations', async t => {
     { SEED_CONTEXT_NAME: 'bad context' }, { SEED_DOMAIN_SUFFIX: 'different.invalid' },
   ]) {
     const result = await f.run(env)
-    equal(result.code, 1, JSON.stringify(env))
+    equal(result.code, 2, JSON.stringify(env))
     equal(result.report.status, 'inconclusive')
     equal(f.calls.length, 0)
   }
@@ -547,7 +547,7 @@ test('every registry page validates ownership, UUID, contexts and uniqueness bef
     if (mode === 'duplicate') last.attributes.uuid = f.instances[1]!.attributes.uuid
     if (mode === 'missing-root') f.instances.shift()
     const result = await f.run()
-    equal(result.code, 1, result.stdout)
+    equal(result.code, 2, result.stdout)
     equal(result.report.status, 'inconclusive')
     equal(mutations(f.calls).length, 0)
   })
@@ -564,7 +564,7 @@ test('registry links never forward admin auth to foreign origins, paths, userinf
       return true
     })
     const result = await f.run()
-    equal(result.code, 1)
+    equal(result.code, 2)
     equal(f.calls.length, 1)
     equal(mutations(f.calls).length, 0)
   })
@@ -582,7 +582,7 @@ test('new reports are private, byte-identical JSON and existing paths are refuse
   equal((await stat(join(base, 'new'))).mode & 0o777, 0o700)
   const before = f.calls.length
   const rejected = await f.run({ FANOUT_REPORT: path })
-  equal(rejected.code, 1)
+  equal(rejected.code, 2)
   equal(f.calls.length, before)
   equal(await readFile(path, 'utf8'), result.stdout)
 })
@@ -704,7 +704,7 @@ test('every actor must expose the same effective trust configuration without man
     }
   })
   const result = await f.run()
-  equal(result.code, 1)
+  equal(result.code, 2)
   match(result.report.error, /auto_accept_trusted/)
   equal(f.calls.filter(r => r.api === 'stack' && r.method !== 'GET').length, 0)
   const tokens = f.calls.filter(r => r.url.pathname === '/instances/token')
@@ -742,7 +742,7 @@ test('malformed effective cap is never echoed as arbitrary upstream text', async
     }
   })
   const result = await f.run()
-  equal(result.code, 1)
+  equal(result.code, 2)
   ok(!result.stdout.includes(secret), result.stdout)
   equal(result.report.capacity.kind, 'inconclusive')
   equal(f.drives.size, 0)
@@ -756,7 +756,7 @@ test('server errors on removal access probes are observer failures, not healthy 
     }
   })
   const result = await f.run({ FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '250', FANOUT_POLL_MS: '50' })
-  equal(result.code, 1)
+  equal(result.code, 2)
   equal(result.report.status, 'inconclusive')
   equal(result.report.points[0].remove.status, 'inconclusive', result.stdout)
   equal(f.drives.size, 1)
@@ -794,7 +794,7 @@ test('fresh mode refuses a collision before invoking the seeder', async t => {
     }
   })
   const result = await f.run({ FANOUT_ORG_DOMAIN: undefined })
-  equal(result.code, 1)
+  equal(result.code, 2)
   equal(result.report.mode, 'fresh')
   equal(result.report.capacity.kind, 'inconclusive')
   equal(mutations(f.calls).length, 0)
@@ -810,7 +810,7 @@ test('a failed real seed child leaves its disclosed partial organization without
   })
   f.instances.splice(0)
   const result = await f.run({ FANOUT_ORG_DOMAIN: undefined, FANOUT_LEVELS: '1' })
-  equal(result.code, 1)
+  equal(result.code, 2)
   match(result.report.error, /seeder failed/)
   match(result.stderr, /API request failed/)
   ok(result.stderr.includes(result.report.organization_domain))
@@ -840,7 +840,7 @@ test('group-index rediscovery must still identify this owner sharing before DELE
     }
   })
   const result = await f.run({ FANOUT_LEVELS: '1', FANOUT_STABLE_MS: '1' })
-  equal(result.code, 1, result.stdout)
+  equal(result.code, 2, result.stdout)
   equal(result.report.status, 'inconclusive')
   equal(result.report.points[0].add.status, 'passed')
   equal(f.calls.filter(r => r.method === 'DELETE').length, 0)
@@ -862,7 +862,7 @@ test(
         })
         const path = join(base, randomUUID() + '.json')
         const result = await f.run({ FANOUT_LEVELS: '1', FANOUT_REPORT: path })
-        equal(result.code, 1)
+        equal(result.code, 2)
         ok(!result.stdout.includes(value), result.stdout)
         ok(!result.stderr.includes(value))
         ok(!(await readFile(path, 'utf8')).includes(value))

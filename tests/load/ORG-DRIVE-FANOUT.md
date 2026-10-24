@@ -116,6 +116,10 @@ maximum. All passing levels give a lower bound. Configuration errors, uncertain
 mutations, failed observations or unverified revocation make the result
 inconclusive rather than a claimed capacity limit.
 
+The runner exits 0 for a lower bound or a bracket, 1 when the first level
+misses its deadline, and 2 when the result is inconclusive, as campaigns
+classify it ([README](README.md#campaigns)).
+
 ## Retained state and cleanup
 
 There are no write retries, hidden manual acceptance, instance auto-deletion or

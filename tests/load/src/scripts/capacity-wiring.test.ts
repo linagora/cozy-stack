@@ -46,6 +46,32 @@ test('a campaign fanout step names its report after the step, not the campaign m
     args: ['src/scripts/org-drive-fanout.ts'] })
 })
 
+test('campaign steps record each producer exit that make itself reports as 2', async t => {
+  const bin = mkdtempSync(join(tmpdir(), 'record-exit-'))
+  t.after(() => rmSync(bin, { recursive: true, force: true }))
+  // Stands in for tsx and docker compose: exits with the status the test chose.
+  const producer = join(bin, 'tsx')
+  writeFileSync(producer, '#!/bin/sh\nexit "$FAKE_EXIT"\n')
+  chmodSync(producer, 0o700)
+  // cozy-capacity reaches upload-capacity through a nested make, as campaigns do.
+  const nested = join(bin, 'nested.mk')
+  writeFileSync(nested, 'nested-upload-capacity:\n\t@$(MAKE) --no-print-directory -s -o node_modules/.load-ready upload-capacity\n')
+  const steps: [string, string[], number][] = [
+    ['upload-capacity', ['-f', 'Makefile', '-f', nested, 'nested-upload-capacity'], 1],
+    ['shared-drive-ramp', ['-o', 'upload-binary', '-o', 'observability-up', `COMPOSE=${producer}`,
+      'cozy-shared-drive-ramp'], 99],
+    ['org-drive-fanout', ['-o', 'node_modules/.load-ready', 'org-drive-fanout'], 2],
+  ]
+  for (const [name, args, code] of steps) await t.test(name, () => {
+    const file = join(bin, `${name}.exit`)
+    const result = spawnSync('make', ['--no-print-directory', '-s', `NODE_BIN=${bin}`, 'EXECUTION_ID=wiring',
+      `RECORD_EXIT=bash campaigns/lib/record-exit.sh ${file}`, ...args],
+    { cwd, env: { ...fanoutFreeEnv(), FAKE_EXIT: String(code) }, encoding: 'utf8' })
+    equal(result.status, 2, result.stderr)
+    equal(readFileSync(file, 'utf8'), `${code}\n`)
+  })
+})
+
 test('Compose adds an internal read-only Node results service without exposing private reports', () => {
   const source = readFileSync(join(cwd, 'compose.yaml'), 'utf8')
   const section = source.match(/^  capacity-results:\n([\s\S]*?)(?=^  \S|^networks:)/m)?.[1]

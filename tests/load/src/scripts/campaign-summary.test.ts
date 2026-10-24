@@ -3,6 +3,8 @@ import { describe, it } from 'node:test'
 
 import {
   buildGrafanaLink,
+  campaignOutcome,
+  classifyStep,
   describeStepResult,
   formatCampaignSummary,
   parseEnvironment,
@@ -16,6 +18,7 @@ const uploadStep: CampaignStep = {
   id: 'run-upload-1m',
   kind: 'upload-capacity',
   name: 'upload-capacity-1M',
+  producerExitCode: null,
   startedAt: '2026-10-18T21:10:00Z',
 }
 
@@ -26,6 +29,13 @@ describe('parseSteps', (): void => {
         'upload-capacity-1M\tupload-capacity\trun-upload-1m\t2026-10-18T21:10:00Z\t2026-10-18T21:20:00Z\t0\n\n',
       ),
       [uploadStep],
+    )
+  })
+
+  it('reads the producer exit status, kept apart from the exit make reports', (): void => {
+    deepEqual(
+      parseSteps('upload-capacity-1M\tupload-capacity\trun-upload-1m\t2026-10-18T21:10:00Z\t2026-10-18T21:20:00Z\t2\t1\n'),
+      [{ ...uploadStep, exitCode: 2, producerExitCode: 1 }],
     )
   })
 })
@@ -193,7 +203,124 @@ describe('formatCampaignSummary', (): void => {
     match(text, /- Topology: single-host/)
     match(text, /- Commit: abc123/)
     match(text, /- Limits: cozy-stack cpus=2 mem=4g/)
-    match(text, /\| upload-capacity-1M \| maximum concurrent uploads = 48 \| \[Grafana\]\(http:\/\/grafana\.test\/d\/twake-drive-k6\//)
-    match(text, /\| shared-drive-prepare \| done \| \|/)
+    match(text, /- Outcome: 0 \(completed\)/)
+    match(text, /\| upload-capacity-1M \| maximum concurrent uploads = 48 \| 0 \| \[Grafana\]\(http:\/\/grafana\.test\/d\/twake-drive-k6\//)
+    match(text, /\| shared-drive-prepare \| done \| 0 \|/)
+  })
+
+  it('reports an interrupted campaign inconclusive with each step reason', (): void => {
+    const text = formatCampaignSummary({
+      environment: { interrupted: 'TERM' },
+      grafanaUrl: 'http://grafana.test',
+      name: 'quick',
+      results: new Map(),
+      runId: '20261018T211000Z',
+      steps: [{ ...uploadStep, exitCode: 2, producerExitCode: 143 }],
+    })
+
+    match(text, /- Outcome: 2 \(inconclusive\)\n- Interrupted by SIGTERM/)
+    match(text, /\| upload-capacity-1M \| no result file \(exit 2\) \| 2: no result file \(exit 143\) \|/)
+  })
+})
+
+describe('classifyStep', (): void => {
+  const ramp: CampaignStep = { ...uploadStep, kind: 'shared-drive-ramp', producerExitCode: 0 }
+  const fanout: CampaignStep = { ...uploadStep, kind: 'org-drive-fanout', producerExitCode: 0 }
+  const upload: CampaignStep = { ...uploadStep, producerExitCode: 0 }
+  const completedUpload = { attempts: [{ consistency_rate: 1 }], maximum_concurrent_uploads: 48, result_bound: 'exact', status: 'completed' }
+  const rampBracket = { max_sustained_level: 8, result_bound: 'bracket', status: 'completed' }
+  const fanoutBracket = { capacity: { kind: 'bracket', lower: 2, upper_exclusive: 4 }, status: 'failed' }
+
+  it('accepts a completed capacity for every producer, a bracket included', (): void => {
+    deepEqual(classifyStep(upload, completedUpload), { code: 0, reason: 'completed' })
+    deepEqual(classifyStep(ramp, rampBracket), { code: 0, reason: 'completed' })
+    deepEqual(classifyStep(ramp, { ...rampBracket, result_bound: 'lower_bound' }), { code: 0, reason: 'completed' })
+    deepEqual(classifyStep(fanout, fanoutBracket), { code: 0, reason: 'completed' })
+    deepEqual(classifyStep(fanout, { capacity: { kind: 'lower_bound', lower: 16 }, status: 'passed' }),
+      { code: 0, reason: 'completed' })
+  })
+
+  it('accepts a ramp that k6 stopped on mostly failed requests once cleanup is verified', (): void => {
+    deepEqual(classifyStep({ ...ramp, exitCode: 2, producerExitCode: 99 }, rampBracket), { code: 0, reason: 'completed' })
+  })
+
+  it('does not let a completed report explain an unexpected producer exit', (): void => {
+    deepEqual(classifyStep({ ...ramp, exitCode: 2, producerExitCode: 107 }, rampBracket),
+      { code: 2, reason: 'exit 107 although the report completed' })
+    deepEqual(classifyStep({ ...upload, exitCode: 2, producerExitCode: 99 }, completedUpload),
+      { code: 2, reason: 'exit 99 although the report completed' })
+    deepEqual(classifyStep({ ...fanout, exitCode: 2, producerExitCode: 1 }, fanoutBracket),
+      { code: 2, reason: 'exit 1 although the report completed' })
+    deepEqual(classifyStep({ ...ramp, exitCode: 2, producerExitCode: null }, rampBracket),
+      { code: 2, reason: 'exit 2 although the report completed' })
+  })
+
+  it('reports a content mismatch as a correctness failure even inside a completed search', (): void => {
+    deepEqual(classifyStep({ ...upload, exitCode: 2, producerExitCode: 1 },
+      { ...completedUpload, attempts: [{ consistency_rate: 1 }, { consistency_rate: 0.75 }] }),
+    { code: 1, reason: 'uploaded content did not match after download' })
+  })
+
+  it('keeps a cleanup failure next to the correctness failure that takes precedence', (): void => {
+    deepEqual(classifyStep({ ...upload, exitCode: 2, producerExitCode: 1 }, {
+      attempts: [{ cleanup_rate: 1, consistency_rate: 0.5 }, { cleanup_rate: 0, consistency_rate: 1 }],
+      failure_reason: 'test-directory cleanup failed',
+      status: 'infrastructure_failure',
+    }), { code: 1, reason: 'uploaded content did not match after download; test-directory cleanup failed' })
+    deepEqual(classifyStep({ ...upload, exitCode: 2, producerExitCode: 1 }, {
+      attempts: [{ cleanup_rate: 0, consistency_rate: 0.5 }],
+      failure_reason: 'test-directory cleanup failed; uploaded content did not match after download',
+      status: 'infrastructure_failure',
+    }), { code: 1, reason: 'test-directory cleanup failed; uploaded content did not match after download' })
+  })
+
+  it('leaves cleanup and setup failures inconclusive', (): void => {
+    deepEqual(classifyStep({ ...upload, exitCode: 2, producerExitCode: 2 }, {
+      attempts: [{ cleanup_rate: 0, consistency_rate: 1 }],
+      failure_reason: 'test-directory cleanup failed',
+      status: 'infrastructure_failure',
+    }), { code: 2, reason: 'test-directory cleanup failed' })
+    deepEqual(classifyStep({ ...ramp, exitCode: 2, producerExitCode: 99 }, {
+      failure_reason: 'test-directory cleanup failed', result_bound: 'inconclusive', status: 'infrastructure_failure',
+    }), { code: 2, reason: 'test-directory cleanup failed' })
+    deepEqual(classifyStep({ ...ramp, exitCode: 2, producerExitCode: 99 },
+      { max_sustained_level: 8, result_bound: 'inconclusive', status: 'completed' }),
+    { code: 2, reason: 'ramp result is inconclusive' })
+    deepEqual(classifyStep({ ...fanout, exitCode: 2, producerExitCode: 2 },
+      { capacity: { kind: 'inconclusive' }, error: 'Observation SLA deadline exceeded', status: 'inconclusive' }),
+    { code: 2, reason: 'Observation SLA deadline exceeded' })
+    deepEqual(classifyStep({ ...uploadStep, exitCode: 2 }, null), { code: 2, reason: 'no result file (exit 2)' })
+    deepEqual(classifyStep({ ...uploadStep, exitCode: 2, id: '', kind: 'prepare' }, null),
+      { code: 2, reason: 'step failed (exit 2)' })
+    deepEqual(classifyStep({ ...uploadStep, id: '', kind: 'prepare' }, null), { code: 0, reason: 'completed' })
+  })
+
+  it('fails a search whose first level failed, for every producer', (): void => {
+    deepEqual(classifyStep({ ...upload, exitCode: 2, producerExitCode: 1 }, { ...completedUpload, maximum_concurrent_uploads: 0 }),
+      { code: 1, reason: 'a single upload failed the criteria' })
+    deepEqual(classifyStep(ramp, { ...rampBracket, max_sustained_level: 0 }), { code: 1, reason: 'the first ramp level failed' })
+    deepEqual(classifyStep({ ...fanout, exitCode: 2, producerExitCode: 1 }, { capacity: { kind: 'inconclusive' }, status: 'failed' }),
+      { code: 1, reason: 'the first fanout level missed its deadline' })
+  })
+})
+
+describe('campaignOutcome', (): void => {
+  const ok = { code: 0, reason: 'completed' } as const
+  const inconclusive = { code: 2, reason: 'no result file (exit 2)' } as const
+  const corrupt = { code: 1, reason: 'uploaded content did not match after download' } as const
+
+  it('lets a correctness failure take precedence over inconclusive steps and interruptions', (): void => {
+    equal(campaignOutcome([ok, inconclusive, corrupt], false), 1)
+    equal(campaignOutcome([corrupt], true), 1)
+  })
+
+  it('keeps an early failure even when the final step completed', (): void => {
+    equal(campaignOutcome([inconclusive, ok], false), 2)
+  })
+
+  it('succeeds only when every step completed and the run was neither empty nor interrupted', (): void => {
+    equal(campaignOutcome([ok, ok], false), 0)
+    equal(campaignOutcome([ok], true), 2)
+    equal(campaignOutcome([], false), 2)
   })
 })

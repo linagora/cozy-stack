@@ -99,6 +99,16 @@ function getMeasuredFailure(
   return ''
 }
 
+export const CONTENT_MISMATCH_REASON = 'uploaded content did not match after download'
+
+// A mismatch fails its point like overload does, so the search goes on; the run's
+// exit status must still report it as a correctness failure.
+export function hasContentMismatch(
+  attempts: readonly { consistency_rate?: unknown }[],
+): boolean {
+  return attempts.some(({ consistency_rate: rate }): boolean => typeof rate === 'number' && rate < 1)
+}
+
 // Cleanup failure must stop the search even when content mismatched. With clean
 // cleanup, a mismatch fails the point before interruption checks: k6 aborts on
 // it, which would otherwise look like an infrastructure failure.
@@ -119,18 +129,17 @@ export function classifyUploadPoint(
   }
   const contentMismatch =
     metrics.consistencyRate !== null && metrics.consistencyRate < 1
-  const mismatchReason = 'uploaded content did not match after download'
 
   if (metrics.cleanupRate !== 1) {
     return infrastructureFailure(
       contentMismatch
-        ? `test-directory cleanup failed; ${mismatchReason}`
+        ? `test-directory cleanup failed; ${CONTENT_MISMATCH_REASON}`
         : 'test-directory cleanup failed',
     )
   }
   if (contentMismatch) {
     return {
-      reason: mismatchReason,
+      reason: CONTENT_MISMATCH_REASON,
       result: 'failed',
     }
   }

@@ -454,6 +454,11 @@ result, and the k6 summary path. An `exact` result has a measured failing level 
 `lower_bound` result is displayed as `maximum >= MAX_VUS`, because the
 configured cap passed and no higher level was attempted.
 
+The search exits 0 with a completed result, 2 when it stopped on an
+infrastructure failure, and 1 when no level passed or any upload read back with
+a different checksum. A mismatch still lets the search continue and report a
+capacity, but it is a correctness failure, never a measurement.
+
 Grafana can filter k6 metrics by campaign, execution ID, file size,
 concurrency, and phase. A campaign groups every capacity-search point. An
 execution ID identifies one k6 process at one concurrency and attempt; for a
@@ -512,9 +517,35 @@ Each run writes `data/results/campaigns/<run id>-<name>/`:
   stack saturated first;
 - `environment.txt`: git commit, topology, host, and the configured and
   effective CPU and memory limits;
-- `steps.tsv`: one line per step with its campaign ID, times, and exit code;
-- `summary.md`: one line per step with its result and a Grafana link for its
-  time range. Set `GRAFANA_URL` when Grafana is not on `localhost`.
+- `steps.tsv`: one line per step with its campaign ID, times, make's exit
+  code, and the producer's own exit code (empty when the producer never ran);
+- `summary.md`: the campaign outcome, then one line per step with its result,
+  its outcome, and a Grafana link for its time range. Set `GRAFANA_URL` when
+  Grafana is not on `localhost`.
+
+`make campaign` exits with the campaign outcome:
+
+| Exit | Meaning |
+| ---: | --- |
+| 0 | Every step completed in its declared mode, with required verification and cleanup |
+| 1 | A proven correctness failure, such as an upload that read back with a different checksum |
+| 2 | Inconclusive: setup failure, missing or invalid report, interruption, incomplete verification, or failed cleanup |
+
+A correctness failure takes precedence over inconclusive steps, and the step
+outcomes keep both reasons. A failed early step still fails the campaign when
+later steps complete. In capacity mode, a lower bound or a tested bracket is a
+completed result, including expected overload: k6 stopping the ramp on mostly
+failed requests (exit 99) counts as overload once cleanup is verified. A search
+whose first level fails measured no capacity and exits 1. Performance stays
+observational until agreed criteria exist. make reports every failed recipe as
+2, so steps also record the producer's exit, and a completed report never
+explains an unexpected one.
+
+Ctrl-C or SIGTERM sends the running step a single SIGTERM, so k6 can still stop
+gracefully and clean up, skips the remaining steps, and still writes the
+summary with outcome 2; `make campaign` itself then ends with the signal's
+status. Treat any exit other than 0 and 1, or a run directory without
+`summary.md`, as inconclusive: that also covers a campaign killed outright.
 
 ### Topology and resource limits
 

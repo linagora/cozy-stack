@@ -36,6 +36,7 @@ import {
 } from './capacity/search.ts'
 import {
   classifyUploadPoint,
+  hasContentMismatch,
   readUploadPointMetrics,
   type UploadPointMetrics,
 } from './capacity/upload-point.ts'
@@ -471,7 +472,7 @@ function abortCampaign(state: CampaignState, reason: string): number {
   renameSync(state.temporaryReportPath, state.reportPath)
   process.stderr.write(`Capacity report: ${state.reportPath}\n`)
   process.stderr.write(`Capacity campaign stopped: ${reason}\n`)
-  return 2
+  return hasContentMismatch(state.report.attempts) ? 1 : 2
 }
 
 function runCapacitySearch(state: CampaignState): number {
@@ -499,7 +500,7 @@ function runCapacitySearch(state: CampaignState): number {
   }
 
   finishReport(state, result)
-  return result.maximumVus === 0 ? 1 : 0
+  return result.maximumVus === 0 || hasContentMismatch(state.report.attempts) ? 1 : 0
 }
 
 function cleanupTemporaryReport(state: CampaignState | null): boolean {
