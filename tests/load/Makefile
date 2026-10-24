@@ -120,11 +120,20 @@ seed-scale-cleanup: $(NODE_MODULES_MARKER)
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts cleanup "$$SEED_DOMAIN"
 
 .PHONY: seed-org seed-org-cleanup
+# A Cloudery token file seeds through the Cloudery partner API instead (SEEDING.md).
 seed-org: $(NODE_MODULES_MARKER)
+ifdef SEED_CLOUDERY_TOKEN_FILE
+	@$(NODE_BIN)/tsx src/scripts/seed-cloudery.ts seed
+else
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts seed-org $${SEED_DOMAIN:+"$$SEED_DOMAIN"}
+endif
 
 seed-org-cleanup: $(NODE_MODULES_MARKER)
+ifdef SEED_CLOUDERY_TOKEN_FILE
+	@$(NODE_BIN)/tsx src/scripts/seed-cloudery.ts teardown
+else
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts cleanup-org "$$SEED_DOMAIN"
+endif
 
 .PHONY: org-drive-fanout
 # Defaulted here only: a global default would also be exported by `make campaign`, under the
