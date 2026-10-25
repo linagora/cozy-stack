@@ -635,6 +635,7 @@ make dev-upload VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M MAX_VUS=2 MAX_UPLOAD_BYTE
 make dev-capacity FILE_SIZE=1M MAX_VUS=8 MAX_UPLOAD_BYTES=160M MAX_RUNTIME=30m \
   BASELINE_ITERATIONS=10 CONFIRMATION_ITERATIONS=20
 make dev-shared-drive-ramp MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m
+make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m   # ORG-DRIVE-FANOUT.md
 ```
 
 Each k6 run gets a fresh 30-minute instance token and is stopped after 20

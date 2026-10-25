@@ -75,6 +75,34 @@ Point drives/groups are fresh, so earlier revoked entries do not consume the nex
 sharing's member cap. Earlier point artifacts remain in the fixture for inspection;
 this is not a cold-cache or history-free comparison.
 
+## Shared DEV
+
+On shared DEV, the actors come from the Cloudery fixture
+([SEEDING.md](SEEDING.md#shared-dev-through-the-cloudery)) instead of the Stack
+admin API. Run it only from the designated load VM, under the shared DEV lock:
+
+```sh
+export SEED_CLOUDERY_TOKEN_FILE=~/private/cloudery-token.json
+export SEED_CLOUDERY_MANIFEST=~/private/<prefix>-cloudery-fixture.json
+make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m
+```
+
+- Before any write, each instance must match its manifest UUID on the Stack, and
+  each member must auto-accept trusted contacts and keep the seed's warm-up drive.
+  Until DEV trusts the organization's domain (#5070), the warm-up is what makes
+  members auto-accept its drives.
+- Every token is minted through the Cloudery for that instance alone, and minted
+  again before a level once it is 10 minutes old (tokens last 30 minutes).
+- Levels cannot exceed the fixture's members. `MAX_RUNTIME` is required: a level
+  starts only when both of its phases can still end within it, and the run
+  otherwise ends as a lower bound (`budget_reached: runtime`).
+- Drives are named `twake-load-fanout-<EXECUTION_ID>-<level>-<id>`. After the
+  run, each of them waits until its roster stops changing, then its root is
+  trashed, which revokes it everywhere, and destroyed. The run's groups and
+  contacts are deleted too. Anything that cannot be removed is listed under
+  `cleanup.retained` and leaves the run inconclusive (exit 2), keeping the levels
+  as evidence. The next DEV run first removes drives an earlier run left.
+
 ## Settings and success criteria
 
 - `FANOUT_LEVELS`: increasing distinct recipient counts, default `1,2,4,8,16`.
