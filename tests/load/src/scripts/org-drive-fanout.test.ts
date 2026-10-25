@@ -1,5 +1,5 @@
 import { deepEqual, equal, match, ok } from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -157,7 +157,7 @@ async function fixture(t: TestContext, override?: Override) {
   }
   async function run(
     env: Record<string, string | undefined> = {},
-    options: { preload?: string, onStderr?: (text: string) => void } = {},
+    options: { preload?: string, onStderr?: (text: string) => void, onSpawn?: (child: ChildProcess) => void } = {},
   ) {
     stdout = ''
     let stderr = ''
@@ -170,6 +170,7 @@ async function fixture(t: TestContext, override?: Override) {
       FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '800', FANOUT_POLL_MS: '10', FANOUT_STABLE_MS: '20',
       FANOUT_POLL_CONCURRENCY: '2', ...env,
     } })
+    options.onSpawn?.(child)
     child.stdout.on('data', chunk => { stdout += String(chunk) })
     child.stderr.on('data', chunk => {
       stderr += String(chunk)
@@ -188,7 +189,8 @@ async function fixture(t: TestContext, override?: Override) {
   // Shared DEV: the Cloudery fixture manifest names the organization first, then its members.
   const dir = await mkdtemp(join(tmpdir(), 'fanout-dev-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
-  async function devRun(env: Record<string, string | undefined> = {}, options: { preload?: string } = {},
+  async function devRun(env: Record<string, string | undefined> = {},
+    options: { preload?: string, onSpawn?: (child: ChildProcess) => void } = {},
     edit?: (manifest: any) => void) {
     const manifest = { warmup_sharing_id: warmup.id, instances: instances.map((i, n) => ({
       fqdn: i.attributes.domain, uuid: i.attributes.uuid, role: n === 0 ? 'organization' : 'member' })) }
@@ -1060,4 +1062,26 @@ test('MAX_RUNTIME also stops writes inside a fan-out level', async t => {
   equal(result.report.points[0].status, 'inconclusive')
   equal(result.report.retained, true)
   ok(f.calls.filter(r => r.method === 'POST' && r.url.pathname === '/data/io.cozy.contacts/').length < 8)
+})
+
+test('an interrupted DEV fan-out stops measuring and still removes its drive', async t => {
+  // Recipients never see the drive, so the first level observes until the interruption.
+  const f = await fixture(t, (r, res) => {
+    if (r.method !== 'GET' || !/^\/sharings\/drive-\d+$/.test(r.url.pathname) || r.headers.host === root) return
+    res.writeHead(404).end()
+    return true
+  })
+  const result = await f.devRun({ FANOUT_TIMEOUT_MS: '10000' }, {
+    onSpawn: child => {
+      const poll = setInterval(() => {
+        if (!f.calls.some(r => r.url.pathname.endsWith('/recipients'))) return
+        clearInterval(poll)
+        child.kill('SIGTERM')
+      }, 20)
+    },
+  })
+  equal(result.code, 2, result.stderr)
+  match(result.report.error, /interrupted by SIGTERM/)
+  deepEqual(result.report.cleanup, { cleaned: ['drive-1'], retained: [] })
+  equal(f.drives.get('drive-1')!.deleted, true)
 })

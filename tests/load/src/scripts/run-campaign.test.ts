@@ -1,5 +1,5 @@
 import { deepEqual, equal, match, ok } from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs'
@@ -22,11 +22,14 @@ for arg in "$@"; do
   esac
 done
 case $target in
-  cozy-capacity) suffix=upload-capacity ;;
-  cozy-shared-drive-ramp) suffix=shared-drive-ramp ;;
-  org-drive-fanout) suffix=org-drive-fanout ;;
+  cozy-capacity | dev-capacity) suffix=upload-capacity ;;
+  cozy-shared-drive-ramp | dev-shared-drive-ramp) suffix=shared-drive-ramp ;;
+  org-drive-fanout | dev-org-drive-fanout) suffix=org-drive-fanout ;;
   *) suffix= ;;
 esac
+echo "$target" >> "$FAKE_STEPS/targets"
+# DEV targets take the shared DEV lock, as the Makefile does.
+case $target in dev-*) bash campaigns/lib/shared-dev-lock.sh "$DEV_LOCK_FILE" true || exit 2 ;; esac
 step=\${id#*-}
 play=$FAKE_STEPS/\${step:-$target}
 [ ! -e "$play.setup-fails" ] || exit 2
@@ -45,11 +48,15 @@ code=$(cat "$play.exit" 2>/dev/null || echo 0)
 `
 
 type Play = { exit?: number, graceful?: boolean, report?: object, setupFails?: boolean, sleep?: number }
-type Run = { code: number | null, log: string, signals: (step: string) => number, steps: string[][], summary: string }
+type Run = {
+  code: number | null, log: string, signals: (step: string) => number, steps: string[][], summary: string, targets: string[]
+}
 type Interrupt = { after: string, delayMs: number }
+// prelude goes before campaign(); during runs once the named step has started.
+type Options = { file?: string, prelude?: string, env?: Record<string, string>, during?: { after: string, run: () => void } }
 
 async function runCampaign(
-  t: TestContext, definition: string, plays: Record<string, Play>, interrupt?: Interrupt,
+  t: TestContext, definition: string, plays: Record<string, Play>, interrupt?: Interrupt, options: Options = {},
 ): Promise<Run> {
   const root = mkdtempSync(join(tmpdir(), 'run-campaign-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -58,13 +65,15 @@ async function runCampaign(
   mkdirSync(join(dir, 'data', 'results'), { recursive: true })
   mkdirSync(bin)
   mkdirSync(steps)
-  for (const file of ['run-campaign.sh', 'lib/record-exit.sh']) {
+  for (const file of ['run-campaign.sh', 'lib/record-exit.sh', 'lib/shared-dev-lock.sh']) {
     copyFileSync(join(harness, 'campaigns', file), join(dir, 'campaigns', file))
   }
   // A copy, not a link: the summary only runs when invoked by its real path.
   cpSync(join(harness, 'src'), join(dir, 'src'), { recursive: true })
   symlinkSync(join(harness, 'node_modules'), join(dir, 'node_modules'))
-  writeFileSync(join(dir, 'campaigns', 'scenario.sh'), `campaign() {\n${definition}\n}\n`)
+  writeFileSync(join(dir, 'campaigns', 'scenario.sh'), options.file
+    ? readFileSync(join(harness, 'campaigns', options.file))
+    : `${options.prelude ?? ''}\ncampaign() {\n${definition}\n}\n`)
   for (const [name, body] of [['make', fakeMake], ['docker', '#!/bin/sh\nexit 0\n']]) {
     writeFileSync(join(bin, name!), body!)
     chmodSync(join(bin, name!), 0o700)
@@ -78,12 +87,17 @@ async function runCampaign(
   }
 
   const child = spawn('bash', ['campaigns/run-campaign.sh', 'scenario'], {
-    cwd: dir, env: { ...process.env, FAKE_STEPS: steps, PATH: `${bin}:${process.env.PATH}` },
+    cwd: dir, env: { ...process.env, FAKE_STEPS: steps, PATH: `${bin}:${process.env.PATH}`, ...options.env },
   })
   let log = ''
   let interrupting = false
+  let during = options.during
   child.stdout.on('data', (chunk: Buffer) => {
     log += chunk
+    if (during && log.includes(`START ${during.after}`)) {
+      during.run()
+      during = undefined
+    }
     if (interrupt === undefined || interrupting || !log.includes(`START ${interrupt.after}`)) return
     interrupting = true
     setTimeout(() => child.kill('SIGTERM'), interrupt.delayMs)
@@ -94,7 +108,9 @@ async function runCampaign(
   const runs = join(dir, 'data', 'results', 'campaigns')
   const [run] = readdirSync(runs)
   ok(run, log)
-  const read = (name: string): string => readFileSync(join(runs, run, name), 'utf8')
+  const read = (name: string): string => {
+    try { return readFileSync(join(runs, run, name), 'utf8') } catch { return '' }
+  }
   return {
     code,
     log,
@@ -107,6 +123,7 @@ async function runCampaign(
     },
     steps: read('steps.tsv').trim().split('\n').filter(Boolean).map(line => line.split('\t')),
     summary: read('summary.md'),
+    targets: (() => { try { return readFileSync(join(steps, 'targets'), 'utf8').split('\n').filter(Boolean) } catch { return [] } })(),
   }
 }
 
@@ -204,4 +221,61 @@ test('an interruption stops the running step once, skips the rest and still summ
       match(run.summary, /- Outcome: 2 \(inconclusive\)\n- Interrupted by SIGTERM/)
     })
   }
+})
+
+const lockScript = join(harness, 'campaigns', 'lib', 'shared-dev-lock.sh')
+const hasFlock = () => spawnSync('sh', ['-c', 'command -v flock']).status === 0
+
+test('the DEV capacity definition stops after a failed or inconclusive step', async t => {
+  if (!hasFlock()) return t.skip('flock is not installed')
+  for (const step of ['upload-capacity-1M', 'shared-drive-ramp']) {
+    for (const exit of [1, 2]) await t.test(`${step} exits ${exit}`, async t => {
+      const dir = mkdtempSync(join(tmpdir(), 'dev-campaign-stop-'))
+      t.after(() => rmSync(dir, { recursive: true, force: true }))
+      const run = await runCampaign(t, '', {
+        'upload-capacity-1M': { exit: 0, report: upload },
+        [step]: { exit, report: exit === 1
+          ? (step === 'upload-capacity-1M'
+            ? { ...upload, attempts: [{ cleanup_rate: 1, consistency_rate: 0 }] }
+            : { ...ramp('bracket'), max_sustained_level: 0 })
+          : { status: 'infrastructure_failure', failure_reason: 'cleanup unverified' } },
+      }, undefined, { file: 'dev-capacity.sh', env: { DEV_LOCK_FILE: join(dir, 'shared-dev.lock') } })
+      equal(run.code, exit, run.log)
+      deepEqual(run.targets, step === 'upload-capacity-1M'
+        ? ['dev-capacity'] : ['dev-capacity', 'dev-shared-drive-ramp'])
+    })
+  }
+})
+
+test('a shared DEV campaign holds the lock once, through steps that reuse it', async t => {
+  if (!hasFlock()) return t.skip('flock is not installed')
+  const lock = join(mkdtempSync(join(tmpdir(), 'dev-campaign-')), 'shared-dev.lock')
+  let outside: number | null = null
+  const run = await runCampaign(t, producers, {
+    fanout: { exit: 0, report: { ...fanout, capacity: { kind: 'lower_bound', lower: 4 }, status: 'passed' } },
+    ramp: { exit: 0, report: ramp('lower_bound') },
+    upload: { exit: 0, report: upload, sleep: 1 },
+  }, undefined, {
+    prelude: 'SHARED_DEV=1', env: { DEV_LOCK_FILE: lock },
+    // Another run, even with the variable set, cannot borrow the campaign's lock.
+    during: { after: 'upload', run: () => {
+      outside = spawnSync('bash', [lockScript, lock, 'true'], { env: { ...process.env, DEV_LOCK_HELD: lock } }).status
+    } },
+  })
+  equal(run.code, 0, run.log)
+  equal(outside, 2)
+  deepEqual(run.targets, ['dev-capacity', 'dev-shared-drive-ramp', 'dev-org-drive-fanout'])
+  match(run.summary, /- Outcome: 0 \(completed\)/)
+})
+
+test('a shared DEV campaign does not start while another run holds the lock', async t => {
+  if (!hasFlock()) return t.skip('flock is not installed')
+  const lock = join(mkdtempSync(join(tmpdir(), 'dev-campaign-')), 'shared-dev.lock')
+  const holder = spawn('bash', [lockScript, lock, 'sh', '-c', 'echo held; sleep 30'])
+  t.after(() => holder.kill())
+  await new Promise(resolve => holder.stdout.once('data', resolve))
+  const run = await runCampaign(t, producers, {}, undefined, { prelude: 'SHARED_DEV=1', env: { DEV_LOCK_FILE: lock } })
+  equal(run.code, 2, run.log)
+  match(run.log, /Shared DEV is busy/)
+  deepEqual(run.targets, [])
 })

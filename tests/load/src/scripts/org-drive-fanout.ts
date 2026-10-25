@@ -18,6 +18,9 @@ class ContentMismatch extends Error {}
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new FanoutError(message)
 }
+// An interruption ends the measurement at its next request; shared DEV cleanup and the report follow.
+let interrupted: NodeJS.Signals | null = null
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { interrupted ??= signal })
 const canary = 'cozy-org-fanout-canary\n'
 const jsonType = 'application/vnd.api+json'
 const now = () => performance.now()
@@ -137,6 +140,7 @@ async function main(): Promise<void> {
     if (remaining <= 0) throw new RuntimeBudget('MAX_RUNTIME exhausted')
     return remaining
   }
+  let measuring = true
   const secrets = new Set<string>()
   const redact = (text: string) => {
     for (const secret of secrets) text = text.replaceAll(secret, '[redacted]')
@@ -332,6 +336,7 @@ async function main(): Promise<void> {
       remainingWork()
       const end = Math.min(deadline, workDeadline)
       const remaining = end - now()
+      if (interrupted && measuring) throw new FanoutError(`interrupted by ${interrupted}`)
       if (remaining <= 0) throw new Deadline()
       let reply: Reply
       try {
@@ -697,6 +702,7 @@ async function main(): Promise<void> {
     }
     // Cleanup has its own bounded allowance after workload traffic has stopped.
     workDeadline = Infinity
+    measuring = false
     if (cleanupRun) await cleanupRun()
     if (report.retained && cleanupRun && !report.content_mismatch) {
       report.status = 'inconclusive'
