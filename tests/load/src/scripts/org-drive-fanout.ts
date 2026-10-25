@@ -17,6 +17,9 @@ class ContentMismatch extends Error {}
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new FanoutError(message)
 }
+// An interruption ends the measurement at its next request; shared DEV cleanup and the report follow.
+let interrupted: NodeJS.Signals | null = null
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { interrupted ??= signal })
 const canary = 'cozy-org-fanout-canary\n'
 const jsonType = 'application/vnd.api+json'
 const now = () => performance.now()
@@ -130,6 +133,7 @@ async function main(): Promise<void> {
   let reportFD: number | undefined
   // Shared DEV removes the run's own fixtures before the report is written.
   let cleanupRun: (() => Promise<void>) | undefined
+  let measuring = true
   const secrets = new Set<string>()
   const redact = (text: string) => {
     for (const secret of secrets) text = text.replaceAll(secret, '[redacted]')
@@ -321,6 +325,7 @@ async function main(): Promise<void> {
     const api = async (
       actor: Actor, method: string, path: string, body = '', deadline = now() + timeout, contentType = jsonType,
     ) => {
+      if (interrupted && measuring) throw new FanoutError(`interrupted by ${interrupted}`)
       const remaining = deadline - now()
       if (remaining <= 0) throw new Deadline()
       const reply = await request(new URL(path, actor.origin), method, {
@@ -671,6 +676,7 @@ async function main(): Promise<void> {
     } else if (last?.status === 'failed' && lower !== null && !report.content_mismatch) {
       report.capacity = { kind: 'bracket', lower, upper_exclusive: last.n, max: null }
     }
+    measuring = false
     if (cleanupRun) await cleanupRun()
     if (report.retained && cleanupRun && !report.content_mismatch) {
       report.status = 'inconclusive'

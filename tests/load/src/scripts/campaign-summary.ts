@@ -34,6 +34,8 @@ export type StepOutcome = { code: Outcome, reason: string }
 const K6_THRESHOLDS_FAILED = 99
 
 export type CampaignSummaryInput = {
+  // The shared DEV monitoring dashboard, linked over each step's time range.
+  devMonitoringUrl?: string
   environment: Record<string, string>
   grafanaUrl: string
   name: string
@@ -254,6 +256,20 @@ export function buildGrafanaLink(
   return `${base}/d/${dashboard}?var-campaignid=${encodeURIComponent(step.id)}&from=${from - GRAFANA_MARGIN_MS}&to=${to + GRAFANA_MARGIN_MS}`
 }
 
+// A Grafana-style dashboard narrowed to the step's time range; null when either is unusable.
+export function buildWindowLink(url: string, step: CampaignStep): string | null {
+  const from = Date.parse(step.startedAt)
+  const to = Date.parse(step.endedAt)
+  if (Number.isNaN(from) || Number.isNaN(to) || !URL.canParse(url)) {
+    return null
+  }
+
+  const link = new URL(url)
+  link.searchParams.set('from', String(from))
+  link.searchParams.set('to', String(to))
+  return link.href
+}
+
 export function evaluateCampaign(input: CampaignSummaryInput): { outcome: Outcome, steps: StepOutcome[] } {
   const steps = input.steps.map((step: CampaignStep): StepOutcome =>
     classifyStep(step, input.results.get(step.id) ?? null))
@@ -268,7 +284,9 @@ export function formatCampaignSummary(input: CampaignSummaryInput): string {
     const { code, reason } = evaluation.steps[index]!
     const outcome = code === 0 ? '0' : `${code}: ${reason}`
     const link = buildGrafanaLink(input.grafanaUrl, step, step.kind === 'org-drive-fanout' ? input.runId : step.id)
-    return `| ${step.name} | ${result} | ${outcome} |${link === null ? '' : ` [Grafana](${link})`} |`
+    const dev = input.devMonitoringUrl ? buildWindowLink(input.devMonitoringUrl, step) : null
+    return `| ${step.name} | ${result} | ${outcome} |${link === null ? '' : ` [Grafana](${link})`}${
+      dev === null ? '' : ` [DEV](${dev})`} |`
   })
 
   return [
@@ -329,6 +347,7 @@ function summarizeCampaign(runDirectory: string): Outcome {
   }
 
   const input: CampaignSummaryInput = {
+    ...(process.env.DEV_MONITORING_URL ? { devMonitoringUrl: process.env.DEV_MONITORING_URL } : {}),
     environment,
     grafanaUrl: process.env.GRAFANA_URL || 'http://localhost:3000',
     name: environment.campaign ?? 'unknown',

@@ -124,31 +124,50 @@ run_step() {
   return "$status"
 }
 
+# A shared DEV campaign (SHARED_DEV=1 in its definition) runs the same steps on the DEV targets.
+target() {
+  if [ "${SHARED_DEV:-}" = 1 ]; then echo "$2"; else echo "$1"; fi
+}
+
 upload_capacity() {
   local name=$1
   shift
-  run_step "$name" upload-capacity "$RUN_ID-$name" cozy-capacity CAPACITY_RUN_ID="$RUN_ID-$name" "$@"
+  run_step "$name" upload-capacity "$RUN_ID-$name" "$(target cozy-capacity dev-capacity)" CAPACITY_RUN_ID="$RUN_ID-$name" "$@"
 }
 
 shared_drive_prepare() {
+  # The DEV ramp creates or reuses its own drive.
+  [ "${SHARED_DEV:-}" != 1 ] || return 0
   run_step shared-drive-prepare prepare '' cozy-shared-drive-prepare "$@"
 }
 
 shared_drive_ramp() {
   local name=$1
   shift
-  run_step "$name" shared-drive-ramp "$RUN_ID-$name" cozy-shared-drive-ramp EXECUTION_ID="$RUN_ID-$name" "$@"
+  run_step "$name" shared-drive-ramp "$RUN_ID-$name" "$(target cozy-shared-drive-ramp dev-shared-drive-ramp)" \
+    EXECUTION_ID="$RUN_ID-$name" "$@"
 }
 
 org_drive_fanout() {
   local name=$1
   shift
-  run_step "$name" org-drive-fanout "$RUN_ID-$name" org-drive-fanout EXECUTION_ID="$RUN_ID-$name" "$@"
+  run_step "$name" org-drive-fanout "$RUN_ID-$name" "$(target org-drive-fanout dev-org-drive-fanout)" \
+    EXECUTION_ID="$RUN_ID-$name" "$@"
 }
 
 echo "Campaign $CAMPAIGN, run $RUN_ID, directory $RUN_DIR"
 # shellcheck source=/dev/null
 source "$DEFINITION"
+# A shared DEV campaign holds the shared DEV lock once, through every step and its cleanup: steps
+# inherit descriptor 9 and reuse it. Taken after tee and the stats loop start, which never hold it.
+if [ "${SHARED_DEV:-}" = 1 ]; then
+  export DEV_LOCK_FILE=${DEV_LOCK_FILE:-/tmp/cozy-load-shared-dev.lock}
+  command -v flock > /dev/null || { echo "flock is required to share DEV" >&2; exit 2; }
+  exec 9>> "$DEV_LOCK_FILE" || exit 2
+  flock -n 9 || { echo "Shared DEV is busy: another run holds $DEV_LOCK_FILE" >&2; exit 2; }
+  export DEV_LOCK_HELD=$DEV_LOCK_FILE
+  echo "shared_dev=1" >> "$RUN_DIR/environment.txt"
+fi
 campaign
 
 echo "limits=$(effective_limits)" >> "$RUN_DIR/environment.txt"

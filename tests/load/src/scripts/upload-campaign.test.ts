@@ -270,6 +270,14 @@ test('make dev-upload refuses a second run while the shared DEV lock is held', a
   await new Promise(resolve => holder.stdout.once('data', resolve))
   const direct = spawnSync('bash', ['campaigns/lib/shared-dev-lock.sh', lock, 'touch', join(dir, 'ran')], { cwd })
   equal(direct.status, 2)
+  // Only a campaign's inherited descriptor can reuse the lock, never the variable alone.
+  const borrowed = spawnSync('bash', ['campaigns/lib/shared-dev-lock.sh', lock, 'touch', join(dir, 'ran')],
+    { cwd, env: { ...process.env, DEV_LOCK_HELD: lock } })
+  equal(borrowed.status, 2)
+  // Nor a descriptor 9 open on another file.
+  const elsewhere = spawnSync('bash', ['-c', `exec 9>> "${join(dir, 'other')}"; exec bash campaigns/lib/shared-dev-lock.sh "${lock}" touch "${join(dir, 'ran')}"`],
+    { cwd, env: { ...process.env, DEV_LOCK_HELD: lock } })
+  equal(elsewhere.status, 2)
   writeFileSync(join(dir, 'node'), `#!/bin/sh\ntouch ${join(dir, 'ran')}\n`)
   chmodSync(join(dir, 'node'), 0o700)
   for (const target of ['dev-upload', 'dev-capacity', 'dev-shared-drive-ramp', 'dev-org-drive-fanout']) {

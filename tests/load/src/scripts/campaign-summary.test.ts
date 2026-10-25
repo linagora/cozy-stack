@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import {
   buildGrafanaLink,
+  buildWindowLink,
   campaignOutcome,
   classifyStep,
   describeStepResult,
@@ -220,6 +221,21 @@ describe('formatCampaignSummary', (): void => {
 
     match(text, /- Outcome: 2 \(inconclusive\)\n- Interrupted by SIGTERM/)
     match(text, /\| upload-capacity-1M \| no result file \(exit 2\) \| 2: no result file \(exit 143\) \|/)
+  })
+})
+
+describe('buildWindowLink', (): void => {
+  it('narrows the shared DEV dashboard to each step, in the summary too', (): void => {
+    const dev = 'https://grafana.dev.test/d/stack?orgId=1'
+    const window = `from=${Date.parse(uploadStep.startedAt)}&to=${Date.parse(uploadStep.endedAt)}`
+    equal(buildWindowLink(dev, uploadStep), `${dev}&${window}`)
+    equal(buildWindowLink('not a url', uploadStep), null)
+    equal(buildWindowLink(dev, { ...uploadStep, endedAt: '' }), null)
+    const text = formatCampaignSummary({
+      devMonitoringUrl: dev, environment: {}, grafanaUrl: 'http://grafana.test', name: 'dev-capacity',
+      results: new Map(), runId: 'run', steps: [uploadStep],
+    })
+    match(text, new RegExp(`\\[DEV\\]\\(${dev.replace(/[.?]/g, '\\$&')}&${window}\\) \\|$`, 'm'))
   })
 })
 

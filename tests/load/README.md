@@ -512,6 +512,7 @@ run together:
 ```console
 $ make campaign CAMPAIGN=quick
 $ make campaign CAMPAIGN=breaking-point
+$ make campaign CAMPAIGN=dev-capacity   # shared DEV, from the load VM (Shared DEV below)
 ```
 
 `campaigns/quick.sh` measures 1 MiB upload capacity on a personal drive and a
@@ -636,7 +637,14 @@ make dev-capacity FILE_SIZE=1M MAX_VUS=8 MAX_UPLOAD_BYTES=160M MAX_RUNTIME=30m \
   BASELINE_ITERATIONS=10 CONFIRMATION_ITERATIONS=20
 make dev-shared-drive-ramp MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m
 make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m   # ORG-DRIVE-FANOUT.md
+make campaign CAMPAIGN=dev-capacity   # all three, with the budgets in campaigns/dev-capacity.sh
 ```
+
+A shared DEV campaign (`SHARED_DEV=1` in its definition) takes the lock once and
+holds it through every step and its cleanup; its steps run on the DEV targets and
+reuse that lock, and the summary classifies them like local steps. With
+`DEV_MONITORING_URL` set, the summary also links the DEV dashboard over each
+step's time range.
 
 Each k6 run gets a fresh 30-minute instance token and is stopped after 20
 minutes. No local Stack is started.
