@@ -23,7 +23,7 @@ function makeOptions(
     configuredP95LimitMs: null,
     confirmationIterations: 20,
     maxVus: 16,
-    runPoint,
+    runPoint: async (request: PointRequest): Promise<PointOutcome> => runPoint(request),
     ...overrides,
   }
 }
@@ -42,9 +42,9 @@ function passUpTo(
 }
 
 describe('searchCapacity', (): void => {
-  it('reports a lower bound when every level passes up to the cap', (): void => {
+  it('reports a lower bound when every level passes up to the cap', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
-    const result = searchCapacity(
+    const result = await searchCapacity(
       makeOptions(passUpTo(Infinity, requests), { maxVus: 8 }),
     )
 
@@ -71,9 +71,9 @@ describe('searchCapacity', (): void => {
     )
   })
 
-  it('judges no point on latency unless a limit is configured', (): void => {
+  it('judges no point on latency unless a limit is configured', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
-    const result = searchCapacity(
+    const result = await searchCapacity(
       makeOptions(passUpTo(Infinity, requests), { maxVus: 2 }),
     )
 
@@ -84,9 +84,9 @@ describe('searchCapacity', (): void => {
     )
   })
 
-  it('uses the configured absolute p95 limit instead of the baseline multiplier', (): void => {
+  it('uses the configured absolute p95 limit instead of the baseline multiplier', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
-    const result = searchCapacity(
+    const result = await searchCapacity(
       makeOptions(passUpTo(Infinity, requests), {
         configuredP95LimitMs: 750,
         maxVus: 2,
@@ -100,9 +100,9 @@ describe('searchCapacity', (): void => {
     )
   })
 
-  it('bisects between the last passing and first failing levels', (): void => {
+  it('bisects between the last passing and first failing levels', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
-    const result = searchCapacity(makeOptions(passUpTo(5, requests)))
+    const result = await searchCapacity(makeOptions(passUpTo(5, requests)))
 
     deepEqual(result, {
       baselineP95Ms: 100,
@@ -127,14 +127,14 @@ describe('searchCapacity', (): void => {
     )
   })
 
-  it('runs a deciding point when a failing level passes on retry', (): void => {
+  it('runs a deciding point when a failing level passes on retry', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
     const outcomes: Record<string, PointOutcome['result']> = {
       'discovery-2': 'failed',
       'discovery-retry-2': 'passed',
       'discovery-decider-2': 'passed',
     }
-    const result = searchCapacity(
+    const result = await searchCapacity(
       makeOptions(
         (request: PointRequest): PointOutcome => {
           requests.push(request)
@@ -160,9 +160,9 @@ describe('searchCapacity', (): void => {
     )
   })
 
-  it('searches downward with confirmation points when the candidate fails confirmation', (): void => {
+  it('searches downward with confirmation points when the candidate fails confirmation', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
-    const result = searchCapacity(
+    const result = await searchCapacity(
       makeOptions(
         (request: PointRequest): PointOutcome => {
           requests.push(request)
@@ -195,8 +195,8 @@ describe('searchCapacity', (): void => {
     )
   })
 
-  it('reports zero when no level passes confirmation', (): void => {
-    const result = searchCapacity(
+  it('reports zero when no level passes confirmation', async (): Promise<void> => {
+    const result = await searchCapacity(
       makeOptions(
         (request: PointRequest): PointOutcome => ({
           p95Ms: 100,
@@ -209,9 +209,9 @@ describe('searchCapacity', (): void => {
     equal(result.status === 'completed' && result.maximumVus, 0)
   })
 
-  it('reports zero without further points when the baseline fails', (): void => {
+  it('reports zero without further points when the baseline fails', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
-    const result = searchCapacity(makeOptions(passUpTo(0, requests)))
+    const result = await searchCapacity(makeOptions(passUpTo(0, requests)))
 
     deepEqual(result, {
       baselineP95Ms: 100,
@@ -223,8 +223,8 @@ describe('searchCapacity', (): void => {
     equal(requests.length, 1)
   })
 
-  it('aborts when the baseline hits an infrastructure failure', (): void => {
-    const result = searchCapacity(
+  it('aborts when the baseline hits an infrastructure failure', async (): Promise<void> => {
+    const result = await searchCapacity(
       makeOptions(
         (): PointOutcome => ({ p95Ms: null, result: 'infrastructure_failure' }),
       ),
@@ -236,8 +236,8 @@ describe('searchCapacity', (): void => {
     })
   })
 
-  it('aborts when the baseline has no p95 measurement', (): void => {
-    const result = searchCapacity(
+  it('aborts when the baseline has no p95 measurement', async (): Promise<void> => {
+    const result = await searchCapacity(
       makeOptions((): PointOutcome => ({ p95Ms: null, result: 'passed' })),
     )
 
@@ -247,8 +247,8 @@ describe('searchCapacity', (): void => {
     })
   })
 
-  it('aborts with the level when discovery hits an infrastructure failure', (): void => {
-    const result = searchCapacity(
+  it('aborts with the level when discovery hits an infrastructure failure', async (): Promise<void> => {
+    const result = await searchCapacity(
       makeOptions(
         (request: PointRequest): PointOutcome => ({
           p95Ms: 100,
@@ -263,9 +263,9 @@ describe('searchCapacity', (): void => {
     })
   })
 
-  it('confirms a single-VU cap without discovery points', (): void => {
+  it('confirms a single-VU cap without discovery points', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
-    const result = searchCapacity(
+    const result = await searchCapacity(
       makeOptions(passUpTo(Infinity, requests), { maxVus: 1 }),
     )
 
@@ -278,15 +278,15 @@ describe('searchCapacity', (): void => {
 })
 
 describe('getCapacityResultBound', (): void => {
-  it('returns a lower bound when the configured cap passed', (): void => {
+  it('returns a lower bound when the configured cap passed', async (): Promise<void> => {
     equal(getCapacityResultBound(8, 8, 0), 'lower_bound')
   })
 
-  it('returns a lower bound for a single-VU configured cap', (): void => {
+  it('returns a lower bound for a single-VU configured cap', async (): Promise<void> => {
     equal(getCapacityResultBound(1, 1, 0), 'lower_bound')
   })
 
-  it('returns an exact bound when a failing level was measured', (): void => {
+  it('returns an exact bound when a failing level was measured', async (): Promise<void> => {
     equal(getCapacityResultBound(7, 8, 8), 'exact')
   })
 })

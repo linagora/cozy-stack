@@ -17,7 +17,7 @@ for measurement definitions.
 | Go integration/API tests | Real storage, workers and permissions | CI with explicit dependencies |
 | Ruby system tests | Cross-instance business flows | CI with isolated test state |
 | Harness tests and mock smoke | Verify the test tools themselves | Every harness PR |
-| Shared DEV regression | Small, repeatable user workflows | Controlled remote runs |
+| Shared DEV regression and capacity | Repeatable user workflows, bounded capacity searches | Controlled remote runs |
 | Capacity and disruptive recovery | Find limits and recovery behavior | Dedicated, disposable infrastructure |
 
 `make unit-tests` uses `-short`; it does not run all integration coverage.
@@ -127,9 +127,10 @@ by two workers making five 1 MiB uploads each. Record normal DEV activity and
 repeat the same workload to establish variability. Add owner/recipient workflows
 after that baseline. Signup and membership-event testing stay separate workloads.
 
-Shared DEV results establish regression behavior under recorded conditions.
-Breaking-point searches, dependency disruption and deployment snapshot restores
-belong on isolated infrastructure.
+Shared DEV results establish regression behavior and capacity under recorded
+conditions, within budgets and stop conditions agreed with the DEV owner.
+Dependency disruption and deployment snapshot restores belong on isolated
+infrastructure.
 
 ## Delivery order
 
