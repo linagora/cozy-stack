@@ -31,8 +31,11 @@ make seed-org-cleanup         # deletes them; the organization record stays
 ```
 
 Re-runs reuse existing instances and add missing members. Only names built from
-the prefix are reused or deleted, and only after the Stack confirms their
-organization. Every request uses a token minted for that instance, refreshed
+the prefix are reused, recorded or deleted, and only after the Stack confirms
+their organization and UUID. Teardown keeps any other match and exits 2, and
+releases only the names of instances it deleted or the manifest recorded. A
+smoke that reads back different content exits 1; any other failure exits 2.
+Every request uses a token minted for that instance, refreshed
 before it expires. Until DEV trusts the organization's domain (#5070), each
 member accepts one warm-up drive from the organization instance, so later drives
 auto-accept. A member that fails the warm-up fails the seed. The seed ends with a
