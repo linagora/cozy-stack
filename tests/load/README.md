@@ -641,6 +641,13 @@ make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m   # ORG-DRIVE
 make campaign CAMPAIGN=dev-capacity   # all three, with the budgets in campaigns/dev-capacity.sh
 ```
 
+On the load VM, Grafana also has a **DEV infrastructure** view
+(`config/grafana/dashboards-dev/`): Stack HTTP, process and workers, hosts, CouchDB
+and Redis from the platform's DEV metrics, collected once a minute. Its data
+source (`dev-influxdb`), credentials and provisioning are private to the VM, so
+local installations never load it. Set `DEV_MONITORING_URL` to that view: reports
+and campaign summaries then link it over each run's time range.
+
 A shared DEV campaign (`SHARED_DEV=1` in its definition) takes the lock once and
 holds it through every step and its cleanup; its steps run on the DEV targets and
 reuse that lock, and the summary classifies them like local steps. With
