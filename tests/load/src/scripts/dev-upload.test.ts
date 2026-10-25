@@ -1,6 +1,6 @@
 import { deepEqual, doesNotMatch, equal, match, ok } from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,17 +19,19 @@ const args = process.argv.slice(2)
 const log = line => fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify(line) + '\\n')
 log({ args, token: process.env.COZY_ACCESS_TOKEN || null })
 if (args[0] === 'image') process.exit(1)
-// A hanging k6 is container c1 of this run until docker stop ends it.
+// A hanging k6 is container c1, with its run's environment, until docker stop ends it.
 const pidFile = process.env.FAKE_DOCKER_LOG + '.pid'
+const container = () => JSON.parse(fs.readFileSync(pidFile, 'utf8'))
 if (args[0] === 'ps') console.log(fs.existsSync(pidFile) ? 'c1' : '')
-if (args[0] === 'inspect') console.log(JSON.stringify(['EXECUTION_ID=' + process.env.EXECUTION_ID]))
-if (args[0] === 'stop') process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGUSR2')
+if (args[0] === 'inspect') console.log(JSON.stringify(container().env))
+if (args[0] === 'stop') process.kill(container().pid, 'SIGUSR2')
 if (args[1] !== 'run') process.exit(0)
 const env = Object.fromEntries(args.flatMap((a, i) => args[i - 1] === '-e' ? [a.split(/=(.*)/s).slice(0, 2)] : []))
 const mode = process.env.FAKE_K6
 if (mode === 'hang') {
   // Signalling docker compose leaves the container running; only docker stop (SIGUSR2 here) ends it.
-  fs.writeFileSync(pidFile, String(process.pid))
+  fs.writeFileSync(pidFile, JSON.stringify({ pid: process.pid,
+    env: ['EXECUTION_ID=' + env.EXECUTION_ID, 'BASE_URL=' + env.BASE_URL] }))
   process.on('SIGTERM', () => {})
   process.on('SIGUSR2', () => { fs.rmSync(pidFile); log('k6 stopped'); process.exit(105) })
   log('running')
@@ -41,12 +43,12 @@ if (mode === 'hang') {
       'http_req_duration{operation:file-upload}': { 'p(95)': 12 },
       'upload_success{operation:file-upload}': { value: 1 },
       iterations: { count: env.UPLOAD_VUS * env.ITERATIONS_PER_VU },
-      cleanup_success: { value: mode === 'leftover' ? 0 : 1 },
-      upload_consistency: { value: mode === 'mismatch' ? 0 : 1 },
+      cleanup_success: { value: mode.includes('leftover') ? 0 : 1 },
+      upload_consistency: { value: mode.includes('mismatch') ? 0 : 1 },
     } }))
-    process.exit(mode === 'mismatch' ? 108 : 0)
+    process.exit(mode.includes('mismatch') ? 108 : 0)
   }
-  if (mode !== 'leftover') finish()
+  if (!mode.includes('leftover')) finish()
   else http.request(process.env.DEV_STACK_URL + '/files/io.cozy.files.root-dir?Type=directory&Name=twake-load-leftover', {
     method: 'POST', headers: { Host: process.env.DEV_INSTANCE, Authorization: 'Bearer ' + process.env.COZY_ACCESS_TOKEN },
   }, res => { res.resume(); res.on('end', finish) }).end()
@@ -115,16 +117,15 @@ async function fixture(t: TestContext) {
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ instances: [{ fqdn, uuid, role: 'member' }] }))
   const dockerLog = join(dir, 'docker.log')
 
-  function start(env: Record<string, string> = {}) {
-    const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(SEED_|DEV_)/.test(key)))
-    const child = spawn(process.execPath, ['--import', 'tsx', script], {
-      cwd,
-      env: {
-        ...inherited, PATH: `${dir}:${process.env.PATH}`, FAKE_DOCKER_LOG: dockerLog, FAKE_K6: 'pass',
-        SEED_CLOUDERY_TOKEN_FILE: join(dir, 'token.json'), SEED_CLOUDERY_MANIFEST: join(dir, 'manifest.json'),
-        DEV_INSTANCE: fqdn, DEV_STACK_URL: origin, EXECUTION_ID: executionId, ...env,
-      },
-      timeout: 60_000,
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(SEED_|DEV_)/.test(key)))
+  const baseEnv = {
+    ...inherited, PATH: `${dir}:${process.env.PATH}`, FAKE_DOCKER_LOG: dockerLog, FAKE_K6: 'pass',
+    SEED_CLOUDERY_TOKEN_FILE: join(dir, 'token.json'), SEED_CLOUDERY_MANIFEST: join(dir, 'manifest.json'),
+    DEV_INSTANCE: fqdn, DEV_STACK_URL: origin, EXECUTION_ID: executionId,
+  }
+  function start(env: Record<string, string> = {}, preload: string[] = []) {
+    const child = spawn(process.execPath, ['--import', 'tsx', ...preload, script], {
+      cwd, env: { ...baseEnv, ...env }, timeout: 60_000,
     })
     let output = ''
     child.stdout.on('data', chunk => { output += chunk })
@@ -136,7 +137,7 @@ async function fixture(t: TestContext) {
   const docker = (): any[] => existsSync(dockerLog)
     ? readFileSync(dockerLog, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : []
   const report = () => JSON.parse(readFileSync(join(cwd, `data/results/${executionId}-dev-upload.json`), 'utf8'))
-  return { state, docker, report, run: (env?: Record<string, string>) => start(env).done, start }
+  return { state, docker, report, run: (env?: Record<string, string>) => start(env).done, start, env: baseEnv, dockerDir: dir }
 }
 
 test('rejects work beyond the shared DEV budget or outside the manifest before any request', async t => {
@@ -169,7 +170,7 @@ test('reconciles earlier data, runs only the k6 upload and records the run', asy
 
   const report = f.report()
   equal(report.outcome, 0)
-  deepEqual(report.cleanup, { before: ['twake-load-1k-old', 'twake-load-1m-older'], after: [], remaining: [] })
+  deepEqual(report.cleanup, { k6_stopped: [], before: ['twake-load-1k-old', 'twake-load-1m-older'], after: [], remaining: [] })
   deepEqual(report.parameters, { vus: 2, iterations_per_vu: 5, file_size: '1M' })
   equal(report.versions.stack, '1.6.test')
   equal(report.versions.node, process.version)
@@ -179,10 +180,11 @@ test('reconciles earlier data, runs only the k6 upload and records the run', asy
 
   // No local Stack: Compose only starts the observability services and runs k6.
   const calls = f.docker()
-  deepEqual(calls.map(c => c.args.slice(0, 2)), [['compose', 'up'], ['compose', 'run'], ['ps', '-q'], ['image', 'inspect']])
+  deepEqual(calls.map(c => c.args.slice(0, 2)),
+    [['ps', '-q'], ['compose', 'up'], ['compose', 'run'], ['ps', '-q'], ['image', 'inspect']])
   for (const call of calls) doesNotMatch(call.args.join(' '), /cozy|couchdb|instance-token/)
-  ok(calls[1].args.includes(`BASE_URL=https://${fqdn}`))
-  equal(calls[1].token, 'instance-token')
+  ok(calls[2].args.includes(`BASE_URL=https://${fqdn}`))
+  equal(calls[2].token, 'instance-token')
   doesNotMatch(JSON.stringify(report), /instance-token|public-secret/)
   // The instance only sees its own files, its settings and the version.
   for (const line of f.state.requests.slice(1)) match(line, new RegExp(`^${fqdn} (GET|DELETE) /(files/|settings/instance$|version$)`))
@@ -193,6 +195,42 @@ test('a content mismatch is a correctness failure', async t => {
   const { code, output } = await f.run({ FAKE_K6: 'mismatch' })
   equal(code, 1, output)
   match(f.report().reason, /did not match/)
+})
+
+test('a content mismatch stays a correctness failure when cleanup also fails', async t => {
+  const f = await fixture(t)
+  f.state.stuck = 'twake-load-leftover'
+  const { code, output } = await f.run({ FAKE_K6: 'mismatch-leftover' })
+  equal(code, 1, output)
+  match(f.report().reason, /cleanup failed; uploaded content did not match.*test data remains/)
+})
+
+test('cleanup listing that outlasts its budget stops the run before any upload', async t => {
+  const f = await fixture(t)
+  for (let i = 0; i < 300; i++) f.state.root.set(`user-${i}`, `user file ${i}`)
+  // Ten thousand times faster: the 5-minute cleanup budget lasts 30 ms of listing.
+  const clock = join(mkdtempSync(join(tmpdir(), 'dev-upload-clock-')), 'clock.mjs')
+  writeFileSync(clock, 'const real = Date.now, start = real()\nDate.now = () => start + (real() - start) * 10_000\n')
+  t.after(() => rmSync(clock, { force: true }))
+  const { code, output } = await f.start({}, ['--import', clock]).done
+  equal(code, 2, output)
+  match(output, /cleanup exceeded its 5 minute budget/)
+  ok(!f.docker().some(c => c.args?.[1] === 'run'))
+})
+
+test('a k6 container left by a killed coordinator is stopped before cleanup', async t => {
+  const f = await fixture(t)
+  const killed = f.start({ FAKE_K6: 'hang' })
+  while (!f.docker().includes('running')) await new Promise(resolve => setTimeout(resolve, 50))
+  killed.child.kill('SIGKILL')
+  await killed.done
+  const { code, output } = await f.run()
+  equal(code, 0, output)
+  const log = f.docker().map(c => typeof c === 'string' ? c : c.args.join(' '))
+  const stoppedAt = log.indexOf('k6 stopped')
+  ok(stoppedAt > 0 && log.indexOf('stop --time 90 c1') < stoppedAt, output)
+  ok(log.map(line => line.startsWith('compose run')).lastIndexOf(true) > stoppedAt, output)
+  deepEqual(f.report().cleanup.k6_stopped, ['c1'])
 })
 
 test('test data that cannot be deleted leaves the run inconclusive and identified', async t => {
@@ -228,11 +266,38 @@ test('make dev-upload refuses a second run while the shared DEV lock is held', a
   await new Promise(resolve => holder.stdout.once('data', resolve))
   const direct = spawnSync('bash', ['campaigns/lib/shared-dev-lock.sh', lock, 'touch', join(dir, 'ran')], { cwd })
   equal(direct.status, 2)
-  writeFileSync(join(dir, 'tsx'), `#!/bin/sh\ntouch ${join(dir, 'ran')}\n`)
-  chmodSync(join(dir, 'tsx'), 0o700)
-  const result = spawnSync('make', ['-s', '-o', 'node_modules/.load-ready', `NODE_BIN=${dir}`,
-    `DEV_LOCK_FILE=${lock}`, 'dev-upload'], { cwd, encoding: 'utf8' })
+  writeFileSync(join(dir, 'node'), `#!/bin/sh\ntouch ${join(dir, 'ran')}\n`)
+  chmodSync(join(dir, 'node'), 0o700)
+  const result = spawnSync('make', ['-s', '-o', 'node_modules/.load-ready', `DEV_LOCK_FILE=${lock}`, 'dev-upload'],
+    { cwd, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } })
   equal(result.status, 2, result.stderr)
   match(result.stderr, /Shared DEV is busy/)
   ok(!existsSync(join(dir, 'ran')))
+})
+
+test('the process holding the shared DEV lock is the runner itself', async t => {
+  if (!existsSync('/proc/self/fd')) return t.skip('needs /proc')
+  if (spawnSync('sh', ['-c', 'command -v flock']).status !== 0) return t.skip('flock is not installed')
+  const f = await fixture(t)
+  const lock = join(mkdtempSync(join(tmpdir(), 'dev-lock-')), 'shared-dev.lock')
+  const dir = f.dockerDir
+  const make = spawn('make', ['-s', '-o', 'node_modules/.load-ready', `DEV_LOCK_FILE=${lock}`, 'dev-upload'],
+    { cwd, env: { ...f.env, FAKE_K6: 'hang' }, stdio: 'ignore' })
+  t.after(() => {
+    make.kill('SIGKILL')
+    // Ends the fake k6 the killed runner left behind.
+    spawnSync(join(dir, 'docker'), ['stop', 'c1'], { env: f.env })
+  })
+  while (!f.docker().includes('running')) await new Promise(resolve => setTimeout(resolve, 50))
+  const pids = () => readdirSync('/proc').filter(pid => /^\d+$/.test(pid))
+  const holders = pids().filter(pid => {
+    try { return readlinkSync(`/proc/${pid}/fd/9`) === lock } catch { return false }
+  })
+  equal(holders.length, 1)
+  process.kill(Number(holders[0]), 'SIGKILL')
+  await new Promise(resolve => setTimeout(resolve, 500))
+  const runners = pids().filter(pid => {
+    try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('dev-upload.ts') } catch { return false }
+  })
+  deepEqual(runners, [])
 })

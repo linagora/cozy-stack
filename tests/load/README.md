@@ -581,18 +581,21 @@ make dev-upload DEV_INSTANCE=<prefix>01.<domain> VUS=2 ITERATIONS_PER_VU=5 FILE_
 The instance must be in the manifest, with the same UUID on the Stack. Every
 request uses a token minted for that instance. Limits are fixed and checked
 before any request: at most 2 workers, 5 uploads each and 1 MiB per upload;
-60 s per request, 10 minutes for k6, and 5 minutes for cleanup before and after
-it. No local Stack is started.
+60 s per request, 10 minutes for k6, and 5 minutes for each cleanup, listing
+included. No local Stack is started.
 
 One run at a time: `make dev-upload` holds `DEV_LOCK_FILE`
 (`/tmp/cozy-load-shared-dev.lock`) through k6, verification and cleanup, and
 exits 2 while another run holds it. Use the same path from every checkout, and
 mount it into any container that starts DEV work.
 
-Before and after k6, the runner deletes every `twake-load-*` directory in the
-instance root and trash, so a killed run is cleaned up by the next one. The
-report, `data/results/<EXECUTION_ID>-dev-upload.json`, records the outcome
-(0, 1 or 2 as for campaigns), parameters, times, the Stack, harness, Node and
+A free lock does not prove DEV is idle: a killed runner can leave its k6
+container running. Before cleanup, the runner stops any k6 container whose
+target is a manifest instance. Before and after k6, it deletes every
+`twake-load-*` directory in the instance root and trash, so a killed run is
+cleaned up by the next one. A content mismatch exits 1 even when cleanup also
+failed. The report, `data/results/<EXECUTION_ID>-dev-upload.json`, records the
+outcome (0, 1 or 2 as for campaigns), the k6 containers it stopped, parameters, times, the Stack, harness, Node and
 k6 image versions, monitoring links (`DEV_MONITORING_URL`, else `unknown`) and
 the identifiers of any data it could not delete.
 
