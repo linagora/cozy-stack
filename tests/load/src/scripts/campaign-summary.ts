@@ -31,7 +31,7 @@ export type StepOutcome = { code: Outcome, reason: string }
 
 // k6 exits 99 when a threshold fails. With cleanup verified, the only other
 // failing ramp threshold is the stop on mostly failed HTTP requests: overload.
-const K6_THRESHOLDS_FAILED = 99
+export const K6_THRESHOLDS_FAILED = 99
 
 export type CampaignSummaryInput = {
   environment: Record<string, string>
@@ -188,7 +188,7 @@ function classifyUploadCapacity(result: JsonRecord): StepOutcome {
     : completed
 }
 
-function classifyRamp(result: JsonRecord): StepOutcome {
+export function classifyRamp(result: JsonRecord): StepOutcome {
   if (result.status !== 'completed') {
     return { code: 2, reason: String(result.failure_reason ?? result.status ?? 'ramp report has no status') }
   }

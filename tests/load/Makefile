@@ -72,7 +72,7 @@ export HOST_GID
 export COZY_STACK_CPUS COZY_STACK_MEMORY COUCHDB_CPUS COUCHDB_MEMORY
 export LOAD_TOPOLOGY GRAFANA_URL
 
-.PHONY: help doctor install typecheck node-checks config pull observability-up up cozy-up cozy-prepare cozy-shared-drive-prepare cozy-shared-drive-load cozy-shared-drive-ramp campaign cozy-upload cozy-upload-soak cozy-capacity cozy-capacity-all cozy-status cozy-logs cozy-down upload-binaries upload-binary upload-smoke upload upload-soak upload-capacity upload-capacity-all upload-regression dev-upload dev-capacity status logs down dashboard-url
+.PHONY: help doctor install typecheck node-checks config pull observability-up up cozy-up cozy-prepare cozy-shared-drive-prepare cozy-shared-drive-load cozy-shared-drive-ramp shared-drive-ramp shared-drive-ramp-run dev-shared-drive-ramp campaign cozy-upload cozy-upload-soak cozy-capacity cozy-capacity-all cozy-status cozy-logs cozy-down upload-binaries upload-binary upload-smoke upload upload-soak upload-capacity upload-capacity-all upload-regression dev-upload dev-capacity status logs down dashboard-url
 
 help:
 	@echo "make install                                 Install the load-harness Node tools"
@@ -85,6 +85,7 @@ help:
 	@echo "make org-drive-fanout FANOUT_LEVELS=10,50,100   Check group auto-accept and revoke convergence"
 	@echo "make dev-upload DEV_INSTANCE=... MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m  Regression on shared DEV"
 	@echo "make dev-capacity DEV_INSTANCE=... MAX_VUS=8 MAX_UPLOAD_BYTES=200M MAX_RUNTIME=30m  Capacity on shared DEV"
+	@echo "make dev-shared-drive-ramp DEV_INSTANCE=... MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m  Shared-drive ramp on shared DEV"
 	@echo "make fixture-up FIXTURE_PROJECT=load-fixture-seed"
 	@echo "make fixture-snapshot FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
 	@echo "make fixture-restore FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
@@ -231,11 +232,11 @@ cozy-shared-drive-load: upload-binary observability-up
 		/scripts/shared-drive-activity.ts
 	@echo "Shared drive activity result: data/results/$(EXECUTION_ID)-shared-drive-summary.json"
 
-cozy-shared-drive-ramp: upload-binary observability-up
+# k6 alone; shared-drive-ramp runs it with the target's token in the environment and the drive.
+shared-drive-ramp-run: upload-binary observability-up
 	@mkdir -p data/results
 	@$(RECORD_EXIT) $(COMPOSE) run --rm \
-		-e BASE_URL="$(COZY_BASE_URL)" \
-		-e COZY_ACCESS_TOKEN="$(COZY_ACCESS_TOKEN)" \
+		-e BASE_URL="$(BASE_URL)" \
 		-e UPLOAD_TARGET=shared-drive \
 		-e SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" \
 		-e SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" \
@@ -255,7 +256,17 @@ cozy-shared-drive-ramp: upload-binary observability-up
 		--tag filesize="$(FILE_SIZE)" \
 		--summary-export="/results/$(EXECUTION_ID)-shared-drive-ramp-summary.json" \
 		/scripts/shared-drive-ramp.ts
-	@echo "Shared drive ramp result: data/results/$(EXECUTION_ID)-shared-drive-ramp.json"
+
+# The shared-drive ramp through the campaign runner: LOAD_TARGET=dev holds the shared DEV lock, as for
+# uploads. The runner creates or reuses the test drive itself.
+SHARED_DRIVE_CAMPAIGN = LOAD_TARGET="$(LOAD_TARGET)" BASE_URL="$(BASE_URL)" STACK_URL="$(STACK_URL)" FILE_SIZE="$(FILE_SIZE)" RAMP_LEVELS="$(RAMP_LEVELS)" RAMP_STEP_DURATION="$(RAMP_STEP_DURATION)" RAMP_WRITERS_PER_LEVEL="$(RAMP_WRITERS_PER_LEVEL)" RAMP_WS_READERS_PER_LEVEL="$(RAMP_WS_READERS_PER_LEVEL)" RAMP_CHANGES_READERS_PER_LEVEL="$(RAMP_CHANGES_READERS_PER_LEVEL)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_DELIVERY_RATIO="$(MIN_DELIVERY_RATIO)" MAX_VUS="$(MAX_VUS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" EXECUTION_ID="$(EXECUTION_ID)" \
+	$(RECORD_EXIT) $(if $(filter dev,$(LOAD_TARGET)),bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)") node --import tsx src/scripts/shared-drive-campaign.ts
+cozy-shared-drive-ramp: BASE_URL = $(COZY_BASE_URL)
+cozy-shared-drive-ramp: STACK_URL = $(COZY_STACK_URL)
+dev-shared-drive-ramp: LOAD_TARGET := dev
+shared-drive-ramp cozy-shared-drive-ramp dev-shared-drive-ramp: export COZY_ACCESS_TOKEN := $(COZY_ACCESS_TOKEN)
+shared-drive-ramp cozy-shared-drive-ramp dev-shared-drive-ramp: $(NODE_MODULES_MARKER)
+	@$(SHARED_DRIVE_CAMPAIGN)
 
 cozy-capacity: cozy-prepare
 	@$(MAKE) upload-capacity BASE_URL="$(COZY_BASE_URL)" STACK_URL="$(COZY_STACK_URL)" FILE_SIZE="$(FILE_SIZE)" MAX_VUS="$(MAX_VUS)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" BASELINE_ITERATIONS="$(BASELINE_ITERATIONS)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)"
@@ -291,7 +302,7 @@ upload-smoke: upload-binary up
 
 upload: upload-binary observability-up
 	@mkdir -p data/results
-	@$(COMPOSE) run --rm -e BASE_URL="$(BASE_URL)" $(if $(filter http://mock,$(BASE_URL)),-e COZY_ACCESS_TOKEN=mock-token,) -e FILE_SIZE="$(FILE_SIZE)" -e UPLOAD_VUS="$(VUS)" -e UPLOAD_MODE="$(UPLOAD_MODE)" -e ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" -e DURATION="$(DURATION)" -e GRACEFUL_STOP="$(GRACEFUL_STOP)" -e CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" -e UPLOAD_TARGET="$(UPLOAD_TARGET)" -e SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" -e SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" -e CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" -e CAPACITY_PHASE="$(CAPACITY_PHASE)" -e MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" -e P95_LIMIT_MS="$(P95_LIMIT_MS)" -e MAX_DURATION="$(MAX_DURATION)" -e UPLOAD_TIMEOUT="$(UPLOAD_TIMEOUT)" -e EXECUTION_ID="$(EXECUTION_ID)" k6 run -o experimental-prometheus-rw --tag campaignid="$(or $(CAPACITY_RUN_ID),$(EXECUTION_ID))" --tag topology="$(LOAD_TOPOLOGY)" --tag concurrency="$(VUS)" --tag executionid="$(EXECUTION_ID)" --tag filesize="$(FILE_SIZE)" --tag phase="$(CAPACITY_PHASE)" --summary-export="/results/$(EXECUTION_ID)-summary.json" /scripts/concurrent-uploads.ts
+	@$(RECORD_EXIT) $(COMPOSE) run --rm -e BASE_URL="$(BASE_URL)" $(if $(filter http://mock,$(BASE_URL)),-e COZY_ACCESS_TOKEN=mock-token,) -e FILE_SIZE="$(FILE_SIZE)" -e UPLOAD_VUS="$(VUS)" -e UPLOAD_MODE="$(UPLOAD_MODE)" -e ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" -e DURATION="$(DURATION)" -e GRACEFUL_STOP="$(GRACEFUL_STOP)" -e CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" -e UPLOAD_TARGET="$(UPLOAD_TARGET)" -e SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" -e SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" -e CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" -e CAPACITY_PHASE="$(CAPACITY_PHASE)" -e MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" -e P95_LIMIT_MS="$(P95_LIMIT_MS)" -e MAX_DURATION="$(MAX_DURATION)" -e UPLOAD_TIMEOUT="$(UPLOAD_TIMEOUT)" -e EXECUTION_ID="$(EXECUTION_ID)" k6 run -o experimental-prometheus-rw --tag campaignid="$(or $(CAPACITY_RUN_ID),$(EXECUTION_ID))" --tag topology="$(LOAD_TOPOLOGY)" --tag concurrency="$(VUS)" --tag executionid="$(EXECUTION_ID)" --tag filesize="$(FILE_SIZE)" --tag phase="$(CAPACITY_PHASE)" --summary-export="/results/$(EXECUTION_ID)-summary.json" /scripts/concurrent-uploads.ts
 	@echo "Upload result: data/results/$(EXECUTION_ID)-summary.json"
 
 upload-soak:

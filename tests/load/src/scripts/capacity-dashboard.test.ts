@@ -584,8 +584,7 @@ test('grouped activity row links select the producer step without an unsupported
   const row = linkResults(t).find(result => result.run === 'parent-activity')!
   assert.equal(row.campaign, 'parent')
   const makefile = readFileSync(new URL('../../Makefile', import.meta.url), 'utf8')
-  const recipe = makefile.split('cozy-shared-drive-ramp: upload-binary observability-up\n')[1]!
-    .split('\ncozy-capacity:')[0]!
+  const recipe = makefile.split('shared-drive-ramp-run: upload-binary observability-up\n')[1]!.split('\n\n')[0]!
   assert.ok(recipe.includes('--tag campaignid="$(EXECUTION_ID)"'))
   assert.ok(!recipe.includes('--tag executionid='))
   const target = JSON.parse(readFileSync(

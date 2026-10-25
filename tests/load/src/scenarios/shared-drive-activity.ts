@@ -128,7 +128,8 @@ export function createSetupData(rampPlan: RampPlan | null): SetupData {
     throw new Error('Expected shared-drive upload target')
   }
 
-  const directoryName = `shared-drive-test-${Date.now()}`
+  // The owned prefix and execution ID let the runner clean up only this run's data.
+  const directoryName = `twake-load-sd-${__ENV.EXECUTION_ID || 'shared-drive'}-${Date.now()}`
   const testDir = fetchCreatedTestDirectory({
     accessToken,
     baseUrl,
