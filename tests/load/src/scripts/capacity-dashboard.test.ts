@@ -128,11 +128,14 @@ test('upload summaries select one visible size and target instead of shrinking e
 test('one campaign and optional run selection never aggregate or replace absent report evidence', () => {
   const dashboard = readDashboard()
   const variables = dashboard.templating.list
-  assert.deepEqual(variables.map(variable => variable.name), ['campaign', 'run', 'size', 'target', 'upload_run'])
-  const [campaign, run] = variables
+  assert.deepEqual(variables.map(variable => variable.name),
+    ['env', 'mode', 'campaign', 'run', 'size', 'target', 'upload_run'])
+  const campaign = variables.find(variable => variable.name === 'campaign')
+  const run = variables.find(variable => variable.name === 'run')
   assert.equal(campaign?.multi, false)
   assert.equal(campaign?.includeAll, false, 'campaigns cannot be silently mixed')
-  assert.equal(campaign?.query.query, 'label_values(cozy_load_result_info, campaign)')
+  assert.equal(campaign?.query.query,
+    'label_values(cozy_load_result_info{load_target=~"$env",mode=~"$mode"}, campaign)')
   assert.equal(run?.multi, false)
   assert.equal(run?.includeAll, true)
   assert.equal(run?.allValue, '.*')
@@ -539,6 +542,7 @@ function uploadTelemetry(run: string) {
   const makefile = readFileSync(new URL('../../Makefile', import.meta.url), 'utf8')
   const recipe = makefile.split('upload: upload-binary observability-up\n')[1]!.split('\nupload-soak:')[0]!
   assert.ok(recipe.includes('--tag campaignid="$(or $(CAPACITY_RUN_ID),$(EXECUTION_ID))"'))
+  assert.ok(recipe.includes('--tag load_target="$(LOAD_TARGET)" $(if $(MODE),--tag mode="$(MODE)")'))
   assert.ok(recipe.includes('--tag executionid="$(EXECUTION_ID)"'))
   const producer = readFileSync(new URL('./upload-campaign.ts', import.meta.url), 'utf8')
   const runner = readFileSync(new URL('./upload/exact-work.ts', import.meta.url), 'utf8')
@@ -586,6 +590,7 @@ test('grouped activity row links select the producer step without an unsupported
   const makefile = readFileSync(new URL('../../Makefile', import.meta.url), 'utf8')
   const recipe = makefile.split('shared-drive-ramp-run: upload-binary observability-up\n')[1]!.split('\n\n')[0]!
   assert.ok(recipe.includes('--tag campaignid="$(EXECUTION_ID)"'))
+  assert.ok(recipe.includes('--tag load_target="$(LOAD_TARGET)"'))
   assert.ok(!recipe.includes('--tag executionid='))
   const target = JSON.parse(readFileSync(
     new URL('../../config/grafana/dashboards/shared-drive.json', import.meta.url), 'utf8')) as Dashboard
@@ -598,7 +603,10 @@ test('grouped activity row links select the producer step without an unsupported
 
 test('All-run selection offers only row-scoped links and cannot mix unrelated producer campaigns', t => {
   const dashboard = readDashboard()
-  assert.deepEqual(dashboard.links, [], 'a parent campaign cannot map to one k6 campaignid')
+  // Only the tag-listed DEV view, which carries no campaign or run.
+  const listed = dashboard.links as unknown as Array<{ tags?: string[] }>
+  assert.deepEqual(listed.filter(link => !link.tags?.includes('dev')), [],
+    'a parent campaign cannot map to one k6 campaignid')
   assert.equal(dashboard.templating.list.find(variable => variable.name === 'run')?.allValue, '.*')
   const rows = linkResults(t).filter(result => result.campaign === 'parent')
   assert.deepEqual(rows.map(row => row.run).sort(), ['parent-activity', 'parent-upload'])
@@ -609,4 +617,21 @@ test('All-run selection offers only row-scoped links and cannot mix unrelated pr
     if (row.kind === 'upload') assertUploadSelection(url, row.run)
     else assert.equal(url.searchParams.has('var-executionid'), false)
   }
+})
+
+test('local and DEV runs share one overview, narrowed by environment and mode', () => {
+  const dashboard = readDashboard()
+  type Variable = { name: string, allValue?: string, query: { query: string } }
+  const variables = dashboard.templating.list as Variable[]
+  for (const [name, label] of [['env', 'load_target'], ['mode', 'mode']]) {
+    const selector = variables.find(variable => variable.name === name)!
+    assert.equal(selector.query.query, `label_values(cozy_load_result_info, ${label})`)
+    // Older reports have neither label and still match All.
+    assert.equal(selector.allValue, '.*')
+  }
+  assert.match(variables.find(variable => variable.name === 'campaign')!.query.query,
+    /load_target=~"\$env",mode=~"\$mode"/)
+  // Listed by tag, the DEV view appears only where it is provisioned: never a dead link locally.
+  const links = dashboard.links as unknown as Array<{ type: string, tags: string[], keepTime: boolean }>
+  assert.deepEqual(links.map(link => [link.type, link.tags, link.keepTime]), [['dashboards', ['dev'], true]])
 })

@@ -4,7 +4,12 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "title": "DEV infrastructure", "type": "dashboards", "tags": ["dev"], "asDropdown": false,
+      "keepTime": true, "includeVars": false, "targetBlank": false, "icon": "external link"
+    }
+  ],
   "panels": [
     {
       "datasource": {"type": "prometheus", "uid": "prometheus"},
@@ -1629,15 +1634,48 @@
   "templating": {
     "list": [
       {
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "definition": "label_values(cozy_load_result_info, load_target)",
+        "includeAll": true,
+        "label": "Environment",
+        "multi": false,
+        "name": "env",
+        "options": [],
+        "query": {"query": "label_values(cozy_load_result_info, load_target)", "refId": "env"},
+        "refresh": 1,
+        "sort": 1,
+        "type": "query",
+        "allValue": ".*"
+      },
+      {
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "definition": "label_values(cozy_load_result_info, mode)",
+        "includeAll": true,
+        "label": "Mode",
+        "multi": false,
+        "name": "mode",
+        "options": [],
+        "query": {"query": "label_values(cozy_load_result_info, mode)", "refId": "mode"},
+        "refresh": 1,
+        "sort": 1,
+        "type": "query",
+        "allValue": ".*"
+      },
+      {
         "current": {},
         "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "definition": "label_values(cozy_load_result_info, campaign)",
+        "definition": "label_values(cozy_load_result_info{load_target=~\"$env\",mode=~\"$mode\"}, campaign)",
         "includeAll": false,
         "label": "Campaign",
         "multi": false,
         "name": "campaign",
         "options": [],
-        "query": {"query": "label_values(cozy_load_result_info, campaign)", "refId": "campaign"},
+        "query": {
+          "query": "label_values(cozy_load_result_info{load_target=~\"$env\",mode=~\"$mode\"}, campaign)",
+          "refId": "campaign"
+        },
         "refresh": 1,
         "sort": 2,
         "type": "query"
@@ -1734,5 +1772,5 @@
   "timezone": "browser",
   "title": "Stack Capacity Overview",
   "uid": "twake-drive-capacity",
-  "version": 1
+  "version": 2
 }
