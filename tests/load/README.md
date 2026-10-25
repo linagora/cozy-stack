@@ -612,7 +612,8 @@ leave cleanup to k6's own teardown check.
 ### Shared DEV
 
 Run DEV campaigns only from the designated load VM, with budgets agreed with
-the DEV owner:
+the DEV owner. [SHARED-DEV.md](SHARED-DEV.md) holds the current agreement, stop
+conditions, runbook and baseline:
 
 ```sh
 export SEED_CLOUDERY_TOKEN_FILE=~/private/cloudery-token.json
