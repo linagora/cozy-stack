@@ -86,6 +86,7 @@ help:
 	@echo "make dev-upload DEV_INSTANCE=... MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m  Regression on shared DEV"
 	@echo "make dev-capacity DEV_INSTANCE=... MAX_VUS=8 MAX_UPLOAD_BYTES=200M MAX_RUNTIME=30m  Capacity on shared DEV"
 	@echo "make dev-shared-drive-ramp DEV_INSTANCE=... MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m  Shared-drive ramp on shared DEV"
+	@echo "make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m  Group fan-out on shared DEV"
 	@echo "make fixture-up FIXTURE_PROJECT=load-fixture-seed"
 	@echo "make fixture-snapshot FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
 	@echo "make fixture-restore FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
@@ -146,12 +147,18 @@ else
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts cleanup-org "$$SEED_DOMAIN"
 endif
 
-.PHONY: org-drive-fanout
+.PHONY: org-drive-fanout dev-org-drive-fanout
 # Defaulted here only: a global default would also be exported by `make campaign`, under the
 # campaign's EXECUTION_ID, and every fanout step would write to that one path.
 org-drive-fanout: export FANOUT_REPORT ?= data/results/$(EXECUTION_ID)-org-drive-fanout.json
 org-drive-fanout: $(NODE_MODULES_MARKER)
 	@$(RECORD_EXIT) $(NODE_BIN)/tsx src/scripts/org-drive-fanout.ts
+
+# Shared DEV: actors from the Cloudery fixture, under the shared DEV lock (ORG-DRIVE-FANOUT.md).
+dev-org-drive-fanout: export FANOUT_REPORT ?= data/results/$(EXECUTION_ID)-org-drive-fanout.json
+dev-org-drive-fanout: $(NODE_MODULES_MARKER)
+	@LOAD_TARGET=dev EXECUTION_ID="$(EXECUTION_ID)" MAX_RUNTIME="$(MAX_RUNTIME)" \
+		$(RECORD_EXIT) bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)" node --import tsx src/scripts/org-drive-fanout.ts
 
 .PHONY: fixture-up fixture-snapshot fixture-restore fixture-discard
 fixture-up fixture-discard: $(NODE_MODULES_MARKER)

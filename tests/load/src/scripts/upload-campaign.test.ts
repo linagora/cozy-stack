@@ -272,7 +272,7 @@ test('make dev-upload refuses a second run while the shared DEV lock is held', a
   equal(direct.status, 2)
   writeFileSync(join(dir, 'node'), `#!/bin/sh\ntouch ${join(dir, 'ran')}\n`)
   chmodSync(join(dir, 'node'), 0o700)
-  for (const target of ['dev-upload', 'dev-capacity', 'dev-shared-drive-ramp']) {
+  for (const target of ['dev-upload', 'dev-capacity', 'dev-shared-drive-ramp', 'dev-org-drive-fanout']) {
     const result = spawnSync('make', ['-s', '-o', 'node_modules/.load-ready', `DEV_LOCK_FILE=${lock}`, target],
       { cwd, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } })
     equal(result.status, 2, result.stderr)

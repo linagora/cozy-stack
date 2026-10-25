@@ -1,7 +1,7 @@
 import { deepEqual, equal, match, ok } from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -29,7 +29,12 @@ async function fixture(t: TestContext, override?: Override) {
   }))
   const calls: Call[] = []
   const origins: Record<string, string> = {}
-  const drives = new Map<string, { recipients: string[], group: string, removed: boolean, owner: string }>()
+  const drives = new Map<string, {
+    recipients: string[], group: string, removed: boolean, owner: string, name?: string, deleted?: boolean,
+  }>()
+  // Shared DEV: the seed's warm-up drive on every member, and the contacts and groups deleted so far.
+  const warmup = { id: 'warmup-1', active: true }
+  const deleted = new Set<string>()
   const contacts = new Map<string, string[]>()
   let current = ''
   let stdout = ''
@@ -49,6 +54,8 @@ async function fixture(t: TestContext, override?: Override) {
         return r.delayMs ? setTimeout(end, r.delayMs).unref() : end()
       }
       if (api === 'admin') {
+        const minted = path.match(/^\/api\/public\/instances\/([^/]+)\/token$/)?.[1]
+        if (minted) return send(200, { token: `token-${minted}` })
         if (path === '/instances/token') return res.end(`token-${p.get('Domain')}`)
         if (path === '/instances' && r.method === 'GET') {
           const start = Number(p.get('page[cursor]') ?? 0)
@@ -67,14 +74,40 @@ async function fixture(t: TestContext, override?: Override) {
         return send(item ? 200 : 404, { data: item })
       }
       if (path === '/settings/context') return send(200, { data: { id: 'context', attributes: {
-        common_contacts: true, max_members_per_sharing: 1001, sharing: { auto_accept_trusted: true },
+        common_contacts: true, max_members_per_sharing: 1001,
+        sharing: { auto_accept_trusted: true, auto_accept_trusted_contacts: true },
       } } })
+      if (path === '/settings/instance') {
+        const uuid = instances.find(i => i.attributes.domain === r.headers.host)?.attributes.uuid
+        return send(200, { data: { id: 'io.cozy.settings.instance', attributes: { uuid } } })
+      }
+      if (path === `/sharings/${warmup.id}`) return send(200, { data: { id: warmup.id, attributes: { active: warmup.active } } })
+      if (path === '/sharings/drives' && r.method === 'GET') {
+        return send(200, { data: [...drives].filter(([, d]) => d.owner === r.headers.host && !d.deleted)
+          .map(([id, d]) => ({ id, attributes: { owner: true, description: d.name, rules: [{ values: [`root-${id}`] }] } })) })
+      }
+      const doc = path.match(/^\/data\/(io\.cozy\.contacts(?:\.groups)?)\/([^/]+)$/)?.[2]
+      if (doc && r.method === 'GET') return send(deleted.has(doc) ? 404 : 200, { _id: doc, _rev: '1-a' })
+      if (doc && r.method === 'DELETE' && p.get('rev') === '1-a') {
+        deleted.add(doc)
+        return send(200, { ok: true })
+      }
+      // Trashing a drive's root revokes it and deletes its sharing, as the Stack does.
+      const rootOf = path.match(/^\/files\/(trash\/)?root-(drive-\d+)$/)
+      if (rootOf && r.method !== 'POST') {
+        const target = drives.get(rootOf[2]!)
+        if (r.method === 'DELETE' && !rootOf[1] && target) target.deleted = true
+        if (r.method === 'DELETE') return send(rootOf[1] ? 204 : 200, {})
+        return send(target && !target.deleted ? 200 : 404, {})
+      }
       if (path === '/sharings/drives' && r.method === 'POST') {
         current = `drive-${drives.size + 1}`
-        drives.set(current, { recipients: [], group: '', removed: false, owner: r.headers.host! })
+        drives.set(current, { recipients: [], group: '', removed: false, owner: r.headers.host!,
+          name: JSON.parse(body).data?.attributes?.name })
       }
       const sid = path.match(/^\/sharings\/(?:drives\/)?(drive-\d+)/)?.[1] ?? current
       const drive = drives.get(sid)!
+      if (drive?.deleted && path.startsWith('/sharings/')) return send(404)
       if (path === '/data/io.cozy.contacts.groups') return send(404)
       if (path === '/data/io.cozy.contacts.groups/') {
         const id = `group-${drives.size}`
@@ -128,7 +161,8 @@ async function fixture(t: TestContext, override?: Override) {
   ) {
     stdout = ''
     let stderr = ''
-    const inherited = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(SEED_|FANOUT_)/.test(k)))
+    const inherited = Object.fromEntries(Object.entries(process.env)
+      .filter(([k]) => !/^(SEED_|FANOUT_|DEV_|LOAD_TARGET$|MAX_RUNTIME$|EXECUTION_ID$)/.test(k)))
     const args = ['--import', 'tsx', ...(options.preload ? ['--import', options.preload] : []), script]
     const child = spawn(process.execPath, args, { timeout: 15000, env: {
       ...inherited, SEED_ADMIN_URL: origins.admin, SEED_STACK_URL: origins.stack, SEED_ADMIN_PASSWORD: secret,
@@ -151,7 +185,21 @@ async function fixture(t: TestContext, override?: Override) {
     } catch { /* Preserve child diagnostics for assertions. */ }
     return { code, stdout, stderr, report }
   }
-  return { calls, instances, drives, origins, run, get stdout() { return stdout } }
+  // Shared DEV: the Cloudery fixture manifest names the organization first, then its members.
+  const dir = await mkdtemp(join(tmpdir(), 'fanout-dev-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  async function devRun(env: Record<string, string | undefined> = {}, options: { preload?: string } = {},
+    edit?: (manifest: any) => void) {
+    const manifest = { warmup_sharing_id: warmup.id, instances: instances.map((i, n) => ({
+      fqdn: i.attributes.domain, uuid: i.attributes.uuid, role: n === 0 ? 'organization' : 'member' })) }
+    edit?.(manifest)
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest))
+    await writeFile(join(dir, 'token.json'), JSON.stringify({ public: 'cloudery-public', manager_url: origins.admin }))
+    return run({ LOAD_TARGET: 'dev', SEED_CLOUDERY_MANIFEST: join(dir, 'manifest.json'),
+      SEED_CLOUDERY_TOKEN_FILE: join(dir, 'token.json'), DEV_STACK_URL: origins.stack, MAX_RUNTIME: '5m',
+      EXECUTION_ID: 'devrun', ...env }, options)
+  }
+  return { calls, instances, drives, origins, run, devRun, warmup, get stdout() { return stdout } }
 }
 const mutations = (calls: Call[]) => calls.filter(r => r.method !== 'GET')
 
@@ -886,3 +934,129 @@ test(
     }
   },
 )
+
+test('shared DEV takes actors from the Cloudery fixture and removes only its own drives', async t => {
+  const f = await fixture(t)
+  f.drives.set('drive-900', { recipients: [], group: '', removed: true, owner: root, name: 'twake-load-fanout-old-1-aa' })
+  f.drives.set('drive-901', { recipients: [], group: '', removed: false, owner: root, name: 'Load-test warm-up' })
+  const result = await f.devRun()
+  equal(result.code, 0, result.stderr)
+  equal(result.report.mode, 'cloudery')
+  deepEqual(result.report.capacity, { kind: 'lower_bound', lower: 2, upper_exclusive: null, max: null })
+  deepEqual(result.report.recovery, { cleaned: ['twake-load-fanout-old-1-aa'] })
+  deepEqual(result.report.cleanup, { cleaned: ['drive-3', 'drive-4'], retained: [] })
+  equal(result.report.retained, false)
+  ok(['drive-900', 'drive-3', 'drive-4'].every(id => f.drives.get(id)!.deleted))
+  ok(!f.drives.get('drive-901')!.deleted)
+  deepEqual(['drive-3', 'drive-4'].map(id => f.drives.get(id)!.name!.startsWith('twake-load-fanout-devrun-')), [true, true])
+  ok(f.calls.some(r => r.method === 'DELETE' && r.url.pathname === '/data/io.cozy.contacts.groups/group-3'))
+  // No admin API: one Cloudery token for the organization and each member the levels need.
+  deepEqual(f.calls.filter(r => r.api === 'admin').map(r => r.url.pathname),
+    [root, domain(1), domain(2)].map(d => `/api/public/instances/${d}/token`))
+})
+
+test('shared DEV checks its budget, identities and the warm-up before any write', async t => {
+  const f = await fixture(t)
+  for (const env of [{ MAX_RUNTIME: undefined }, { FANOUT_LEVELS: '1,13' }]) {
+    const result = await f.devRun(env)
+    equal(result.code, 2, result.stderr)
+  }
+  equal(f.calls.length, 0)
+  let result = await f.devRun({}, {}, manifest => { manifest.instances[2].uuid = 'recreated' })
+  equal(result.code, 2, result.stderr)
+  match(result.report.error, /no longer the fixture instance/)
+  f.warmup.active = false
+  result = await f.devRun()
+  equal(result.code, 2, result.stderr)
+  match(result.report.error, /warm-up/)
+  deepEqual(f.calls.filter(r => r.api === 'stack' && r.method !== 'GET'), [])
+})
+
+test('shared DEV re-mints instance tokens before they expire', async t => {
+  const f = await fixture(t)
+  // Ten thousand times faster: tokens age past their refresh window between levels.
+  const clock = join(await mkdtemp(join(tmpdir(), 'fanout-clock-')), 'clock.mjs')
+  await writeFile(clock, 'const real = Date.now, start = real()\nDate.now = () => start + (real() - start) * 10_000\n')
+  t.after(() => rm(clock, { force: true }))
+  const result = await f.devRun({}, { preload: clock })
+  equal(result.code, 0, result.stderr)
+  ok(f.calls.filter(r => r.api === 'admin').length >= 6, 'every actor got a fresh token')
+})
+
+test('unverified cleanup keeps the drive and the result only as evidence', async t => {
+  const f = await fixture(t, (r, res) => {
+    if (r.method !== 'DELETE' || r.url.pathname !== '/files/root-drive-2') return
+    res.writeHead(500).end()
+    return true
+  })
+  const result = await f.devRun()
+  equal(result.code, 2, result.stderr)
+  equal(result.report.status, 'inconclusive')
+  equal(result.report.retained, true)
+  deepEqual(result.report.cleanup, { cleaned: ['drive-1'], retained: ['drive-2'] })
+  equal(result.report.capacity.kind, 'lower_bound')
+  match(result.report.error, /fixtures remain: drive-2/)
+})
+
+test('a MAX_RUNTIME too short for the next level ends the run as a lower bound', async t => {
+  const f = await fixture(t, r => {
+    if (r.method === 'POST' && r.url.pathname === '/sharings/drives') r.delayMs = 1100
+  })
+  // A level may take 2 x 3 s + 20 ms + 60 s; one second more leaves no room for a second level.
+  const result = await f.devRun({ FANOUT_TIMEOUT_MS: '3000', MAX_RUNTIME: '67020ms' })
+  equal(result.code, 0, result.stderr)
+  equal(result.report.budget_reached, 'runtime')
+  equal(result.report.points.length, 1)
+  deepEqual(result.report.capacity, { kind: 'lower_bound', lower: 1, upper_exclusive: null, max: null })
+})
+
+test('shared DEV fan-out counts token setup against MAX_RUNTIME', async t => {
+  const f = await fixture(t, r => {
+    if (r.url.pathname.endsWith('/token')) r.delayMs = 800
+  })
+  const clock = join(await mkdtemp(join(tmpdir(), 'fanout-runtime-')), 'clock.mjs')
+  await writeFile(clock, 'import { performance } from "node:perf_hooks"\n' +
+    'const real = performance.now.bind(performance), start = real()\n' +
+    'performance.now = () => start + (real() - start) * 100\n')
+  t.after(() => rm(clock, { force: true }))
+  const result = await f.devRun({ FANOUT_TIMEOUT_MS: '3000', MAX_RUNTIME: '67020ms' }, { preload: clock })
+  equal(result.code, 2, result.stderr)
+  equal(result.report.budget_reached, 'runtime')
+  deepEqual(result.report.points, [])
+  equal(result.report.capacity.kind, 'inconclusive')
+  deepEqual(f.calls.filter(r => r.api === 'stack' && r.method !== 'GET'), [])
+})
+
+test('a lost creation reply cannot be reported as verified cleanup', async t => {
+  for (const [path, retained] of [['/sharings/drives', 'level 1'], ['/data/io.cozy.contacts/', 'drive-1']]) {
+    await t.test(path!, async t => {
+      const f = await fixture(t, (r, res) => {
+        if (r.method !== 'POST' || r.url.pathname !== path) return
+        res.destroy()
+        return true
+      })
+      const result = await f.devRun()
+      equal(result.code, 2, result.stderr)
+      equal(result.report.retained, true)
+      deepEqual(result.report.cleanup, { cleaned: [], retained: [retained] })
+    })
+  }
+})
+
+test('MAX_RUNTIME also stops writes inside a fan-out level', async t => {
+  const f = await fixture(t, r => {
+    if (r.method === 'POST' && r.url.pathname === '/data/io.cozy.contacts/') r.delayMs = 300
+  })
+  const clock = join(await mkdtemp(join(tmpdir(), 'fanout-level-runtime-')), 'clock.mjs')
+  await writeFile(clock, 'import { performance } from "node:perf_hooks"\n' +
+    'const real = performance.now.bind(performance), start = real()\n' +
+    'performance.now = () => start + (real() - start) * 100\n')
+  t.after(() => rm(clock, { force: true }))
+  const result = await f.devRun({ FANOUT_LEVELS: '8', FANOUT_TIMEOUT_MS: '60000', MAX_RUNTIME: '200s' },
+    { preload: clock })
+  equal(result.code, 2, result.stderr)
+  equal(result.report.budget_reached, 'runtime')
+  equal(result.report.points[0].status, 'inconclusive')
+  equal(result.report.retained, true)
+  ok(f.calls.filter(r => r.method === 'POST' && r.url.pathname === '/data/io.cozy.contacts/').length < 8)
+})
