@@ -443,6 +443,22 @@ test('wrong canary bytes cannot pass even with an entirely ready owner roster', 
   equal(f.calls.filter(r => r.method === 'DELETE').length, 0)
 })
 
+test('wrong bytes after a passed level fail the run instead of measuring a bracket', async t => {
+  const f = await fixture(t, (r, res) => {
+    if (r.headers.host === domain(2) && r.url.pathname.includes('/download/')) {
+      res.end('wrong bytes')
+      return true
+    }
+  })
+  const result = await f.run({ FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
+  equal(result.code, 1, result.stdout)
+  equal(result.report.status, 'failed')
+  equal(result.report.content_mismatch, true)
+  equal(result.report.error, 'Recipient read different marker bytes')
+  equal(result.report.capacity.kind, 'inconclusive')
+  deepEqual(result.report.points.map((p: { status: string }) => p.status), ['passed', 'failed'])
+})
+
 test('removal without denial invalidates every usable capacity claim, retaining add diagnostics', async t => {
   const f = await fixture(t, (r, res) => {
     if (r.headers.host !== root && r.url.pathname.includes('/download/') && f.drives.get('drive-2')?.removed) {

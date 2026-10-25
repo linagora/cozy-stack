@@ -194,7 +194,7 @@ describe('formatCampaignSummary', (): void => {
       environment: { commit: 'abc123', limits: 'cozy-stack cpus=2 mem=4g', topology: 'single-host' },
       grafanaUrl: 'http://grafana.test',
       name: 'quick',
-      results: new Map([['run-upload-1m', { maximum_concurrent_uploads: 48, result_bound: 'exact', status: 'completed' }]]),
+      results: new Map([['run-upload-1m', { attempts: [{ cleanup_rate: 1, consistency_rate: 1 }], maximum_concurrent_uploads: 48, result_bound: 'exact', status: 'completed' }]]),
       runId: '20261018T211000Z',
       steps: [uploadStep, { ...uploadStep, exitCode: 0, id: '', kind: 'prepare', name: 'shared-drive-prepare' }],
     })
@@ -227,7 +227,7 @@ describe('classifyStep', (): void => {
   const ramp: CampaignStep = { ...uploadStep, kind: 'shared-drive-ramp', producerExitCode: 0 }
   const fanout: CampaignStep = { ...uploadStep, kind: 'org-drive-fanout', producerExitCode: 0 }
   const upload: CampaignStep = { ...uploadStep, producerExitCode: 0 }
-  const completedUpload = { attempts: [{ consistency_rate: 1 }], maximum_concurrent_uploads: 48, result_bound: 'exact', status: 'completed' }
+  const completedUpload = { attempts: [{ cleanup_rate: 1, consistency_rate: 1 }], maximum_concurrent_uploads: 48, result_bound: 'exact', status: 'completed' }
   const rampBracket = { max_sustained_level: 8, result_bound: 'bracket', status: 'completed' }
   const fanoutBracket = { capacity: { kind: 'bracket', lower: 2, upper_exclusive: 4 }, status: 'failed' }
 
@@ -238,6 +238,21 @@ describe('classifyStep', (): void => {
     deepEqual(classifyStep(fanout, fanoutBracket), { code: 0, reason: 'completed' })
     deepEqual(classifyStep(fanout, { capacity: { kind: 'lower_bound', lower: 16 }, status: 'passed' }),
       { code: 0, reason: 'completed' })
+  })
+
+  it('leaves a completed report without its evidence inconclusive', (): void => {
+    const invalid = { code: 2, reason: 'completed report lacks its capacity or verification evidence' }
+    deepEqual(classifyStep(upload, { status: 'completed' }), invalid)
+    deepEqual(classifyStep(upload, { ...completedUpload, attempts: [{ cleanup_rate: 0, consistency_rate: 1 }] }), invalid)
+    deepEqual(classifyStep(upload, { ...completedUpload, result_bound: 'bracket' }), invalid)
+    deepEqual(classifyStep(ramp, { result_bound: 'lower_bound', status: 'completed' }),
+      { code: 2, reason: 'ramp report has no sustained level' })
+  })
+
+  it('fails a fanout that read different bytes even after a measured bracket', (): void => {
+    deepEqual(classifyStep({ ...fanout, exitCode: 2, producerExitCode: 1 },
+      { ...fanoutBracket, content_mismatch: true, error: 'Recipient read different marker bytes' }),
+    { code: 1, reason: 'Recipient read different marker bytes' })
   })
 
   it('accepts a ramp that k6 stopped on mostly failed requests once cleanup is verified', (): void => {

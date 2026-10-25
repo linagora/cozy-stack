@@ -8,6 +8,8 @@ import { FixtureDeadline, FixtureError, request, type Reply } from './fixture-ht
 
 class FanoutError extends Error {}
 class Deadline extends Error {}
+// Served bytes that differ from the marker: corruption, never a slow convergence.
+class ContentMismatch extends Error {}
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new FanoutError(message)
 }
@@ -104,7 +106,7 @@ async function bounded(tasks: Array<() => Promise<void>>, concurrency: number): 
         await task()
       } catch (error) {
         // Observer uncertainty takes precedence over a healthy SLA miss, regardless of completion order.
-        if (!failure || failure instanceof Deadline) failure = error
+        if (!failure || failure instanceof Deadline || error instanceof ContentMismatch) failure = error
       }
     }
   }))
@@ -114,8 +116,8 @@ async function bounded(tasks: Array<() => Promise<void>>, concurrency: number): 
 async function main(): Promise<void> {
   const report: { status: string, organization_domain?: string, mode?: string, settings?: object,
     points: Point[], capacity: { kind: string, lower: number | null, upper_exclusive: number | null, max: null },
-    retained: boolean, warning: string, error?: string } = {
-    status: 'inconclusive', points: [],
+    retained: boolean, warning: string, error?: string, content_mismatch: boolean } = {
+    status: 'inconclusive', points: [], content_mismatch: false,
     capacity: { kind: 'inconclusive', lower: null, upper_exclusive: null, max: null },
     retained: true, warning: 'No automatic cleanup. Client completion/timeout does not prove server writes ended.',
   }
@@ -406,7 +408,7 @@ async function main(): Promise<void> {
           if (removed) {
             expect(await api(owner, 'GET', proxyRoot, '', deadline))
             const bytes = expect(await api(owner, 'GET', marker, '', deadline))
-            good = good && bytes.body === canary
+            if (bytes.body !== canary) throw new ContentMismatch('Owner read different marker bytes')
           }
           p.owner ??= { domain: root }
           p.owner[removed ? 'remove' : 'add'] = {
@@ -452,6 +454,9 @@ async function main(): Promise<void> {
           proof.root_status = rootReply.status
           proof.marker_status = fileReply.status
           proof.marker_matches = fileReply.status === 200 && fileReply.body === canary
+          if (fileReply.status === 200 && !proof.marker_matches) {
+            throw new ContentMismatch('Recipient read different marker bytes')
+          }
           const denied = (status: number) => [403, 404, 410].includes(status)
           const expectedAccess = [200, 403, 404, 410].includes(rootReply.status) &&
             [200, 403, 404, 410].includes(fileReply.status)
@@ -533,7 +538,7 @@ async function main(): Promise<void> {
             p.retained_autoaccept_work_may_continue = false
           } catch (error) {
             const missedPhaseDeadline = error instanceof Deadline && phase.mutation === 'accepted'
-            phase.status = missedPhaseDeadline ? 'failed' : 'inconclusive'
+            phase.status = missedPhaseDeadline || error instanceof ContentMismatch ? 'failed' : 'inconclusive'
             throw error
           } finally {
             phase.elapsed_ms = now() - start
@@ -543,16 +548,17 @@ async function main(): Promise<void> {
         p.phase = 'complete'
       } catch (error) {
         const missedAddDeadline = error instanceof Deadline && p.phase === 'add' && p.add.mutation === 'accepted'
-        p.status = missedAddDeadline ? 'failed' : 'inconclusive'
+        p.status = missedAddDeadline || error instanceof ContentMismatch ? 'failed' : 'inconclusive'
         if (error instanceof Deadline) p.error = 'Observation SLA deadline exceeded'
-        else if (error instanceof FanoutError) p.error = error.message
+        else if (error instanceof FanoutError || error instanceof ContentMismatch) p.error = error.message
         else p.error = 'Transport or observer failure; server write completion unknown'
         throw error
       }
     }
     report.status = 'passed'
   } catch (error) {
-    if (error instanceof FanoutError) report.error = error.message
+    report.content_mismatch = error instanceof ContentMismatch
+    if (error instanceof FanoutError || error instanceof ContentMismatch) report.error = error.message
     else if (error instanceof Deadline) report.error = 'Observation SLA deadline exceeded'
     else if (error instanceof FixtureError) report.error = 'Transport failure; server write completion unknown'
     else report.error = 'Fanout execution failed; artifacts retained'
@@ -564,10 +570,11 @@ async function main(): Promise<void> {
     const last = report.points.at(-1)
     if (report.status === 'passed') {
       report.capacity = { kind: 'lower_bound', lower, upper_exclusive: null, max: null }
-    } else if (last?.status === 'failed' && lower !== null) {
+    } else if (last?.status === 'failed' && lower !== null && !report.content_mismatch) {
       report.capacity = { kind: 'bracket', lower, upper_exclusive: last.n, max: null }
     }
-    // Exit contract (README): a bound or bracket is a measurement, a missed first level a failure.
+    // Exit contract (README): a bound or bracket is a measurement; a missed first level or
+    // a content mismatch at any level is a failure.
     process.exitCode = report.capacity.kind !== 'inconclusive' ? 0 : report.status === 'failed' ? 1 : 2
     let output = render()
     if (reportFD !== undefined) {

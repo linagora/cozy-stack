@@ -536,7 +536,8 @@ outcomes keep both reasons. A failed early step still fails the campaign when
 later steps complete. In capacity mode, a lower bound or a tested bracket is a
 completed result, including expected overload: k6 stopping the ramp on mostly
 failed requests (exit 99) counts as overload once cleanup is verified. A search
-whose first level fails measured no capacity and exits 1. Performance stays
+whose first level fails measured no capacity and exits 1, and content read back
+with other bytes exits 1 at any level, even after passing ones. Performance stays
 observational until agreed criteria exist. make reports every failed recipe as
 2, so steps also record the producer's exit, and a completed report never
 explains an unexpected one.

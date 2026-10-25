@@ -176,7 +176,14 @@ function classifyUploadCapacity(result: JsonRecord): StepOutcome {
     return { code: 1, reason }
   }
   if (stopped !== '') return { code: 2, reason: stopped }
-  return result.maximum_concurrent_uploads === 0
+  // A completed search must carry its capacity and an attempt that verified content and cleanup.
+  const maximum = result.maximum_concurrent_uploads
+  const verified = attempts.some(({ cleanup_rate, consistency_rate }): boolean =>
+    cleanup_rate === 1 && consistency_rate === 1)
+  const valid = typeof maximum === 'number' && Number.isSafeInteger(maximum) && maximum >= 0 &&
+    ['exact', 'lower_bound'].includes(String(result.result_bound)) && (maximum === 0 ? attempts.length > 0 : verified)
+  if (!valid) return { code: 2, reason: 'completed report lacks its capacity or verification evidence' }
+  return maximum === 0
     ? { code: 1, reason: 'a single upload failed the criteria' }
     : completed
 }
@@ -185,12 +192,16 @@ function classifyRamp(result: JsonRecord): StepOutcome {
   if (result.status !== 'completed') {
     return { code: 2, reason: String(result.failure_reason ?? result.status ?? 'ramp report has no status') }
   }
+  if (!Number.isSafeInteger(result.max_sustained_level)) return { code: 2, reason: 'ramp report has no sustained level' }
   if (result.result_bound === 'lower_bound') return completed
   if (result.result_bound !== 'bracket') return { code: 2, reason: 'ramp result is inconclusive' }
   return result.max_sustained_level === 0 ? { code: 1, reason: 'the first ramp level failed' } : completed
 }
 
 function classifyFanout(result: JsonRecord): StepOutcome {
+  if (result.content_mismatch === true) {
+    return { code: 1, reason: String(result.error ?? 'fanout read different marker bytes') }
+  }
   if (fanoutBound(result) !== null) return completed
   return result.status === 'failed'
     ? { code: 1, reason: 'the first fanout level missed its deadline' }
