@@ -587,7 +587,9 @@ Budgets are campaign settings, recorded in the report:
 
 A search that reaches `MAX_VUS` or `MAX_UPLOAD_BYTES` ends as a lower bound.
 When `MAX_RUNTIME` ends it, only levels that passed confirmation count: the
-highest is a lower bound, and without one the search is inconclusive. A
+highest is a lower bound, and without one the search is inconclusive. If the
+stopped point's cleanup is not verified, the run exits 2 and the report keeps
+that lower bound only as evidence. A
 checksum mismatch stops either mode at once and exits 1, even when cleanup also
 failed. Leftover data, a timeout or an interruption leaves the run inconclusive
 and the report names what remains. The report,
@@ -634,7 +636,8 @@ A free lock does not prove DEV is idle: a killed runner can leave its k6
 container running. Before its first point, a DEV campaign stops any k6
 container whose target is a manifest instance, then deletes every
 `twake-load-*` directory in the instance root and trash, so a killed run is
-cleaned up by the next one. The report also records the k6 containers it
+cleaned up by the next one. When Docker cannot list or inspect its k6
+containers, the campaign exits 2 before touching any data. The report also records the k6 containers it
 stopped and the DEV monitoring link (`DEV_MONITORING_URL`, else `unknown`).
 
 ## Adding another scenario
