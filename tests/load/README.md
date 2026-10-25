@@ -624,19 +624,16 @@ without making one scenario change everything at once.
 | Cozy API flow | `make cozy-upload FILE_SIZE=1K VUS=1` |
 | Load model or limits | A small trial, then the dedicated load environment |
 
-To run the Node checks on the same runtime as Compose, for example on the load
-VM, whose host Node is too old, use `node:22-alpine` from `tests/load`. Pull the
-tag first, because a cached tag can still hold an unsupported Node. Keep the
-printed version and digest with the results:
+`make node-checks` runs `npm ci`, the tests and the type checks in the Node
+image Compose uses, on a copy of the sources: the checkout, its `node_modules`
+and `.env` stay untouched, and the container is removed. Use it wherever the
+host Node is too old, for example on the load VM. `compose.yaml` pins that image
+by digest (`x-node-image`), since a cached tag can hold an unsupported Node; to
+refresh it, pull `node:22-alpine`, check `node --version`, and update the digest.
 
-```console
-$ docker pull node:22-alpine
-$ docker image inspect node:22-alpine --format '{{index .RepoDigests 0}}'
-$ docker run --rm -v "$PWD":/app -v /app/node_modules -w /app node:22-alpine \
-    sh -c 'apk add --no-cache make bash && node --version && npm ci && npm test && npm run typecheck'
-```
-
-The anonymous `/app/node_modules` volume keeps the host install untouched.
+The `Load harness` workflow runs `make node-checks`, `make config` and
+`make upload-smoke` for changes under `tests/load`, and keeps the results and
+Compose logs when it fails. It needs no credentials and never contacts DEV.
 
 The mock checks our test code and API flow. It cannot give us a Cozy capacity
 number. The bundled Cozy stack is useful for integration testing, but it

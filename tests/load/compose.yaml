@@ -1,5 +1,9 @@
 name: twake-drive-load
 
+# The Node image for Compose services, the DEV runner and CI (make node-checks): pinned by digest, as
+# a cached tag can hold an unsupported Node. Refresh: docker pull node:22-alpine, check node --version.
+x-node-image: &node-image node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+
 services:
   couchdb:
     image: couchdb:3.3.3
@@ -142,7 +146,7 @@ services:
           - load.localhost
 
   capacity-results:
-    image: node:22-alpine
+    image: *node-image
     restart: "${RESTART_POLICY:-no}"
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     command:
@@ -221,7 +225,7 @@ services:
       - load-test
 
   mock:
-    image: node:22-alpine
+    image: *node-image
     restart: "${RESTART_POLICY:-no}"
     command:
       - node

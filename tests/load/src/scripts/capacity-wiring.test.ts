@@ -76,7 +76,8 @@ test('Compose adds an internal read-only Node results service without exposing p
   const source = readFileSync(join(cwd, 'compose.yaml'), 'utf8')
   const section = source.match(/^  capacity-results:\n([\s\S]*?)(?=^  \S|^networks:)/m)?.[1]
   ok(section, 'missing capacity-results service')
-  match(section, /image: node:22-alpine/)
+  match(section, /image: \*node-image/)
+  match(source, /^x-node-image: &node-image node:22-alpine@sha256:[0-9a-f]{64}$/m)
   match(section, /--experimental-strip-types/)
   match(section, /\.\/data\/results:\/results:ro/)
   match(section, /CAPACITY_RESULTS_DIR: \/results/)

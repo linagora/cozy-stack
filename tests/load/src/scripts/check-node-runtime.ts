@@ -28,7 +28,7 @@ if (isMainModule()) {
   const minimum = minimumNode(manifest.engines.node)
   if (!satisfiesMinimum(process.version, minimum)) {
     process.stderr.write(`Node ${process.version} is not supported here; tests/load needs ${minimum} or newer. ` +
-      'Run it in node:22-alpine (see README) or upgrade Node.\n')
+      'Run make node-checks (README) or upgrade Node.\n')
     process.exitCode = 1
   }
 }

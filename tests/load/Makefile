@@ -65,11 +65,12 @@ export HOST_GID
 export COZY_STACK_CPUS COZY_STACK_MEMORY COUCHDB_CPUS COUCHDB_MEMORY
 export LOAD_TOPOLOGY GRAFANA_URL
 
-.PHONY: help doctor install typecheck config pull observability-up up cozy-up cozy-prepare cozy-shared-drive-prepare cozy-shared-drive-load cozy-shared-drive-ramp campaign cozy-upload cozy-upload-soak cozy-capacity cozy-capacity-all cozy-status cozy-logs cozy-down upload-binaries upload-binary upload-smoke upload upload-soak upload-capacity upload-capacity-all status logs down dashboard-url
+.PHONY: help doctor install typecheck node-checks config pull observability-up up cozy-up cozy-prepare cozy-shared-drive-prepare cozy-shared-drive-load cozy-shared-drive-ramp campaign cozy-upload cozy-upload-soak cozy-capacity cozy-capacity-all cozy-status cozy-logs cozy-down upload-binaries upload-binary upload-smoke upload upload-soak upload-capacity upload-capacity-all status logs down dashboard-url
 
 help:
 	@echo "make install                                 Install the load-harness Node tools"
 	@echo "make typecheck                               Typecheck k6 and Node TypeScript"
+	@echo "make node-checks                             Run npm ci, tests and typecheck in the Compose Node image"
 	@echo "make seed-scale SEED_FILES=1000 SEED_DRIVES=10  Build a disposable fixture through Stack APIs"
 	@echo "make seed-scale-cleanup SEED_DOMAIN=...        Delete that disposable fixture instance"
 	@echo "make seed-org SEED_USERS=50                    Build an organization with empty user instances"
@@ -142,6 +143,15 @@ fixture-snapshot fixture-restore: $(NODE_MODULES_MARKER)
 
 typecheck: $(NODE_MODULES_MARKER)
 	@npm run typecheck
+
+# On a copy of the sources, so the checkout, its node_modules and .env stay untouched; --rm also
+# removes the container's anonymous volumes.
+node-checks:
+	@image=$$($(COMPOSE) config --images | grep -m1 '^node:') && echo "Node image: $$image" && \
+	docker run --rm -v "$$PWD":/src:ro "$$image" sh -euc '\
+		apk add --no-cache make bash > /dev/null; mkdir /app; \
+		tar -C /src --exclude=./node_modules --exclude=./data --exclude=./.env -cf - . | tar -C /app -xf -; \
+		cd /app; node --version; npm ci --no-audit --no-fund; npm test; npm run typecheck'
 
 config:
 	@$(COMPOSE) config --quiet
