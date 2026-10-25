@@ -174,14 +174,14 @@ describe('classifyUploadPoint', (): void => {
     })
   }
 
-  it('stops capacity probes after cleanup fails with a content mismatch', (): void => {
+  it('stops capacity probes after cleanup fails with a content mismatch', async (): Promise<void> => {
     const requests: PointRequest[] = []
-    const result = searchCapacity({
+    const result = await searchCapacity({
       baselineIterations: 4,
       configuredP95LimitMs: 200,
       confirmationIterations: 4,
       maxVus: 8,
-      runPoint: (request) => {
+      runPoint: async (request) => {
         requests.push(request)
         const expectedIterations = request.iterationsPerVu * request.vus
         const cleanupFailed = request.vus === 4

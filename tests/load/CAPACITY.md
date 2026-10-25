@@ -25,7 +25,7 @@ three methods, chosen by the shape of the dimension:
 
 | Method | Use it when | Implementation |
 | --- | --- | --- |
-| Point search | Each level needs an exact amount of work, its own data, and cleanup | `src/scripts/find-upload-capacity.ts` runs separate k6 points: baseline, doubling, bisection, confirmation |
+| Point search | Each level needs an exact amount of work, its own data, and cleanup | `src/scripts/upload-campaign.ts` runs separate k6 points: baseline, doubling, bisection, confirmation |
 | k6 ramp | The load is sustained and the levels can share one run | `src/scenarios/shared-drive-ramp.ts`: one k6 run, samples tagged with `level`, judged in `handleSummary()` |
 | Step ladder | Each level needs data created first, and that data cannot be removed cheaply | Planned: extend the existing API seeder with representative profiles, run a fixed probe workload, and stop at the first failing step |
 

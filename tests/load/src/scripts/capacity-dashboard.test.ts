@@ -540,9 +540,11 @@ function uploadTelemetry(run: string) {
   const recipe = makefile.split('upload: upload-binary observability-up\n')[1]!.split('\nupload-soak:')[0]!
   assert.ok(recipe.includes('--tag campaignid="$(or $(CAPACITY_RUN_ID),$(EXECUTION_ID))"'))
   assert.ok(recipe.includes('--tag executionid="$(EXECUTION_ID)"'))
-  const producer = readFileSync(new URL('./find-upload-capacity.ts', import.meta.url), 'utf8')
-  assert.ok(producer.includes('`CAPACITY_RUN_ID=${config.campaignId}`'))
-  assert.ok(producer.includes('`EXECUTION_ID=${executionId}`'))
+  const producer = readFileSync(new URL('./upload-campaign.ts', import.meta.url), 'utf8')
+  const runner = readFileSync(new URL('./upload/exact-work.ts', import.meta.url), 'utf8')
+  assert.ok(producer.includes('campaignId: config.campaignId,') && producer.includes('    executionId,\n'))
+  assert.ok(runner.includes('`CAPACITY_RUN_ID=${work.campaignId}`'))
+  assert.ok(runner.includes('`EXECUTION_ID=${work.executionId}`'))
   const template = producer.match(/const executionId = `([^`]+)`/)?.[1]
   assert.ok(template, 'derive attempt IDs from the actual upload producer')
   return ['baseline', 'confirmation'].map((phase, index) => ({

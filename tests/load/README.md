@@ -411,8 +411,7 @@ already supports those workload shapes.
 
 A point passes when upload success is at least `MIN_SUCCESS_RATE` (99%), no
 iterations are dropped, and every upload reads back with the same checksum. A
-checksum mismatch aborts the k6 point and fails it; the search then continues
-below that level. Latency is not judged by default, because a limit derived
+checksum mismatch stops the search at once. Latency is not judged by default, because a limit derived
 from the nearly idle 1-VU baseline mostly measured latency doubling. To add a
 latency contract, set an absolute `P95_LIMIT_MS`. Every point's p95 is in the
 report either way.
@@ -456,8 +455,8 @@ configured cap passed and no higher level was attempted.
 
 The search exits 0 with a completed result, 2 when it stopped on an
 infrastructure failure, and 1 when no level passed or any upload read back with
-a different checksum. A mismatch still lets the search continue and report a
-capacity, but it is a correctness failure, never a measurement.
+a different checksum. The search runs through the shared upload runner, so its
+budgets and per-point cleanup are those of [Upload campaigns](#upload-campaigns).
 
 Grafana can filter k6 metrics by campaign, execution ID, file size,
 concurrency, and phase. A campaign groups every capacity-search point. An
@@ -565,39 +564,78 @@ COUCHDB_CPUS=1
 COUCHDB_MEMORY=2g
 ```
 
-## Shared DEV
+## Upload campaigns
 
-`make dev-upload` runs the exact-work upload scenario against one instance of
-the Cloudery fixture ([SEEDING.md](SEEDING.md#shared-dev-through-the-cloudery)).
-Run it only from the designated load VM:
+Every upload campaign goes through one runner, `src/scripts/upload-campaign.ts`.
+It runs exact amounts of work, stops k6 at its deadline or on Ctrl-C, checks
+every checksum, deletes the run's own `twake-load-*` directory after each k6
+run, and classifies the result the same way on every target. Two modes:
+
+| Mode | Command | Result |
+| --- | --- | --- |
+| Regression | `make upload-regression`, `make dev-upload` | One fixed `VUS` x `ITERATIONS_PER_VU` workload: 0 passed, 1 correctness or criteria failure, 2 inconclusive |
+| Capacity | `make upload-capacity`, `make dev-capacity` | The [search](#find-upload-capacity): an exact bracket, a lower bound at a budget, or inconclusive |
+
+Budgets are campaign settings, recorded in the report:
+
+| Setting | Bounds |
+| --- | --- |
+| `MAX_VUS` | Concurrent workers |
+| `MAX_UPLOAD_BYTES` | Bytes one k6 run uploads before its cleanup, such as `10M`; it caps the search level |
+| `MAX_RUNTIME` | Load time for the whole campaign; no point starts after it, and a running point is stopped |
+| `UPLOAD_TIMEOUT` | One request |
+
+A search that reaches `MAX_VUS` or `MAX_UPLOAD_BYTES` ends as a lower bound.
+When `MAX_RUNTIME` ends it, only levels that passed confirmation count: the
+highest is a lower bound, and without one the search is inconclusive. A
+checksum mismatch stops either mode at once and exits 1, even when cleanup also
+failed. Leftover data, a timeout or an interruption leaves the run inconclusive
+and the report names what remains. The report,
+`data/results/<id>-upload-<mode>.json`, records every attempt, the budgets, the
+Stack, harness, Node and k6 image versions and monitoring links.
+
+Targets differ only in preparation, credentials and coordination:
+
+| | Local (`LOAD_TARGET=local`) | Shared DEV (`LOAD_TARGET=dev`) |
+| --- | --- | --- |
+| Preparation | `cozy-prepare`, or any `BASE_URL` | An instance of the Cloudery fixture ([SEEDING.md](SEEDING.md#shared-dev-through-the-cloudery)), checked against the Stack's UUID |
+| Credentials | `COZY_ACCESS_TOKEN` from `.env` | A token minted for that instance before each k6 run |
+| Budgets | Optional, with search caps by file size | Required, as agreed with the DEV owner |
+| Coordination | None | The shared DEV lock, with recovery of killed runs |
+
+Locally, `STACK_URL` is where the host reaches the Stack when k6 uses a Compose
+name; `make cozy-capacity` sets it. Runs against the mock or a shared drive
+leave cleanup to k6's own teardown check.
+
+### Shared DEV
+
+Run DEV campaigns only from the designated load VM, with budgets agreed with
+the DEV owner:
 
 ```sh
 export SEED_CLOUDERY_TOKEN_FILE=~/private/cloudery-token.json
 export SEED_CLOUDERY_MANIFEST=~/private/<prefix>-cloudery-fixture.json
-make dev-upload DEV_INSTANCE=<prefix>01.<domain>                                 # 1 x 1 x 1 KiB
-make dev-upload DEV_INSTANCE=<prefix>01.<domain> VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M
+export DEV_INSTANCE=<prefix>01.<domain> MIN_SUCCESS_RATE=1 UPLOAD_TIMEOUT=60s
+make dev-upload MAX_VUS=1 MAX_UPLOAD_BYTES=1K MAX_RUNTIME=5m                   # 1 x 1 x 1 KiB
+make dev-upload VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m
+make dev-capacity FILE_SIZE=1M MAX_VUS=8 MAX_UPLOAD_BYTES=160M MAX_RUNTIME=30m \
+  BASELINE_ITERATIONS=10 CONFIRMATION_ITERATIONS=20
 ```
 
-The instance must be in the manifest, with the same UUID on the Stack. Every
-request uses a token minted for that instance. Limits are fixed and checked
-before any request: at most 2 workers, 5 uploads each and 1 MiB per upload;
-60 s per request, 10 minutes for k6, and 5 minutes for each cleanup, listing
-included. No local Stack is started.
+Each k6 run gets a fresh 30-minute instance token and is stopped after 20
+minutes. No local Stack is started.
 
-One run at a time: `make dev-upload` holds `DEV_LOCK_FILE`
+One run at a time: DEV campaigns hold `DEV_LOCK_FILE`
 (`/tmp/cozy-load-shared-dev.lock`) through k6, verification and cleanup, and
-exits 2 while another run holds it. Use the same path from every checkout, and
+exit 2 while another run holds it. Use the same path from every checkout, and
 mount it into any container that starts DEV work.
 
 A free lock does not prove DEV is idle: a killed runner can leave its k6
-container running. Before cleanup, the runner stops any k6 container whose
-target is a manifest instance. Before and after k6, it deletes every
+container running. Before its first point, a DEV campaign stops any k6
+container whose target is a manifest instance, then deletes every
 `twake-load-*` directory in the instance root and trash, so a killed run is
-cleaned up by the next one. A content mismatch exits 1 even when cleanup also
-failed. The report, `data/results/<EXECUTION_ID>-dev-upload.json`, records the
-outcome (0, 1 or 2 as for campaigns), the k6 containers it stopped, parameters, times, the Stack, harness, Node and
-k6 image versions, monitoring links (`DEV_MONITORING_URL`, else `unknown`) and
-the identifiers of any data it could not delete.
+cleaned up by the next one. The report also records the k6 containers it
+stopped and the DEV monitoring link (`DEV_MONITORING_URL`, else `unknown`).
 
 ## Adding another scenario
 

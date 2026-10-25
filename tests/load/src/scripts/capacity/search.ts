@@ -26,7 +26,7 @@ export type CapacitySearchOptions = {
   confirmationIterations: number
   log?: (message: string) => void
   maxVus: number
-  runPoint: (request: PointRequest) => PointOutcome
+  runPoint: (request: PointRequest) => Promise<PointOutcome>
 }
 
 export type CapacitySearchResult =
@@ -67,11 +67,11 @@ function abort(reason: string): CapacitySearchResult {
   return { reason, status: 'infrastructure_failure' }
 }
 
-function evaluateBurstLevel(context: SearchContext, vus: number): PointOutcome {
+async function evaluateBurstLevel(context: SearchContext, vus: number): Promise<PointOutcome> {
   const { options, p95LimitMs } = context
-  const runBurst = (phase: CapacityPhase): PointOutcome =>
+  const runBurst = (phase: CapacityPhase): Promise<PointOutcome> =>
     options.runPoint({ iterationsPerVu: 1, p95LimitMs, phase, vus })
-  const firstOutcome = runBurst('discovery')
+  const firstOutcome = await runBurst('discovery')
 
   if (firstOutcome.result !== 'failed') {
     return firstOutcome
@@ -79,7 +79,7 @@ function evaluateBurstLevel(context: SearchContext, vus: number): PointOutcome {
 
   context.log(`Retrying failing discovery point at ${vus} VUs\n`)
 
-  const secondOutcome = runBurst('discovery-retry')
+  const secondOutcome = await runBurst('discovery-retry')
 
   if (secondOutcome.result === 'infrastructure_failure') {
     return secondOutcome
@@ -95,7 +95,7 @@ function evaluateBurstLevel(context: SearchContext, vus: number): PointOutcome {
 function evaluateConfirmationLevel(
   context: SearchContext,
   vus: number,
-): PointOutcome {
+): Promise<PointOutcome> {
   return context.options.runPoint({
     iterationsPerVu: context.options.confirmationIterations,
     p95LimitMs: context.p95LimitMs,
@@ -108,19 +108,19 @@ type BisectionResult =
   | { highestPassingVus: number; status: 'completed' }
   | { failingVus: number; status: 'infrastructure_failure' }
 
-function bisect(
+async function bisect(
   low: number,
   high: number,
   initialPassingVus: number,
-  evaluate: (vus: number) => PointOutcome,
-): BisectionResult {
+  evaluate: (vus: number) => Promise<PointOutcome>,
+): Promise<BisectionResult> {
   let highestPassingVus = initialPassingVus
   let searchLow = low
   let searchHigh = high
 
   while (searchLow <= searchHigh) {
     const searchMid = Math.floor((searchLow + searchHigh) / 2)
-    const outcome = evaluate(searchMid)
+    const outcome = await evaluate(searchMid)
 
     if (outcome.result === 'infrastructure_failure') {
       return { failingVus: searchMid, status: 'infrastructure_failure' }
@@ -141,14 +141,14 @@ type DiscoveryResult =
   | { firstFailingVus: number; lastPassingVus: number; status: 'completed' }
   | { reason: string; status: 'infrastructure_failure' }
 
-function discover(context: SearchContext): DiscoveryResult {
+async function discover(context: SearchContext): Promise<DiscoveryResult> {
   const { maxVus } = context.options
   let lastPassingVus = 1
   let firstFailingVus = 0
   let currentVus = 2
 
   while (currentVus <= maxVus) {
-    const outcome = evaluateBurstLevel(context, currentVus)
+    const outcome = await evaluateBurstLevel(context, currentVus)
 
     if (outcome.result === 'infrastructure_failure') {
       return {
@@ -175,11 +175,11 @@ function discover(context: SearchContext): DiscoveryResult {
     return { firstFailingVus, lastPassingVus, status: 'completed' }
   }
 
-  const bisection = bisect(
+  const bisection = await bisect(
     lastPassingVus + 1,
     firstFailingVus - 1,
     lastPassingVus,
-    (vus: number): PointOutcome => evaluateBurstLevel(context, vus),
+    (vus: number): Promise<PointOutcome> => evaluateBurstLevel(context, vus),
   )
 
   if (bisection.status === 'infrastructure_failure') {
@@ -196,10 +196,10 @@ function discover(context: SearchContext): DiscoveryResult {
   }
 }
 
-export function searchCapacity(
+export async function searchCapacity(
   options: CapacitySearchOptions,
-): CapacitySearchResult {
-  const baselineOutcome = options.runPoint({
+): Promise<CapacitySearchResult> {
+  const baselineOutcome = await options.runPoint({
     iterationsPerVu: options.baselineIterations,
     p95LimitMs: null,
     phase: 'baseline',
@@ -235,14 +235,14 @@ export function searchCapacity(
     options,
     p95LimitMs,
   }
-  const discovery = discover(context)
+  const discovery = await discover(context)
 
   if (discovery.status === 'infrastructure_failure') {
     return abort(discovery.reason)
   }
 
   const candidateVus = discovery.lastPassingVus
-  const confirmationOutcome = evaluateConfirmationLevel(context, candidateVus)
+  const confirmationOutcome = await evaluateConfirmationLevel(context, candidateVus)
 
   if (confirmationOutcome.result === 'infrastructure_failure') {
     return abort(
@@ -261,11 +261,11 @@ export function searchCapacity(
     )
   }
 
-  const confirmation = bisect(
+  const confirmation = await bisect(
     1,
     candidateVus - 1,
     0,
-    (vus: number): PointOutcome => evaluateConfirmationLevel(context, vus),
+    (vus: number): Promise<PointOutcome> => evaluateConfirmationLevel(context, vus),
   )
 
   if (confirmation.status === 'infrastructure_failure') {
