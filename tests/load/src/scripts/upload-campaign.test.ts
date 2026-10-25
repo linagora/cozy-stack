@@ -24,14 +24,21 @@ if (args[0] === 'image') process.exit(1)
 if (args[0] === 'info') console.log(String(8 * 2 ** 30))
 // A hanging k6 is container c1, with its run's environment, until docker stop ends it.
 const pidFile = process.env.FAKE_DOCKER_LOG + '.pid'
+// FAKE_DOCKER_FAIL fails one command; with inspect-gone, the container also exits first.
+const fail = process.env.FAKE_DOCKER_FAIL || ''
+if (fail && args[0] === fail.split('-')[0]) {
+  if (fail === 'inspect-gone') fs.rmSync(pidFile, { force: true })
+  process.exit(1)
+}
 const container = () => JSON.parse(fs.readFileSync(pidFile, 'utf8'))
 if (args[0] === 'ps') console.log(fs.existsSync(pidFile) ? 'c1' : '')
 if (args[0] === 'inspect') console.log(JSON.stringify(container().env))
 if (args[0] === 'stop') process.kill(container().pid, 'SIGUSR2')
 if (args[1] !== 'run') process.exit(0)
 const env = Object.fromEntries(args.flatMap((a, i) => args[i - 1] === '-e' ? [a.split(/=(.*)/s).slice(0, 2)] : []))
-const mode = process.env.FAKE_K6
-if (mode === 'hang') {
+// FAKE_PLAN picks a mode per "phase:workers"; fail misses the success criterion.
+const mode = JSON.parse(process.env.FAKE_PLAN || '{}')[env.CAPACITY_PHASE + ':' + env.UPLOAD_VUS] || process.env.FAKE_K6
+const hang = () => {
   // Signalling docker compose leaves the container running; only docker stop (SIGUSR2 here) ends it.
   fs.writeFileSync(pidFile, JSON.stringify({ pid: process.pid,
     env: ['EXECUTION_ID=' + env.EXECUTION_ID, 'BASE_URL=' + env.BASE_URL] }))
@@ -39,33 +46,33 @@ if (mode === 'hang') {
   process.on('SIGUSR2', () => { fs.rmSync(pidFile); log('k6 stopped'); process.exit(105) })
   log('running')
   setInterval(() => {}, 1000)
-} else {
-  const mismatch = mode.includes('mismatch') && Number(env.UPLOAD_VUS) >= Number(process.env.FAKE_MISMATCH_VUS || 1)
-  const finish = () => {
-    const name = args.find(a => a.startsWith('--summary-export=')).split('/').pop()
-    fs.writeFileSync('data/results/' + name, JSON.stringify({ metrics: {
-      'http_req_duration{operation:file-upload}': { 'p(95)': 12 },
-      'upload_success{operation:file-upload}': { value: 1 },
-      iterations: { count: env.UPLOAD_VUS * env.ITERATIONS_PER_VU },
-      cleanup_success: { value: mode.includes('leftover') ? 0 : 1 },
-      upload_consistency: { value: mismatch ? 0 : 1 },
-    } }))
-    process.exit(mismatch ? 108 : 0)
-  }
-  // Named like the scenario's own test directory, which only teardown deletes.
-  const name = 'twake-load-' + env.FILE_SIZE.toLowerCase() + '-' + env.EXECUTION_ID + '-leftover'
-  if (!mode.includes('leftover')) finish()
-  else http.request(process.env.FAKE_STACK_URL + '/files/io.cozy.files.root-dir?Type=directory&Name=' + name, {
-    method: 'POST', headers: { Host: new URL(env.BASE_URL).host, Authorization: 'Bearer ' + process.env.COZY_ACCESS_TOKEN },
-  }, res => { res.resume(); res.on('end', finish) }).end()
 }
+const mismatch = mode.includes('mismatch') && Number(env.UPLOAD_VUS) >= Number(process.env.FAKE_MISMATCH_VUS || 1)
+const finish = () => {
+  const name = args.find(a => a.startsWith('--summary-export=')).split('/').pop()
+  fs.writeFileSync('data/results/' + name, JSON.stringify({ metrics: {
+    'http_req_duration{operation:file-upload}': { 'p(95)': 12 },
+    'upload_success{operation:file-upload}': { value: mode === 'fail' ? 0.5 : 1 },
+    iterations: { count: env.UPLOAD_VUS * env.ITERATIONS_PER_VU },
+    cleanup_success: { value: mode.includes('leftover') ? 0 : 1 },
+    upload_consistency: { value: mismatch ? 0 : 1 },
+  } }))
+  process.exit(mismatch ? 108 : mode === 'fail' ? 99 : 0)
+}
+const proceed = mode.includes('hang') ? hang : finish
+// Named like the scenario's own test directory, which only teardown deletes.
+const name = 'twake-load-' + env.FILE_SIZE.toLowerCase() + '-' + env.EXECUTION_ID + '-leftover'
+if (!mode.includes('leftover')) proceed()
+else http.request(process.env.FAKE_STACK_URL + '/files/io.cozy.files.root-dir?Type=directory&Name=' + name, {
+  method: 'POST', headers: { Host: new URL(env.BASE_URL).host, Authorization: 'Bearer ' + process.env.COZY_ACCESS_TOKEN },
+}, res => { res.resume(); res.on('end', proceed) }).end()
 `
 
 // One server plays the Cloudery token route and the instance (by Host); the root lists one child per page.
 async function fixture(t: TestContext) {
   const state = {
     root: new Map<string, string>([['docs', 'Documents']]), trash: new Map<string, string>(),
-    requests: [] as string[], stuck: '', uuid, host: fqdn,
+    requests: [] as string[], stuck: '', uuid, host: fqdn, tokenDelayMs: 0,
   }
   const stuck = (name: string) => state.stuck !== '' && name.endsWith(state.stuck)
   const server = createServer(async (req, res) => {
@@ -78,6 +85,7 @@ async function fixture(t: TestContext) {
       res.end(value === undefined ? '' : JSON.stringify(value))
     }
     if (route === `POST /api/public/instances/${fqdn}/token`) {
+      await new Promise(resolve => setTimeout(resolve, state.tokenDelayMs))
       return req.headers.authorization === 'Bearer public-secret' ? send(200, { token: 'instance-token' }) : send(401)
     }
     if (req.headers.host !== state.host || req.headers.authorization !== 'Bearer instance-token') return send(401)
@@ -151,7 +159,7 @@ async function fixture(t: TestContext) {
   const report = (mode = 'regression') =>
     JSON.parse(readFileSync(join(cwd, `data/results/${id}-upload-${mode}.json`), 'utf8'))
   const local = { LOAD_TARGET: 'local', BASE_URL: 'http://local.test:8080', STACK_URL: origin, COZY_ACCESS_TOKEN: 'instance-token' }
-  return { state, docker, report, run: (env?: Record<string, string>) => start(env).done, start, env: baseEnv, dockerDir: dir, id, local }
+  return { state, docker, report, run: (env?: Record<string, string>) => start(env).done, start, env: baseEnv, dockerDir: dir, dockerLog, id, local }
 }
 
 const phases = (report: any) => report.attempts.map((a: any) => [a.phase, a.vus])
@@ -242,6 +250,24 @@ test('cleanup listing that outlasts its budget stops the run before any upload',
   ok(!f.docker().some(c => c.args?.[1] === 'run'))
 })
 
+test('an unverifiable Docker inventory stops recovery before cleanup or load', async t => {
+  const f = await fixture(t)
+  f.state.root.set('old', 'twake-load-1k-old')
+  equal((await f.run({ FAKE_DOCKER_FAIL: 'ps' })).code, 2)
+  // A listed container whose environment cannot be read may still be loading DEV.
+  writeFileSync(`${f.dockerLog}.pid`, JSON.stringify({ pid: 0, env: [] }))
+  const { code, output } = await f.run({ FAKE_DOCKER_FAIL: 'inspect' })
+  equal(code, 2, output)
+  match(output, /docker inspect c1 failed/)
+  deepEqual([...f.state.root.values()], ['Documents', 'twake-load-1k-old'])
+  ok(!f.docker().some(c => c.args?.[1] === 'run'))
+  // A container that exited since the listing no longer runs k6.
+  equal((await f.run({ FAKE_DOCKER_FAIL: 'inspect-gone' })).code, 0)
+  // Without the inventory after k6, a run cannot show that its k6 stopped.
+  equal((await f.run({ LOAD_TARGET: 'local', BASE_URL: 'http://mock', FAKE_DOCKER_FAIL: 'ps' })).code, 2)
+  match(f.report().failure_reason, /k6 containers could not be verified: docker ps failed/)
+})
+
 test('a k6 container left by a killed coordinator is stopped before cleanup', async t => {
   const f = await fixture(t)
   const killed = f.start({ FAKE_K6: 'hang' })
@@ -318,6 +344,37 @@ test('the runtime budget stops a running point without claiming a capacity', asy
   match(report.failure_reason, /MAX_RUNTIME budget ran out before a level was confirmed/)
   equal(report.attempts[0].result, 'stopped')
   ok(f.docker().includes('k6 stopped'))
+})
+
+test('a runtime stop keeps its lower bound as evidence but not an unverified cleanup', async t => {
+  const f = await fixture(t)
+  f.state.stuck = '-leftover'
+  const search = { MODE: 'capacity', MAX_VUS: '4', MAX_RUNTIME: '20s', BASELINE_ITERATIONS: '2', CONFIRMATION_ITERATIONS: '2' }
+  const plan = (stopped: string) => JSON.stringify({ 'confirmation:4': 'fail', 'confirmation:3': stopped })
+  // DEV keeps undeletable data; the mock's k6 is killed before its own teardown reports.
+  for (const [env, reason] of [[{ FAKE_PLAN: plan('hang-leftover') }, /test data remains/],
+    [{ FAKE_PLAN: plan('hang'), LOAD_TARGET: 'local', BASE_URL: 'http://mock' }, /cleanup could not be verified/]] as const) {
+    const { code, output } = await f.run({ ...search, ...env })
+    equal(code, 2, output)
+    const report = f.report('capacity')
+    deepEqual(phases(report), [['baseline', 1], ['discovery', 2], ['discovery', 4], ['confirmation', 4],
+      ['confirmation', 2], ['confirmation', 3]])
+    equal(report.attempts[5].result, 'stopped')
+    equal(report.status, 'infrastructure_failure')
+    equal(report.maximum_concurrent_uploads, 2)
+    equal(report.result_bound, 'lower_bound')
+    equal(report.budget_reached, 'runtime')
+    match(report.failure_reason, reason)
+  }
+})
+
+test('a slow token cannot start k6 after the runtime budget', async t => {
+  const f = await fixture(t)
+  f.state.tokenDelayMs = 1200
+  const { code, output } = await f.run({ MAX_RUNTIME: '2s' })
+  equal(code, 2, output)
+  match(f.report().failure_reason, /MAX_RUNTIME/)
+  ok(!f.docker().some(c => c.args?.[1] === 'run'))
 })
 
 test('a runtime stop keeps only confirmed levels, as a lower bound', () => {

@@ -124,7 +124,7 @@ type CampaignState = {
   temporaryReportPath: string
 }
 
-// The runtime budget ended the campaign.
+// The runtime budget ended the campaign; the message lists what the stopped point left unverified.
 class BudgetReached extends Error {}
 class CorrectnessFailure extends Error {}
 
@@ -132,6 +132,7 @@ function makeCapacityReport(
   config: CampaignConfig,
   target: Target,
   recovery: CapacityReport['recovery'],
+  startedAt: number,
 ): CapacityReport {
   return {
     mode: config.mode,
@@ -160,7 +161,7 @@ function makeCapacityReport(
     status: 'running',
     attempts: [],
     recovery,
-    started_at: new Date().toISOString(),
+    started_at: new Date(startedAt).toISOString(),
   }
 }
 
@@ -179,14 +180,15 @@ function makeCampaignState(
   config: CampaignConfig,
   target: Target,
   recovery: CapacityReport['recovery'],
+  startedAt: number,
 ): CampaignState {
   mkdirSync(resultsDirectory, { recursive: true })
 
   const state: CampaignState = {
     attemptNumber: 0,
     config,
-    deadline: Date.now() + config.budgets.maxRuntimeMs,
-    report: makeCapacityReport(config, target, recovery),
+    deadline: startedAt + config.budgets.maxRuntimeMs,
+    report: makeCapacityReport(config, target, recovery, startedAt),
     reportPath: join(
       resultsDirectory,
       `${config.campaignId}-upload-${config.mode}.json`,
@@ -217,7 +219,9 @@ function settle(point: Point): PointResult {
     return 'failed'
   }
 
-  return point.problems.length > 0 ? 'infrastructure_failure' : point.result
+  return point.k6.timed_out || point.problems.length > 0
+    ? 'infrastructure_failure'
+    : point.result
 }
 
 async function runUploadPoint(
@@ -244,7 +248,7 @@ async function runUploadPoint(
     executionId,
     fileSize: config.fileSize,
     iterationsPerVu,
-    limitMs: state.deadline - Date.now(),
+    deadline: state.deadline,
     minimumSuccessRate: config.minimumSuccessRate,
     p95LimitMs,
     phase,
@@ -274,7 +278,7 @@ async function runUploadPoint(
   })
 
   if (stopped) {
-    throw new BudgetReached()
+    throw new BudgetReached(point.problems.join('; '))
   }
 
   return point
@@ -362,7 +366,9 @@ async function runRegression(state: CampaignState): Promise<Outcome> {
     })
   } catch (error: unknown) {
     if (error instanceof BudgetReached) {
-      return finishReport(state, 'infrastructure_failure', 2, 'k6 ran past the MAX_RUNTIME budget')
+      const reason = ['the MAX_RUNTIME budget ran out', error.message].filter(Boolean).join('; ')
+
+      return finishReport(state, 'infrastructure_failure', 2, reason)
     }
 
     throw error
@@ -417,6 +423,8 @@ async function runCapacitySearch(state: CampaignState): Promise<Outcome> {
 
   let result: CapacitySearchResult
   let budget = config.capBudget
+  // What a runtime stop left unverified: the lower bound stays evidence, not a result.
+  let unverified = ''
 
   try {
     result = await searchCapacity({
@@ -448,10 +456,16 @@ async function runCapacitySearch(state: CampaignState): Promise<Outcome> {
 
     result = getBudgetResult(report.attempts, config.configuredP95LimitMs)
     budget = 'runtime'
+    unverified = error.message
   }
 
   if (result.status === 'infrastructure_failure') {
-    return finishReport(state, 'infrastructure_failure', 2, result.reason)
+    return finishReport(
+      state,
+      'infrastructure_failure',
+      2,
+      [result.reason, unverified].filter(Boolean).join('; '),
+    )
   }
 
   report.baseline_p95_ms = result.baselineP95Ms
@@ -461,6 +475,9 @@ async function runCapacitySearch(state: CampaignState): Promise<Outcome> {
 
   if (result.bound === 'lower_bound') {
     report.budget_reached = budget
+  }
+  if (unverified.length > 0) {
+    return finishReport(state, 'infrastructure_failure', 2, unverified)
   }
 
   const comparison = result.bound === 'lower_bound' ? '>=' : '='
@@ -498,6 +515,7 @@ async function runCampaign(): Promise<Outcome> {
 
   try {
     const config = getCampaignConfig()
+    const startedAt = Date.now()
     const target =
       config.loadTarget === 'dev' ? await devTarget(process.env) : localTarget(process.env)
 
@@ -505,7 +523,7 @@ async function runCampaign(): Promise<Outcome> {
 
     const recovery = target.lockedUrls.length > 0 ? await recover(target) : null
 
-    state = makeCampaignState(config, target, recovery)
+    state = makeCampaignState(config, target, recovery, startedAt)
     return config.mode === 'capacity'
       ? await runCapacitySearch(state)
       : await runRegression(state)

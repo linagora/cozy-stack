@@ -1,7 +1,7 @@
 // Runs one exact amount of upload work and owns what must not differ between targets: the k6
 // deadline and interruption, content verification, cleanup of the run's own data and the point's
 // classification. Profiles (targets.ts) only prepare a target; upload-campaign.ts picks the work.
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
@@ -42,12 +42,13 @@ export interface Work {
   minimumSuccessRate: number
   p95LimitMs: number | null
   consistencyChunkSizeBytes: number
-  limitMs: number
+  // No k6 starts or keeps running past it.
+  deadline: number
 }
 export interface Point {
   result: PointResult
   corrupted: boolean
-  // Whatever left the point unverified: a timeout, an interruption or cleanup.
+  // What left the point unverified besides a timeout: an interruption, Docker or cleanup.
   problems: string[]
   reason: string
   metrics: UploadPointMetrics | null
@@ -95,44 +96,61 @@ export function trapInterrupts(): void {
 
 // docker compose run neither forwards a stop to k6 nor waits for it, so k6 containers are stopped
 // directly: k6 then finishes its teardown within 90 seconds. Docker keeps each container's
-// environment, so a run's identity outlives a killed coordinator.
+// environment, so a run's identity outlives a killed coordinator. An unreadable inventory throws:
+// a k6 left unseen may still be writing.
 function k6Containers(...env: string[]): string[] {
-  const docker = (...args: string[]) => spawnSync('docker', args, { encoding: 'utf8' }).stdout ?? ''
-  return docker('ps', '-q', '--filter', 'label=com.docker.compose.service=k6').split('\n').filter(Boolean)
-    .filter(id => {
-      const config = docker('inspect', '--format', '{{json .Config.Env}}', id)
-      return env.some(entry => config.includes(JSON.stringify(entry)))
-    })
+  const docker = (...args: string[]) => spawnSync('docker', args, { encoding: 'utf8' })
+  const failed = (what: string, result: SpawnSyncReturns<string>) =>
+    `docker ${what} failed: ${(result.stderr || result.error?.message || `exit ${result.status}`).trim().slice(0, 200)}`
+  const list = () => {
+    const result = docker('ps', '-q', '--filter', 'label=com.docker.compose.service=k6')
+    check(result.status === 0, failed('ps', result))
+    return result.stdout.split('\n').filter(Boolean)
+  }
+  return list().filter(id => {
+    const result = docker('inspect', '--format', '{{json .Config.Env}}', id)
+    if (result.status === 0) return env.some(entry => result.stdout.includes(JSON.stringify(entry)))
+    // A container that exited since the listing no longer runs k6.
+    check(!list().includes(id), failed(`inspect ${id}`, result))
+    return false
+  })
 }
 const stopContainers = (ids: string[]) => spawnSync('docker', ['stop', '--time', '90', ...ids], { stdio: 'ignore' })
 
 // make runs in its own process group: a stop before k6 starts ends make and docker compose.
-function runK6(args: string[], env: NodeJS.ProcessEnv, executionId: string, limitMs: number):
-  Promise<{ code: number, timedOut: boolean }> {
+// unverified says why the run's k6 containers could not be shown stopped.
+interface K6Run { code: number, timedOut: boolean, unverified: string | null }
+
+// make runs in its own process group: a stop before k6 starts ends make and docker compose.
+function runK6(args: string[], env: NodeJS.ProcessEnv, executionId: string, limitMs: number): Promise<K6Run> {
   return new Promise(resolve => {
     const child = spawn('make', args, { cwd: harness, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     child.stdout.pipe(process.stdout)
     child.stderr.pipe(process.stderr)
     const signal = (name: NodeJS.Signals) => { try { process.kill(-child.pid!, name) } catch {} }
     let timedOut = false
+    let unverified: string | null = null
+    const inventory = (): string[] => {
+      try { return k6Containers(`EXECUTION_ID=${executionId}`) } catch (error) { unverified = message(error); return [] }
+    }
     stopK6 = () => {
       stopK6 = () => {}
-      const ids = k6Containers(`EXECUTION_ID=${executionId}`)
+      const ids = inventory()
       if (ids.length) spawn('docker', ['stop', '--time', '90', ...ids], { stdio: 'ignore' })
       else signal('SIGTERM')
       setTimeout(() => signal('SIGKILL'), 120_000).unref()
     }
     const deadline = Number.isFinite(limitMs)
-      ? setTimeout(() => { timedOut = true; stopK6() }, Math.max(0, Math.min(limitMs, 2 ** 31 - 1)))
+      ? setTimeout(() => { timedOut = true; stopK6() }, Math.min(limitMs, 2 ** 31 - 1))
       : undefined
-    child.on('error', () => resolve({ code: 2, timedOut }))
+    child.on('error', () => resolve({ code: 2, timedOut, unverified }))
     child.on('close', code => {
       clearTimeout(deadline)
       stopK6 = () => {}
       // A container docker compose left behind still runs k6.
-      const left = k6Containers(`EXECUTION_ID=${executionId}`)
-      if (left.length) stopContainers(left)
-      resolve({ code: code ?? 2, timedOut })
+      const left = inventory()
+      if (left.length && stopContainers(left).status !== 0) unverified = `docker stop ${left.join(' ')} failed`
+      resolve({ code: code ?? 2, timedOut, unverified })
     })
   })
 }
@@ -188,15 +206,21 @@ export async function recover(target: Target): Promise<{ k6_stopped: string[], c
 export async function runExactWork(target: Target, work: Work): Promise<Point> {
   const summary = `data/results/${work.executionId}-summary.json`
   rmSync(`${harness}${summary}`, { force: true })
-  const limitMs = Math.min(work.limitMs, target.maxPointMs)
   const problems: string[] = []
-  let k6 = { code: 2, timedOut: false }
+  let k6: K6Run = { code: 2, timedOut: false, unverified: null }
+  let limitMs = 0
+  let started = false
   try {
     if (!interrupted) {
       const { token } = await target.session()
+      // Measured after the token request, whose time also counts against the deadline.
+      limitMs = Math.min(work.deadline - Date.now(), target.maxPointMs)
       // Checked again: a signal during the token request found no k6 to stop. -e: the target's
       // token must win over the local one cozy-prepare writes to the harness .env.
-      if (!interrupted) {
+      if (limitMs <= 0) {
+        k6.timedOut = true
+      } else if (!interrupted) {
+        started = true
         k6 = await runK6(['-e', '-o', 'node_modules/.load-ready', 'upload', `BASE_URL=${target.baseUrl}`,
           ...target.makeArgs, 'UPLOAD_MODE=iterations', `VUS=${work.vus}`, `ITERATIONS_PER_VU=${work.iterationsPerVu}`,
           `FILE_SIZE=${work.fileSize}`, `CONSISTENCY_CHUNK_SIZE_BYTES=${work.consistencyChunkSizeBytes}`,
@@ -216,8 +240,10 @@ export async function runExactWork(target: Target, work: Work): Promise<Point> {
     expectedIterations: work.vus * work.iterationsPerVu, metrics, minimumSuccessRate: work.minimumSuccessRate,
     p95LimitMs: work.p95LimitMs, runnerExitCode: k6.code, summaryFound: parsed !== null,
   })
-  if (k6.timedOut) problems.push(`k6 ran past its ${Math.round(limitMs / 1000)} s limit`)
+  const timeout = !k6.timedOut ? ''
+    : limitMs > 0 ? `k6 ran past its ${Math.round(limitMs / 1000)} s limit` : 'no time was left to start k6'
   if (interrupted) problems.push(`interrupted by ${interrupted}`)
+  if (k6.unverified) problems.push(`k6 containers could not be verified: ${k6.unverified}`)
 
   let cleanup: Cleanup | null = null
   try {
@@ -225,6 +251,9 @@ export async function runExactWork(target: Target, work: Work): Promise<Point> {
     if (stack) {
       cleanup = await reconcile(stack, `${OWNED}${work.fileSize.toLowerCase()}-${work.executionId}-`)
       if (cleanup.remaining.length) problems.push('test data remains after cleanup')
+    } else if (started && metrics?.cleanupRate !== 1) {
+      // Without a listing, only k6's own teardown shows that a started run left nothing.
+      problems.push('cleanup could not be verified')
     }
   } catch (error) {
     problems.push(`cleanup could not be verified: ${message(error)}`)
@@ -234,7 +263,7 @@ export async function runExactWork(target: Target, work: Work): Promise<Point> {
     // A mismatch stays a correctness failure even when cleanup also failed.
     corrupted: metrics?.consistencyRate != null && metrics.consistencyRate < 1,
     problems,
-    reason: [point.reason, ...problems].filter(Boolean).join('; '),
+    reason: [point.reason, timeout, ...problems].filter(Boolean).join('; '),
     metrics,
     k6: { exit_code: k6.code, timed_out: k6.timedOut },
     cleanup,
