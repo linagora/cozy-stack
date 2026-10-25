@@ -302,6 +302,16 @@ Shared drives can be tested in two modes:
    $ make cozy-shared-drive-ramp RAMP_LEVELS=1,2,4,8,16 RAMP_STEP_DURATION=1m
    ```
 
+   The ramp goes through the campaign runner ([Upload campaigns](#upload-campaigns)).
+   It creates or reuses the instance's `Load-Test Shared Drive`, stops k6 at
+   its deadline or on Ctrl-C, deletes the run's own
+   `twake-load-sd-<EXECUTION_ID>-*` directory in the drive, and adds what it
+   verified to the report. `make shared-drive-ramp` targets any `BASE_URL`;
+   `make dev-shared-drive-ramp` targets shared DEV, which requires `MAX_VUS`
+   (workers and readers at the highest level), `MAX_UPLOAD_BYTES` (writers
+   upload at most once a second) and `MAX_RUNTIME`, all checked before any
+   request. On DEV, the whole ramp must also fit in one 20-minute k6 run.
+
    Level L runs L writers, 3L WebSocket readers, and 2L changes readers
    (`RAMP_WRITERS_PER_LEVEL`, `RAMP_WS_READERS_PER_LEVEL`,
    `RAMP_CHANGES_READERS_PER_LEVEL`). Each level gets a 10s transition and
@@ -339,7 +349,9 @@ Shared drives can be tested in two modes:
    A level with missing metrics never counts as passed. The run stops early
    when more than half of the HTTP requests fail after the first 30 seconds.
 
-   A failing completed level is a result, not an error: k6 still exits with 0.
+   A failing completed level is a result, not an error: the runner exits 0 for
+   a bracket and 1 only when the first level fails. Leftover data, an
+   interruption or a missing report leaves the run inconclusive (exit 2).
    Cleanup failure (including an absent/empty cleanup metric) invalidates the
    report: `status: infrastructure_failure`, a cleanup `failure_reason`,
    `result_bound: inconclusive` and `max_sustained_level: null`. Raw per-level
@@ -622,6 +634,7 @@ make dev-upload MAX_VUS=1 MAX_UPLOAD_BYTES=1K MAX_RUNTIME=5m                   #
 make dev-upload VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m
 make dev-capacity FILE_SIZE=1M MAX_VUS=8 MAX_UPLOAD_BYTES=160M MAX_RUNTIME=30m \
   BASELINE_ITERATIONS=10 CONFIRMATION_ITERATIONS=20
+make dev-shared-drive-ramp MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m
 ```
 
 Each k6 run gets a fresh 30-minute instance token and is stopped after 20
@@ -635,8 +648,8 @@ mount it into any container that starts DEV work.
 A free lock does not prove DEV is idle: a killed runner can leave its k6
 container running. Before its first point, a DEV campaign stops any k6
 container whose target is a manifest instance, then deletes every
-`twake-load-*` directory in the instance root and trash, so a killed run is
-cleaned up by the next one. When Docker cannot list or inspect its k6
+`twake-load-*` directory in the instance root, the test drive (for the ramp)
+and the trash, so a killed run is cleaned up by the next one. When Docker cannot list or inspect its k6
 containers, the campaign exits 2 before touching any data. The report also records the k6 containers it
 stopped and the DEV monitoring link (`DEV_MONITORING_URL`, else `unknown`).
 

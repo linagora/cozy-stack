@@ -188,7 +188,7 @@ function classifyUploadCapacity(result: JsonRecord): StepOutcome {
     : completed
 }
 
-function classifyRamp(result: JsonRecord): StepOutcome {
+export function classifyRamp(result: JsonRecord): StepOutcome {
   if (result.status !== 'completed') {
     return { code: 2, reason: String(result.failure_reason ?? result.status ?? 'ramp report has no status') }
   }

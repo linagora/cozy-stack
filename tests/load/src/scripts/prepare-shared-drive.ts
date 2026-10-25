@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 
 import { getEnvironmentFilePath, saveEnvironmentFile } from './env.ts'
 
-const DEFAULT_DRIVE_NAME = 'Load-Test Shared Drive'
+export const DEFAULT_DRIVE_NAME = 'Load-Test Shared Drive'
 
 export interface SharedDriveInfo {
   sharingId: string

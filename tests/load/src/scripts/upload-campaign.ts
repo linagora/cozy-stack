@@ -1,9 +1,8 @@
 // Runs one upload campaign through the exact-work runner (upload/exact-work.ts) against a local or
 // shared DEV target (upload/targets.ts). MODE=regression runs one fixed workload; MODE=capacity
 // searches levels (capacity/search.ts). Both stay within the campaign's budgets (README, Upload campaigns).
-import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -29,6 +28,7 @@ import {
 import {
   harness as harnessDirectory,
   message,
+  readVersions,
   recover,
   runExactWork,
   trapInterrupts,
@@ -280,30 +280,6 @@ async function runUploadPoint(
   }
 
   return point
-}
-
-async function readVersions(target: Target): Promise<Record<string, string>> {
-  const output = (command: string, args: string[]): string =>
-    spawnSync(command, args, { cwd: harnessDirectory, encoding: 'utf8' }).stdout?.trim() || 'unknown'
-  const image = readFileSync(join(harnessDirectory, 'compose.yaml'), 'utf8')
-    .match(/image: (grafana\/k6:\S+)/)?.[1]
-  let stack = 'unknown'
-
-  try {
-    const { stack: client } = await target.session()
-    stack = (await client?.('GET', '/version', [200]))?.version ?? 'unknown'
-  } catch (_error: unknown) {
-    // Unknown metadata stays explicit.
-  }
-
-  return {
-    stack,
-    harness: output('git', ['describe', '--always', '--dirty']),
-    node: process.version,
-    k6_image: image
-      ? output('docker', ['image', 'inspect', '--format', '{{index .RepoDigests 0}}', image])
-      : 'unknown',
-  }
 }
 
 async function finishReport(

@@ -60,8 +60,7 @@ test('campaign steps record each producer exit that make itself reports as 2', a
   writeFileSync(nested, 'nested-upload-capacity:\n\t@$(MAKE) --no-print-directory -s -o node_modules/.load-ready upload-capacity\n')
   const steps: [string, string[], number][] = [
     ['upload-capacity', ['-f', 'Makefile', '-f', nested, 'nested-upload-capacity'], 1],
-    ['shared-drive-ramp', ['-o', 'upload-binary', '-o', 'observability-up', `COMPOSE=${producer}`,
-      'cozy-shared-drive-ramp'], 99],
+    ['shared-drive-ramp', ['-o', 'node_modules/.load-ready', 'cozy-shared-drive-ramp'], 1],
     ['org-drive-fanout', ['-o', 'node_modules/.load-ready', 'org-drive-fanout'], 2],
   ]
   for (const [name, args, code] of steps) await t.test(name, () => {

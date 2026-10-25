@@ -58,7 +58,7 @@ const defaultMaximumVirtualUsers: Record<UploadDataSize, number> = {
   '1G': 2,
 }
 
-function getPositiveInteger(environmentName: string, value: string): number {
+export function getPositiveInteger(environmentName: string, value: string): number {
   if (!/^[1-9][0-9]*$/.test(value)) {
     throw new Error(`${environmentName} must be a positive integer`)
   }
@@ -104,7 +104,7 @@ function getMinimumSuccessRate(value: string): number {
 }
 
 // 1024-based, like FILE_SIZE: 10M is 10 MiB.
-function getBytes(environmentName: string, value: string): number {
+export function getBytes(environmentName: string, value: string): number {
   const match = /^([1-9][0-9]*)([KMG]?)$/.exec(value)
 
   if (match === null) {
@@ -114,7 +114,7 @@ function getBytes(environmentName: string, value: string): number {
   return Number(match[1]) * 1024 ** ' KMG'.indexOf(match[2] || ' ')
 }
 
-function getDurationMs(environmentName: string, value: string): number {
+export function getDurationMs(environmentName: string, value: string): number {
   try {
     return parseDurationToMs(value)
   } catch (_error: unknown) {
