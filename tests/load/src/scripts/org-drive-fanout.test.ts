@@ -974,9 +974,10 @@ test('shared DEV checks its budget, identities and the warm-up before any write'
 
 test('shared DEV re-mints instance tokens before they expire', async t => {
   const f = await fixture(t)
-  // Ten thousand times faster: tokens age past their refresh window between levels.
+  // Each reading of the clock moves it five minutes on: tokens age past their refresh window between
+  // levels however fast the run is. Deadlines use the monotonic clock and are unaffected.
   const clock = join(await mkdtemp(join(tmpdir(), 'fanout-clock-')), 'clock.mjs')
-  await writeFile(clock, 'const real = Date.now, start = real()\nDate.now = () => start + (real() - start) * 10_000\n')
+  await writeFile(clock, 'let now = Date.now()\nDate.now = () => (now += 300_000)\n')
   t.after(() => rm(clock, { force: true }))
   const result = await f.devRun({}, { preload: clock })
   equal(result.code, 0, result.stderr)
