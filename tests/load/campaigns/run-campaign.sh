@@ -166,11 +166,16 @@ if [ "${SHARED_DEV:-}" = 1 ]; then
   exec 9>> "$DEV_LOCK_FILE" || exit 2
   flock -n 9 || { echo "Shared DEV is busy: another run holds $DEV_LOCK_FILE" >&2; exit 2; }
   export DEV_LOCK_HELD=$DEV_LOCK_FILE
-  echo "shared_dev=1" >> "$RUN_DIR/environment.txt"
+  # The local Stack's topology and limits say nothing about shared DEV; later keys win.
+  echo "topology=shared-dev" >> "$RUN_DIR/environment.txt"
 fi
 campaign
 
-echo "limits=$(effective_limits)" >> "$RUN_DIR/environment.txt"
+if [ "${SHARED_DEV:-}" = 1 ]; then
+  echo "limits=not measured on shared DEV" >> "$RUN_DIR/environment.txt"
+else
+  echo "limits=$(effective_limits)" >> "$RUN_DIR/environment.txt"
+fi
 [ -z "$INTERRUPTED" ] || echo "interrupted=$INTERRUPTED" >> "$RUN_DIR/environment.txt"
 ./node_modules/.bin/tsx src/scripts/campaign-summary.ts "$RUN_DIR"
 outcome=$?
