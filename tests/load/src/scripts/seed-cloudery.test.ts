@@ -20,7 +20,8 @@ async function fixture(t: TestContext) {
   for (const fqdn of unrelated) instances.set(fqdn, { _id: randomUUID(), fqdn })
   const state = {
     instances, used: new Set<string>(), orgs: new Set<string>(), mints: [] as string[], created: [] as string[],
-    adminCalls: 0, failWorkflow: '', untrusting: '', foreign: '',
+    released: [] as string[],
+    adminCalls: 0, failWorkflow: '', untrusting: '', foreign: '', corrupt: false,
   }
   const workflows = new Map<string, { polls: number, fqdn: string, done: () => void }>()
   const tokens = new Map<string, string>()
@@ -81,7 +82,7 @@ async function fixture(t: TestContext) {
         } })
         return send(200, { workflow: `wf-del-${id}` })
       }
-      if (route === 'DELETE api/v2/fqdns') return state.used.delete(id), send(200)
+      if (route === 'DELETE api/v2/fqdns') return state.used.delete(id), state.released.push(id), send(200)
       if (route === 'POST api/public/instances' && parts[5] === 'token') {
         if (!instances.has(id)) return send(404)
         const token = `token-${tokens.size}`
@@ -141,7 +142,7 @@ async function fixture(t: TestContext) {
       files.set(id, body)
       return send(201, { data: { id } })
     }
-    if (route.startsWith('GET /files/download/')) return send(200, files.get(parts[3]!))
+    if (route.startsWith('GET /files/download/')) return send(200, state.corrupt ? 'other bytes' : files.get(parts[3]!))
     if (route.startsWith('DELETE /files/')) return send(200, {})
     send(500)
   })
@@ -215,7 +216,7 @@ test('a failed creation workflow fails the seed', async t => {
   const f = await fixture(t)
   f.state.failWorkflow = member(2)
   const result = await f.run('seed')
-  equal(result.code, 1)
+  equal(result.code, 2)
   match(result.output, /seedtest02\.dev\.example\.test: workflow wf-\S+ failed/)
 })
 
@@ -223,7 +224,7 @@ test('a fixture name the Cloudery already reserved fails instead of being adopte
   const f = await fixture(t)
   f.state.used.add(member(1))
   const result = await f.run('seed')
-  equal(result.code, 1)
+  equal(result.code, 2)
   match(result.output, /POST \/api\/v1\/instances: HTTP 409 seedtest01\.dev\.example\.test is already taken/)
 })
 
@@ -232,7 +233,7 @@ test('an instance with a fixture name but another organization is not adopted', 
   f.state.instances.set(member(1), { _id: randomUUID(), fqdn: member(1) })
   f.state.foreign = member(1)
   const result = await f.run('seed')
-  equal(result.code, 1)
+  equal(result.code, 2)
   match(result.output, /seedtest01\.dev\.example\.test is not the Cloudery instance of organization seedtest/)
   ok(!f.state.created.includes(member(1)))
 })
@@ -241,8 +242,16 @@ test('a member that does not trust the organization instance fails the warm-up',
   const f = await fixture(t)
   f.state.untrusting = member(2)
   const result = await f.run('seed')
-  equal(result.code, 1)
+  equal(result.code, 2)
   match(result.output, /seedtest02\.dev\.example\.test is not warmed up/)
+})
+
+test('only a smoke that reads back different content is a correctness failure', async t => {
+  const f = await fixture(t)
+  f.state.corrupt = true
+  const result = await f.run('seed')
+  equal(result.code, 1)
+  match(result.output, /seedtest01\.dev\.example\.test: the 1 KiB smoke read back different content/)
 })
 
 test('teardown deletes only fixture instances and releases their names', async t => {
@@ -256,4 +265,18 @@ test('teardown deletes only fixture instances and releases their names', async t
   const again = await f.run('seed')
   equal(again.code, 0, again.output)
   equal(f.state.adminCalls, 0)
+})
+
+test('another organization\'s instance with a fixture name is never recorded, deleted or released', async t => {
+  const f = await fixture(t)
+  f.state.instances.set(member(9), { _id: randomUUID(), fqdn: member(9) })
+  f.state.foreign = member(9)
+  equal((await f.run('seed')).code, 0)
+  ok(!f.manifest().instances.some((i: any) => i.fqdn === member(9)))
+  // Any member count: names are released from verified identities, never from the naming scheme.
+  const result = await f.run('teardown', { SEED_USERS: '9' })
+  equal(result.code, 2, result.output)
+  match(result.output, /Kept instances not verified as organization seedtest: seedtest09\.dev\.example\.test/)
+  deepEqual([...f.state.instances.keys()], [...unrelated, member(9)])
+  deepEqual(f.state.released.sort(), [org, member(1), member(2), member(3)].sort())
 })

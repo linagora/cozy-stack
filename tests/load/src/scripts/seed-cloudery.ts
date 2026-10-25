@@ -1,7 +1,7 @@
 // Seeds a long-lived organization through the Cloudery partner API, for shared environments whose
 // Stack admin API is internal (DEV). It never calls the Stack admin API. See SEEDING.md (Cloudery).
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import { FixtureError, request } from './fixture-http.ts'
@@ -11,6 +11,9 @@ const WARMUP = 'Load-test warm-up'
 
 interface CloudInstance { _id: string, fqdn: string, deleting_at?: string | null }
 interface Member { instance?: string, email?: string }
+interface Recorded { fqdn: string, uuid: string }
+// Exit 1 is reserved for proven correctness failures; everything else exits 2.
+class CorrectnessError extends Error {}
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new FixtureError(message)
@@ -100,12 +103,30 @@ async function main(): Promise<void> {
     check(Array.isArray(page.items) && page.items.length === page.count, 'Partner instances span several pages')
     return new Map((page.items as CloudInstance[]).filter(i => fixtureName.test(i.fqdn)).map(i => [i.fqdn, i]))
   }
+  // A matching name alone may belong to another organization: the Stack must confirm both identities.
+  const owned = async (item: CloudInstance): Promise<boolean> => {
+    const attributes = (await stack(item.fqdn, 'GET', '/settings/instance', [200])).data?.attributes
+    return attributes?.org_id === prefix && attributes.uuid === item._id
+  }
+  const manifest = setting('SEED_CLOUDERY_MANIFEST', `data/results/${prefix}-cloudery-fixture.json`)
 
   if (command === 'teardown') {
+    // The seed's manifest lists the identities it verified; it vouches for instances already being deleted.
+    const record = existsSync(manifest) ? parse(readFileSync(manifest, 'utf8')) : { instances: [] }
+    check(Array.isArray(record.instances) && (!record.organization || record.organization === prefix),
+      `${manifest} is not the manifest of organization ${prefix}`)
+    const recorded: Recorded[] = record.instances
+    const isRecorded = (i: CloudInstance) => recorded.some(r => r.fqdn === i.fqdn && r.uuid === i._id)
     const listed = [...(await fixtureInstances()).values()]
     // Members first: the organization instance owns the warm-up drive.
     listed.sort((a, b) => Number(a.fqdn === orgHost) - Number(b.fqdn === orgHost))
+    const deleted: string[] = []
+    const kept: string[] = []
     for (const item of listed) {
+      if (!(item.deleting_at ? isRecorded(item) : await owned(item))) {
+        kept.push(item.fqdn)
+        continue
+      }
       if (!item.deleting_at) {
         const { workflow: id } = await cloudery('DELETE', `/api/v1/instances/${item._id}?user_request=false`, [200])
         await workflow(id, item.fqdn)
@@ -114,11 +135,15 @@ async function main(): Promise<void> {
       await poll(`${item.fqdn} deletion`, async () =>
         (await cloudery('GET', `/api/v1/instances/${item._id}`, [200, 404]))._id ? undefined : true)
       console.log(`Deleted ${item.fqdn}`)
+      deleted.push(item.fqdn)
     }
     // The Cloudery reserves a deleted FQDN for good; releasing it lets a later seed reuse the name.
-    for (const name of new Set([...listed.map(i => i.fqdn), orgHost, ...memberHosts])) {
+    // Only names this run deleted, or recorded ones no longer in use, are ours to release.
+    const free = recorded.map(r => r.fqdn).filter(name => !listed.some(i => i.fqdn === name))
+    for (const name of new Set([...deleted, ...free])) {
       await cloudery('DELETE', `/api/v2/fqdns/${name}`, [200])
     }
+    check(!kept.length, `Kept instances not verified as organization ${prefix}: ${kept.join(', ')}`)
     console.log(`Organization ${prefix} kept: the Cloudery has no route to delete it`)
     return
   }
@@ -152,10 +177,11 @@ async function main(): Promise<void> {
   for (const [name, id] of creating) await workflow(id, name)
 
   const listed = await fixtureInstances()
+  const verified: CloudInstance[] = []
   for (const name of [orgHost, ...memberHosts]) {
-    const attributes = (await stack(name, 'GET', '/settings/instance', [200])).data?.attributes
-    check(attributes?.org_id === prefix && attributes.uuid === listed.get(name)?._id,
-      `${name} is not the Cloudery instance of organization ${prefix}`)
+    const item = listed.get(name)
+    check(item && await owned(item), `${name} is not the Cloudery instance of organization ${prefix}`)
+    verified.push(item)
   }
 
   // Warm-up: accepting one drive from the organization instance makes it a trusted contact, so
@@ -197,16 +223,15 @@ async function main(): Promise<void> {
     const file = await stack(memberHosts[0], 'POST',
       `/files/io.cozy.files.root-dir?Type=file&Name=seed-smoke-${Date.now()}.txt`, [201], content, 'text/plain')
     const read = await stackText(memberHosts[0], 'GET', `/files/download/${file.data.id}`, [200])
-    check(read === content, `${memberHosts[0]}: the 1 KiB smoke read back different content`)
+    if (read !== content) throw new CorrectnessError(`${memberHosts[0]}: the 1 KiB smoke read back different content`)
     await stack(memberHosts[0], 'DELETE', `/files/${file.data.id}`, [200])
     console.log(`Smoke passed on ${memberHosts[0]}`)
   }
 
-  const manifest = setting('SEED_CLOUDERY_MANIFEST', `data/results/${prefix}-cloudery-fixture.json`)
   mkdirSync(dirname(manifest), { recursive: true })
   writeFileSync(manifest, `${JSON.stringify({
     domain, organization: prefix, warmup_sharing_id: sid,
-    instances: [...listed.values()].map(i => ({
+    instances: verified.map(i => ({
       fqdn: i.fqdn, uuid: i._id, role: i.fqdn === orgHost ? 'organization' : 'member',
     })),
   }, null, 2)}\n`, { mode: 0o600 })
@@ -215,5 +240,5 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : 'Seed command failed')
-  process.exitCode = 1
+  process.exitCode = error instanceof CorrectnessError ? 1 : 2
 })
