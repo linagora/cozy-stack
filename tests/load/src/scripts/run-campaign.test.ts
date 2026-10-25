@@ -265,7 +265,7 @@ test('a shared DEV campaign holds the lock once, through steps that reuse it', a
   equal(run.code, 0, run.log)
   equal(outside, 2)
   deepEqual(run.targets, ['dev-capacity', 'dev-shared-drive-ramp', 'dev-org-drive-fanout'])
-  match(run.summary, /- Outcome: 0 \(completed\)/)
+  match(run.summary, /- Outcome: 0 \(completed\)\n- Topology: shared-dev\n.*\n- Limits: not measured on shared DEV/)
 })
 
 test('a shared DEV campaign does not start while another run holds the lock', async t => {
