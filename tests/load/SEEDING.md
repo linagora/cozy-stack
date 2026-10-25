@@ -26,11 +26,13 @@ and the prefix private.
 ```sh
 export SEED_CLOUDERY_TOKEN_FILE=~/private/cloudery-token.json
 export SEED_CLOUDERY_DOMAIN=<instance domain> SEED_CLOUDERY_PREFIX=<prefix>
-make seed-org SEED_USERS=20   # <prefix>org and members <prefix>01..20
+make seed-org SEED_USERS=20   # organization <prefix> and members <prefix>01..20
 make seed-org-cleanup         # deletes them; the organization record stays
 ```
 
-Re-runs reuse existing instances and add missing members. Only names built from
+The organization instance is named after the organization ID: that is how the
+Stack recognizes an organization's own instance, whose drives are organization
+drives. Re-runs reuse existing instances and add missing members. Only names built from
 the prefix are reused, recorded or deleted, and only after the Stack confirms
 their organization and UUID. Teardown keeps any other match and exits 2, and
 releases only the names of instances it deleted or the manifest recorded. A

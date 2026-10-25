@@ -10,9 +10,9 @@ import { fileURLToPath } from 'node:url'
 
 const script = fileURLToPath(new URL('./seed-cloudery.ts', import.meta.url))
 const domain = 'dev.example.test'
-const org = `seedtestorg.${domain}`
+const org = `seedtest.${domain}`
 const member = (i: number) => `seedtest${String(i).padStart(2, '0')}.${domain}`
-const unrelated = [`other01.${domain}`, `seedtestx01.${domain}`, 'seedtest01.other.test']
+const unrelated = [`other01.${domain}`, `seedtestx01.${domain}`, `seedtestorg.${domain}`, 'seedtest01.other.test']
 
 // One server plays the Cloudery (/api/...) and every Stack instance (by Host).
 async function fixture(t: TestContext) {
@@ -105,7 +105,7 @@ async function fixture(t: TestContext) {
       if (route === 'GET /sharings/drives') return send(200, { data: drive ? [drive] : [] })
       if (route === 'POST /sharings/drives') {
         drive = { id: 'warmup', attributes: { owner: true, description: JSON.parse(body).data.attributes.description,
-          members: [{ instance: `https://${org}/`, email: 'seedtestorg@example.com' }] } }
+          members: [{ instance: `https://${org}/`, email: 'seedtest@example.com' }] } }
         return send(201, { data: drive })
       }
       if (route === `GET /sharings/${sid}`) return send(200, { data: drive })
@@ -130,7 +130,7 @@ async function fixture(t: TestContext) {
     if (route === `POST /sharings/drives/${sid}/accept` && pending.has(host)) {
       pending.set(host, true)
       if (host !== state.untrusting) {
-        contacts.set(host, [{ email: [{ address: 'seedtestorg@example.com' }], trustedForSharing: true }])
+        contacts.set(host, [{ email: [{ address: 'seedtest@example.com' }], trustedForSharing: true }])
       }
       return send(200, {})
     }
@@ -261,7 +261,7 @@ test('teardown deletes only fixture instances and releases their names', async t
   equal(result.code, 0, result.output)
   deepEqual([...f.state.instances.keys()], unrelated)
   deepEqual([...f.state.used], [])
-  match(result.output, /Deleted seedtest03[^]*Deleted seedtestorg[^]*Organization seedtest kept/)
+  match(result.output, /Deleted seedtest03[^]*Deleted seedtest\.dev[^]*Organization seedtest kept/)
   const again = await f.run('seed')
   equal(again.code, 0, again.output)
   equal(f.state.adminCalls, 0)

@@ -54,10 +54,12 @@ async function main(): Promise<void> {
   const stackOrigin = process.env.SEED_STACK_URL
 
   const host = (slug: string) => `${slug}.${domain}`
-  const orgHost = host(`${prefix}org`)
+  // The Stack treats an instance as its organization's own only when its first label is the
+  // organization ID: only then are its drives organization drives.
+  const orgHost = host(prefix)
   const memberHosts = Array.from({ length: users }, (_, i) => host(`${prefix}${String(i + 1).padStart(2, '0')}`))
   // The prefix guard: nothing but these exact names is ever adopted or deleted.
-  const fixtureName = new RegExp(`^${prefix}(org|\\d{2,})\\.${domain.replaceAll('.', '\\.')}$`)
+  const fixtureName = new RegExp(`^${prefix}(\\d{2,})?\\.${domain.replaceAll('.', '\\.')}$`)
 
   const send = async (url: URL, headers: Record<string, string>, method: string, ok: number[], body = '') => {
     const reply = await request(url, method, { Accept: 'application/json', ...headers }, timeout, body, 8 << 20)
