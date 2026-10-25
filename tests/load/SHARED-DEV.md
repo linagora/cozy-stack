@@ -78,8 +78,6 @@ The deployed Stack version is in the private reports
 For the DEV owner's agreement before any performance gate:
 
 - Keep gating on correctness, completed work and verified cleanup, as now.
-- After at least ten repeats at different times of day, gate 2 × 5 × 1 MiB on
-  an upload median under 1 s and a p95 under 2 s, about twice the slowest run so
-  far.
-- Give the runner DEV monitoring links before raising budgets or starting a
-  capacity search.
+- Leave latency observational. Repeated or scheduled regression runs wait until
+  capacity has been measured; a latency gate can then come from those results.
+- Record the DEV Grafana links with each run once the runner has them.
