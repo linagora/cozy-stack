@@ -145,10 +145,12 @@ org-drive-fanout: $(NODE_MODULES_MARKER)
 
 .PHONY: dev-upload
 # One shared DEV run at a time: every checkout, user and container on the runner locks this path.
+# node --import tsx keeps the runner in the process holding the lock; the tsx CLI would run it in a
+# child that outlives its killed parent.
 DEV_LOCK_FILE ?= /tmp/cozy-load-shared-dev.lock
 dev-upload: $(NODE_MODULES_MARKER)
 	@VUS="$(VUS)" ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" FILE_SIZE="$(FILE_SIZE)" EXECUTION_ID="$(EXECUTION_ID)" \
-		bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)" $(NODE_BIN)/tsx src/scripts/dev-upload.ts
+		bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)" node --import tsx src/scripts/dev-upload.ts
 
 .PHONY: fixture-up fixture-snapshot fixture-restore fixture-discard
 fixture-up fixture-discard: $(NODE_MODULES_MARKER)

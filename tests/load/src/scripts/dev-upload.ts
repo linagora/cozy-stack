@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import { getUploadDataSizeBytes, isUploadDataSize } from '../fixtures/upload-sizes.ts'
 import { buildGrafanaLink } from './campaign-summary.ts'
-import { classifyUploadPoint, readUploadPointMetrics } from './capacity/upload-point.ts'
+import { classifyUploadPoint, hasContentMismatch, readUploadPointMetrics } from './capacity/upload-point.ts'
 import { FixtureError, request } from './fixture-http.ts'
 
 // Raise these only with the DEV owner's agreement. Each phase is bounded, so one 30-minute
@@ -52,13 +52,18 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   })
 }
 
-// docker compose run neither forwards a stop to k6 nor waits for it, so this run's k6 container is
-// stopped directly: k6 then finishes its teardown within 90 seconds.
-function k6Containers(executionId: string): string[] {
+// docker compose run neither forwards a stop to k6 nor waits for it, so k6 containers are stopped
+// directly: k6 then finishes its teardown within 90 seconds. Docker keeps each container's
+// environment, so a run's identity outlives a killed coordinator.
+function k6Containers(...env: string[]): string[] {
   const docker = (...args: string[]) => spawnSync('docker', args, { encoding: 'utf8' }).stdout ?? ''
   return docker('ps', '-q', '--filter', 'label=com.docker.compose.service=k6').split('\n').filter(Boolean)
-    .filter(id => docker('inspect', '--format', '{{json .Config.Env}}', id).includes(`"EXECUTION_ID=${executionId}"`))
+    .filter(id => {
+      const config = docker('inspect', '--format', '{{json .Config.Env}}', id)
+      return env.some(entry => config.includes(JSON.stringify(entry)))
+    })
 }
+const stopContainers = (ids: string[]) => spawnSync('docker', ['stop', '--time', '90', ...ids], { stdio: 'ignore' })
 
 // make runs in its own process group: a stop before k6 starts ends make and docker compose.
 function runK6(args: string[], env: NodeJS.ProcessEnv, executionId: string): Promise<{ code: number, timedOut: boolean }> {
@@ -70,7 +75,7 @@ function runK6(args: string[], env: NodeJS.ProcessEnv, executionId: string): Pro
     let timedOut = false
     stopK6 = () => {
       stopK6 = () => {}
-      const ids = k6Containers(executionId)
+      const ids = k6Containers(`EXECUTION_ID=${executionId}`)
       if (ids.length) spawn('docker', ['stop', '--time', '90', ...ids], { stdio: 'ignore' })
       else signal('SIGTERM')
       setTimeout(() => signal('SIGKILL'), 120_000).unref()
@@ -81,8 +86,8 @@ function runK6(args: string[], env: NodeJS.ProcessEnv, executionId: string): Pro
       clearTimeout(deadline)
       stopK6 = () => {}
       // A container docker compose left behind still runs k6.
-      const left = k6Containers(executionId)
-      if (left.length) spawnSync('docker', ['stop', '--time', '90', ...left], { stdio: 'ignore' })
+      const left = k6Containers(`EXECUTION_ID=${executionId}`)
+      if (left.length) stopContainers(left)
       resolve({ code: code ?? 2, timedOut })
     })
   })
@@ -104,8 +109,9 @@ async function main(): Promise<number> {
   const secrets = parse(readFileSync(setting('SEED_CLOUDERY_TOKEN_FILE'), 'utf8'))
   check(secrets.public && secrets.manager_url, 'The token file needs public and manager_url')
 
-  const call = async (url: URL, method: string, ok: number[], headers: Record<string, string>, body = '') => {
-    const reply = await request(url, method, { Accept: 'application/json', ...headers }, REQUEST_MS, body, 8 << 20)
+  const call = async (url: URL, method: string, ok: number[], headers: Record<string, string>, body = '',
+    timeout = REQUEST_MS) => {
+    const reply = await request(url, method, { Accept: 'application/json', ...headers }, timeout, body, 8 << 20)
     check(ok.includes(reply.status), `${method} ${url.pathname}: HTTP ${reply.status} ${reply.body.slice(0, 200)}`)
     return parse(reply.body)
   }
@@ -114,18 +120,21 @@ async function main(): Promise<number> {
     JSON.stringify({ audience: 'cli', scope: 'io.cozy.files io.cozy.settings' }))
   check(typeof token === 'string' && token, `Invalid token for ${fqdn}`)
   // DEV_STACK_URL is a connection origin for tests; the instance stays the Host.
-  const stack = (method: string, path: string, ok: number[]) =>
-    call(new URL(path, process.env.DEV_STACK_URL || `https://${fqdn}`), method, ok,
-      { Host: fqdn, Authorization: `Bearer ${token}` })
+  const stack = (method: string, path: string, ok: number[], deadline = Infinity) => {
+    const left = Math.min(REQUEST_MS, deadline - Date.now())
+    check(left > 0, `cleanup exceeded its ${LIMITS.cleanupMs / 60_000} minute budget`)
+    return call(new URL(path, process.env.DEV_STACK_URL || `https://${fqdn}`), method, ok,
+      { Host: fqdn, Authorization: `Bearer ${token}` }, '', left)
+  }
 
   const settings = (await stack('GET', '/settings/instance', [200])).data?.attributes
   check(settings?.uuid === entry.uuid, `${fqdn} is no longer the fixture instance in the manifest`)
 
-  const owned = async (): Promise<Owned[]> => {
+  const owned = async (deadline: number): Promise<Owned[]> => {
     const found: Owned[] = []
     for (const [path, trashed] of [['/files/io.cozy.files.root-dir', false], ['/files/trash', true]] as const) {
       for (let next: string | undefined = `${path}?page[limit]=100`; next;) {
-        const page = await stack('GET', next, [200])
+        const page = await stack('GET', next, [200], deadline)
         // A directory lists its children in included, the trash in data.
         for (const item of (Array.isArray(page.data) ? page.data : page.included) ?? []) {
           if (item.attributes?.name?.startsWith(OWNED)) found.push({ id: item.id, name: item.attributes.name, trashed })
@@ -135,24 +144,33 @@ async function main(): Promise<number> {
     }
     return found
   }
-  // Destroys every owned directory, in the root or the trash, then lists what remains.
+  // Destroys every owned directory, in the root or the trash, then lists what remains. Every
+  // request shares the cleanup budget: running out throws, which leaves the run inconclusive.
   const reconcile = async () => {
     const deadline = Date.now() + LIMITS.cleanupMs
     const cleaned: string[] = []
-    for (const item of await owned()) {
+    for (const item of await owned(deadline)) {
       if (Date.now() > deadline) break
       try {
-        if (!item.trashed) await stack('DELETE', `/files/${item.id}`, [200])
-        await stack('DELETE', `/files/trash/${item.id}`, [204])
+        if (!item.trashed) await stack('DELETE', `/files/${item.id}`, [200], deadline)
+        await stack('DELETE', `/files/trash/${item.id}`, [204], deadline)
         cleaned.push(item.name)
       } catch (error) {
         console.error(message(error))
       }
     }
-    return { cleaned, remaining: (await owned()).map(({ id, name }) => ({ id, name })) }
+    return { cleaned, remaining: (await owned(deadline)).map(({ id, name }) => ({ id, name })) }
   }
 
-  // An earlier run may have been killed before its cleanup.
+  // A killed coordinator frees the lock but not its k6 container: stop any k6 still loading DEV
+  // before touching its data. An earlier run may also have been killed before its cleanup.
+  const devTargets = (fixture.instances as Array<{ fqdn: string }>).map(i => `BASE_URL=https://${i.fqdn}`)
+  const stopped = k6Containers(...devTargets)
+  if (stopped.length) {
+    console.error(`Stopping k6 left running by an earlier DEV run: ${stopped.join(' ')}`)
+    stopContainers(stopped)
+    check(!k6Containers(...devTargets).length, 'k6 from an earlier DEV run is still running')
+  }
   const before = await reconcile()
   check(before.remaining.length === 0, `Earlier test data remains on ${fqdn}: ${JSON.stringify(before.remaining)}`)
   const summaryPath = `data/results/${executionId}-summary.json`
@@ -175,8 +193,10 @@ async function main(): Promise<number> {
     expectedIterations: vus * iterations, metrics, minimumSuccessRate: 1, p95LimitMs: null,
     runnerExitCode: k6.code, summaryFound: summary !== null,
   })
-  // A proven correctness failure keeps exit 1; anything else unfinished makes the run inconclusive.
-  let outcome = point.result === 'passed' ? 0 : point.result === 'failed' ? 1 : 2
+  // A proven correctness failure keeps exit 1, even when cleanup also failed; anything else
+  // unfinished makes the run inconclusive.
+  const corrupted = hasContentMismatch([{ consistency_rate: metrics?.consistencyRate }])
+  let outcome = corrupted || point.result === 'failed' ? 1 : point.result === 'passed' ? 0 : 2
   const reasons = [point.reason]
   const inconclusive = (reason: string) => {
     reasons.push(reason)
@@ -211,7 +231,7 @@ async function main(): Promise<number> {
       dev: process.env.DEV_MONITORING_URL || 'unknown',
     },
     k6: { exit_code: k6.code, timed_out: k6.timedOut, summary: summaryPath, metrics },
-    cleanup: { before: before.cleaned, after: after?.cleaned ?? 'unknown', remaining: after?.remaining ?? 'unknown' },
+    cleanup: { k6_stopped: stopped, before: before.cleaned, after: after?.cleaned ?? 'unknown', remaining: after?.remaining ?? 'unknown' },
   }, null, 2)}\n`)
   console.log(`Shared DEV upload outcome ${outcome}${reasons.some(Boolean) ? ` (${reasons.filter(Boolean).join('; ')})` : ''}: ${report}`)
   return outcome
