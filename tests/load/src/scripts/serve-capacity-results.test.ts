@@ -280,3 +280,17 @@ test('recognized report files still require a JSON object', t => {
   }
   assert.deepEqual(readResults(dir).counts, { valid: 0, invalid: 4, unsupported: 0 })
 })
+
+test('regression reports are read, timed by their own record outside a campaign', t => {
+  const dir = directory(t)
+  writeFileSync(join(dir, 'reg-upload-regression.json'), JSON.stringify({
+    campaign_id: 'reg', mode: 'regression', status: 'completed', outcome: 0,
+    started_at: '2026-10-25T13:52:08.000Z', ended_at: '2026-10-25T13:52:13.000Z', attempts: [],
+  }))
+  const snapshot = readResults(dir)
+  assert.deepEqual(snapshot.counts, { valid: 1, invalid: 0, unsupported: 0 })
+  assert.equal(snapshot.reports[0]?.run, 'reg')
+  assert.equal(snapshot.reports[0]?.kind, 'upload')
+  assert.equal(snapshot.reports[0]?.startedAt, Date.parse('2026-10-25T13:52:08Z') / 1000)
+  assert.equal(snapshot.reports[0]?.endedAt, Date.parse('2026-10-25T13:52:13Z') / 1000)
+})

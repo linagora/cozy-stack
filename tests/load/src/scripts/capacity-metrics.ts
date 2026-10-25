@@ -27,6 +27,12 @@ function record(value: unknown): Record<string, unknown> {
     ? value as Record<string, unknown> : {}
 }
 
+// A regression run's verdict, by its recorded status; it never claims a capacity.
+const regressionVerdicts: Record<string, string> = {
+  completed: 'passed', regression_failure: 'failed', correctness_failure: 'failed',
+  infrastructure_failure: 'inconclusive', running: 'running',
+}
+
 function numbers(source: Record<string, unknown>, mapping: Record<string, string>): Record<string, number> {
   return Object.fromEntries(Object.entries(mapping).flatMap(([metric, key]) =>
     finite(source[key]) ? [[metric, source[key]]] : []))
@@ -107,19 +113,49 @@ export function renderMetrics(
       }
     }
     const running = data.status === 'running'
+    const regression = kind === 'upload' && data.mode === 'regression'
+    if (regression) lower = upper = undefined
+    // A runner that could not verify a run keeps the bound it measured, shown only as evidence.
+    let evidence: { lower: number, upper?: number | undefined, exact: boolean } | undefined
+    const capacity = record(data.capacity)
+    if (!regression && lower === undefined) {
+      if (kind === 'upload' && data.status === 'infrastructure_failure' && integer(data.maximum_concurrent_uploads)) {
+        evidence = { lower: data.maximum_concurrent_uploads, exact: data.result_bound === 'exact' }
+      } else if (kind === 'shared_drive' && ['completed', 'infrastructure_failure'].includes(String(data.status)) &&
+          integer(data.max_sustained_level)) {
+        const failed = integer(data.first_failed_level) && data.first_failed_level > data.max_sustained_level
+        evidence = { lower: data.max_sustained_level, upper: failed ? data.first_failed_level as number : undefined, exact: false }
+      } else if (kind === 'fanout' && data.status === 'inconclusive' && integer(capacity.lower)) {
+        const bracket = capacity.kind === 'bracket' && integer(capacity.upper_exclusive) &&
+          capacity.upper_exclusive > capacity.lower
+        evidence = { lower: capacity.lower, upper: bracket ? capacity.upper_exclusive as number : undefined, exact: false }
+      }
+    }
+    const describe = (low: number, high: number | undefined, exact: boolean) =>
+      high !== undefined ? `[${low}, ${high})` : exact ? `= ${low}` : `>= ${low}`
+    const verdict = regression ? regressionVerdicts[String(data.status)] : undefined
     emit('result_info', {
       ...base,
       scope: kind === 'fanout' ? 'recipients' : kind === 'shared_drive' ? 'activity_mix' : 'upload_workers',
-      status: running ? 'running' : lower === undefined ? 'inconclusive' : 'completed', bound,
-      result: running ? 'Running' : lower === undefined ? 'Inconclusive'
-        : bound === 'bracket' ? `[${lower}, ${upper})` : bound === 'exact' ? `= ${lower}` : `>= ${lower}`,
+      status: regression ? verdict ?? 'inconclusive'
+        : running ? 'running' : lower === undefined ? 'inconclusive' : 'completed',
+      bound: regression ? 'none' : bound,
+      result: regression ? (verdict ?? 'inconclusive').replace(/^./, c => c.toUpperCase())
+        : running ? 'Running' : lower === undefined ? 'Inconclusive' : describe(lower, upper, bound === 'exact'),
       file_size: allowed(data.file_size, ['1K', '100K', '1M', '10M', '100M', '1G'], 'n/a'),
       upload_target: allowed(data.upload_target, ['shared-drive', 'personal'], 'n/a'),
-      reason: lower === undefined ? 'missing_result' : 'recorded',
+      reason: (regression ? verdict === undefined : lower === undefined) ? 'missing_result' : 'recorded',
+      // Recorded by the producer: legacy reports show an unknown environment and outcome.
+      load_target: allowed(data.load_target, ['local', 'dev'], 'unknown'),
+      mode: allowed(data.mode, ['capacity', 'regression'], 'capacity'),
+      outcome: [0, 1, 2].includes(data.outcome as number) ? String(data.outcome) : 'unknown',
+      evidence: evidence === undefined ? 'none' : describe(evidence.lower, evidence.upper, evidence.exact),
     }, 1)
     emit('result_timestamp_seconds', base, timestamp)
     emit('capacity_lower', base, lower)
     emit('capacity_upper', base, upper)
+    emit('capacity_evidence_lower', base, evidence?.lower)
+    emit('capacity_evidence_upper', base, evidence?.upper)
     emit('result_value', { ...base, metric: 'started_at_seconds' }, startedAt)
     emit('result_value', { ...base, metric: 'ended_at_seconds' }, endedAt)
     const plan = record(data.plan)
@@ -160,12 +196,12 @@ export function renderMetrics(
       const load = kind === 'upload' ? point.vus : kind === 'shared_drive' ? point.level : point.n
       if (!integer(load) || load === 0) return
       const phase = kind === 'upload' ? allowed(point.phase,
-        ['baseline', 'discovery', 'discovery-retry', 'discovery-decider', 'confirmation'], 'unknown')
+        ['baseline', 'discovery', 'discovery-retry', 'discovery-decider', 'confirmation', 'regression'], 'unknown')
         : kind === 'shared_drive' ? 'hold'
         : allowed(point.phase, ['setup', 'add', 'remove', 'complete'], 'unknown')
       const recordedStatus = kind === 'upload' ? point.result : point.status
       const status = allowed(recordedStatus, kind === 'upload'
-        ? ['passed', 'failed', 'infrastructure_failure']
+        ? ['passed', 'failed', 'infrastructure_failure', 'stopped']
         : kind === 'shared_drive' ? ['passed', 'failed', 'not_run', 'not_measured', 'inconclusive']
         : ['passed', 'failed', 'inconclusive'], 'missing_result')
       const dimensions = { ...base, index: String(index + 1), load: String(load), phase }

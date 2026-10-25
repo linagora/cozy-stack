@@ -18,7 +18,12 @@ type Limits = { maxEntries: number; maxReports: number; maxFileBytes: number; ma
 const defaults: Limits = {
   maxEntries: 2048, maxReports: 128, maxFileBytes: 1024 * 1024, maxTotalBytes: 8 * 1024 * 1024,
 }
-const reportPattern = /-(upload-capacity|shared-drive-ramp|org-drive-fanout)\.json$/
+const reportPattern = /-(upload-capacity|upload-regression|shared-drive-ramp|org-drive-fanout)\.json$/
+// A producer's own recorded time, for runs outside a campaign.
+const seconds = (value: unknown): number | undefined => {
+  const time = typeof value === 'string' ? Date.parse(value) : NaN
+  return Number.isNaN(time) ? undefined : time / 1000
+}
 
 function entries(path: string, budget: { entries: number }, limits: Limits): string[] {
   const dir = opendirSync(path)
@@ -156,7 +161,7 @@ export function readResults(directory: string, options: Partial<Limits> = {}): S
         const source: unknown = JSON.parse(file.text)
         if (!isJsonRecord(source)) throw new Error('invalid_report')
         const content = source
-        const kind = format === 'upload-capacity' ? 'upload'
+        const kind = format.startsWith('upload-') ? 'upload'
           : format === 'shared-drive-ramp' ? 'shared_drive' : 'fanout'
         const run = kind === 'upload' ? content.campaign_id : name.replace(reportPattern, '')
         if (!safeId(run)) throw new Error('invalid_identity')
@@ -172,7 +177,8 @@ export function readResults(directory: string, options: Partial<Limits> = {}): S
         if (ambiguous) throw new Error('ambiguous_campaign')
         snapshot.reports.push({
           campaign: link?.campaign ?? run, run, kind, data: content, timestamp: file.timestamp,
-          startedAt: link?.values.started_at_seconds, endedAt: link?.values.ended_at_seconds,
+          startedAt: link?.values.started_at_seconds ?? seconds(content.started_at),
+          endedAt: link?.values.ended_at_seconds ?? seconds(content.ended_at),
         })
       } catch (error) {
         if (error instanceof Error && error.message === 'work_limit') throw error

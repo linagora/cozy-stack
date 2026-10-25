@@ -33,13 +33,22 @@ inconclusive even if an earlier point passed. Explicit zero differs from absent.
 Legacy activity reports with `exact` or no final status remain inconclusive;
 the separate scenario-correctness changes provide explicit brackets and status.
 
+Each result also carries the producer's own `load_target` (`local`, `dev`, or
+`unknown` for older reports), `mode` and `outcome` (0, 1 or 2). A regression run
+shows passed, failed or inconclusive and never a capacity. When a runner could not
+verify a run, for example because cleanup failed, the result stays inconclusive
+and any bound it recorded appears only as `evidence` (and
+`capacity_evidence_lower`/`_upper`), never as the capacity.
+
 Criteria, owner readiness, recipient-side access and removal remain separate
 measurements. Unknown values are omitted, not invented. File mtime is the report
 update time, not scrape freshness. Conditions absent from reports stay not recorded.
 
 ## Publishing reports
 
-Upload capacity and activity ramp already write JSON to `data/results`.
+Upload capacity, upload regression and activity ramp already write JSON to
+`data/results`. Outside a campaign, a run's time range comes from the times its
+report records.
 `make org-drive-fanout` defaults `FANOUT_REPORT` to
 `data/results/<EXECUTION_ID>-org-drive-fanout.json`; explicit paths still work.
 Configure the disposable organization and routing per [ORG-DRIVE-FANOUT.md](ORG-DRIVE-FANOUT.md).

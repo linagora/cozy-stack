@@ -290,3 +290,48 @@ test('upload capacity follows the completed producer root, not optional diagnost
     assert.match(samples(output, 'result_info')[0]!, /reason="recorded"/)
   }
 })
+
+test('a regression run shows its verdict and environment, never a capacity', () => {
+  for (const [status, verdict, outcome] of [['completed', 'passed', 0], ['regression_failure', 'failed', 1],
+    ['correctness_failure', 'failed', 1], ['infrastructure_failure', 'inconclusive', 2]] as const) {
+    const output = renderMetrics([report('upload', {
+      mode: 'regression', load_target: 'dev', status, outcome, maximum_concurrent_uploads: 2,
+      attempts: [{ phase: 'regression', vus: 2, result: verdict === 'inconclusive' ? 'infrastructure_failure' : verdict }],
+    })], counts)
+    assert.equal(value(output, 'capacity_lower'), undefined)
+    assert.equal(value(output, 'capacity_evidence_lower'), undefined)
+    assert.match(samples(output, 'result_info')[0]!, new RegExp(
+      `status="${verdict}",bound="none",result="${verdict[0]!.toUpperCase()}${verdict.slice(1)}",.*` +
+      `reason="recorded",load_target="dev",mode="regression",outcome="${outcome}",evidence="none"`))
+    assert.match(samples(output, 'point_info')[0]!, /phase="regression"/)
+  }
+})
+
+test('an unverified run keeps its recorded bound as evidence, never as a capacity', () => {
+  const cases: Array<[ReportFile['kind'], Record<string, unknown>, string]> = [
+    ['upload', { status: 'infrastructure_failure', result_bound: 'lower_bound', maximum_concurrent_uploads: 2 }, '>= 2'],
+    ['shared_drive', { status: 'infrastructure_failure', result_bound: 'inconclusive', max_sustained_level: 8,
+      first_failed_level: 16 }, '[8, 16)'],
+    ['fanout', { status: 'inconclusive', capacity: { kind: 'lower_bound', lower: 16 } }, '>= 16'],
+  ]
+  for (const [kind, data, evidence] of cases) {
+    const output = renderMetrics([report(kind, { ...data, outcome: 2, load_target: 'dev' })], counts)
+    assert.equal(value(output, 'capacity_lower'), undefined)
+    assert.match(samples(output, 'result_info')[0]!, new RegExp(
+      `status="inconclusive",.*outcome="2",evidence="${evidence.replace(/[[\]()]/g, '\\$&')}"`))
+    assert.equal(value(output, 'capacity_evidence_lower'), Number(evidence.match(/\d+/)![0]))
+  }
+  // A completed result is a capacity, not evidence.
+  const completed = renderMetrics([report('upload', {
+    status: 'completed', result_bound: 'exact', maximum_concurrent_uploads: 18, outcome: 0 })], counts)
+  assert.equal(value(completed, 'capacity_lower'), 18)
+  assert.equal(value(completed, 'capacity_evidence_lower'), undefined)
+  assert.match(samples(completed, 'result_info')[0]!, /evidence="none"/)
+})
+
+test('reports without environment metadata show it unknown', () => {
+  const output = renderMetrics([report('upload', {
+    status: 'completed', result_bound: 'exact', maximum_concurrent_uploads: 57, load_target: 'staging', outcome: 7,
+  })], counts)
+  assert.match(samples(output, 'result_info')[0]!, /load_target="unknown",mode="capacity",outcome="unknown"/)
+})

@@ -126,6 +126,7 @@ async function main(): Promise<void> {
   const report: { status: string, organization_domain?: string, mode?: string, settings?: object,
     points: Point[], capacity: { kind: string, lower: number | null, upper_exclusive: number | null, max: null },
     retained: boolean, warning: string, error?: string, content_mismatch: boolean, budget_reached?: string,
+    load_target?: 'local' | 'dev', outcome?: number,
     recovery?: { cleaned: string[] }, cleanup?: { cleaned: string[], retained: string[] } } = {
     status: 'inconclusive', points: [], content_mismatch: false,
     capacity: { kind: 'inconclusive', lower: null, upper_exclusive: null, max: null },
@@ -162,6 +163,7 @@ async function main(): Promise<void> {
     const stable = integer('FANOUT_STABLE_MS', '3000')
     check(stable < timeout, 'FANOUT_STABLE_MS must be less than FANOUT_TIMEOUT_MS')
     const dev = process.env.LOAD_TARGET === 'dev'
+    report.load_target = dev ? 'dev' : 'local'
     // A level starts only when both of its phases can still end within MAX_RUNTIME.
     const levelBudget = 2 * timeout + stable + 60_000
     const runtime = process.env.MAX_RUNTIME
@@ -712,6 +714,7 @@ async function main(): Promise<void> {
     // a content mismatch at any level is a failure.
     process.exitCode = report.status === 'inconclusive' ? 2
       : report.capacity.kind !== 'inconclusive' ? 0 : report.status === 'failed' ? 1 : 2
+    report.outcome = process.exitCode
     let output = render()
     if (reportFD !== undefined) {
       try {
@@ -721,6 +724,7 @@ async function main(): Promise<void> {
         report.capacity = { kind: 'inconclusive', lower: null, upper_exclusive: null, max: null }
         report.error = 'Private report write failed'
         process.exitCode = 2
+        report.outcome = 2
         output = render()
       } finally {
         closeSync(reportFD)
