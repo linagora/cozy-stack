@@ -209,6 +209,12 @@ func readPump(ctx context.Context, c echo.Context, i *instance.Instance, ws *web
 		if permType == consts.Settings && permID == consts.PassphraseParametersID {
 			permID = consts.InstanceSettingsID
 		}
+		// XXX: io.cozy.files.recents is only available on its dedicated
+		// endpoint, its events must not leak here
+		if cmd.Payload.Type == consts.FilesRecents {
+			sendErr(ctx, errc, forbidden(cmd))
+			continue
+		}
 		// XXX: no permissions are required for io.cozy.sharings.initial_sync
 		// and io.cozy.auth.confirmations
 		if withAuthentication &&

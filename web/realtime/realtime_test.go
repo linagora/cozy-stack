@@ -104,6 +104,44 @@ func TestRealtime(t *testing.T) {
 		payload.ValueEqual("title", "The application can't subscribe to io.cozy.contacts")
 	})
 
+	t.Run("WSForbiddenForRecents", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		_, recentsToken := setup.GetTestClient("io.cozy.files.recents io.cozy.foos")
+
+		ws := e.GET("/realtime/").
+			WithWebsocketUpgrade().
+			Expect().Status(http.StatusSwitchingProtocols).
+			Websocket()
+		defer ws.Disconnect()
+
+		ws.WriteText(fmt.Sprintf(`{"method": "AUTH", "payload": "%s"}`, recentsToken))
+
+		ws.WriteText(`{"method": "SUBSCRIBE", "payload": { "type": "io.cozy.foos" }}`)
+		ws.WriteText(`{"method": "SUBSCRIBE", "payload": { "type": "io.cozy.files.recents" }}`)
+		time.Sleep(30 * time.Millisecond)
+
+		h := realtime.GetHub()
+		h.Publish(inst, realtime.EventCreate, &testDoc{
+			doctype: "io.cozy.files.recents",
+			id:      "recents-one",
+		}, nil)
+		h.Publish(inst, realtime.EventCreate, &testDoc{
+			doctype: "io.cozy.foos",
+			id:      "foo-three",
+		}, nil)
+
+		obj := ws.Expect().TextMessage().JSON().Object()
+		obj.ValueEqual("event", "error")
+		payload := obj.Value("payload").Object()
+		payload.ValueEqual("status", "403 Forbidden")
+		payload.ValueEqual("code", "forbidden")
+		payload.ValueEqual("title", "The application can't subscribe to io.cozy.files.recents")
+
+		obj = ws.Expect().TextMessage().JSON().Object()
+		obj.ValueEqual("event", "CREATED")
+		obj.Value("payload").Object().ValueEqual("id", "foo-three")
+	})
+
 	t.Run("WSSuccess", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

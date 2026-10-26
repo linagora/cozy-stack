@@ -34,6 +34,9 @@ var Indexes = []*mango.Index{
 	// Used to find old files and directories in the trashed that should be deleted
 	mango.MakeIndex(consts.Files, "by-dir-id-updated-at", mango.IndexDef{Fields: []string{"dir_id", "updated_at"}}),
 
+	// Used to sort the personal recents by their last activity
+	mango.MakeIndex(consts.FilesRecents, "by-last-activity-and-id", mango.IndexDef{Fields: []string{"last_activity_at", "_id"}}),
+
 	// Used to lookup a queued and running jobs
 	mango.MakeIndex(consts.Jobs, "by-worker-and-state", mango.IndexDef{Fields: []string{"worker", "state"}}),
 	mango.MakeIndex(consts.Jobs, "by-trigger-id", mango.IndexDef{Fields: []string{"trigger_id", "queued_at"}}),
