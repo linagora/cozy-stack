@@ -21,14 +21,11 @@ async function fixture(t: TestContext) {
   const state = {
     instances, used: new Set<string>(), orgs: new Set<string>(), mints: [] as string[], created: [] as string[], emails: [] as string[],
     released: [] as string[],
-    adminCalls: 0, failWorkflow: '', untrusting: '', foreign: '', corrupt: false,
+    adminCalls: 0, failWorkflow: '', noAutoAccept: '', foreign: '', corrupt: false,
   }
   const workflows = new Map<string, { polls: number, fqdn: string, done: () => void }>()
   const tokens = new Map<string, string>()
-  const contacts = new Map<string, any[]>()
-  const pending = new Map<string, boolean>() // member -> active
   const files = new Map<string, string>()
-  let drive: { id: string, attributes: any } | undefined
 
   const server = createServer(async (req, res) => {
     let body = ''
@@ -77,9 +74,6 @@ async function fixture(t: TestContext) {
         workflows.set(`wf-del-${id}`, { polls: 0, fqdn: instance.fqdn, done: () => {
           instances.delete(instance.fqdn)
           state.used.add(instance.fqdn)
-          contacts.delete(instance.fqdn)
-          pending.delete(instance.fqdn)
-          if (instance.fqdn === org) drive = undefined
         } })
         return send(200, { workflow: `wf-del-${id}` })
       }
@@ -97,46 +91,13 @@ async function fixture(t: TestContext) {
     const host = req.headers.host!
     if (!bearer || tokens.get(bearer) !== host) return send(401)
     const route = `${req.method} ${pathname}`
-    const sid = drive?.id
     if (route === 'GET /settings/instance') {
       const orgID = host === state.foreign ? 'another' : 'seedtest'
       return send(200, { data: { attributes: { org_id: orgID, uuid: instances.get(host)!._id } } })
     }
-    if (host === org) {
-      if (route === 'GET /sharings/drives') return send(200, { data: drive ? [drive] : [] })
-      if (route === 'POST /sharings/drives') {
-        drive = { id: 'warmup', attributes: { owner: true, description: JSON.parse(body).data.attributes.description,
-          members: [{ instance: `https://${org}/`, email: 'seedtest@spam.cozycloud.cc' }] } }
-        return send(201, { data: drive })
-      }
-      if (route === `GET /sharings/${sid}`) return send(200, { data: drive })
-      if (route === 'POST /data/io.cozy.contacts/') {
-        const contact = { _id: `contact-${randomUUID()}`, ...JSON.parse(body) }
-        contacts.set(org, [...contacts.get(org) ?? [], contact])
-        return send(201, { id: contact._id })
-      }
-      if (route === `POST /sharings/${sid}/recipients`) {
-        for (const { id } of JSON.parse(body).data.relationships.recipients.data) {
-          const url = contacts.get(org)!.find(c => c._id === id).cozy[0].url
-          drive!.attributes.members.push({ instance: url })
-          pending.set(new URL(url).host, false)
-        }
-        return send(200, { data: drive })
-      }
-    }
-    if (route === `GET /sharings/${sid}`) {
-      if (!pending.has(host)) return send(404, { errors: [{ status: '404' }] })
-      return send(200, { data: { attributes: { active: pending.get(host), members: drive!.attributes.members } } })
-    }
-    if (route === `POST /sharings/drives/${sid}/accept` && pending.has(host)) {
-      pending.set(host, true)
-      if (host !== state.untrusting) {
-        contacts.set(host, [{ email: [{ address: 'seedtest@spam.cozycloud.cc' }], trustedForSharing: true }])
-      }
-      return send(200, {})
-    }
-    if (route === 'GET /data/io.cozy.contacts/_all_docs') {
-      return send(200, { rows: (contacts.get(host) ?? []).map(doc => ({ doc })) })
+    if (route === 'GET /settings/context') {
+      const autoAccept = host !== state.noAutoAccept
+      return send(200, { data: { attributes: { common_contacts: autoAccept, sharing: { auto_accept_trusted: true } } } })
     }
     if (route === 'POST /files/io.cozy.files.root-dir') {
       const id = `file-${files.size}`
@@ -182,17 +143,16 @@ async function fixture(t: TestContext) {
     const code = await new Promise<number | null>(resolve => child.on('close', resolve))
     return { code, output }
   }
-  return { state, pending, run, manifest: () => JSON.parse(readFileSync(manifest, 'utf8')) }
+  return { state, run, manifest: () => JSON.parse(readFileSync(manifest, 'utf8')) }
 }
 
-test('seeds, warms up and reuses the organization with per-instance tokens only', async t => {
+test('seeds and reuses the organization with per-instance tokens only', async t => {
   const f = await fixture(t)
   const first = await f.run('seed')
   equal(first.code, 0, first.output)
   deepEqual(f.state.created, [org, member(1), member(2), member(3)])
   deepEqual(f.state.emails, ['seedtest', 'seedtest01', 'seedtest02', 'seedtest03'].map(slug => `${slug}@spam.cozycloud.cc`))
   deepEqual([...f.state.orgs], ['seedtest'])
-  deepEqual([...f.pending], [[member(1), true], [member(2), true], [member(3), true]])
   deepEqual(f.manifest().instances.map((i: any) => [i.fqdn, i.role]),
     [[org, 'organization'], [member(1), 'member'], [member(2), 'member'], [member(3), 'member']])
   match(first.output, /Smoke passed on seedtest01/)
@@ -203,7 +163,6 @@ test('seeds, warms up and reuses the organization with per-instance tokens only'
   const second = await f.run('seed', { SEED_USERS: '4' })
   equal(second.code, 0, second.output)
   deepEqual(f.state.created.slice(4), [member(4)])
-  equal(f.pending.get(member(4)), true)
   equal(f.state.adminCalls, 0)
 })
 
@@ -240,12 +199,12 @@ test('an instance with a fixture name but another organization is not adopted', 
   ok(!f.state.created.includes(member(1)))
 })
 
-test('a member that does not trust the organization instance fails the warm-up', async t => {
+test('a member whose context cannot auto-accept the organization\'s drives fails the seed', async t => {
   const f = await fixture(t)
-  f.state.untrusting = member(2)
+  f.state.noAutoAccept = member(2)
   const result = await f.run('seed')
   equal(result.code, 2)
-  match(result.output, /seedtest02\.dev\.example\.test is not warmed up/)
+  match(result.output, /seedtest02\.dev\.example\.test cannot auto-accept the organization's drives/)
 })
 
 test('only a smoke that reads back different content is a correctness failure', async t => {

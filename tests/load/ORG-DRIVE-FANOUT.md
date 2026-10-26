@@ -88,9 +88,8 @@ make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m
 ```
 
 - Before any write, each instance must match its manifest UUID on the Stack, and
-  each member must auto-accept trusted contacts and keep the seed's warm-up drive.
-  Until DEV trusts the organization's domain (#5070), the warm-up is what makes
-  members auto-accept its drives.
+  each member's context must enable same-organization auto-accept, as above. The
+  organization instance's own context needs neither flag.
 - Every token is minted through the Cloudery for that instance alone, and minted
   again before a level once it is 10 minutes old (tokens last 30 minutes).
 - Levels cannot exceed the fixture's members. `MAX_RUNTIME` includes preparation

@@ -6,13 +6,11 @@ import { dirname } from 'node:path'
 
 import { FixtureError, request } from './fixture-http.ts'
 
-const SCOPE = 'io.cozy.files io.cozy.sharings io.cozy.contacts io.cozy.settings'
-const WARMUP = 'Load-test warm-up'
+const SCOPE = 'io.cozy.files io.cozy.settings'
 // Mail to test instances lands in a test-only mailbox domain.
 const MAIL_DOMAIN = 'spam.cozycloud.cc'
 
 interface CloudInstance { _id: string, fqdn: string, deleting_at?: string | null }
-interface Member { instance?: string, email?: string }
 interface Recorded { fqdn: string, uuid: string }
 // Exit 1 is reserved for proven correctness failures; everything else exits 2.
 class CorrectnessError extends Error {}
@@ -122,7 +120,7 @@ async function main(): Promise<void> {
     const recorded: Recorded[] = record.instances
     const isRecorded = (i: CloudInstance) => recorded.some(r => r.fqdn === i.fqdn && r.uuid === i._id)
     const listed = [...(await fixtureInstances()).values()]
-    // Members first: the organization instance owns the warm-up drive.
+    // Members first: the organization instance owns the drives shared with them.
     listed.sort((a, b) => Number(a.fqdn === orgHost) - Number(b.fqdn === orgHost))
     const deleted: string[] = []
     const kept: string[] = []
@@ -188,39 +186,13 @@ async function main(): Promise<void> {
     verified.push(item)
   }
 
-  // Warm-up: accepting one drive from the organization instance makes it a trusted contact, so
-  // later drives auto-accept. shortcut: needed until DEV trusts the domain (#5070).
-  const drives = (await stack(orgHost, 'GET', '/sharings/drives', [200])).data ?? []
-  const sid: string = drives.find((d: any) => d.attributes?.owner && d.attributes.description === WARMUP)?.id ??
-    (await stack(orgHost, 'POST', '/sharings/drives', [201], JSON.stringify({
-      data: { type: 'io.cozy.sharings', attributes: { name: WARMUP, description: WARMUP } },
-    }))).data.id
-  const roster: Member[] = (await stack(orgHost, 'GET', `/sharings/${sid}`, [200])).data.attributes.members
-  const invited = new Set(roster.map(m => m.instance && new URL(m.instance).host))
-  const contacts: string[] = []
-  for (const name of memberHosts.filter(name => !invited.has(name))) {
-    contacts.push((await stack(orgHost, 'POST', '/data/io.cozy.contacts/', [201], JSON.stringify({
-      fullname: name, email: [{ address: `${name.slice(0, name.indexOf('.'))}@${MAIL_DOMAIN}`, primary: true }],
-      cozy: [{ url: `https://${name}/`, primary: true }],
-    }), 'application/json')).id)
-  }
-  if (contacts.length) {
-    await stack(orgHost, 'POST', `/sharings/${sid}/recipients`, [200], JSON.stringify({ data: {
-      type: 'io.cozy.sharings', id: sid,
-      relationships: { recipients: { data: contacts.map(id => ({ id, type: 'io.cozy.contacts' })) } },
-    } }))
-  }
+  // Members auto-accept the organization's drives because they share its organization ID, which
+  // their context enables with common_contacts and sharing.auto_accept_trusted (cozy-stack #4966).
   for (const name of memberHosts) {
-    const sharing = await poll(`${name} warm-up invitation`, async () =>
-      (await stack(name, 'GET', `/sharings/${sid}`, [200, 404])).data)
-    if (!sharing.attributes.active) await stack(name, 'POST', `/sharings/drives/${sid}/accept`, [200])
-    const sender = sharing.attributes.members?.[0]?.email
-    const { rows } = await stack(name, 'GET', '/data/io.cozy.contacts/_all_docs?include_docs=true', [200])
-    const trusted = rows?.some((r: any) => r.doc?.trustedForSharing === true &&
-      r.doc.email?.some((e: any) => e.address === sender))
-    check(sender && trusted, `${name} is not warmed up: the organization instance is not a trusted contact`)
+    const context = (await stack(name, 'GET', '/settings/context', [200])).data?.attributes
+    check(context?.common_contacts === true && context.sharing?.auto_accept_trusted === true,
+      `${name} cannot auto-accept the organization's drives: its context needs common_contacts and sharing.auto_accept_trusted`)
   }
-  console.log(`Warmed up ${memberHosts.length} members`)
 
   if (memberHosts[0]) {
     const content = randomBytes(512).toString('hex')
@@ -234,7 +206,7 @@ async function main(): Promise<void> {
 
   mkdirSync(dirname(manifest), { recursive: true })
   writeFileSync(manifest, `${JSON.stringify({
-    domain, organization: prefix, warmup_sharing_id: sid,
+    domain, organization: prefix,
     instances: verified.map(i => ({
       fqdn: i.fqdn, uuid: i._id, role: i.fqdn === orgHost ? 'organization' : 'member',
     })),

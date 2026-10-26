@@ -26,7 +26,6 @@ export interface DevFixture {
   root: string
   // The organization first, then the members the levels need, by name.
   actors: Array<{ domain: string, uuid: string, origin: URL }>
-  warmup: string
   mint(domain: string, owner: boolean, timeoutMs: number): Promise<string>
 }
 // Requests as the organization instance, bounded by the caller's deadline.
@@ -50,7 +49,6 @@ export function readFixture(env: Record<string, string | undefined>, recipients:
   check(org.length === 1 && [...org, ...members].every(i => i.fqdn && i.uuid),
     'The manifest needs one organization and identified members')
   check(members.length >= recipients, `FANOUT_LEVELS needs ${recipients} members; the fixture has ${members.length}`)
-  check(typeof manifest.warmup_sharing_id === 'string' && manifest.warmup_sharing_id, 'The manifest has no warm-up drive')
   return {
     root: org[0]!.fqdn!,
     // Only the members the levels need. DEV_STACK_URL is a connection origin for tests; each
@@ -58,7 +56,6 @@ export function readFixture(env: Record<string, string | undefined>, recipients:
     actors: [org[0]!, ...members.slice(0, recipients)].map(i => ({
       domain: i.fqdn!, uuid: i.uuid!, origin: new URL(env.DEV_STACK_URL || `https://${i.fqdn}`),
     })),
-    warmup: manifest.warmup_sharing_id,
     async mint(domain, owner, timeoutMs) {
       const reply = await request(new URL(`/api/public/instances/${domain}/token`, secrets.manager_url), 'POST',
         { Authorization: `Bearer ${secrets.public}`, 'Content-Type': 'application/json', Accept: 'application/json' },

@@ -32,8 +32,7 @@ async function fixture(t: TestContext, override?: Override) {
   const drives = new Map<string, {
     recipients: string[], group: string, removed: boolean, owner: string, name?: string, deleted?: boolean,
   }>()
-  // Shared DEV: the seed's warm-up drive on every member, and the contacts and groups deleted so far.
-  const warmup = { id: 'warmup-1', active: true }
+  // Shared DEV: the contacts and groups deleted so far.
   const deleted = new Set<string>()
   const contacts = new Map<string, string[]>()
   let current = ''
@@ -81,7 +80,6 @@ async function fixture(t: TestContext, override?: Override) {
         const uuid = instances.find(i => i.attributes.domain === r.headers.host)?.attributes.uuid
         return send(200, { data: { id: 'io.cozy.settings.instance', attributes: { uuid } } })
       }
-      if (path === `/sharings/${warmup.id}`) return send(200, { data: { id: warmup.id, attributes: { active: warmup.active } } })
       if (path === '/sharings/drives' && r.method === 'GET') {
         return send(200, { data: [...drives].filter(([, d]) => d.owner === r.headers.host && !d.deleted)
           .map(([id, d]) => ({ id, attributes: { owner: true, description: d.name, rules: [{ values: [`root-${id}`] }] } })) })
@@ -192,7 +190,7 @@ async function fixture(t: TestContext, override?: Override) {
   async function devRun(env: Record<string, string | undefined> = {},
     options: { preload?: string, onSpawn?: (child: ChildProcess) => void } = {},
     edit?: (manifest: any) => void) {
-    const manifest = { warmup_sharing_id: warmup.id, instances: instances.map((i, n) => ({
+    const manifest = { instances: instances.map((i, n) => ({
       fqdn: i.attributes.domain, uuid: i.attributes.uuid, role: n === 0 ? 'organization' : 'member' })) }
     edit?.(manifest)
     await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest))
@@ -201,7 +199,7 @@ async function fixture(t: TestContext, override?: Override) {
       SEED_CLOUDERY_TOKEN_FILE: join(dir, 'token.json'), DEV_STACK_URL: origins.stack, MAX_RUNTIME: '5m',
       EXECUTION_ID: 'devrun', ...env }, options)
   }
-  return { calls, instances, drives, origins, run, devRun, warmup, get stdout() { return stdout } }
+  return { calls, instances, drives, origins, run, devRun, get stdout() { return stdout } }
 }
 const mutations = (calls: Call[]) => calls.filter(r => r.method !== 'GET')
 
@@ -940,7 +938,14 @@ test(
 )
 
 test('shared DEV takes actors from the Cloudery fixture and removes only its own drives', async t => {
-  const f = await fixture(t)
+  // As on DEV, the organization instance's own context does not enable auto-accept.
+  const f = await fixture(t, r => {
+    if (r.headers.host === root && r.url.pathname === '/settings/context') r.transform = value => {
+      delete value.data.attributes.common_contacts
+      delete value.data.attributes.sharing
+      return value
+    }
+  })
   f.drives.set('drive-900', { recipients: [], group: '', removed: true, owner: root, name: 'twake-load-fanout-old-1-aa' })
   f.drives.set('drive-901', { recipients: [], group: '', removed: false, owner: root, name: 'Load-test warm-up' })
   const result = await f.devRun()
@@ -961,8 +966,14 @@ test('shared DEV takes actors from the Cloudery fixture and removes only its own
     [root, domain(1), domain(2)].map(d => `/api/public/instances/${d}/token`))
 })
 
-test('shared DEV checks its budget, identities and the warm-up before any write', async t => {
-  const f = await fixture(t)
+test('shared DEV checks its budget, identities and member auto-accept before any write', async t => {
+  let autoAccept = true
+  const f = await fixture(t, r => {
+    if (r.headers.host === domain(2) && r.url.pathname === '/settings/context') r.transform = value => {
+      value.data.attributes.common_contacts = autoAccept
+      return value
+    }
+  })
   for (const env of [{ MAX_RUNTIME: undefined }, { FANOUT_LEVELS: '1,13' }]) {
     const result = await f.devRun(env)
     equal(result.code, 2, result.stderr)
@@ -971,10 +982,10 @@ test('shared DEV checks its budget, identities and the warm-up before any write'
   let result = await f.devRun({}, {}, manifest => { manifest.instances[2].uuid = 'recreated' })
   equal(result.code, 2, result.stderr)
   match(result.report.error, /no longer the fixture instance/)
-  f.warmup.active = false
+  autoAccept = false
   result = await f.devRun()
   equal(result.code, 2, result.stderr)
-  match(result.report.error, /warm-up/)
+  match(result.report.error, /0002\.localhost:8080 context must enable common_contacts/)
   deepEqual(f.calls.filter(r => r.api === 'stack' && r.method !== 'GET'), [])
 })
 

@@ -367,19 +367,15 @@ async function main(): Promise<void> {
       await refresh(actor)
       const settings = resource(expect(await api(actor, 'GET', '/settings/context'))).attributes
       if (fixture) {
-        // Until DEV trusts the organization's domain (#5070), members auto-accept its drives because
-        // the seed's warm-up made it a trusted contact.
         const identity = resource(expect(await api(actor, 'GET', '/settings/instance'))).attributes
         check(identity.uuid === actor.uuid, `${actor.domain} is no longer the fixture instance in the manifest`)
-        if (actor !== owner) {
-          const warmup = resource(expect(await api(actor, 'GET', `/sharings/${fixture.warmup}`))).attributes
-          check(settings.sharing?.auto_accept_trusted_contacts === true && warmup.active === true,
-            `${actor.domain} must auto-accept trusted contacts and keep the warm-up drive`)
-        }
-      } else {
+      }
+      // Recipients auto-accept because they share the owner's organization ID; on shared DEV the
+      // organization instance's own context does not enable it.
+      if (!fixture || actor !== owner) {
         const trustedCommonContacts = settings.common_contacts === true &&
           settings.sharing?.auto_accept_trusted === true
-        check(trustedCommonContacts, 'Context must enable common_contacts and sharing.auto_accept_trusted')
+        check(trustedCommonContacts, `${actor.domain} context must enable common_contacts and sharing.auto_accept_trusted`)
       }
       if (actor === owner) {
         memberCap = settings.max_members_per_sharing ?? 90
@@ -391,7 +387,7 @@ async function main(): Promise<void> {
     }
     report.settings = {
       ...report.settings, effective_member_cap: memberCap, context: contextName,
-      ...(fixture ? { auto_accept: 'trusted contacts (warm-up)' } : { common_contacts: true, auto_accept_trusted: true }),
+      common_contacts: true, auto_accept_trusted: true,
     }
     const asOwner = (deadline: number) => (method: string, path: string) => api(owner, method, path, '', deadline)
     if (fixture) {

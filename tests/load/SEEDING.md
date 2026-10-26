@@ -40,9 +40,9 @@ their organization and UUID. Teardown keeps any other match and exits 2, and
 releases only the names of instances it deleted or the manifest recorded. A
 smoke that reads back different content exits 1; any other failure exits 2.
 Every request uses a token minted for that instance, refreshed
-before it expires. Until DEV trusts the organization's domain (#5070), each
-member accepts one warm-up drive from the organization instance, so later drives
-auto-accept. A member that fails the warm-up fails the seed. The seed ends with a
+before it expires. Members auto-accept the organization's drives because they
+share its organization ID, so each member's context must enable `common_contacts`
+and `sharing.auto_accept_trusted`, or the seed fails. The seed ends with a
 1 KiB smoke test on the first member and writes the instance identities to
 `data/results/<prefix>-cloudery-fixture.json` (`SEED_CLOUDERY_MANIFEST`), without
 tokens. Offers default to `b2b_org_default` and `b2b_twake_default`
