@@ -29,19 +29,23 @@ const passed = { status: 'passed', reasons: [], correctness_failures: [], proble
 
 test('budgets are checked against what the arrivals can need, before any request', () => {
   const config = readConfig(env)
-  // 120 workflows of 3 requests and one observer session, plus k6 setup, a token, the Stack version, two
-  // verifications of 16 requests each and 6 cleanup requests.
-  deepEqual(config.needs, { vus: 9, requests: 402, bytes: 122_880, runtimeMs: 240_000 })
-  readConfig({ ...env, MAX_VUS: '9', MAX_REQUESTS: '402', MAX_UPLOAD_BYTES: '120K', MAX_RUNTIME: '4m' })
+  // 121 workflows (k6 starts one more at t=0) of 3 requests and one observer session, plus k6 setup, a
+  // token, the Stack version, two verifications of 16 requests each and 6 cleanup requests.
+  deepEqual(config.needs, { vus: 9, requests: 405, bytes: 123_904, runtimeMs: 240_000 })
+  readConfig({ ...env, MAX_VUS: '9', MAX_REQUESTS: '405', MAX_UPLOAD_BYTES: '121K', MAX_RUNTIME: '4m' })
   throws(() => readConfig({ ...env, SEED_MANIFEST: manifest('seed-a') }),
     /single-instance tree fixture/)
-  for (const [name, value, reason] of [['MAX_VUS', '8', /VUs/], ['MAX_REQUESTS', '401', /requests/],
+  for (const [name, value, reason] of [['MAX_VUS', '8', /VUs/], ['MAX_REQUESTS', '404', /requests/],
     ['MAX_UPLOAD_BYTES', '100K', /bytes/], ['MAX_RUNTIME', '3m', /minutes/]] as const) {
     throws(() => readConfig({ ...env, [name]: value }), reason)
   }
   throws(() => readConfig({ ...env, LOAD_TARGET: 'dev' }), /local tree fixture/)
   throws(() => readConfig({ ...env, MIXED_DOMAIN: '' }), /MIXED_DOMAIN/)
   throws(() => readConfig({ ...env, MIXED_OBSERVERS: '-1' }), /MIXED_OBSERVERS/)
+  // Unreadable criteria would pass every comparison in k6.
+  throws(() => readConfig({ ...env, MIN_SUCCESS_RATE: '0,99' }), /MIN_SUCCESS_RATE/)
+  throws(() => readConfig({ ...env, P95_LIMIT_MS: '2s' }), /P95_LIMIT_MS/)
+  deepEqual([config.minSuccessRate, config.p95LimitMs], [0.99, 2000])
   const observers = (value: string) => readConfig({ ...env, MIXED_OBSERVERS: value }).observers
   deepEqual([observers(''), observers('0')],
     [1, 0])

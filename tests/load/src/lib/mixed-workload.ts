@@ -88,7 +88,9 @@ export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria
   const succeeded = (operation: MixedOperation) =>
     value(metrics, operationMetric('http_req_failed', operation), 'fails') ?? 0
   const expected = { metadata: succeeded('metadata'), upload: succeeded('upload') }
+  const unvalidated = value(metrics, 'mixed_unvalidated_responses', 'count') ?? 0
   const incomplete = [
+    ...(unvalidated ? [`${unvalidated} successful responses could not be validated`] : []),
     ...(metadata.passes + metadata.fails < expected.metadata
       ? [`${metadata.passes + metadata.fails} of ${expected.metadata} successful metadata reads were checked`] : []),
     ...(upload.passes + upload.fails < expected.upload
@@ -140,7 +142,7 @@ export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria
       metadata_checks: metadata.passes + metadata.fails, metadata_mismatches: metadata.fails,
       metadata_expected: expected.metadata,
       upload_checks: upload.passes + upload.fails, upload_mismatches: upload.fails, upload_expected: expected.upload,
-      unvalidated: value(metrics, 'mixed_unvalidated_responses', 'count') ?? 0,
+      unvalidated,
       complete: !incomplete.length && expected.metadata > 0 && expected.upload > 0,
     },
     observers: {

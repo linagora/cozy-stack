@@ -33,6 +33,10 @@ const criteria = {
   minimumSuccessRate: Number(__ENV.MIN_SUCCESS_RATE || '0.99'),
   p95LimitMs: Number(__ENV.P95_LIMIT_MS || '2000'),
 }
+// An unreadable criterion would pass every comparison: refuse it before any request.
+if (!(criteria.minimumSuccessRate > 0 && criteria.minimumSuccessRate <= 1) || !(criteria.p95LimitMs > 0)) {
+  throw new Error('MIN_SUCCESS_RATE must be a ratio in (0, 1] and P95_LIMIT_MS a positive number')
+}
 
 export const metadataMatch = new Rate('mixed_metadata_match')
 export const uploadMatch = new Rate('mixed_upload_match')

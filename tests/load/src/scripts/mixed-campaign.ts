@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { treeFiles } from './dataset-profile.ts'
+import { TREE_VERSION, treeFiles } from './dataset-profile.ts'
 import { stackAddress } from './drive-actors.ts'
 import { request } from './fixture-http.ts'
 import { manifestPath, readManifest } from './fixture-manifest.ts'
@@ -36,15 +36,18 @@ export function readConfig(env: Env) {
   const manifest = readManifest(env.SEED_MANIFEST || manifestPath(domain), domain)
   const entry = manifest.instances[0]!
   // One instance: verifying and cleaning it then costs a known number of requests.
-  check(manifest.status === 'complete' && manifest.profile === 'tree' && !manifest.organization && entry.files.length,
-    `${domain} is not a complete single-instance tree fixture (make seed-scale SEED_PROFILE=tree)`)
+  check(manifest.status === 'complete' && manifest.profile === 'tree' && manifest.profile_version === TREE_VERSION &&
+    !manifest.organization && entry.files.length,
+  `${domain} is not a complete single-instance tree fixture, version ${TREE_VERSION} ` +
+    '(make seed-scale SEED_PROFILE=tree)')
   const rate = getPositiveInteger('MIXED_RATE', env.MIXED_RATE || '1')
   const durationMs = getDurationMs('MIXED_DURATION', env.MIXED_DURATION || '2m')
   const maxVus = getPositiveInteger('MIXED_MAX_VUS', env.MIXED_MAX_VUS || '10')
   // Make passes unset settings as empty strings.
   const observers = Number(env.MIXED_OBSERVERS || '1')
   check(Number.isSafeInteger(observers) && observers >= 0, 'MIXED_OBSERVERS must be a non-negative integer')
-  const workflows = rate * Math.ceil(durationMs / 1000)
+  // k6 starts one more arrival at the very start of the scenario than rate × seconds.
+  const workflows = rate * Math.ceil(durationMs / 1000) + 1
   // A verification reads the instance, mints a token, then reads every directory, file and drive root and
   // the root's entry count.
   const verifyRequests = 3 + (entry.dirs?.length ?? 0) + entry.files.length + entry.drives.length
@@ -74,8 +77,17 @@ export function readConfig(env: Env) {
     `The workload needs ${Math.ceil(needs.runtimeMs / 60_000)} minutes, beyond MAX_RUNTIME`)
   return {
     executionId, domain, manifest, entry, rate, durationMs, maxVus, observers, needs, budgets, deadlineMs: runtimeMs,
-    minSuccessRate: env.MIN_SUCCESS_RATE || '0.99', p95LimitMs: env.P95_LIMIT_MS || '2000',
+    ...criteria(env),
   }
+}
+
+// k6 reads the criteria as numbers: an unreadable one would silently pass every comparison.
+function criteria(env: Env) {
+  const minSuccessRate = Number(env.MIN_SUCCESS_RATE || '0.99')
+  const p95LimitMs = Number(env.P95_LIMIT_MS || '2000')
+  check(minSuccessRate > 0 && minSuccessRate <= 1, 'MIN_SUCCESS_RATE must be a ratio in (0, 1]')
+  check(Number.isFinite(p95LimitMs) && p95LimitMs > 0, 'P95_LIMIT_MS must be a positive number of milliseconds')
+  return { minSuccessRate, p95LimitMs }
 }
 
 // The fixture as seeded, or the reason it is not.

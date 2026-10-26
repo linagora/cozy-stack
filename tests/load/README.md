@@ -574,7 +574,7 @@ achieved workflows per second, dropped iterations, each operation's request
 rate, p95 and error rate, the correctness checks, the observers' sessions and
 events, and the [result envelope](#result-envelope). Every operation must
 reach `MIN_SUCCESS_RATE` (default 0.99) and stay within `P95_LIMIT_MS`
-(default 2000), and every successful metadata read and upload must have been
+(default 2000), both checked before any request, and every successful metadata read and upload must have been
 checked: a response that cannot be checked keeps the run from passing.
 Dropped workflows while every operation met its limits mean
 the generator fell behind: inconclusive, exit 2. With a slow or failing
