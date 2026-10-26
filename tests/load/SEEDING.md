@@ -94,14 +94,34 @@ and zero drives. Bounds are 0..1,000,000 files and 0..100,000 drives, with at le
 one requested object. Those bounds are not a performance guarantee. The builder
 never changes the harness's normal `.env` or prints access tokens.
 
+## Profiles
+
+`SEED_PROFILE` picks the dataset each populated instance gets:
+
+- `flat` (default): `SEED_FILES` identical 1 KiB files at the root and
+  `SEED_DRIVES` empty drives. Large counts stay opt-in, for isolated
+  deployments.
+- `tree` (version 1, `src/scripts/dataset-profile.ts`): directories three
+  levels deep, seven files from 512 B to 1 MiB, and a shared drive holding a
+  folder and two of the files, about 1.4 MiB per instance; `SEED_FILES` and
+  `SEED_DRIVES` do not apply. Each file's bytes come from
+  `SEED_GENERATION_SEED` (default `1`) and its path, so the same seed always
+  gives the same structure and content, while resource IDs belong to each run.
+  It fits shared DEV budgets: 20 members upload under 30 MiB.
+
+```sh
+make seed-org SEED_USERS=2 SEED_PROFILE=tree SEED_GENERATION_SEED=7
+```
+
 ## Fixture manifest
 
 Each seed records its fixture in a private manifest,
 `data/results/seed-<32-hex-id>-fixture.json` (`SEED_MANIFEST` overrides the path).
-It holds the profile (`flat`, the dataset above), generation parameters, the
-expected content checksum and every instance's domain, UUID and role, with the
-file and shared-drive IDs it confirmed and the root entry count. It never holds
-tokens. Instance UUIDs are chosen before any write, and the manifest is written
+It holds the profile (with the tree's version and generation seed), generation
+parameters, the expected content checksum and every instance's domain, UUID and
+role, with the directory, file and shared-drive IDs it confirmed and the root
+entry count, and the preparation's time and uploaded bytes, kept apart from any
+measured work. It never holds tokens. Instance UUIDs are chosen before any write, and the manifest is written
 before the first instance is created, then after each step, so a failed seed
 leaves a `failed` manifest with every planned identity and confirmed object. A
 seed refuses to replace an existing manifest.
@@ -111,10 +131,10 @@ make seed-verify SEED_DOMAIN='seed-<32-hex-id>.load.example.test:8443'
 ```
 
 Verify the fixture before using it and again after a run. Only a `complete`
-manifest passes. Verification reads every recorded instance, file and drive root
-and fails if an identity, a count, a file's checksum, size or location, a drive
-backlink, the root entry count or the organization membership differs from the
-manifest. It never writes.
+manifest passes. Verification reads every recorded instance, directory, file and
+drive root and fails if an identity, a count, a directory's or file's name or
+parent, a file's checksum or size, a drive backlink, the root entry count or the
+organization membership differs from the manifest. It never writes.
 
 ## Save and restore separately
 

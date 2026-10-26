@@ -1,5 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
+import {
+  nameOf, parentOf, TREE, TREE_DRIVE, TREE_VERSION, treeContent, treeDigest, treeFiles, type TreeFile,
+} from './dataset-profile.ts'
 import { FixtureError as CliError, request, type Reply } from './fixture-http.ts'
 import {
   manifestPath, readManifest, removeManifest, writeManifest, type FixtureManifest, type ManifestInstance,
@@ -50,7 +53,7 @@ interface Resource {
   type?: string
   attributes?: {
     domain?: string, uuid?: string, type?: string, org_id?: string, org_domain?: string, context?: string,
-    md5sum?: string, size?: string, dir_id?: string
+    md5sum?: string, size?: string, dir_id?: string, name?: string
   }
   relationships?: {
     referenced_by?: { data?: Array<{ type?: string, id?: string }> }, contents?: { meta?: { count?: number } }
@@ -70,6 +73,8 @@ function identity(item: Resource, requireUUID = true): boolean {
   return fields.every((value) =>
     typeof value === 'string' && value.length > 0 && !/[\s\x00-\x1f\x7f]/.test(value))
 }
+
+const ROOT = 'io.cozy.files.root-dir'
 
 type PublicAPI = (method: string, path: string, body?: string | Buffer, headers?: Record<string, string>) =>
   Promise<Reply>
@@ -262,10 +267,33 @@ async function main(): Promise<void> {
         entry.drives.length === (populated ? parameters.drives : 0), `${entry.domain} lacks recorded objects`)
       if (!populated || (!parameters.files && !parameters.drives)) continue
       const { api } = await session(stackURL, entry.domain)
-      for (const id of entry.files) {
-        const file = resource(expectStatus(await api('GET', `/files/${encodeURIComponent(id)}`), 200))
-        check(file.id === id && file.attributes?.md5sum === content.md5 && Number(file.attributes.size) ===
-          content.bytes && file.attributes.dir_id === 'io.cozy.files.root-dir', `${entry.domain}: file ${id} changed`)
+      const read = async (id: string) =>
+        resource(expectStatus(await api('GET', `/files/${encodeURIComponent(id)}`), 200))
+      if (manifest.profile === 'tree') {
+        // Every directory and file sits under its profile parent, with its name, size and bytes.
+        const tree = treeFiles(manifest.generation_seed!)
+        const dirs = entry.dirs ?? []
+        check(dirs.length === TREE.dirs.length, `${entry.domain} lacks recorded directories`)
+        const parents = new Map<string, string>([['.', ROOT], [TREE_DRIVE, entry.drives[0]!.root]])
+        TREE.dirs.forEach((path, index) => parents.set(path, dirs[index]!))
+        for (const [index, path] of TREE.dirs.entries()) {
+          const dir = await read(dirs[index]!)
+          check(dir.attributes?.type === 'directory' && dir.attributes.name === nameOf(path) &&
+            dir.attributes.dir_id === parents.get(parentOf(path)), `${entry.domain}: directory ${path} changed`)
+        }
+        for (const [index, expected] of tree.entries()) {
+          const file = await read(entry.files[index]!)
+          const parent = parents.get(parentOf(expected.path))
+          check(file.attributes?.md5sum === expected.md5 && Number(file.attributes.size) === expected.size &&
+            file.attributes.name === nameOf(expected.path) && file.attributes.dir_id === parent,
+          `${entry.domain}: file ${expected.path} changed`)
+        }
+      } else {
+        for (const id of entry.files) {
+          const file = await read(id)
+          check(file.id === id && file.attributes?.md5sum === content.md5 && Number(file.attributes.size) ===
+            content.bytes && file.attributes.dir_id === ROOT, `${entry.domain}: file ${id} changed`)
+        }
       }
       for (const drive of entry.drives) await checkDriveRoot(api, drive.root, drive.sharing)
       const entries = await rootEntries(api)
@@ -285,8 +313,15 @@ async function main(): Promise<void> {
   check(contextName === undefined || (contextName.length > 0 && !/[\s\x00-\x1f\x7f]/.test(contextName)),
     'SEED_CONTEXT_NAME must be nonempty and contain no whitespace or control characters')
   const users = organization ? integer('SEED_USERS', '3', 1000) : 0
-  const files = integer('SEED_FILES', organization ? '0' : '100', 1_000_000)
-  const drives = integer('SEED_DRIVES', '0', 100_000)
+  const profile = process.env.SEED_PROFILE || 'flat'
+  check(profile === 'flat' || profile === 'tree', 'SEED_PROFILE must be flat or tree')
+  const generationSeed = process.env.SEED_GENERATION_SEED || '1'
+  check(/^[A-Za-z0-9._-]{1,64}$/.test(generationSeed),
+    'SEED_GENERATION_SEED must be 1 to 64 letters, digits, ., _ or -')
+  // The tree profile is fixed and small; flat counts stay the opt-in path to large datasets.
+  const tree: TreeFile[] | null = profile === 'tree' ? treeFiles(generationSeed) : null
+  const files = tree ? tree.length : integer('SEED_FILES', organization ? '0' : '100', 1_000_000)
+  const drives = tree ? 1 : integer('SEED_DRIVES', '0', 100_000)
   check(organization || files || drives, 'At least one file or drive is required')
   const stackURL = !organization || files || drives ? origin('SEED_STACK_URL') : undefined
   const names = [domain, ...Array.from({ length: users }, () =>
@@ -296,13 +331,17 @@ async function main(): Promise<void> {
   const md5 = createHash('md5').update(body).digest('base64')
   // UUIDs are chosen before any write, so cleanup can prove ownership even after a lost creation reply.
   const manifest: FixtureManifest = {
-    version: 1, profile: 'flat', status: 'preparing', domain, organization: organization ? orgID : null,
-    parameters: { users, files, drives, context: contextName ?? null }, content: { bytes: body.length, md5 },
+    version: 1, profile, ...(tree ? { profile_version: TREE_VERSION, generation_seed: generationSeed } : {}),
+    status: 'preparing', domain, organization: organization ? orgID : null,
+    parameters: { users, files, drives, context: contextName ?? null },
+    content: tree ? { bytes: tree.reduce((sum, f) => sum + f.size, 0), md5: treeDigest(tree) }
+      : { bytes: body.length, md5 },
     instances: names.map((name, index) => ({
       domain: name, uuid: randomUUID(), role: organization ? (index ? 'member' : 'organization') : 'owner',
-      created: false, files: [], drives: [],
+      created: false, files: [], ...(tree ? { dirs: [] } : {}), drives: [],
     })),
   }
+  let uploaded = 0
   const create = async ({ domain: name, uuid }: ManifestInstance): Promise<Resource> => {
     const created = resource(expectStatus(await admin('POST', '/instances', {
       Domain: name, UUID: uuid, Locale: 'en', Email: `${uuid}@spam.cozycloud.cc`,
@@ -323,16 +362,9 @@ async function main(): Promise<void> {
     if (!files && !drives) return
     if (organization) console.log(`Seed owner: ${entry.domain}; files=${files}; drives=${drives}`)
     const { accessToken, api: publicAPI } = await session(stackURL, entry.domain)
-    for (let index = 1; index <= files; index++) {
-      const query = new URLSearchParams({ Type: 'file', Name: `seed-file-${index}.txt` })
-      const file = resource(expectStatus(await publicAPI('POST', `/files/io.cozy.files.root-dir?${query}`, body, {
-        'Content-Type': 'text/plain', 'Content-MD5': md5,
-      }), 201))
-      entry.files.push(file.id)
-    }
-    for (let index = 1; index <= drives; index++) {
+    const createDrive = async (driveName: string) => {
       const drive = await createSharedDrive({
-        baseUrl: stackURL!.origin, accessToken, driveName: `Seed shared drive ${index}`,
+        baseUrl: stackURL!.origin, accessToken, driveName,
         fetcher: async (input, init) => {
           const headers = Object.fromEntries(new Headers(init?.headers))
           const path = new URL(String(input)).pathname
@@ -345,7 +377,36 @@ async function main(): Promise<void> {
         typeof drive.rootDirectoryId === 'string' && drive.rootDirectoryId.trim(), 'Invalid shared-drive identity')
       await checkDriveRoot(publicAPI, drive.rootDirectoryId, drive.sharingId)
       entry.drives.push({ sharing: drive.sharingId, root: drive.rootDirectoryId })
+      return drive.rootDirectoryId
     }
+    const add = async (parent: string, query: Record<string, string>, content: Buffer | '' = '') => resource(
+      expectStatus(await publicAPI('POST', `/files/${encodeURIComponent(parent)}?${new URLSearchParams(query)}`,
+        content, content ? { 'Content-Type': 'application/octet-stream',
+          'Content-MD5': createHash('md5').update(content).digest('base64') } : {}), 201)).id
+    if (tree) {
+      const parents = new Map<string, string>([['.', ROOT], [TREE_DRIVE, await createDrive('Seed tree drive')]])
+      for (const path of TREE.dirs) {
+        const id = await add(parents.get(parentOf(path))!, { Type: 'directory', Name: nameOf(path) })
+        parents.set(path, id)
+        entry.dirs!.push(id)
+      }
+      for (const { path, size } of tree) {
+        const content = treeContent(generationSeed, path, size)
+        entry.files.push(await add(parents.get(parentOf(path))!, { Type: 'file', Name: nameOf(path) }, content))
+        uploaded += size
+      }
+      entry.root_entries = await rootEntries(publicAPI)
+      return
+    }
+    for (let index = 1; index <= files; index++) {
+      const query = new URLSearchParams({ Type: 'file', Name: `seed-file-${index}.txt` })
+      const file = resource(expectStatus(await publicAPI('POST', `/files/io.cozy.files.root-dir?${query}`, body, {
+        'Content-Type': 'text/plain', 'Content-MD5': md5,
+      }), 201))
+      entry.files.push(file.id)
+      uploaded += body.length
+    }
+    for (let index = 1; index <= drives; index++) await createDrive(`Seed shared drive ${index}`)
     entry.root_entries = await rootEntries(publicAPI)
   }
   let recording = false
@@ -358,6 +419,7 @@ async function main(): Promise<void> {
     if (organization) check(!(await list()).some(inScope), 'Organization scope already exists')
     writeManifest(manifestFile, manifest, true)
     recording = true
+    const startedAt = new Date()
     console.log(`Seed manifest: ${manifestFile}`)
     const created: Resource[] = []
     for (const entry of manifest.instances) {
@@ -373,8 +435,12 @@ async function main(): Promise<void> {
         members.some((item) => same(item, expected))), 'Organization membership mismatch')
     }
     manifest.status = 'complete'
+    const endedAt = new Date()
+    manifest.preparation = { started_at: startedAt.toISOString(), ended_at: endedAt.toISOString(),
+      duration_ms: endedAt.getTime() - startedAt.getTime(), bytes: uploaded }
     writeManifest(manifestFile, manifest)
-    const counts = `${organization ? `users=${users}; ` : ''}files=${files}; drives=${drives}`
+    const counts = `${organization ? `users=${users}; ` : ''}${tree ? 'profile=tree; ' : ''}` +
+      `files=${files}; drives=${drives}`
     console.log(`Seed complete: ${domain}; ${counts}`)
   } catch (error) {
     // The manifest keeps every confirmed object and planned identity for verification and cleanup.

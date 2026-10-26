@@ -165,7 +165,10 @@ test('file-only seed uses dedicated APIs, Basic auth and exact public Host inclu
   deepEqual(files[0]!.body, files[1]!.body)
   ok(!result.output.includes(password) && !result.output.includes(token))
   ok(f.instances.has(f.unrelated))
-  const manifest = JSON.parse(readFileSync(f.manifest, 'utf8'))
+  const { preparation, ...manifest } = JSON.parse(readFileSync(f.manifest, 'utf8'))
+  // Seeding is preparation, timed and sized apart from any measured work.
+  deepEqual(preparation.bytes, 2048)
+  ok(preparation.duration_ms >= 0 && Date.parse(preparation.ended_at) >= Date.parse(preparation.started_at))
   deepEqual(manifest, {
     version: 1, profile: 'flat', status: 'complete', domain, organization: null,
     parameters: { users: 0, files: 2, drives: 0, context: null }, content: { bytes: 1024, md5 },
@@ -349,6 +352,65 @@ test('seed refuses to replace an existing manifest before any write', async (t) 
   match(result.output, /an existing manifest may record another fixture/)
   ok(f.requests.every((r) => r.method === 'GET'))
   equal(readFileSync(f.manifest, 'utf8'), 'another fixture')
+})
+
+test('the tree profile seeds the same structure and bytes for a seed, and verify proves every parent', async (t) => {
+  const seeded = async (seed: string) => {
+    // Directories and files anywhere, as the Stack keeps them; drive roots and the root count stay default.
+    const items = new Map<string, Record<string, unknown>>()
+    const f = await fixture(t, (r, res) => {
+      const id = decodeURIComponent(r.url.pathname.slice('/files/'.length))
+      if (r.api !== 'stack' || !r.url.pathname.startsWith('/files/')) return
+      if (r.method === 'POST') {
+        const created = `item-${items.size + 1}`
+        const type = r.url.searchParams.get('Type')!
+        items.set(created, { type, name: r.url.searchParams.get('Name'), dir_id: id,
+          ...(type === 'file' ? { md5sum: r.headers['content-md5'], size: String(r.body.length) } : {}) })
+        res.writeHead(201).end(JSON.stringify({ data: { id: created, type: 'io.cozy.files' } }))
+        return true
+      }
+      if (!items.has(id)) return
+      res.end(JSON.stringify({ data: { id, type: 'io.cozy.files', attributes: items.get(id) } }))
+      return true
+    })
+    const result = await f.run(['seed', domain], { SEED_PROFILE: 'tree', SEED_GENERATION_SEED: seed, SEED_FILES: '9' })
+    equal(result.code, 0, result.output)
+    ok(result.output.includes('profile=tree; files=7; drives=1'))
+    return { f, items, manifest: JSON.parse(readFileSync(f.manifest, 'utf8')) }
+  }
+  const first = await seeded('alpha')
+  const again = await seeded('alpha')
+  const other = await seeded('beta')
+  const shape = (items: Map<string, Record<string, unknown>>) => [...items.values()]
+  // The same seed gives the same structure and bytes; another seed changes the bytes, not the structure.
+  deepEqual(shape(again.items), shape(first.items))
+  const structure = (items: Map<string, Record<string, unknown>>) => shape(items).map(({ md5sum, ...rest }) => rest)
+  deepEqual(structure(other.items), structure(first.items))
+  ok(first.manifest.content.md5 !== other.manifest.content.md5)
+  const m = first.manifest
+  deepEqual([m.profile, m.profile_version, m.generation_seed, m.parameters.files, m.parameters.drives],
+    ['tree', 1, 'alpha', 7, 1])
+  deepEqual([m.instances[0].dirs.length, m.instances[0].files.length, m.instances[0].drives.length], [5, 7, 1])
+  equal(m.preparation.bytes, m.content.bytes)
+  ok(m.content.bytes < 2 << 20, 'the tree stays within shared DEV byte budgets')
+  // Directories nest, and drive content sits under the drive root.
+  const byName = (name: string) => [...first.items.entries()].find(([, item]) => item.name === name)!
+  equal(byName('specs')[1].dir_id, byName('alpha')[0])
+  equal(byName('design.bin')[1].dir_id, byName('specs')[0])
+  equal(byName('handbook')[1].dir_id, m.instances[0].drives[0].root)
+  equal(byName('readme.txt')[1].dir_id, 'io.cozy.files.root-dir')
+
+  const verified = await first.f.run(['verify', domain])
+  equal(verified.code, 0, verified.output)
+  byName('plan.txt')[1].dir_id = byName('archive')[0]
+  match((await first.f.run(['verify', domain])).output, /file projects\/plan.txt changed/)
+  byName('plan.txt')[1].dir_id = byName('projects')[0]
+  const alpha = byName('alpha')[1]
+  alpha.name = 'beta'
+  match((await first.f.run(['verify', domain])).output, /directory projects\/alpha changed/)
+  alpha.name = 'alpha'
+  byName('welcome.txt')[1].md5sum = shape(other.items).find(item => item.name === 'welcome.txt')!.md5sum
+  match((await first.f.run(['verify', domain])).output, /file @drive\/handbook\/welcome.txt changed/)
 })
 
 test('drive-only seed reuses shared-drive creation and reads each root backlink with the same Host', async (t) => {

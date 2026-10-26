@@ -12,20 +12,27 @@ export interface ManifestInstance {
   // False until the admin API confirmed it: after a lost creation reply only the planned UUID is known.
   created: boolean
   files: string[]
+  // The tree profile's directories, in profile order.
+  dirs?: string[]
   drives: Array<{ sharing: string, root: string }>
   // Entries in the root directory once populated, to reconcile the fixture after a run.
   root_entries?: number
 }
 export interface FixtureManifest {
   version: 1
-  // The flat dataset: identical files at the root and empty owner drives.
-  profile: 'flat'
+  // flat: identical files at the root and empty owner drives; tree: dataset-profile.ts.
+  profile: 'flat' | 'tree'
+  // The tree profile's version and the seed its structure and bytes come from.
+  profile_version?: number
+  generation_seed?: string
   status: 'preparing' | 'complete' | 'failed'
   domain: string
   organization: string | null
   parameters: { users: number, files: number, drives: number, context: string | null }
   content: { bytes: number, md5: string }
   instances: ManifestInstance[]
+  // Seeding is preparation, kept apart from any measured work.
+  preparation?: { started_at: string, ended_at: string, duration_ms: number, bytes: number }
 }
 
 const id = (value: unknown) => typeof value === 'string' && value.length > 0 && !/[\s\x00-\x1f\x7f]/.test(value)
@@ -58,7 +65,9 @@ export function readManifest(path: string, domain: string): FixtureManifest {
     throw new FixtureError(`No readable fixture manifest at ${path}`)
   }
   const p = manifest?.parameters
-  const valid = manifest?.version === 1 && manifest.profile === 'flat' &&
+  const tree = manifest?.profile === 'tree'
+  const valid = manifest?.version === 1 && (manifest.profile === 'flat' ||
+    (tree && count(manifest.profile_version) && id(manifest.generation_seed))) &&
     ['preparing', 'complete', 'failed'].includes(manifest.status) && manifest.domain === domain &&
     (manifest.organization === null || manifest.organization === domain.split('.')[0]) &&
     count(p?.users) && count(p.files) && count(p.drives) && (p.context === null || id(p.context)) &&
@@ -66,7 +75,8 @@ export function readManifest(path: string, domain: string): FixtureManifest {
     manifest.instances[0]?.domain === domain && manifest.instances.every(i => id(i?.domain) && id(i.uuid) &&
       ['owner', 'organization', 'member'].includes(i.role) && typeof i.created === 'boolean' &&
       Array.isArray(i.files) && i.files.every(id) && Array.isArray(i.drives) &&
-      i.drives.every(d => id(d?.sharing) && id(d.root)) && (i.root_entries === undefined || count(i.root_entries)))
+      i.drives.every(d => id(d?.sharing) && id(d.root)) && (i.root_entries === undefined || count(i.root_entries)) &&
+      (i.dirs === undefined || (Array.isArray(i.dirs) && i.dirs.every(id))))
   if (!valid) throw new FixtureError(`${path} is not the fixture manifest of ${domain}`)
   return manifest
 }
