@@ -9,7 +9,7 @@ See [Testing architecture](../../docs/testing.md) for lifecycle boundaries,
 correctness and result contracts, and the planned bounded shared DEV rollout.
 
 For classified workload limits, tested bounds and fanout readiness evidence, see
-[Stack Capacity Overview](CAPACITY-OVERVIEW.md). The existing diagnostic dashboards remain available.
+[Load test overview](CAPACITY-OVERVIEW.md). Workload and infrastructure diagnostics remain available.
 
 The harness includes authenticated exact-work and fixed-duration file-upload
 workloads for personal drives, shared-drive activity and upload workloads, and an
@@ -470,19 +470,20 @@ infrastructure failure, and 1 when no level passed or any upload read back with
 a different checksum. The search runs through the shared upload runner, so its
 budgets and per-point cleanup are those of [Upload campaigns](#upload-campaigns).
 
-Grafana can filter k6 metrics by campaign, execution ID, file size,
-concurrency, and phase. A campaign groups every capacity-search point. An
+Grafana selects a recorded run through Environment, Mode and Run. Inspecting a
+point derives its execution ID, concurrency and phase. A campaign groups every
+capacity-search point. An
 execution ID identifies one k6 process at one concurrency and attempt; for a
 standalone upload or soak run, the campaign and execution ID are the same.
 Make generates a UTC execution ID by default. Pass `EXECUTION_ID=name` for a
 standalone run or `CAPACITY_RUN_ID=name` for a capacity campaign when you want
 a stable name in Grafana.
 
-The dashboard keeps successful and failed upload p95 values separate and uses
-seconds, which is the Prometheus base unit used by k6 remote write. It also
-shows failed-upload totals, a failure-rate timeline, and failures grouped by
-execution, concurrency, and HTTP status. The HTTP status is available in k6
-metrics; the server-side error message still comes from stack logs.
+Workload shows successful upload p50/p95/p99 in seconds, the Prometheus base
+unit used by k6 remote write. Final per-attempt report values remain in
+milliseconds. Failure counts require recorded evidence; unavailable counts do
+not become zero. HTTP status is available in raw k6 metrics; server-side error
+messages remain in Stack logs and are not exported as metric labels.
 
 Use the Stack source selector to inspect either the bundled Compose target or
 a stack started directly on the host. The stack panels show scrape health,
@@ -491,10 +492,10 @@ descriptor usage, garbage collection, and upload-related worker queues.
 
 For the bundled stack, Prometheus also scrapes CouchDB
 (`/_node/_local/_prometheus`) and RabbitMQ (port 15692, including per-queue
-depth). The overview's last row shows CouchDB requests, request time, error
+depth). The Infrastructure tab shows CouchDB requests, request time, error
 responses, open databases and files, and RabbitMQ memory and queued messages.
 
-The **Twake Drive shared-drive activity** dashboard follows the ramp level by
+The **Workload** tab follows shared-drive activity level by
 level: success rates, WebSocket events and changes delivered per upload level,
 upload, changes, and WebSocket connect p95, VUs, and stack load.
 
@@ -663,12 +664,18 @@ make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m   # ORG-DRIVE
 make campaign CAMPAIGN=dev-capacity   # all three, with the budgets in campaigns/dev-capacity.sh
 ```
 
-On the load VM, Grafana also has a **DEV infrastructure** view
-(`config/grafana/dashboards-dev/`): Stack HTTP, process and workers, hosts, CouchDB
-and Redis from the platform's DEV metrics, collected once a minute. Its data
-source (`dev-influxdb`), credentials and provisioning are private to the VM, so
-local installations never load it. Set `DEV_MONITORING_URL` to that view: reports
-and campaign summaries then link it over each run's time range.
+The [load test dashboard](CAPACITY-OVERVIEW.md) uses **Environment → Mode → Run**
+and three native tabs: **Overview**, **Workload**, **Infrastructure**. Size and
+upload target describe the run. Inspecting a tested point carries its execution
+and recorded window into the workload and infrastructure views. Producer links
+open the same dashboard over each run's UTC window.
+
+On the load VM, provision the private read-only Flux datasource **DEV InfluxDB**
+with UID `dev-influxdb`. The Infrastructure tab then shows DEV HTTP, process,
+workers, host, CouchDB and Redis measurements at 60-second sampling. These are
+shared host metrics, not isolated organization usage. Without that datasource,
+the tab reports DEV infrastructure unavailable. Set `DEV_MONITORING_URL` if an
+additional platform monitoring link is useful in reports and summaries.
 
 A shared DEV campaign (`SHARED_DEV=1` in its definition) takes the lock once and
 holds it through every step and its cleanup; its steps run on the DEV targets and

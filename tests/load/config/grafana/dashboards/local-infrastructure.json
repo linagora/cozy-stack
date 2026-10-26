@@ -1,0 +1,83 @@
+{
+  "uid": "twake-drive-local-infra",
+  "title": "Local infrastructure \u00b7 moved",
+  "schemaVersion": 42,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "tags": [
+    "load-test-compatibility"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "run",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(cozy_load_result_info,run)",
+          "refId": "run"
+        },
+        "refresh": 1,
+        "hide": 2,
+        "includeAll": false,
+        "multi": false,
+        "current": {}
+      },
+      {
+        "name": "env",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(cozy_load_result_info{run=\"$run\"},load_target)",
+          "refId": "env"
+        },
+        "refresh": 1,
+        "hide": 2,
+        "includeAll": false,
+        "multi": false,
+        "current": {}
+      },
+      {
+        "name": "mode",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(cozy_load_result_info{run=\"$run\"},mode)",
+          "refId": "mode"
+        },
+        "refresh": 1,
+        "hide": 2,
+        "includeAll": false,
+        "multi": false,
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Local infrastructure is now a tab",
+      "type": "text",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 5
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "[Open Local infrastructure in the shared load-test dashboard \u2192](/d/twake-drive-capacity?var-run=$run&var-env=$env&var-mode=$mode&dtab=infrastructure&${__url_time_range})\n\nOverview, Workload and Infrastructure now share the same recorded run and tested point."
+      }
+    }
+  ]
+}

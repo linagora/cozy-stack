@@ -11,6 +11,7 @@ export type ReportFile = {
 }
 
 type Labels = Record<string, string>
+export interface ReportSample { name: string; labels: Labels; value: number }
 
 function allowed(value: unknown, choices: string[], fallback: string): string {
   return typeof value === 'string' && choices.includes(value) ? value : fallback
@@ -27,6 +28,80 @@ function integer(value: unknown): value is number {
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : {}
+}
+
+function getRevision(value: unknown): string {
+  return typeof value === 'string' && /^[A-Za-z0-9._+-]{1,96}$/.test(value) ? value : 'Not recorded'
+}
+
+function records(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(record) : []
+}
+
+function reasonCategory(value: unknown, passed = false): string {
+  const text = typeof value === 'string' ? value : ''
+  for (const [pattern, category] of [
+    [/cleanup|reconcil|remaining|retained/i, 'Cleanup unverified'],
+    [/content.*(match|mismatch)|checksum/i, 'Content mismatch'],
+    [/p95|latency/i, 'Latency limit exceeded'],
+    [/success rate|upload.*fail/i, 'Upload success rate below minimum'],
+    [/iteration|incomplete|interrupt|stopped/i, 'Work incomplete'],
+    [/deadline|timeout|timed out|SLA/i, 'Observation deadline exceeded'],
+    [/budget|MAX_RUNTIME|MAX_VUS/i, 'Experiment limit reached'],
+    [/summary|metric|report|envelope/i, 'Report evidence unavailable'],
+  ] as const) if (pattern.test(text)) return category
+  return text === '' ? passed ? 'Required checks passed' : 'Reason not recorded' : 'See report diagnostics'
+}
+
+function parseTimestamp(value: unknown): number | null {
+  const parsed = typeof value === 'string' ? Date.parse(value) : NaN
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+const fileBytes: Record<string, number> = {
+  '1K': 1024, '100K': 102400, '1M': 1048576, '10M': 10485760, '100M': 104857600, '1G': 1073741824,
+}
+
+// These describe recorded checks, not a new verdict or a reconstruction of the capacity search.
+function checks(kind: ReportFile['kind'], data: Record<string, unknown>): { correctness: string, cleanup: string } {
+  const attempts = records(data.attempts)
+  const points = records(data.points)
+  let correctness = 'Not measured'
+  if (data.status === 'correctness_failure' || data.content_mismatch === true ||
+      attempts.some(point => finite(point.consistency_rate) && point.consistency_rate < 1)) {
+    correctness = 'Failed'
+  } else if (kind === 'upload' && attempts.some(point => finite(point.consistency_rate))) {
+    correctness = attempts.every(point => point.consistency_rate === 1 && point.success_rate === 1 &&
+      integer(point.completed_iterations) && point.completed_iterations > 0 &&
+      integer(point.vus) && integer(point.iterations_per_vu) &&
+      point.completed_iterations === point.vus * point.iterations_per_vu) ? 'Verified' : 'Partial'
+  } else if (kind === 'fanout' && points.length) {
+    correctness = points.every(point => {
+      const recipients = records(point.recipients)
+      return integer(point.n) && point.n > 0 && recipients.length === point.n &&
+        recipients.every(recipient => record(recipient.add).converged === true &&
+          record(recipient.add).marker_matches === true && record(recipient.remove).converged === true)
+    }) ? 'Verified' : 'Partial'
+  }
+  let cleanup = 'Not recorded'
+  const cleared = (point: Record<string, unknown>): boolean => {
+    const remaining = record(point.cleanup).remaining
+    return Array.isArray(remaining) ? remaining.length === 0 : point.cleanup_rate === 1
+  }
+  if (kind === 'upload' && attempts.length) {
+    cleanup = attempts.every(cleared) ? 'Verified' : 'Unverified'
+  } else if (kind === 'shared_drive') {
+    const remaining = record(data.cleanup).remaining
+    if (Array.isArray(remaining)) cleanup = remaining.length === 0 ? 'Verified' : 'Unverified'
+    else if (finite(data.cleanup_success_rate)) {
+      cleanup = data.cleanup_success_rate === 1 ? 'Verified' : 'Unverified'
+    }
+  } else if (kind === 'fanout') {
+    const retained = record(data.cleanup).retained
+    if (Array.isArray(retained)) cleanup = retained.length === 0 ? 'Verified' : 'Unverified'
+    else if (data.retained === true) cleanup = 'Retained'
+  }
+  return { correctness, cleanup }
 }
 
 // A regression run's verdict, by its recorded status; it never claims a capacity.
@@ -65,26 +140,19 @@ function fanoutValues(point: Record<string, unknown>): Record<string, number> {
   return values
 }
 
-export function renderMetrics(
+export function getReportSamples(
   reports: ReportFile[],
   counts: { valid: number; invalid: number; unsupported: number },
-): string {
-  const output: string[] = []
-  const families = new Set<string>()
+): ReportSample[] {
+  const output: ReportSample[] = []
   const emit = (name: string, dimensions: Labels, value: unknown) => {
     if (!finite(value)) return
-    const labels = Object.entries(dimensions).map(([key, text]) => {
-      const escaped = text.replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll('"', '\\"')
-      return `${key}="${escaped}"`
-    }).join(',')
-    if (!families.has(name)) {
-      output.push(`# TYPE cozy_load_${name} gauge`)
-      families.add(name)
-    }
-    output.push(`cozy_load_${name}{${labels}} ${value}`)
+    output.push({ name: `cozy_load_${name}`, labels: dimensions, value })
   }
   for (const { campaign, run, kind, data, timestamp, startedAt, endedAt } of reports) {
-    const base = { campaign, run, kind }
+    const base = { campaign, run, kind,
+      load_target: allowed(data.load_target, ['local', 'dev'], 'unknown'),
+      mode: allowed(data.mode, ['capacity', 'regression'], 'capacity') }
     let lower: number | undefined
     let upper: number | undefined
     let bound = 'inconclusive'
@@ -146,6 +214,72 @@ export function renderMetrics(
       high !== undefined ? `[${low}, ${high})` : exact ? `= ${low}` : `>= ${low}`
     const verdict = !regression ? undefined : declared === undefined ? regressionVerdicts[String(data.status)]
       : (['passed', 'failed', 'inconclusive'] as const)[declared?.outcome ?? 2]
+    const p95Limit = regression ? record(data.criteria).maximum_p95_ms : data.p95_limit_ms
+    const observational = record(data.criteria).p95_limit_mode === 'none'
+    const outcome = declared === undefined ? data.outcome : declared?.outcome ?? 2
+    const execution = running ? 'Running' : outcome === 0 ? 'Completed'
+      : outcome === 1 ? 'Failed' : outcome === 2 ? 'Inconclusive' : 'Not recorded'
+    const recordedChecks = checks(kind, data)
+    if (declared !== undefined) {
+      const verification = { verified: 'Verified', failed: 'Failed', not_verified: 'Unverified' }
+      recordedChecks.correctness = declared ? verification[declared.correctness] : 'Unverified'
+      recordedChecks.cleanup = declared ? verification[declared.cleanup] : 'Unverified'
+      if (declared?.cleanup === 'not_verified' && kind === 'fanout' && data.retained === true) {
+        recordedChecks.cleanup = 'Retained'
+      }
+    }
+    const size = allowed(data.file_size, Object.keys(fileBytes), 'n/a')
+    const target = allowed(data.upload_target, ['shared-drive', 'personal'], 'n/a')
+    const workload = kind === 'upload' ? `${target === 'personal' ? 'Personal' : target === 'shared-drive' ? 'Shared-drive' : 'Legacy'} uploads`
+      : kind === 'fanout' ? 'Organization sharing' : 'Shared-drive activity'
+    const recordedStart = declared?.time.start ?? (finite(startedAt) && startedAt < 8.64e12
+      ? new Date(startedAt * 1000).toISOString() : '')
+    const versions = record(declared?.versions ?? data.versions)
+    const budgets = record(record(declared?.parameters).budgets ?? data.budgets)
+    const runReason = declared === null ? 'Invalid result envelope'
+      : reasonCategory(declared?.reason ?? data.failure_reason ?? data.error, outcome === 0)
+    const runtime = typeof budgets.max_runtime === 'string' && /^\d+(ms|s|m|h)$/.test(budgets.max_runtime)
+      ? budgets.max_runtime : 'Not recorded'
+    emit('run_info', { ...base, title: `${workload}${size === 'n/a' ? '' : ` · ${size}`} · ${recordedStart.slice(5, 19).replace('T', ' ')} UTC`,
+      workload, profile: kind === 'upload' ? `${size} files · ${target}`
+        : kind === 'fanout' ? 'Distinct organization recipients' : 'Writer / WebSocket / changes roles · one identity',
+      file_size: size, upload_target: target,
+      reason: runReason,
+      schema: declared === undefined ? 'legacy' : declared === null ? 'invalid' : declared.schema,
+      notice: outcome !== 0 || data.budget_reached === true ? 'yes' : 'no',
+      stack_revision: getRevision(versions.stack), harness_revision: getRevision(versions.harness),
+      runtime_budget: runtime,
+      vus_budget: finite(budgets.max_vus) ? String(budgets.max_vus) : 'Not recorded',
+      bytes_budget: finite(budgets.max_upload_bytes) ? String(budgets.max_upload_bytes) : 'Not recorded',
+      dataset: declared?.dataset === null ? 'None' : 'Not recorded',
+      topology: allowed(declared?.topology, ['single-host', 'shared-dev', 'distributed'], 'Not recorded'),
+    }, 1)
+    emit('verdict_info', {
+      ...base, execution, ...recordedChecks,
+      performance: regression
+        ? (declared === null ? 'Inconclusive' : finite(p95Limit)
+          ? declared?.performance === 'failed' ? 'Gate failed'
+            : declared?.performance === 'passed' ? 'Gate passed' : 'Configured gate'
+          : observational ? 'Observational' : 'Not recorded')
+        : running ? 'Running' : lower === undefined ? 'Inconclusive' : describe(lower, upper, bound === 'exact'),
+      performance_detail: regression ? (finite(p95Limit) ? 'See recorded p95 criterion'
+        : observational ? 'No latency gate' : 'Latency criterion not recorded')
+        : evidence ? `Retained evidence: ${describe(evidence.lower, evidence.upper, evidence.exact)}`
+        : kind === 'upload' ? 'Upload workers' : kind === 'fanout' ? 'Recipients' : 'Activity mix units',
+      outcome: [0, 1, 2].includes(outcome as number) ? String(outcome) : 'Not recorded',
+    }, 1)
+    if (finite(startedAt) && finite(endedAt) && endedAt >= startedAt && endedAt < 8.64e12) {
+      const start = new Date(startedAt * 1000).toISOString()
+      const end = new Date(endedAt * 1000).toISOString()
+      emit('window_info', { ...base, start, end, window: `${start.slice(11, 19)} – ${end.slice(11, 19)} UTC`,
+        start_ms: String(startedAt * 1000), end_ms: String(endedAt * 1000),
+        // Match campaign links: leave time for Prometheus to scrape the completed report.
+        focus_from_ms: String(Math.max(0, startedAt * 1000 - 60_000)),
+        focus_to_ms: String(endedAt * 1000 + 60_000),
+        open_run: 'Open run + context', run_only: 'Run only', all_points: 'All points',
+        evidence: 'Download evidence',
+      }, 1)
+    }
     emit('result_info', {
       ...base,
       scope: kind === 'fanout' ? 'recipients' : kind === 'shared_drive' ? 'activity_mix' : 'upload_workers',
@@ -154,8 +288,8 @@ export function renderMetrics(
       bound: regression ? 'none' : bound,
       result: regression ? (verdict ?? 'inconclusive').replace(/^./, c => c.toUpperCase())
         : running ? 'Running' : lower === undefined ? 'Inconclusive' : describe(lower, upper, bound === 'exact'),
-      file_size: allowed(data.file_size, ['1K', '100K', '1M', '10M', '100M', '1G'], 'n/a'),
-      upload_target: allowed(data.upload_target, ['shared-drive', 'personal'], 'n/a'),
+      file_size: size,
+      upload_target: target,
       reason: (regression ? verdict === undefined : lower === undefined) ? 'missing_result' : 'recorded',
       // Recorded by the producer: legacy reports show an unknown environment and outcome.
       load_target: allowed(data.load_target, ['local', 'dev'], 'unknown'),
@@ -180,7 +314,9 @@ export function renderMetrics(
           minimum_success_rate: 'minimum_success_rate',
           confirmation_iterations_per_vu: 'confirmation_iterations_per_vu',
         }),
-        ...numbers(data, { p95_limit_ms: 'p95_limit_ms', configured_max_vus: 'configured_max_vus' }),
+        ...numbers({ ...data, p95_limit_ms: p95Limit }, {
+          p95_limit_ms: 'p95_limit_ms', configured_max_vus: 'configured_max_vus',
+        }),
       }
     } else if (kind === 'shared_drive') {
       values = {
@@ -204,6 +340,32 @@ export function renderMetrics(
     for (const [metric, value] of Object.entries(values)) emit('result_value', { ...base, metric }, value)
     const rawPoints = kind === 'upload' ? data.attempts : kind === 'shared_drive' ? data.levels : data.points
     const points = Array.isArray(rawPoints) ? rawPoints : []
+    const attempts = records(rawPoints)
+    if (kind === 'upload' && attempts.length > 0) {
+      const aggregate = (metric: string, get: (point: Record<string, unknown>) => unknown): void => {
+        const amounts = attempts.map(get)
+        if (amounts.every(finite)) emit('result_value', { ...base, metric }, amounts.reduce((a, b) => a + b, 0))
+      }
+      aggregate('failed_uploads', p => p.success_rate === 1 ? 0 : undefined)
+      aggregate('payload_bytes', p => p.success_rate === 1 && finite(p.completed_iterations) && size !== 'n/a'
+        ? p.completed_iterations * fileBytes[size]! : undefined)
+      const latencies = attempts.map(p => p.p95_ms)
+      if (latencies.every(finite)) emit('result_value', { ...base, metric: 'worst_final_p95_ms' }, Math.max(...latencies))
+      const completed = attempts.map(p => p.completed_iterations)
+      const planned = attempts.map(p => integer(p.vus) && integer(p.iterations_per_vu) ? p.vus * p.iterations_per_vu : null)
+      const count = (amounts: unknown[]): string => amounts.every(finite) ? String(amounts.reduce((a, b) => a + b, 0)) : 'Not recorded'
+      emit('work_info', { ...base, completed: `${attempts.every(p => p.success_rate === 1) ? count(completed) : 'Not recorded'} / ${count(planned)}`,
+        readback: checks(kind, data).correctness === 'Verified' ? `${count(completed)} matched` : 'Readback coverage incomplete',
+      }, 1)
+    } else if (kind === 'shared_drive' && attempts.length > 0) {
+      emit('work_info', { ...base, completed: `${attempts.length} recorded levels`,
+        readback: 'Content not verified',
+      }, 1)
+    } else if (kind === 'fanout' && attempts.length > 0) {
+      emit('work_info', { ...base, completed: `${attempts.length} recorded recipient batches`,
+        readback: recordedChecks.correctness,
+      }, 1)
+    }
     points.forEach((raw, index) => {
       const point = record(raw)
       const load = kind === 'upload' ? point.vus : kind === 'shared_drive' ? point.level : point.n
@@ -218,6 +380,48 @@ export function renderMetrics(
         : kind === 'shared_drive' ? ['passed', 'failed', 'not_run', 'not_measured', 'inconclusive']
         : ['passed', 'failed', 'inconclusive'], 'missing_result')
       const dimensions = { ...base, index: String(index + 1), load: String(load), phase }
+      const pointId = `${run}-point-${index + 1}`
+      const legacyId = typeof point.summary_path === 'string'
+        ? /^data\/results\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})-summary\.json$/.exec(point.summary_path)?.[1] : null
+      const executionId = typeof point.execution_id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(point.execution_id)
+        ? point.execution_id : legacyId ?? 'not-recorded'
+      const pointStart = parseTimestamp(point.started_at)
+      const pointEnd = parseTimestamp(point.ended_at)
+      const pointWindow = pointStart !== null && pointEnd !== null && pointEnd >= pointStart
+      const unit = kind === 'upload' ? 'workers' : kind === 'fanout' ? 'recipients' : 'mix units'
+      const phaseTitle = phase.charAt(0).toUpperCase() + phase.slice(1)
+      const planned = kind === 'upload' && integer(point.iterations_per_vu) ? load * point.iterations_per_vu : null
+      const complete = kind === 'upload' && integer(point.completed_iterations) ? point.completed_iterations : null
+      const pointChecks = kind === 'upload' ? checks(kind, { attempts: [point] }) : checks(kind, { points: [point] })
+      const safeReason = reasonCategory(point.reason ?? point.error ?? (Array.isArray(point.reasons) ? point.reasons.join('; ') : ''), status === 'passed')
+      const fanout = kind === 'fanout' ? fanoutValues(point) : {}
+      emit('point_evidence_info', { ...dimensions, execution_id: executionId,
+        point_title: `${load} ${unit} · ${phaseTitle} · point ${index + 1}`, status,
+        completed: complete === null ? 'Not recorded' : String(complete),
+        planned: planned === null ? 'Not recorded' : String(planned),
+        correctness: pointChecks.correctness, cleanup: pointChecks.cleanup,
+        access: finite(fanout.recipient_access_proofs) ? `${fanout.recipient_access_proofs} / ${load}` : 'Not recorded',
+        revoked: finite(fanout.owner_revoked) ? `${fanout.owner_revoked} / ${load}` : 'Not recorded',
+        p95: finite(point.p95_ms) ? `${point.p95_ms.toFixed(1)} ms` : 'Not recorded',
+        reason: safeReason,
+        start_ms: !pointWindow ? finite(startedAt) ? String(Math.max(0, startedAt * 1000 - 60_000)) : ''
+          : String(Math.max(0, pointStart - 30_000)),
+        end_ms: !pointWindow ? finite(endedAt) ? String(endedAt * 1000 + 60_000) : ''
+          : String(pointEnd + 60_000),
+        window_recorded: pointWindow ? 'yes' : 'no',
+        point_id: pointId,
+        raw_start_ms: pointWindow ? String(pointStart) : finite(startedAt) ? String(startedAt * 1000) : '',
+        raw_end_ms: pointWindow ? String(pointEnd) : finite(endedAt) ? String(endedAt * 1000) : '',
+        inspect: 'Inspect →',
+        point_window: pointWindow ? 'Point + context' : 'Run window (point time unavailable)',
+        point_only: pointWindow ? 'Point only' : 'Run only (point time unavailable)',
+        evidence: pointChecks.correctness === 'Failed' || status === 'failed' ? 'Failed'
+          : pointChecks.cleanup === 'Retained' ? 'Retained'
+          : pointChecks.correctness === 'Verified' && pointChecks.cleanup === 'Verified' ? 'Verified' : 'Unverified',
+      }, 1)
+      if (!['not_run', 'not_measured', 'missing_result'].includes(status)) {
+        emit('point_value', { ...dimensions, metric: 'load' }, load)
+      }
       emit('point_info', {
         ...dimensions, status: status === 'missing_result' ? 'inconclusive' : status,
         reason: status === 'missing_result' ? 'missing_result' : 'recorded',
@@ -230,6 +434,13 @@ export function renderMetrics(
         upload_p95_ms: 'upload_p95_ms', success_rate: 'upload_success_rate',
         ws_delivery_ratio: 'ws_delivery_ratio', changes_delivery_ratio: 'changes_delivery_ratio',
       }) : fanoutValues(point)
+      if (pointStart !== null && pointEnd !== null && pointEnd > pointStart) {
+        values.started_at_seconds = pointStart / 1000
+        values.ended_at_seconds = pointEnd / 1000
+        if (point.success_rate === 1 && complete !== null) {
+          values.point_uploads_per_second = complete / ((pointEnd - pointStart) / 1000)
+        }
+      }
       if (kind === 'shared_drive') {
         for (const [metric, key] of Object.entries({
           writers: 'writers', ws_readers: 'wsReaders', changes_readers: 'changesReaders',
@@ -237,11 +448,28 @@ export function renderMetrics(
           if (finite(roles[key])) values[metric] = load * roles[key]
         }
       }
+      if (kind === 'upload' && point.success_rate === 1 && complete !== null && size !== 'n/a') {
+        values.payload_bytes = complete * fileBytes[size]!
+        values.failed_uploads = 0
+      }
+      if (kind === 'upload' && planned !== null) values.planned_iterations = planned
       for (const [metric, value] of Object.entries(values)) emit('point_value', { ...dimensions, metric }, value)
     })
   }
   for (const state of ['valid', 'invalid', 'unsupported'] as const) {
     emit('exporter_reports', { state }, counts[state])
+  }
+  return output
+}
+
+export function renderMetrics(reports: ReportFile[], counts: { valid: number; invalid: number; unsupported: number }): string {
+  const families = new Set<string>()
+  const output: string[] = []
+  for (const { name, labels, value } of getReportSamples(reports, counts)) {
+    if (!families.has(name)) { output.push(`# TYPE ${name} gauge`); families.add(name) }
+    const dimensions = Object.entries(labels).map(([key, text]) =>
+      `${key}="${text.replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll('"', '\\"')}"`).join(',')
+    output.push(`${name}{${dimensions}} ${value}`)
   }
   return `${output.join('\n')}\n`
 }

@@ -47,11 +47,7 @@ export type CampaignSummaryInput = {
 
 const GRAFANA_MARGIN_MS = 60_000
 
-const dashboards: Record<string, string> = {
-  'shared-drive-ramp': 'twake-drive-shared-drive/twake-drive-shared-drive-activity',
-  'upload-capacity': 'twake-drive-k6/twake-drive-k6-overview',
-  'org-drive-fanout': 'twake-drive-capacity/stack-capacity-overview',
-}
+const dashboardKinds = ['shared-drive-ramp', 'upload-capacity', 'upload-regression', 'org-drive-fanout']
 
 export function parseSteps(tsv: string): CampaignStep[] {
   return tsv
@@ -240,22 +236,22 @@ export function campaignOutcome(steps: readonly StepOutcome[], interrupted: bool
 const outcomeLabels: Record<Outcome, string> = { 0: 'completed', 1: 'correctness failure', 2: 'inconclusive' }
 
 export function buildGrafanaLink(
-  grafanaUrl: string, step: CampaignStep, campaignId = step.id,
+  grafanaUrl: string, step: CampaignStep,
+  context: { loadTarget?: unknown, mode?: unknown } = {},
 ): string | null {
-  const dashboard = dashboards[step.kind]
   const from = Date.parse(step.startedAt)
   const to = Date.parse(step.endedAt)
 
-  if (dashboard === undefined || step.id === '' || Number.isNaN(from) || Number.isNaN(to)) {
+  if (!dashboardKinds.includes(step.kind) || step.id === '' || Number.isNaN(from) || Number.isNaN(to)) {
     return null
   }
 
   const base = grafanaUrl.replace(/\/+$/, '')
-  if (step.kind === 'org-drive-fanout') {
-    return `${base}/d/${dashboard}?var-campaign=${encodeURIComponent(campaignId)}` +
-      `&from=${from - GRAFANA_MARGIN_MS}&to=${to + GRAFANA_MARGIN_MS}`
-  }
-  return `${base}/d/${dashboard}?var-campaignid=${encodeURIComponent(step.id)}&from=${from - GRAFANA_MARGIN_MS}&to=${to + GRAFANA_MARGIN_MS}`
+  const params = new URLSearchParams({ 'var-run': step.id, 'var-point': '$__all', dtab: 'overview',
+    from: String(from - GRAFANA_MARGIN_MS), to: String(to + GRAFANA_MARGIN_MS) })
+  if (context.loadTarget === 'local' || context.loadTarget === 'dev') params.set('var-env', context.loadTarget)
+  if (context.mode === 'regression' || context.mode === 'capacity') params.set('var-mode', context.mode)
+  return `${base}/d/twake-drive-capacity?${params}`
 }
 
 // A Grafana-style dashboard narrowed to the step's time range; null when either is unusable.
@@ -285,7 +281,8 @@ export function formatCampaignSummary(input: CampaignSummaryInput): string {
     const result = describeStepResult(step, input.results.get(step.id) ?? null)
     const { code, reason } = evaluation.steps[index]!
     const outcome = code === 0 ? '0' : `${code}: ${reason}`
-    const link = buildGrafanaLink(input.grafanaUrl, step, step.kind === 'org-drive-fanout' ? input.runId : step.id)
+    const report = input.results.get(step.id)
+    const link = buildGrafanaLink(input.grafanaUrl, step, { loadTarget: report?.load_target, mode: report?.mode })
     const dev = input.devMonitoringUrl ? buildWindowLink(input.devMonitoringUrl, step) : null
     return `| ${step.name} | ${result} | ${outcome} |${link === null ? '' : ` [Grafana](${link})`}${
       dev === null ? '' : ` [DEV](${dev})`} |`

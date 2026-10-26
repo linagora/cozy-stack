@@ -166,9 +166,9 @@ describe('fanout campaign results', (): void => {
     'inconclusive; batch 75; owner ready 72; recipient access proofs 1')
   })
 
-  it('links native overview without losing the explicit campaign identifier', (): void => {
-    match(buildGrafanaLink('http://grafana.test', step, 'parent-campaign') ?? '',
-      /\/d\/twake-drive-capacity\/stack-capacity-overview\?var-campaign=parent-campaign&/)
+  it('opens the actual fanout report and its environment in the shared overview', (): void => {
+    match(buildGrafanaLink('http://grafana.test', step, { loadTarget: 'dev', mode: 'capacity' }) ?? '',
+      /\/d\/twake-drive-capacity\?var-run=run-upload-1m&/)
   })
 })
 
@@ -176,11 +176,11 @@ describe('buildGrafanaLink', (): void => {
   it('opens the matching dashboard on the step campaign and time range', (): void => {
     equal(
       buildGrafanaLink('http://grafana.test/', uploadStep),
-      'http://grafana.test/d/twake-drive-k6/twake-drive-k6-overview?var-campaignid=run-upload-1m&from=1792357740000&to=1792358460000',
+      'http://grafana.test/d/twake-drive-capacity?var-run=run-upload-1m&var-point=%24__all&dtab=overview&from=1792357740000&to=1792358460000',
     )
     match(
       buildGrafanaLink('http://grafana.test', { ...uploadStep, kind: 'shared-drive-ramp' }) ?? '',
-      /\/d\/twake-drive-shared-drive\/twake-drive-shared-drive-activity\?var-campaignid=run-upload-1m&/,
+      /\/d\/twake-drive-capacity\?var-run=run-upload-1m&/,
     )
   })
 
@@ -205,7 +205,7 @@ describe('formatCampaignSummary', (): void => {
     match(text, /- Commit: abc123/)
     match(text, /- Limits: cozy-stack cpus=2 mem=4g/)
     match(text, /- Outcome: 0 \(completed\)/)
-    match(text, /\| upload-capacity-1M \| maximum concurrent uploads = 48 \| 0 \| \[Grafana\]\(http:\/\/grafana\.test\/d\/twake-drive-k6\//)
+    match(text, /\| upload-capacity-1M \| maximum concurrent uploads = 48 \| 0 \| \[Grafana\]\(http:\/\/grafana\.test\/d\/twake-drive-capacity\?/)
     match(text, /\| shared-drive-prepare \| done \| 0 \|/)
   })
 

@@ -92,7 +92,7 @@ help:
 	@echo "make fixture-snapshot FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
 	@echo "make fixture-restore FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
 	@echo "make fixture-discard FIXTURE_PROJECT=...       Remove only a marked disposable deployment"
-	@echo "make capacity-dashboard-url                  Open the Stack Capacity Overview"
+	@echo "make capacity-dashboard-url                  Open the shared load-test overview"
 	@echo "make up                                      Start dashboards and the local mock"
 	@echo "make upload-binaries                         Generate every upload binary"
 	@echo "make upload-smoke                            Run two concurrent 1K mock uploads"
@@ -355,7 +355,7 @@ down:
 
 .PHONY: capacity-dashboard-url
 capacity-dashboard-url:
-	@printf '%s/d/twake-drive-capacity/stack-capacity-overview\n' "$(GRAFANA_URL)"
+	@printf '%s/d/twake-drive-capacity\n' "$(GRAFANA_URL)"
 
 dashboard-url:
 	@port="$$( $(COMPOSE) port grafana 3000 | sed 's/.*://' )"; echo "http://localhost:$$port/"

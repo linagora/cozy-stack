@@ -5,8 +5,9 @@ import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { renderMetrics, type ReportFile } from './capacity-metrics.ts'
+import { getReportSamples, renderMetrics, type ReportFile } from './capacity-metrics.ts'
 import { isJsonRecord } from './capacity/k6-summary.ts'
+import { fetchReportMetadata } from './report-metadata.ts'
 
 const finite = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -199,7 +200,7 @@ export function readResults(directory: string, options: Partial<Limits> = {}): S
   return snapshot
 }
 
-export function createResultsServer(directory: string) {
+export function createResultsServer(directory: string, prometheusUrl = 'http://prometheus:9090') {
   const server = createServer({ maxHeaderSize: 8192 }, (request, response) => {
     response.setHeader('Cache-Control', 'no-store')
     response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -212,12 +213,27 @@ export function createResultsServer(directory: string) {
       response.end('ok\n')
       return
     }
-    if (request.url !== '/metrics') {
+    const url = new URL(request.url ?? '/', 'http://results')
+    if (url.pathname.startsWith('/metadata/') && !url.pathname.startsWith('/metadata/evidence/')) {
+      void fetchReportMetadata(url, response, prometheusUrl)
+      return
+    }
+    const download = /^(?:\/metadata)?\/evidence\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.json$/.exec(url.pathname)
+    if (request.url !== '/metrics' && !download) {
       response.writeHead(404).end('not_found\n')
       return
     }
     try {
       const snapshot = readResults(directory)
+      if (download) {
+        const reports = snapshot.reports.filter(report => report.run === download[1])
+        if (reports.length !== 1) { response.writeHead(404).end('not_found\n'); return }
+        response.setHeader('Content-Type', 'application/json')
+        response.setHeader('Content-Disposition', `attachment; filename="${download[1]}-evidence.json"`)
+        response.end(JSON.stringify({ schema: 'cozy-load-evidence/1', run: download[1],
+          samples: getReportSamples(reports, { valid: 1, invalid: 0, unsupported: 0 }) }, null, 2))
+        return
+      }
       const text = renderMetrics(snapshot.reports, snapshot.counts)
       response.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
       response.end(text)

@@ -8,3 +8,14 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: false
+  - name: Load reports
+    uid: load-reports
+    type: prometheus
+    access: proxy
+    url: http://capacity-results:9465/metadata
+    editable: false
+    jsonData:
+      httpMethod: GET
+      prometheusType: Prometheus
+      disableRecordingRules: true
+      cacheLevel: None

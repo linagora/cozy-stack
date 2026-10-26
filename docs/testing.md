@@ -126,6 +126,10 @@ work and verified cleanup. Setup or cleanup failure returns 2. Record performanc
 without pass/fail thresholds; safety budgets and stop conditions still apply.
 
 Retain raw diagnostics and a short human-readable report with dashboard links.
+Grafana uses Environment, Mode and Run, with Overview, Workload and Infrastructure
+tabs. Recorded results and point evidence remain independent of telemetry zoom;
+run and point controls restore their recorded windows. A dashboard evidence
+download is an allowlisted projection, not a replacement for the producer report.
 Compare only compatible workloads, datasets and environments, with repeated
 runs and background activity recorded. Agree on absolute performance criteria
 before using them as release gates.

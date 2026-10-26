@@ -309,3 +309,28 @@ test('regression reports are read, timed by their own record outside a campaign'
   assert.equal(snapshot.reports[0]?.startedAt, Date.parse('2026-10-25T13:52:08Z') / 1000)
   assert.equal(snapshot.reports[0]?.endedAt, Date.parse('2026-10-25T13:52:13Z') / 1000)
 })
+
+test('evidence download projects the same safe facts as metrics, never raw report secrets or paths', async t => {
+  const dir = directory(t)
+  writeFileSync(join(dir, 'run-upload-capacity.json'), JSON.stringify({ ...uploadReport(),
+    token: 'private-token', target: 'https://private.example',
+    attempts: [{ vus: 1, phase: 'baseline', result: 'passed', error: 'private-error' }],
+  }))
+  const server = createResultsServer(dir).listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(() => { server.closeAllConnections(); server.close() })
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const base = `http://127.0.0.1:${address.port}`
+  const response = await fetch(`${base}/metadata/evidence/run.json`)
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('content-disposition')!, /attachment/)
+  const text = await response.text()
+  assert.doesNotMatch(text, /private-token|private\.example|private-error/)
+  const evidence = JSON.parse(text)
+  assert.equal(evidence.schema, 'cozy-load-evidence/1')
+  assert.equal(evidence.run, 'run')
+  assert.ok(evidence.samples.some((sample: { name: string }) => sample.name === 'cozy_load_point_evidence_info'))
+  assert.equal((await fetch(`${base}/evidence/missing.json`)).status, 404)
+  assert.equal((await fetch(`${base}/metadata/api/v1/query`, { method: 'POST' })).status, 405)
+})

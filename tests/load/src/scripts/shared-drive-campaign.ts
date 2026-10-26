@@ -119,7 +119,7 @@ async function main(): Promise<number> {
     k6: buildGrafanaLink(env.GRAFANA_URL || 'http://localhost:3000', {
       name: 'shared-drive-ramp', kind: 'shared-drive-ramp', id: config.executionId, startedAt, endedAt,
       exitCode: code, producerExitCode: code,
-    }),
+    }, { loadTarget: target.kind, mode: 'capacity' }),
     ...(target.kind === 'dev' ? { dev: env.DEV_MONITORING_URL || 'unknown' } : {}),
   }
   report.result = rampEnvelope(report, {

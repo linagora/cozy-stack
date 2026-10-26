@@ -1,8 +1,80 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { renderMetrics, type ReportFile } from './capacity-metrics.ts'
+import { uploadEnvelope } from './result-envelope.ts'
 
 const counts = { valid: 1, invalid: 0, unsupported: 0 }
+
+test('the same four verdicts describe both modes on either environment', () => {
+  for (const load_target of ['local', 'dev']) {
+    for (const mode of ['regression', 'capacity']) {
+      const output = renderMetrics([report('upload', {
+        load_target, mode, outcome: 0, status: 'completed',
+        maximum_concurrent_uploads: 2, result_bound: 'lower_bound',
+        criteria: { p95_limit_mode: 'none' },
+        attempts: [{ vus: 2, iterations_per_vu: 10, completed_iterations: 20,
+          consistency_rate: 1, success_rate: 1, cleanup_rate: 1 }],
+      })], counts)
+      const verdict = samples(output, 'verdict_info')[0]!
+      assert.match(verdict, new RegExp(`load_target="${load_target}",mode="${mode}"`))
+      assert.match(verdict, /execution="Completed",correctness="Verified",cleanup="Verified"/)
+      assert.match(verdict, mode === 'regression' ? /performance="Observational"/ : /performance=">= 2"/)
+      if (mode === 'regression') assert.equal(value(output, 'capacity_lower'), undefined)
+    }
+  }
+})
+
+test('regression latency gates come from its criteria; missing criteria stay unknown', () => {
+  const gated = renderMetrics([report('upload', {
+    mode: 'regression', criteria: { maximum_p95_ms: 500, p95_limit_mode: 'absolute' },
+  })], counts)
+  assert.match(gated, /performance="Configured gate"/)
+  assert.match(gated, /metric="p95_limit_ms"} 500/)
+  const absent = renderMetrics([report('upload', { mode: 'regression' })], counts)
+  assert.match(absent, /performance="Not recorded"/)
+  assert.doesNotMatch(absent, /No latency gate|Observational/)
+})
+
+test('unknown, partial, failed and cleanup evidence never become green by inference', () => {
+  const attempt = { vus: 2, iterations_per_vu: 10, completed_iterations: 20,
+    consistency_rate: 1, success_rate: 1, cleanup_rate: 1 }
+  for (const [data, expected] of [
+    [{}, /execution="Not recorded",correctness="Not measured",cleanup="Not recorded"/],
+    [{ outcome: 2, attempts: [{ ...attempt, completed_iterations: 1, cleanup: { remaining: ['private-id'] } }] },
+      /execution="Inconclusive",correctness="Partial",cleanup="Unverified"/],
+    [{ outcome: 1, attempts: [{ ...attempt, consistency_rate: 0, cleanup_rate: null }] },
+      /execution="Failed",correctness="Failed",cleanup="Unverified"/],
+    [{ outcome: 2, status: 'infrastructure_failure', result_bound: 'lower_bound', maximum_concurrent_uploads: 8 },
+      /performance="Inconclusive",performance_detail="Retained evidence: >= 8"/],
+    [{ attempts: [attempt, {}] }, /correctness="Partial",cleanup="Unverified"/],
+  ] as const) {
+    const output = renderMetrics([report('upload', data)], counts)
+    assert.match(samples(output, 'verdict_info')[0]!, expected)
+    assert.doesNotMatch(output, /private-id/)
+  }
+  const ramp = renderMetrics([report('shared_drive', {
+    outcome: 0, cleanup: { remaining: [] }, levels: [{ level: 1, status: 'passed' }],
+  })], counts)
+  assert.match(ramp, /correctness="Not measured",cleanup="Verified"/)
+  const fanout = { n: 1, recipients: [{ add: { converged: true, marker_matches: true },
+    remove: { converged: true } }] }
+  assert.match(renderMetrics([report('fanout', { points: [fanout], retained: true })], counts),
+    /correctness="Verified",cleanup="Retained"/)
+  assert.match(renderMetrics([report('fanout', { points: [{ n: 1, recipients: [] }] })], counts),
+    /correctness="Partial"/)
+  assert.match(renderMetrics([report('fanout', { points: [fanout], content_mismatch: true })], counts),
+    /correctness="Failed"/)
+})
+
+test('run-window links use only valid recorded timestamps', () => {
+  const input = { ...report('upload', {}), startedAt: 1, endedAt: 10 }
+  assert.match(renderMetrics([input], counts), /start_ms="1000",end_ms="10000"/)
+  assert.match(renderMetrics([input], counts), /focus_from_ms="0",focus_to_ms="70000"/)
+  for (const endedAt of [0, NaN, Infinity, 8.64e12]) {
+    assert.equal(samples(renderMetrics([{ ...input, endedAt }], counts), 'window_info').length, 0)
+  }
+  assert.equal(samples(renderMetrics([report('upload', {})], counts), 'window_info').length, 0)
+})
 
 test('upload root accepts lower bounds and zero but rejects absent or unsafe capacity', () => {
   for (const bound of ['exact', 'lower_bound']) {
@@ -302,7 +374,7 @@ test('a regression run shows its verdict and environment, never a capacity', () 
     assert.equal(value(output, 'capacity_evidence_lower'), undefined)
     assert.match(samples(output, 'result_info')[0]!, new RegExp(
       `status="${verdict}",bound="none",result="${verdict[0]!.toUpperCase()}${verdict.slice(1)}",.*` +
-      `reason="recorded",load_target="dev",mode="regression",outcome="${outcome}",evidence="none"`))
+      `reason="recorded",outcome="${outcome}",evidence="none"`))
     assert.match(samples(output, 'point_info')[0]!, /phase="regression"/)
   }
 })
@@ -333,5 +405,76 @@ test('reports without environment metadata show it unknown', () => {
   const output = renderMetrics([report('upload', {
     status: 'completed', result_bound: 'exact', maximum_concurrent_uploads: 57, load_target: 'staging', outcome: 7,
   })], counts)
-  assert.match(samples(output, 'result_info')[0]!, /load_target="unknown",mode="capacity",outcome="unknown"/)
+  assert.match(samples(output, 'result_info')[0]!, /load_target="unknown",mode="capacity",.*outcome="unknown"/)
+})
+
+test('planned and unmeasured levels never become the largest tested load', () => {
+  const output = renderMetrics([report('shared_drive', { levels: [
+    { level: 1, status: 'passed' }, { level: 2, status: 'not_measured' },
+    { level: 4, status: 'not_run' }, { level: 8 },
+  ] })], counts)
+  const loads = samples(output, 'point_value').filter(line => line.includes('metric="load"'))
+  assert.equal(loads.length, 1)
+  assert.match(loads[0]!, /load="1"/)
+  assert.equal(samples(output, 'point_info').length, 4, 'planned points stay visible as evidence')
+})
+
+test('upload work summaries require actual success and complete readback coverage', () => {
+  const attempt = { vus: 2, iterations_per_vu: 10, completed_iterations: 20,
+    success_rate: 1, consistency_rate: 1, cleanup_rate: 1, phase: 'confirmation', result: 'passed',
+    p95_ms: 250, execution_id: 'run-confirmation-v2-a1', started_at: '2026-10-26T10:00:00Z', ended_at: '2026-10-26T10:00:10Z' }
+  const good = renderMetrics([report('upload', { file_size: '1M', attempts: [attempt] })], counts)
+  assert.match(good, /completed="20 \/ 20",readback="20 matched"/)
+  assert.match(good, /metric="payload_bytes"} 20971520/)
+  assert.match(good, /metric="point_uploads_per_second"} 2\n/)
+  assert.match(samples(good, 'point_evidence_info')[0]!, /execution_id="run-confirmation-v2-a1"/)
+  const partial = renderMetrics([report('upload', { file_size: '1M', attempts: [{ ...attempt, success_rate: 0.5 }] })], counts)
+  assert.match(partial, /completed="Not recorded \/ 20",readback="Readback coverage incomplete"/)
+  assert.equal(value(partial, 'failed_uploads'), undefined)
+  assert.equal(value(partial, 'payload_bytes'), undefined)
+})
+
+test('point explanations are safe categories and legacy attempt IDs come only from the known summary path', () => {
+  const output = renderMetrics([report('upload', { attempts: [
+    { vus: 1, result: 'failed', reason: 'private-token p95 limit exceeded at private.example',
+      summary_path: 'data/results/run-baseline-v1-a1-summary.json' },
+    { vus: 2, result: 'failed', summary_path: '/private/secret-summary.json' },
+  ] })], counts)
+  const points = samples(output, 'point_evidence_info')
+  assert.match(points[0]!, /execution_id="run-baseline-v1-a1"/)
+  assert.match(points[0]!, /reason="Latency limit exceeded"/)
+  assert.match(points[1]!, /execution_id="not-recorded"/)
+  assert.match(points[1]!, /reason="Reason not recorded"/)
+  assert.doesNotMatch(output, /private-token|private.example|\/private\/|secret-summary/)
+})
+
+test('headline verdicts follow a valid envelope and an invalid envelope cannot become green', () => {
+  const data = { status: 'completed', outcome: 0, mode: 'capacity', load_target: 'local',
+    maximum_concurrent_uploads: 2, result_bound: 'lower_bound',
+    attempts: [{ vus: 2, iterations_per_vu: 10, completed_iterations: 20, success_rate: 1,
+      consistency_rate: 1, cleanup: { remaining: [] } }] }
+  const envelope = uploadEnvelope(data, { interrupted: false, versions: { stack: 'test', harness: 'test' },
+    topology: 'single-host', start: '2026-10-26T10:00:00Z', end: '2026-10-26T10:01:00Z' })
+  const failed = { ...envelope, outcome: 1, correctness: 'failed',
+    capacity: { ...envelope.capacity!, verified: false } }
+  const output = renderMetrics([report('upload', { ...data, result: failed })], counts)
+  assert.match(samples(output, 'verdict_info')[0]!, /execution="Failed",correctness="Failed",cleanup="Verified"/)
+  const invalid = renderMetrics([report('upload', { ...data, result: { ...failed, outcome: 0 } })], counts)
+  assert.match(samples(invalid, 'verdict_info')[0]!, /execution="Inconclusive",correctness="Unverified",cleanup="Unverified"/)
+})
+
+test('point identities belong to their run and incomplete checks stay visually unverified', () => {
+  const attempt = { vus: 1, iterations_per_vu: 1, completed_iterations: 1,
+    success_rate: 1, consistency_rate: 1, cleanup_rate: 1, result: 'passed' }
+  for (const run of ['first', 'second']) {
+    for (const [change, expected] of [
+      [{}, 'Verified'], [{ cleanup_rate: 0 }, 'Unverified'],
+      [{ consistency_rate: 0 }, 'Failed'], [{ result: 'failed' }, 'Failed'],
+    ] as const) {
+      const output = renderMetrics([{ ...report('upload', { attempts: [{ ...attempt, ...change }] }), run }], counts)
+      const point = samples(output, 'point_evidence_info')[0]!
+      assert.match(point, new RegExp(`point_id="${run}-point-1"`))
+      assert.match(point, new RegExp(`evidence="${expected}"`))
+    }
+  }
 })

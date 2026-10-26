@@ -1,193 +1,83 @@
 {
-  "annotations": {"list": []},
+  "uid": "twake-drive-shared-drive",
+  "title": "Activity workload \u00b7 moved",
+  "schemaVersion": 42,
+  "version": 1,
   "editable": false,
-  "fiscalYearStartMonth": 0,
-  "graphTooltip": 1,
-  "id": null,
-  "links": [{"asDropdown": false, "icon": "dashboard", "includeVars": false, "keepTime": true, "tags": [], "targetBlank": false, "title": "k6 overview", "type": "link", "url": "/d/twake-drive-k6"}],
-  "panels": [
-    {
-      "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
-      "id": 1,
-      "panels": [],
-      "title": "Errors and delivery per level",
-      "type": "row"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1},
-      "id": 2,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"expr": "avg by (level) (k6_shared_drive_upload_success_rate_rate{campaignid=~\"$campaignid\",level=~\"$level\"})", "legendFormat": "level {{level}}", "refId": "A"}],
-      "title": "Upload success rate by level",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1},
-      "id": 3,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"expr": "avg by (level) (k6_shared_drive_changes_success_rate_rate{campaignid=~\"$campaignid\",level=~\"$level\"})", "legendFormat": "level {{level}}", "refId": "A"}],
-      "title": "Changes success rate by level",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 9},
-      "id": 4,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "avg by (level) (k6_shared_drive_ws_handshake_rate_rate{campaignid=~\"$campaignid\",level=~\"$level\"})", "legendFormat": "handshake, level {{level}}", "refId": "A"},
-        {"expr": "avg by (level) (k6_shared_drive_ws_auth_rate_rate{campaignid=~\"$campaignid\",level=~\"$level\"})", "legendFormat": "auth, level {{level}}", "refId": "B"}
-      ],
-      "title": "WebSocket handshake and auth rate by level",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "CREATED events received by all WebSocket readers, per second. If every reader gets every event, this equals uploads per second times the number of WebSocket readers at that level. Grouped by the ramp level the file was uploaded at, read from its name, so a notification that arrives after its level ended still counts for that level. \"unattributed\" is for files uploaded during a transition between levels.",
-      "fieldConfig": {"defaults": {"unit": "suffix: /s"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 9},
-      "id": 5,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"expr": "sum by (level) (rate(k6_shared_drive_ws_events_total_total{campaignid=~\"$campaignid\",level=~\"$level\",event=\"CREATED\"}[$__rate_interval]))", "legendFormat": "files uploaded at level {{level}}", "refId": "A"}],
-      "title": "WebSocket: file-created notifications received per second",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "New files found by all changes-feed readers (GET /sharings/drives/:id/_changes), per second. If every reader gets every file, this equals uploads per second times the number of changes readers at that level. Grouped by the ramp level the file was uploaded at, read from its name, so a notification that arrives after its level ended still counts for that level. \"unattributed\" is for files uploaded during a transition between levels.",
-      "fieldConfig": {"defaults": {"unit": "suffix: /s"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 9},
-      "id": 14,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"expr": "sum by (level) (rate(k6_shared_drive_changes_items_total_total{campaignid=~\"$campaignid\",level=~\"$level\"}[$__rate_interval]))", "legendFormat": "files uploaded at level {{level}}", "refId": "A"}],
-      "title": "Changes feed: new files received per second",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17},
-      "id": 6,
-      "panels": [],
-      "title": "Latency per level (recorded, judged only with P95_LIMIT_MS)",
-      "type": "row"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 18},
-      "id": 7,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"expr": "max by (level) (k6_http_req_duration_p95{campaignid=~\"$campaignid\",level=~\"$level\",operation=\"file-upload\"})", "legendFormat": "level {{level}}", "refId": "A"}],
-      "title": "Upload p95 by level",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 18},
-      "id": 8,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"expr": "max by (level) (k6_shared_drive_changes_duration_ms_p95{campaignid=~\"$campaignid\",level=~\"$level\"})", "legendFormat": "level {{level}}", "refId": "A"}],
-      "title": "Changes p95 by level",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 18},
-      "id": 9,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"expr": "max by (level) (k6_ws_connecting_p95{campaignid=~\"$campaignid\",level=~\"$level\"})", "legendFormat": "level {{level}}", "refId": "A"}],
-      "title": "WebSocket connect p95 by level",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 26},
-      "id": 10,
-      "panels": [],
-      "title": "Load and stack",
-      "type": "row"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 27},
-      "id": 11,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"expr": "max(k6_vus{campaignid=~\"$campaignid\"})", "legendFormat": "VUs", "refId": "A"}],
-      "title": "Virtual users",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 27},
-      "id": 12,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"expr": "max by (level) (k6_shared_drive_changes_pending_p95{campaignid=~\"$campaignid\",level=~\"$level\"})", "legendFormat": "level {{level}}", "refId": "A"}],
-      "title": "Changes pending p95 by level",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 27},
-      "id": 13,
-      "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "rate(process_cpu_seconds_total{job=\"cozy-stack-compose\"}[$__rate_interval])", "legendFormat": "cozy-stack CPU cores", "refId": "A"},
-        {"expr": "sum(rate(couchdb_httpd_request_methods{job=\"couchdb\"}[$__rate_interval])) / 1000", "legendFormat": "CouchDB kreq/s", "refId": "B"}
-      ],
-      "title": "cozy-stack CPU and CouchDB requests",
-      "type": "timeseries"
-    }
+  "timezone": "utc",
+  "tags": [
+    "load-test-compatibility"
   ],
-  "refresh": "10s",
-  "schemaVersion": 41,
-  "tags": ["k6", "twake-drive", "load-test", "shared-drive"],
   "templating": {
     "list": [
       {
-        "current": {},
-        "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "definition": "label_values(k6_shared_drive_upload_success_rate_rate, campaignid)",
-        "includeAll": true,
-        "label": "Campaign",
-        "multi": true,
         "name": "campaignid",
-        "options": [],
-        "query": {"query": "label_values(k6_shared_drive_upload_success_rate_rate, campaignid)", "refId": "PrometheusVariableQueryEditor-campaignid"},
-        "refresh": 2,
-        "sort": 3,
-        "type": "query"
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(cozy_load_result_info,run)",
+          "refId": "campaignid"
+        },
+        "refresh": 1,
+        "hide": 2,
+        "includeAll": false,
+        "multi": false,
+        "current": {}
       },
       {
-        "current": {},
-        "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "definition": "label_values(k6_shared_drive_upload_success_rate_rate{campaignid=~\"$campaignid\"}, level)",
-        "includeAll": true,
-        "label": "Level",
-        "multi": true,
-        "name": "level",
-        "options": [],
-        "query": {"query": "label_values(k6_shared_drive_upload_success_rate_rate{campaignid=~\"$campaignid\"}, level)", "refId": "PrometheusVariableQueryEditor-level"},
-        "refresh": 2,
-        "sort": 3,
-        "type": "query"
+        "name": "env",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(cozy_load_result_info{run=\"$campaignid\"},load_target)",
+          "refId": "env"
+        },
+        "refresh": 1,
+        "hide": 2,
+        "includeAll": false,
+        "multi": false,
+        "current": {}
+      },
+      {
+        "name": "mode",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(cozy_load_result_info{run=\"$campaignid\"},mode)",
+          "refId": "mode"
+        },
+        "refresh": 1,
+        "hide": 2,
+        "includeAll": false,
+        "multi": false,
+        "current": {}
       }
     ]
   },
-  "time": {"from": "now-30m", "to": "now"},
-  "timepicker": {},
-  "timezone": "browser",
-  "title": "Twake Drive shared-drive activity",
-  "uid": "twake-drive-shared-drive",
-  "version": 1
+  "panels": [
+    {
+      "id": 1,
+      "title": "Activity workload is now a tab",
+      "type": "text",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 5
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "[Open Activity workload in the shared load-test dashboard \u2192](/d/twake-drive-capacity?var-run=$campaignid&var-env=$env&var-mode=$mode&dtab=workload&${__url_time_range})\n\nOverview, Workload and Infrastructure now share the same recorded run and tested point."
+      }
+    }
+  ]
 }

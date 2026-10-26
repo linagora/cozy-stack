@@ -64,6 +64,9 @@ type CampaignCriteria = {
 }
 
 type CapacityAttempt = {
+  execution_id: string
+  started_at: string
+  ended_at: string
   phase: Phase
   vus: number
   iterations_per_vu: number
@@ -245,6 +248,7 @@ async function runUploadPoint(
     `\nRunning ${phase} point: ${vus} VUs x ${iterationsPerVu} upload(s)\n`,
   )
 
+  const pointStartedAt = new Date().toISOString()
   const point = await runExactWork(state.target, {
     campaignId: config.campaignId,
     consistencyChunkSizeBytes: config.consistencyChunkSizeBytes,
@@ -263,6 +267,9 @@ async function runUploadPoint(
   const { metrics } = point
 
   appendAttempt(state, {
+    execution_id: executionId,
+    started_at: pointStartedAt,
+    ended_at: new Date().toISOString(),
     phase,
     vus,
     iterations_per_vu: iterationsPerVu,
@@ -313,7 +320,7 @@ async function finishReport(
       endedAt: report.ended_at,
       exitCode: outcome,
       producerExitCode: outcome,
-    }),
+    }, { loadTarget: report.load_target, mode: report.mode }),
     ...(report.load_target === 'dev'
       ? { dev: process.env.DEV_MONITORING_URL || 'unknown' }
       : {}),

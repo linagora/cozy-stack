@@ -51,13 +51,15 @@ test('reconciles earlier data, runs only the k6 upload and records the run', asy
   deepEqual(report.budgets, { max_vus: 2, max_upload_bytes: 10 << 20, max_runtime: '10m', upload_timeout: null })
   deepEqual(phases(report), [['regression', 2]])
   equal(report.attempts[0].iterations_per_vu, 5)
+  match(report.attempts[0].execution_id, /-regression-v2-a1$/)
+  ok(Date.parse(report.attempts[0].ended_at) >= Date.parse(report.attempts[0].started_at))
   deepEqual(report.attempts[0].cleanup, { cleaned: [], remaining: [] })
   equal(report.file_size, '1M')
   equal(report.versions.stack, '1.6.test')
   equal(report.versions.node, process.version)
   equal(report.versions.k6_image, 'unknown')
   equal(report.monitoring.dev, 'unknown')
-  match(report.monitoring.k6, /var-campaignid=load-runner-test-/)
+  match(report.monitoring.k6, /var-run=load-runner-test-/)
   const envelope = validateEnvelope(report.result)
   deepEqual([envelope?.producer, envelope?.outcome, envelope?.performance, envelope?.capacity, envelope?.cleanup,
     envelope?.topology, envelope?.versions], ['upload-regression', 0, 'passed', null, 'verified', 'shared-dev',
