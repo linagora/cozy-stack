@@ -4,40 +4,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
-	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 )
 
-// seenTTL is how long the stack remembers that the feed sent a contact. A
-// reconciliation can only look back that far.
-const seenTTL = 7 * 24 * time.Hour
+const maxReconcileAge = 7 * 24 * time.Hour
+
+const commonContactsSeenAtKey = "twakeCommonContactsSeenAt"
 
 var (
 	// ErrNoCommonContacts is returned when the contacts service is disabled.
 	ErrNoCommonContacts = errors.New("the organization instance does not read the common contacts")
 	// ErrSinceTooOld is returned when since is older than the seen markers.
-	ErrSinceTooOld = fmt.Errorf("since must be less than %s ago", seenTTL)
-	// ErrNothingSeen is returned when the feed sent no contact since then.
-	ErrNothingSeen = errors.New("no contact was sent")
+	ErrSinceTooOld = fmt.Errorf("since must be less than %s ago", maxReconcileAge)
+	// ErrSinceInFuture prevents interpreting every contact as stale.
+	ErrSinceInFuture = errors.New("since cannot be in the future")
+	// ErrIncompleteRepublication prevents deletion before the expected contacts arrive.
+	ErrIncompleteRepublication = errors.New("observed contacts do not match the completed republication")
 )
 
-// The hash tag keeps an instance's keys in one Redis Cluster slot, for MGET.
-func seenKey(inst *instance.Instance, path string) string {
-	return "common-contacts-seen:{" + inst.Domain + "}:" + path
-}
-
-// MarkContactSeen remembers that twake:contacts:common sent the contact at
-// path for the organization instance, even when nothing was written for it.
-func MarkContactSeen(inst *instance.Instance, path string) {
-	at := strconv.FormatInt(time.Now().UnixMilli(), 10)
-	config.GetConfig().CacheStorage.Set(seenKey(inst, path), []byte(at), seenTTL)
+// MarkContactSeen records an observation in the contact before it is saved.
+// Keeping it in the same revision makes cache loss and concurrent updates safe.
+func MarkContactSeen(c *contact.Contact) {
+	c.M[commonContactsSeenAtKey] = time.Now().UTC().Format(time.RFC3339Nano)
 }
 
 // ReconcileReport tells which contacts of the organization instance were
@@ -51,9 +45,15 @@ type ReconcileReport struct {
 // ReconcileOrganizationContacts deletes the contacts the feed wrote on the
 // organization instance and did not send again since the given time, to catch
 // the DELETE messages the stack missed.
-func ReconcileOrganizationContacts(ctx context.Context, organizationID string, since time.Time, dryRun bool) (*ReconcileReport, error) {
-	if time.Since(since) > seenTTL {
+func ReconcileOrganizationContacts(ctx context.Context, organizationID string, since time.Time, expectedContacts int, dryRun bool) (*ReconcileReport, error) {
+	if time.Since(since) > maxReconcileAge {
 		return nil, ErrSinceTooOld
+	}
+	if since.After(time.Now()) {
+		return nil, ErrSinceInFuture
+	}
+	if expectedContacts < 0 {
+		return nil, ErrIncompleteRepublication
 	}
 	orgInst, err := FindOrganizationInstance(ctx, organizationID, "")
 	if err != nil {
@@ -73,27 +73,25 @@ func ReconcileOrganizationContacts(ctx context.Context, organizationID string, s
 	if err != nil {
 		return nil, err
 	}
-	keys := make([]string, len(docs))
-	for i, doc := range docs {
-		path, _ := doc.Get(contact.CardDAVPathKey).(string)
-		keys[i] = seenKey(orgInst, path)
-	}
-	seen := config.GetConfig().CacheStorage.MultiGet(keys)
-
 	report := &ReconcileReport{Domain: orgInst.Domain, Removed: []string{}}
 	var stale []*contact.Contact
-	for i, doc := range docs {
-		at, _ := strconv.ParseInt(string(seen[i]), 10, 64)
-		if at >= since.UnixMilli() {
+	for _, doc := range docs {
+		var at time.Time
+		if value, exists := doc.M[commonContactsSeenAtKey]; exists {
+			text, _ := value.(string)
+			at, err = time.Parse(time.RFC3339Nano, text)
+			if err != nil {
+				return nil, fmt.Errorf("invalid contact observation for %s: %w", doc.ID(), err)
+			}
+		}
+		if !at.Before(since) {
 			report.Kept++
 		} else {
 			stale = append(stale, doc)
 		}
 	}
-	// Nothing seen means the republication did not run or did not reach the
-	// stack, not that Sabre is empty.
-	if len(stale) > 0 && report.Kept == 0 {
-		return nil, fmt.Errorf("%w since %s, refusing to remove %d contacts", ErrNothingSeen, since.Format(time.RFC3339), len(stale))
+	if report.Kept != expectedContacts {
+		return nil, fmt.Errorf("%w: got %d, expected %d; refusing to remove %d contacts", ErrIncompleteRepublication, report.Kept, expectedContacts, len(stale))
 	}
 
 	for _, doc := range stale {

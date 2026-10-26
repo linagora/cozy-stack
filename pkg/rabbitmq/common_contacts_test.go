@@ -119,17 +119,20 @@ func TestCommonContactsHandler(t *testing.T) {
 		require.Equal(t, "carol@acme.example", addr.Email)
 		require.Empty(t, byPath(t, alice, path))
 
-		t.Run("replaying it changes nothing", func(t *testing.T) {
+		t.Run("replaying it refreshes the durable observation", func(t *testing.T) {
 			handle(t, message("ADD", domainAudience, path, card("Carol Doe", "carol@acme.example", "+33123", "carol.cc.localhost")))
 			again := byPath(t, org, path)
 			require.Len(t, again, 1)
-			require.Equal(t, c.Rev(), again[0].Rev())
+			require.Equal(t, c.ID(), again[0].ID())
+			require.NotEqual(t, c.Rev(), again[0].Rev())
+			c = again[0]
 		})
 
-		t.Run("a replay that writes nothing still counts for the reconciliation", func(t *testing.T) {
+		t.Run("a replay counts for the reconciliation", func(t *testing.T) {
 			since := time.Now()
 			handle(t, message("ADD", domainAudience, path, card("Carol Doe", "carol@acme.example", "+33123", "carol.cc.localhost")))
-			report, err := orgdirectory.ReconcileOrganizationContacts(context.Background(), orgID, since, true)
+			c = byPath(t, org, path)[0]
+			report, err := orgdirectory.ReconcileOrganizationContacts(context.Background(), orgID, since, 1, true)
 			require.NoError(t, err)
 			require.NotContains(t, report.Removed, path)
 			require.Equal(t, 1, report.Kept)

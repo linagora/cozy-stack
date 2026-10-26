@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/cozy/cozy-stack/client"
@@ -27,10 +28,11 @@ import (
 )
 
 var (
-	dryRunFlag       bool
-	forceFlag        bool
-	withMetadataFlag bool
-	sinceFlag        string
+	dryRunFlag           bool
+	forceFlag            bool
+	withMetadataFlag     bool
+	sinceFlag            string
+	expectedContactsFlag int
 )
 
 var fixerCmdGroup = &cobra.Command{
@@ -595,12 +597,17 @@ organization instance and did not send again since --since. Run it once a
 republication of the domain address books has completed without failures and
 the stack has read every message, with --since set a few minutes before the
 start of the republication, as the stack and the side service clocks may
-differ. Contacts the feed did not write are kept.
+differ. Pass the completed task's processedContactCount as --expected-contacts;
+the fixer refuses until that many distinct contacts have been observed.
+Contacts the feed did not write are kept.
 `,
-	Example: `$ cozy-stack fix org-contacts 6740b0e4e0c5c1001f2ef9d1 --since 2026-10-07T08:00:00Z --dry-run`,
+	Example: `$ cozy-stack fix org-contacts 6740b0e4e0c5c1001f2ef9d1 --since 2026-10-07T08:00:00Z --expected-contacts 100 --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 1 || sinceFlag == "" {
 			return cmd.Usage()
+		}
+		if expectedContactsFlag < 0 {
+			return errors.New("expected-contacts must be the non-negative contact count of a completed republication")
 		}
 		if !dryRunFlag && !forceFlag {
 			if err := askForConfirmation("Remove the stale contacts of organization " + args[0] + "?"); err != nil {
@@ -608,7 +615,7 @@ differ. Contacts the feed did not write are kept.
 			}
 		}
 		c := newAdminClient()
-		q := url.Values{"since": {sinceFlag}}
+		q := url.Values{"since": {sinceFlag}, "expected_contacts": {strconv.Itoa(expectedContactsFlag)}}
 		if dryRunFlag {
 			q.Set("dry_run", "true")
 		}
@@ -646,6 +653,7 @@ func init() {
 	memberCopiesFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
 	memberCopiesFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
 	orgContactsFixer.Flags().StringVar(&sinceFlag, "since", "", "A few minutes before the republication (RFC 3339)")
+	orgContactsFixer.Flags().IntVar(&expectedContactsFlag, "expected-contacts", -1, "processedContactCount of the completed domain republication (required)")
 	orgContactsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
 	orgContactsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
 

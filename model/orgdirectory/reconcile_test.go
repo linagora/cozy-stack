@@ -7,6 +7,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/pkg/cache"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/stretchr/testify/require"
@@ -53,7 +54,7 @@ func testReconcileOrganizationContacts(t *testing.T, centralized bool) {
 
 	since := time.Now().Add(-time.Second)
 	conf.Contexts[onCtx].(map[string]interface{})["common_contacts"] = false
-	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, false)
+	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, 1, false)
 	require.ErrorIs(t, err, ErrNoCommonContacts, "centralization alone must not enable service reconciliation")
 	conf.Contexts[onCtx].(map[string]interface{})["common_contacts"] = true
 	sent := fromFeed("carol@acme.test")
@@ -61,28 +62,44 @@ func testReconcileOrganizationContacts(t *testing.T, centralized bool) {
 	notFromFeed, err := contact.Create(org, contact.CreateOptions{Email: "eve@acme.test", External: true})
 	require.NoError(t, err)
 
-	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, false)
-	require.ErrorIs(t, err, ErrNothingSeen, "nothing sent since, so no republication reached the stack")
+	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, 1, false)
+	require.ErrorIs(t, err, ErrIncompleteRepublication, "nothing sent since, so no republication reached the stack")
 	require.True(t, exists(gone))
 
-	MarkContactSeen(org, sent.M[contact.CardDAVPathKey].(string))
+	MarkContactSeen(sent)
+	require.NoError(t, couchdb.UpdateDoc(org, sent))
+	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, 2, false)
+	require.ErrorIs(t, err, ErrIncompleteRepublication, "consumer lag must not authorize deletion")
+	require.True(t, exists(gone))
+	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, 0, false)
+	require.ErrorIs(t, err, ErrIncompleteRepublication, "extra observations must also refuse deletion")
+	previousCache := conf.CacheStorage
+	conf.CacheStorage = cache.NewInMemory()
+	t.Cleanup(func() { conf.CacheStorage = previousCache })
 
-	report, err := ReconcileOrganizationContacts(testCtx(t), orgID, since, true)
+	report, err := ReconcileOrganizationContacts(testCtx(t), orgID, since, 1, true)
 	require.NoError(t, err)
 	require.Equal(t, []string{"addressbooks/domain/dave@acme.test.vcf"}, report.Removed)
 	require.True(t, exists(gone), "a dry run deletes nothing")
 
-	report, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, false)
+	report, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, 1, false)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Kept)
 	require.False(t, exists(gone))
 	require.True(t, exists(sent))
 	require.True(t, exists(notFromFeed))
 
-	report, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, false)
+	report, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, 1, false)
 	require.NoError(t, err)
 	require.Empty(t, report.Removed)
 
-	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, time.Now().Add(-8*24*time.Hour), false)
-	require.ErrorIs(t, err, ErrSinceTooOld, "the seen markers do not go back that far")
+	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, time.Now().Add(-8*24*time.Hour), 1, false)
+	require.ErrorIs(t, err, ErrSinceTooOld)
+	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, time.Now().Add(time.Hour), 0, false)
+	require.ErrorIs(t, err, ErrSinceInFuture)
+
+	report, err = ReconcileOrganizationContacts(testCtx(t), orgID, time.Now(), 0, false)
+	require.NoError(t, err, "a completed empty republication has an explicit zero count")
+	require.Len(t, report.Removed, 1)
+	require.True(t, exists(notFromFeed))
 }

@@ -103,13 +103,7 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 			log.Warnf("contacts.common: dropping %s without payload for %s", msg.Action, msg.Path)
 			return nil
 		}
-		if err := upsertCommonContact(inst, msg.Path, msg.Payload); err != nil {
-			return err
-		}
-		if msg.Audience.Domain != "" {
-			orgdirectory.MarkContactSeen(inst, msg.Path)
-		}
-		return nil
+		return upsertCommonContact(inst, msg.Path, msg.Payload)
 	case "DELETE":
 		c, err := contact.FindByCardDAVPath(inst, msg.Path)
 		if errors.Is(err, contact.ErrNotFound) {
@@ -147,6 +141,9 @@ func upsertCommonContact(inst *instance.Instance, path string, card *jsContact) 
 		return err
 	}
 	applyCard(c, path, card, emails)
+	if inst.IsOrganizationInstance() {
+		orgdirectory.MarkContactSeen(c)
+	}
 	if c.Rev() == "" {
 		return couchdb.CreateDoc(inst, c)
 	}

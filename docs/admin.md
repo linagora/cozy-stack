@@ -550,8 +550,17 @@ the stack missed. Call it once the side service republication of the domain
 address books (`POST /domains/<domain>/contacts?action=republish&scope=domain`)
 has completed without failures and the stack has read every message, with
 `since` a few minutes before the start of the republication (the stack and the
-side service clocks may differ), at most 7 days ago. It refuses to run when no
-contact was sent since then. Contacts without a `carddavPath` are kept. The
+side service clocks may differ), at most 7 days ago. Set the required
+`expected_contacts` to the completed task's `processedContactCount`. The number
+of distinct contacts observed since `since` must match exactly, otherwise the
+fixer refuses to delete anything. Use only a completed, failure-free task scoped
+to this domain's address books. An empty republication requires an explicit zero.
+Concurrent changes can cause a count mismatch; republish again in that case.
+Observations are stored on the contacts in CouchDB, so cache loss cannot make
+contacts appear stale. Republication updates this bookkeeping field and the
+contact revision even when the card is unchanged. Concurrent updates cause a
+revision conflict rather than deleting a newly observed contact.
+Contacts without a `carddavPath` are kept. The
 organization instance must exist and its context must set `common_contacts`.
 This service reconciliation is independent of `centralized_org_directory`: it
 also works while replication is retained, and never runs for B2B-only directories.
@@ -559,23 +568,25 @@ also works while replication is retained, and never runs for B2B-only directorie
 `removed` lists the CardDAV paths of the deleted contacts, `kept` counts the
 contacts the feed sent again.
 
-It responds with `400 Bad Request` when `since` is not a date or is more than 7
-days ago, with `404 Not Found` when the organization has no instance or no
+It responds with `400 Bad Request` when `since` is not a date, is in the future,
+or is more than 7 days ago, or when `expected_contacts` is missing or invalid;
+with `404 Not Found` when the organization has no instance or no
 organization instance, and with `412 Precondition Failed` when the context of
-the organization instance does not set `common_contacts` or no contact was sent
-since `since`.
+the organization instance does not set `common_contacts` or the observed count
+does not match `expected_contacts`.
 
 #### Query-String
 
 | Parameter | Description                                          |
 | --------- | ---------------------------------------------------- |
 | since     | a few minutes before the republication, in RFC 3339  |
+| expected_contacts | required `processedContactCount` of the completed domain republication |
 | dry_run   | `true` to report what would be removed, but not save |
 
 #### Request
 
 ```http
-POST /instances/fixers/org-contacts/6740b0e4e0c5c1001f2ef9d1?since=2026-10-07T08:00:00Z&dry_run=true HTTP/1.1
+POST /instances/fixers/org-contacts/6740b0e4e0c5c1001f2ef9d1?since=2026-10-07T08:00:00Z&expected_contacts=100&dry_run=true HTTP/1.1
 ```
 
 #### Response

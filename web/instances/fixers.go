@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/account"
@@ -402,14 +403,18 @@ func orgContactsFixer(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "since must be an RFC 3339 date")
 	}
+	expected, err := strconv.Atoi(c.QueryParam("expected_contacts"))
+	if err != nil || expected < 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "expected_contacts must be the non-negative contact count of a completed republication")
+	}
 	dryRun := c.QueryParam("dry_run") == "true"
-	report, err := orgdirectory.ReconcileOrganizationContacts(c.Request().Context(), c.Param("org_id"), since, dryRun)
+	report, err := orgdirectory.ReconcileOrganizationContacts(c.Request().Context(), c.Param("org_id"), since, expected, dryRun)
 	switch {
-	case errors.Is(err, orgdirectory.ErrSinceTooOld):
+	case errors.Is(err, orgdirectory.ErrSinceTooOld), errors.Is(err, orgdirectory.ErrSinceInFuture):
 		return jsonapi.BadRequest(err)
 	case errors.Is(err, instance.ErrNotFound):
 		return jsonapi.NotFound(err)
-	case errors.Is(err, orgdirectory.ErrNoCommonContacts), errors.Is(err, orgdirectory.ErrNothingSeen):
+	case errors.Is(err, orgdirectory.ErrNoCommonContacts), errors.Is(err, orgdirectory.ErrIncompleteRepublication):
 		return jsonapi.PreconditionFailed("org_id", err)
 	case err != nil:
 		return err
