@@ -154,9 +154,10 @@ test('member actors play the ramp roles, and a proven access failure outweighs t
 test('a ramp that runs out of time after preparing its actors still removes their fixtures', async t => {
   const f = await fixture(t)
   const actors = await fakeActors(t)
-  // A fast clock: preparing the actors outlasts MAX_RUNTIME, so setup stops before k6.
+  // A clock so fast that preparing the actors always outlasts MAX_RUNTIME (2 ms are 200 s), so setup
+  // stops before k6.
   const clock = join(f.dockerDir, 'clock.mjs')
-  writeFileSync(clock, 'const real = Date.now, start = real()\nDate.now = () => start + (real() - start) * 2000\n')
+  writeFileSync(clock, 'const real = Date.now, start = real()\nDate.now = () => start + (real() - start) * 100000\n')
   const { code, output } = await f.start({ ...budgets, ...f.local, ...actors.env, RAMP_LEVELS: '1',
     RAMP_STEP_DURATION: '5s', MAX_RUNTIME: '200s' }, ['--import', clock]).done
   equal(code, 2, output)
