@@ -247,7 +247,7 @@ test('real child ramps group fanout, proves every recipient access and one-opera
     const c = JSON.parse(r.body)
     const actor = f.instances.find(i => i.attributes.domain === new URL(c.cozy[0].url).host)!
     equal(c.cozy[0].url, `https://${actor.attributes.domain}/`)
-    deepEqual(c.email, [{ address: `${actor.attributes.uuid}@seed.invalid`, primary: true }])
+    deepEqual(c.email, [{ address: `${actor.attributes.uuid}@spam.cozycloud.cc`, primary: true }])
     deepEqual(Object.keys(c.relationships), ['groups'])
     equal(c.relationships.groups.data[0]._type, 'io.cozy.contacts.groups')
   }

@@ -32,7 +32,9 @@ make seed-org-cleanup         # deletes them; the organization record stays
 
 The organization instance is named after the organization ID: that is how the
 Stack recognizes an organization's own instance, whose drives are organization
-drives. Re-runs reuse existing instances and add missing members. Only names built from
+drives. New instances get the email `<slug>@spam.cozycloud.cc`, a test-only
+mailbox domain; re-runs leave existing instances' emails unchanged. Re-runs reuse
+existing instances and add missing members. Only names built from
 the prefix are reused, recorded or deleted, and only after the Stack confirms
 their organization and UUID. Teardown keeps any other match and exits 2, and
 releases only the names of instances it deleted or the manifest recorded. A

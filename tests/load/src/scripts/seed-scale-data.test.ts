@@ -134,7 +134,7 @@ test('file-only seed uses dedicated APIs, Basic auth and exact public Host inclu
   equal(creation.get('CouchCluster'), '-1')
   equal(creation.get('SwiftLayout'), '-1')
   equal(creation.get('AutoUpdate'), 'false')
-  match(creation.get('Email')!, /@[^@]+\.invalid$/)
+  match(creation.get('Email')!, /^[^@]+@spam\.cozycloud\.cc$/)
   ok(creation.get('PublicName'))
   const credentials = f.requests[3]!.url.searchParams
   equal(credentials.get('Domain'), domain)

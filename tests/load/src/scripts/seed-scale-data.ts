@@ -202,7 +202,7 @@ async function main(): Promise<void> {
   const create = async (name: string): Promise<Resource> => {
     const uuid = randomUUID()
     const created = resource(expectStatus(await admin('POST', '/instances', {
-      Domain: name, UUID: uuid, Locale: 'en', Email: `${uuid}@seed.invalid`,
+      Domain: name, UUID: uuid, Locale: 'en', Email: `${uuid}@spam.cozycloud.cc`,
       PublicName: 'Disposable seed fixture', CouchCluster: '-1', SwiftLayout: '-1', AutoUpdate: 'false',
       ...(organization ? { OrgID: orgID, OrgDomain: orgDomain } : {}),
       ...(contextName ? { ContextName: contextName } : {}),

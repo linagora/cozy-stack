@@ -8,6 +8,8 @@ import { FixtureError, request } from './fixture-http.ts'
 
 const SCOPE = 'io.cozy.files io.cozy.sharings io.cozy.contacts io.cozy.settings'
 const WARMUP = 'Load-test warm-up'
+// Mail to test instances lands in a test-only mailbox domain.
+const MAIL_DOMAIN = 'spam.cozycloud.cc'
 
 interface CloudInstance { _id: string, fqdn: string, deleting_at?: string | null }
 interface Member { instance?: string, email?: string }
@@ -169,7 +171,7 @@ async function main(): Promise<void> {
     const created = await cloudery('POST', '/api/v1/instances', [201], {
       offer: setting(name === orgHost ? 'SEED_CLOUDERY_ORG_OFFER' : 'SEED_CLOUDERY_MEMBER_OFFER',
         name === orgHost ? 'b2b_org_default' : 'b2b_twake_default'),
-      slug, domain, org_id: prefix, email: `${slug}@example.com`, public_name: slug, locale: 'en',
+      slug, domain, org_id: prefix, email: `${slug}@${MAIL_DOMAIN}`, public_name: slug, locale: 'en',
       skip_email_validation: true,
     })
     check(created.fqdn === name && created.workflow, `${name}: unexpected creation reply`)
@@ -198,7 +200,7 @@ async function main(): Promise<void> {
   const contacts: string[] = []
   for (const name of memberHosts.filter(name => !invited.has(name))) {
     contacts.push((await stack(orgHost, 'POST', '/data/io.cozy.contacts/', [201], JSON.stringify({
-      fullname: name, email: [{ address: `${name.slice(0, name.indexOf('.'))}@example.com`, primary: true }],
+      fullname: name, email: [{ address: `${name.slice(0, name.indexOf('.'))}@${MAIL_DOMAIN}`, primary: true }],
       cozy: [{ url: `https://${name}/`, primary: true }],
     }), 'application/json')).id)
   }

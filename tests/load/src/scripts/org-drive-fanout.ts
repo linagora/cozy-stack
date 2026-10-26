@@ -484,7 +484,7 @@ async function main(): Promise<void> {
           const contact = decode<{ id?: string }>(expect(await api(
             owner, 'POST', '/data/io.cozy.contacts/', JSON.stringify({
               fullname: 'Disposable fanout fixture',
-              email: [{ address: `${actor.uuid}@seed.invalid`, primary: true }],
+              email: [{ address: `${actor.uuid}@spam.cozycloud.cc`, primary: true }],
               cozy: [{ url: `${scheme}//${actor.domain}/`, primary: true }],
               relationships: { groups: { data: [{ _id: groupID, _type: 'io.cozy.contacts.groups' }] } },
             }), undefined, 'application/json',

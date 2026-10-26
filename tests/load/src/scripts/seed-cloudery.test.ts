@@ -19,7 +19,7 @@ async function fixture(t: TestContext) {
   const instances = new Map<string, { _id: string, fqdn: string, deleting_at?: string }>()
   for (const fqdn of unrelated) instances.set(fqdn, { _id: randomUUID(), fqdn })
   const state = {
-    instances, used: new Set<string>(), orgs: new Set<string>(), mints: [] as string[], created: [] as string[],
+    instances, used: new Set<string>(), orgs: new Set<string>(), mints: [] as string[], created: [] as string[], emails: [] as string[],
     released: [] as string[],
     adminCalls: 0, failWorkflow: '', untrusting: '', foreign: '', corrupt: false,
   }
@@ -58,6 +58,7 @@ async function fixture(t: TestContext) {
         if (instances.has(fqdn) || state.used.has(fqdn)) return send(409, `${fqdn} is already taken`)
         if (params.org_id !== 'seedtest' || !params.skip_email_validation) return send(400)
         state.created.push(fqdn)
+        state.emails.push(params.email)
         const _id = randomUUID()
         workflows.set(`wf-${_id}`, { polls: 0, fqdn, done: () => instances.set(fqdn, { _id, fqdn }) })
         return send(201, { _id, fqdn, workflow: `wf-${_id}` })
@@ -105,7 +106,7 @@ async function fixture(t: TestContext) {
       if (route === 'GET /sharings/drives') return send(200, { data: drive ? [drive] : [] })
       if (route === 'POST /sharings/drives') {
         drive = { id: 'warmup', attributes: { owner: true, description: JSON.parse(body).data.attributes.description,
-          members: [{ instance: `https://${org}/`, email: 'seedtest@example.com' }] } }
+          members: [{ instance: `https://${org}/`, email: 'seedtest@spam.cozycloud.cc' }] } }
         return send(201, { data: drive })
       }
       if (route === `GET /sharings/${sid}`) return send(200, { data: drive })
@@ -130,7 +131,7 @@ async function fixture(t: TestContext) {
     if (route === `POST /sharings/drives/${sid}/accept` && pending.has(host)) {
       pending.set(host, true)
       if (host !== state.untrusting) {
-        contacts.set(host, [{ email: [{ address: 'seedtest@example.com' }], trustedForSharing: true }])
+        contacts.set(host, [{ email: [{ address: 'seedtest@spam.cozycloud.cc' }], trustedForSharing: true }])
       }
       return send(200, {})
     }
@@ -189,6 +190,7 @@ test('seeds, warms up and reuses the organization with per-instance tokens only'
   const first = await f.run('seed')
   equal(first.code, 0, first.output)
   deepEqual(f.state.created, [org, member(1), member(2), member(3)])
+  deepEqual(f.state.emails, ['seedtest', 'seedtest01', 'seedtest02', 'seedtest03'].map(slug => `${slug}@spam.cozycloud.cc`))
   deepEqual([...f.state.orgs], ['seedtest'])
   deepEqual([...f.pending], [[member(1), true], [member(2), true], [member(3), true]])
   deepEqual(f.manifest().instances.map((i: any) => [i.fqdn, i.role]),
