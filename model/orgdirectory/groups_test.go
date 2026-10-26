@@ -344,7 +344,7 @@ func TestSyncGroupWithCentralizedDirectory(t *testing.T) {
 	const feedCtx = "groups-common-contacts"
 	conf := config.GetConfig()
 	previous := conf.Contexts
-	conf.Contexts = map[string]interface{}{feedCtx: map[string]interface{}{"centralized_org_directory": true}}
+	conf.Contexts = map[string]interface{}{feedCtx: map[string]interface{}{"centralized_org_directory": true, "common_contacts": true}}
 	t.Cleanup(func() { conf.Contexts = previous })
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -399,9 +399,26 @@ func TestSyncGroupWithCentralizedDirectory(t *testing.T) {
 	require.Len(t, stored.M["email"], 2)
 	require.Equal(t, "https://alice-"+suffix+".local", stored.PrimaryCozyURL(), "the cozy URL is set when the feed has none")
 
-	carol, err := findManagedContactByEmail(org, "carol@acme.test")
+	carol, err := FindManagedContactByEmail(org, "carol@acme.test")
 	require.NoError(t, err, "a member the feed has not sent yet is written right away")
 	require.Contains(t, carol.GroupIDs(), groupID)
+
+	conf.Contexts[feedCtx].(map[string]interface{})["common_contacts"] = false
+	updated, err := UpsertManagedContact(org, ContactPatch{
+		OrganizationID: orgID,
+		Email:          "alicia@acme.test",
+		Name:           "Alicia",
+		CozyURL:        stored.PrimaryCozyURL(),
+	})
+	require.NoError(t, err)
+	updated, err = contact.Find(org, updated.ID())
+	require.NoError(t, err)
+	addr, err := updated.ToMailAddress()
+	require.NoError(t, err)
+	require.Equal(t, fromFeed.ID(), updated.ID(), "B2B updates reuse the existing feed contact")
+	require.Equal(t, "alicia@acme.test", addr.Email, "the disabled feed must not freeze recipient addresses")
+	require.Equal(t, "Alicia", updated.PrimaryName())
+	require.Contains(t, updated.GroupIDs(), groupID)
 
 	require.NoError(t, SyncGroupDeleted(testCtx(t), GroupDeletedMessage{OrganizationID: orgID, ID: "engineering"}))
 	stored, err = contact.Find(org, fromFeed.ID())

@@ -409,7 +409,8 @@ func UpsertManagedContact(inst *instance.Instance, input ContactPatch) (*contact
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := c.M[contact.CardDAVPathKey]; ok {
+	_, feedOwned := c.M[contact.CardDAVPathKey]
+	if feedOwned && inst.HasCommonContacts() {
 		// The feed owns the fields of this contact, it only joins the directory.
 		c.M[contact.TrustedForSharingKey] = true
 		setContactDirectoryMetadata(&c.JSONDoc, input, input.Email)
