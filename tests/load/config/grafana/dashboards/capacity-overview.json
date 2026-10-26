@@ -5,8 +5,8 @@
     "name": "twake-drive-capacity"
   },
   "spec": {
-    "title": "Load test overview",
-    "description": "The recorded result, its workload and its infrastructure. Report facts survive telemetry zoom. Restore exact recorded windows with the run and point controls.",
+    "title": "Load test results",
+    "description": "Load test results, workload metrics and infrastructure metrics for the selected run. Choose a run, then use Run + context to show its time range.",
     "editable": false,
     "cursorSync": "Crosshair",
     "liveNow": false,
@@ -375,7 +375,7 @@
         "spec": {
           "id": 100,
           "title": "Execution",
-          "description": "",
+          "description": "Did the test finish? The exit code comes from the test report.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -456,7 +456,7 @@
                     "mode": "fixed",
                     "fixedColor": "text"
                   },
-                  "displayName": "Exit ${__field.labels.outcome}",
+                  "displayName": "Exit code ${__field.labels.outcome}",
                   "mappings": [
                     {
                       "type": "value",
@@ -554,7 +554,7 @@
         "spec": {
           "id": 101,
           "title": "Correctness",
-          "description": "",
+          "description": "Did the recorded content and access checks pass? Missing checks remain unverified.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -635,7 +635,7 @@
                     "mode": "fixed",
                     "fixedColor": "text"
                   },
-                  "displayName": "Producer assertion verdict",
+                  "displayName": "Recorded checks",
                   "mappings": [
                     {
                       "type": "value",
@@ -733,7 +733,7 @@
         "spec": {
           "id": 102,
           "title": "Cleanup",
-          "description": "",
+          "description": "Was the test data removed and its removal checked? Retained means the data was kept.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -814,7 +814,7 @@
                     "mode": "fixed",
                     "fixedColor": "text"
                   },
-                  "displayName": "Producer cleanup verdict",
+                  "displayName": "Test data cleanup",
                   "mappings": [
                     {
                       "type": "value",
@@ -912,7 +912,7 @@
         "spec": {
           "id": 103,
           "title": "Performance",
-          "description": "",
+          "description": "Regression checks a fixed load against any configured limit. Capacity reports the tested bound; a lower bound does not establish maximum capacity.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -1269,8 +1269,8 @@
         "kind": "Panel",
         "spec": {
           "id": 111,
-          "title": "Payload written",
-          "description": "",
+          "title": "Data uploaded",
+          "description": "Total file content uploaded successfully, excluding HTTP overhead.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -1342,8 +1342,8 @@
         "kind": "Panel",
         "spec": {
           "id": 112,
-          "title": "Highest final upload p95",
-          "description": "Highest final p95 among the recorded attempts. Not a pooled percentile.",
+          "title": "Worst final upload p95",
+          "description": "Highest final p95 reported across all attempts in this run. For each attempt, 95% of measured requests took this long or less. Read the failure count alongside latency.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -1416,7 +1416,7 @@
         "spec": {
           "id": 113,
           "title": "Failed uploads",
-          "description": "Zero is shown only when every recorded upload attempt has success_rate = 1. Otherwise the count is not recorded.",
+          "description": "Zero is shown only when every attempt in this run records 100% successful uploads. Otherwise the failure count is unavailable.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -1489,7 +1489,7 @@
         "spec": {
           "id": 200,
           "title": "Tested upload points",
-          "description": "",
+          "description": "Each row is one test attempt. Inspect opens its workload and time range. Repeated load levels remain separate attempts.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -1563,15 +1563,15 @@
                       "renameByName": {
                         "load": "Workers",
                         "phase": "Phase",
-                        "completed": "Completed iterations",
-                        "planned": "Planned iterations",
-                        "correctness": "Readback",
+                        "completed": "Iterations completed",
+                        "planned": "Iterations planned",
+                        "correctness": "Content checks",
                         "cleanup": "Cleanup",
                         "status": "Outcome",
-                        "reason": "Deciding evidence",
+                        "reason": "Reason",
                         "index": "Attempt",
                         "access": "Access verified",
-                        "revoked": "Owner revoked",
+                        "revoked": "Revoked (owner)",
                         "inspect": "Inspect"
                       }
                     }
@@ -1627,7 +1627,7 @@
                   {
                     "matcher": {
                       "id": "byName",
-                      "options": "Readback"
+                      "options": "Content checks"
                     },
                     "properties": [
                       {
@@ -1977,7 +1977,7 @@
         "spec": {
           "id": 201,
           "title": "Tested activity levels",
-          "description": "",
+          "description": "Each row is one test attempt. Inspect opens its workload and time range. Repeated load levels remain separate attempts.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -2056,10 +2056,10 @@
                         "correctness": "Verification",
                         "cleanup": "Cleanup",
                         "status": "Outcome",
-                        "reason": "Deciding evidence",
+                        "reason": "Reason",
                         "index": "Attempt",
                         "access": "Access verified",
-                        "revoked": "Owner revoked",
+                        "revoked": "Revoked (owner)",
                         "inspect": "Inspect"
                       }
                     }
@@ -2261,7 +2261,7 @@
         "spec": {
           "id": 202,
           "title": "Tested recipient batches",
-          "description": "",
+          "description": "Each row is one test attempt. Inspect opens its workload and time range. Repeated load levels remain separate attempts.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -2340,10 +2340,10 @@
                         "correctness": "Verification",
                         "cleanup": "Cleanup",
                         "status": "Outcome",
-                        "reason": "Deciding evidence",
+                        "reason": "Reason",
                         "index": "Attempt",
                         "access": "Access verified",
-                        "revoked": "Owner revoked",
+                        "revoked": "Revoked (owner)",
                         "inspect": "Inspect"
                       }
                     }
@@ -2646,8 +2646,8 @@
         "kind": "Panel",
         "spec": {
           "id": 300,
-          "title": "Point upload throughput",
-          "description": "Completed successful uploads divided by recorded whole-attempt seconds, including setup, content readback and cleanup. This is not steady-state upload request throughput.",
+          "title": "Average upload rate by worker count",
+          "description": "Successful uploads divided by the full attempt duration, including setup, content checks and cleanup. Use Workload for the upload request rate over time.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -2853,7 +2853,7 @@
                       },
                       {
                         "id": "custom.axisLabel",
-                        "value": "Point upload throughput"
+                        "value": "Average upload rate by worker count"
                       }
                     ]
                   },
@@ -2911,8 +2911,8 @@
         "kind": "Panel",
         "spec": {
           "id": 301,
-          "title": "Final upload p95 by load",
-          "description": "Every measured attempt remains separate. The numeric x axis is tested load; repeated confirmation levels are not additional capacity.",
+          "title": "Final upload p95 by worker count",
+          "description": "Final p95 for each attempt at its worker count. Confirmation repeats a load; it is not an additional capacity level.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -3118,7 +3118,7 @@
                       },
                       {
                         "id": "custom.axisLabel",
-                        "value": "Final upload p95 by load"
+                        "value": "Final upload p95 by worker count"
                       }
                     ]
                   },
@@ -3195,8 +3195,8 @@
         "kind": "Panel",
         "spec": {
           "id": 302,
-          "title": "Upload success by mix level",
-          "description": "Every measured attempt remains separate. The numeric x axis is tested load; repeated confirmation levels are not additional capacity.",
+          "title": "Upload success rate by activity level",
+          "description": "Share of successful uploads at each activity level. A level combines writer and reader roles using one identity.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -3402,7 +3402,7 @@
                       },
                       {
                         "id": "custom.axisLabel",
-                        "value": "Upload success by mix level"
+                        "value": "Upload success rate by activity level"
                       }
                     ]
                   },
@@ -3460,8 +3460,8 @@
         "kind": "Panel",
         "spec": {
           "id": 303,
-          "title": "Final upload p95 by load",
-          "description": "Every measured attempt remains separate. The numeric x axis is tested load; repeated confirmation levels are not additional capacity.",
+          "title": "Final upload p95 by activity level",
+          "description": "Final upload p95 at each activity level. A level combines writer and reader roles using one identity.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -3667,7 +3667,7 @@
                       },
                       {
                         "id": "custom.axisLabel",
-                        "value": "Final upload p95 by load"
+                        "value": "Final upload p95 by activity level"
                       }
                     ]
                   },
@@ -3744,8 +3744,8 @@
         "kind": "Panel",
         "spec": {
           "id": 304,
-          "title": "Add and verify elapsed",
-          "description": "Every measured attempt remains separate. The numeric x axis is tested load; repeated confirmation levels are not additional capacity.",
+          "title": "Time to add and verify recipients",
+          "description": "Time to add each recipient batch and complete its recorded checks. Read the access, content and cleanup results alongside the duration.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -3951,7 +3951,7 @@
                       },
                       {
                         "id": "custom.axisLabel",
-                        "value": "Add and verify elapsed"
+                        "value": "Time to add and verify recipients"
                       }
                     ]
                   },
@@ -4009,8 +4009,8 @@
         "kind": "Panel",
         "spec": {
           "id": 305,
-          "title": "Revoke elapsed",
-          "description": "Every measured attempt remains separate. The numeric x axis is tested load; repeated confirmation levels are not additional capacity.",
+          "title": "Time to revoke access",
+          "description": "Time to remove each recipient batch and complete its recorded checks. Read the removal result alongside the duration.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -4216,7 +4216,7 @@
                       },
                       {
                         "id": "custom.axisLabel",
-                        "value": "Revoke elapsed"
+                        "value": "Time to revoke access"
                       }
                     ]
                   },
@@ -4274,8 +4274,8 @@
         "kind": "Panel",
         "spec": {
           "id": 120,
-          "title": "Successful upload throughput",
-          "description": "",
+          "title": "Successful uploads per second",
+          "description": "Successful upload requests per second, averaged over the query interval. The moving average can extend beyond the last upload.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -4296,7 +4296,7 @@
                         "instant": false,
                         "range": true,
                         "format": "time_series",
-                        "legendFormat": "Successful upload throughput"
+                        "legendFormat": "Successful uploads per second"
                       }
                     },
                     "refId": "A",
@@ -4349,8 +4349,8 @@
         "kind": "Panel",
         "spec": {
           "id": 122,
-          "title": "Offered upload workers",
-          "description": "",
+          "title": "Upload workers",
+          "description": "k6 virtual users assigned to uploads. Each worker runs one upload at a time. The current query can keep the last worker count visible after an attempt ends.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -4371,7 +4371,7 @@
                         "instant": false,
                         "range": true,
                         "format": "time_series",
-                        "legendFormat": "Offered upload workers"
+                        "legendFormat": "Upload workers"
                       }
                     },
                     "refId": "A",
@@ -4425,7 +4425,7 @@
         "spec": {
           "id": 121,
           "title": "Upload latency by attempt",
-          "description": "Each line is a k6 per-attempt running percentile. No averaging or pooling across attempts. Missing samples remain unavailable. A criterion line appears only when this run records a p95 limit.",
+          "description": "Running p50, p95 and p99 for successful uploads in each attempt: 50%, 95% and 99% took this long or less. Attempts stay separate. Final values can remain visible after an attempt ends. A red line marks the configured p95 limit, if any.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -5321,7 +5321,7 @@
         "spec": {
           "id": 673,
           "title": "Recipient access evidence",
-          "description": "owner_ready \u2260 recipient_access_proofs. owner_pending is not successful access.",
+          "description": "Owner readiness and successful recipient access checks are separate. Pending recipients have not passed the access check.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -5423,7 +5423,7 @@
         "spec": {
           "id": 674,
           "title": "Revocation evidence",
-          "description": "Revoke: not started is not success. Missing remove_* evidence means Not recorded.",
+          "description": "A removal that has not started is not a successful revocation. Missing removal checks remain unavailable.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -5524,7 +5524,7 @@
         "kind": "Panel",
         "spec": {
           "id": 850,
-          "title": "Recorded run criteria and parameters",
+          "title": "Raw run data",
           "description": "",
           "links": [],
           "data": {
@@ -5613,7 +5613,7 @@
         "kind": "Panel",
         "spec": {
           "id": 851,
-          "title": "Recorded point measurements",
+          "title": "Raw point measurements",
           "description": "",
           "links": [],
           "data": {
@@ -5702,7 +5702,7 @@
         "kind": "Panel",
         "spec": {
           "id": 1100,
-          "title": "Metric coverage",
+          "title": "Metric sources",
           "description": "",
           "links": [],
           "data": {
@@ -5720,7 +5720,7 @@
             "spec": {
               "options": {
                 "mode": "markdown",
-                "content": "**LOCAL \u00b7 Runner Prometheus \u00b7 5 s**. Stack process metrics and bundled dependencies. CPU is measured in cores; memory is bytes. Missing scrapes stay unavailable. Use DEV infrastructure for remote Stack metrics."
+                "content": "**Local Prometheus \u00b7 every 5 s**\n\nStack process metrics and local dependencies. Process CPU is measured in cores. Missing samples are unavailable."
               },
               "fieldConfig": {
                 "defaults": {},
@@ -5963,8 +5963,8 @@
         "kind": "Panel",
         "spec": {
           "id": 1010,
-          "title": "Stack HTTP error rate in range",
-          "description": "",
+          "title": "Stack HTTP error rate",
+          "description": "Share of Stack requests that returned an HTTP error during the selected time range.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -6876,7 +6876,7 @@
         "kind": "Panel",
         "spec": {
           "id": 1300,
-          "title": "Metric coverage",
+          "title": "Metric sources",
           "description": "",
           "links": [],
           "data": {
@@ -6894,7 +6894,7 @@
             "spec": {
               "options": {
                 "mode": "markdown",
-                "content": "**DEV \u00b7 Platform InfluxDB \u00b7 60 s collection**\n\nShared host activity, not isolated test-organization usage. Dots are sampled values; sub-minute spikes may be missed. HTTP p99 stays per host; process CPU (cores) differs from host CPU (%). S3 / RabbitMQ telemetry is unavailable in this view. Missing data is not zero."
+                "content": "**DEV InfluxDB \u00b7 every 60 s**\n\nIncludes activity from all organizations on the selected hosts. Short spikes may fall between samples. HTTP p99 is shown per host. S3 and RabbitMQ metrics are unavailable."
               },
               "fieldConfig": {
                 "defaults": {},
@@ -7199,7 +7199,7 @@
         "kind": "Panel",
         "spec": {
           "id": 1206,
-          "title": "CPU seconds/s by host",
+          "title": "Stack process CPU by host",
           "description": "Shared DEV activity, collected once a minute: background conditions for a run, not test-organization usage.",
           "links": [],
           "data": {
@@ -7272,7 +7272,7 @@
         "kind": "Panel",
         "spec": {
           "id": 1207,
-          "title": "Resident memory by host",
+          "title": "Stack process memory (RSS) by host",
           "description": "Shared DEV activity, collected once a minute: background conditions for a run, not test-organization usage.",
           "links": [],
           "data": {
@@ -7637,7 +7637,7 @@
         "kind": "Panel",
         "spec": {
           "id": 1214,
-          "title": "CPU busy by host",
+          "title": "Host CPU usage",
           "description": "Shared DEV activity, collected once a minute: background conditions for a run, not test-organization usage.",
           "links": [],
           "data": {
@@ -8020,7 +8020,7 @@
             "spec": {
               "options": {
                 "mode": "markdown",
-                "content": "The dedicated **DEV InfluxDB** datasource is not configured in this Grafana. The recorded workload result is still available.\n\nNo DEV resource usage is inferred from local metrics. A missing source is not a healthy source."
+                "content": "Configure a read-only **DEV InfluxDB** datasource to show DEV resource usage. Workload results are still available."
               },
               "fieldConfig": {
                 "defaults": {
@@ -8576,8 +8576,8 @@
         "kind": "Panel",
         "spec": {
           "id": 1303,
-          "title": "Successful upload throughput",
-          "description": "",
+          "title": "Successful uploads per second",
+          "description": "Successful upload requests per second, averaged over the query interval. The moving average can extend beyond the last upload.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -8598,7 +8598,7 @@
                         "instant": false,
                         "range": true,
                         "format": "time_series",
-                        "legendFormat": "Successful upload throughput"
+                        "legendFormat": "Successful uploads per second"
                       }
                     },
                     "refId": "A",
@@ -8652,7 +8652,7 @@
         "spec": {
           "id": 1304,
           "title": "Upload latency by attempt",
-          "description": "Each line is a k6 per-attempt running percentile. No averaging or pooling across attempts. Missing samples remain unavailable. A criterion line appears only when this run records a p95 limit.",
+          "description": "Running p50, p95 and p99 for successful uploads in each attempt: 50%, 95% and 99% took this long or less. Attempts stay separate. Final values can remain visible after an attempt ends. A red line marks the configured p95 limit, if any.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -8863,7 +8863,7 @@
         "spec": {
           "id": 1305,
           "title": "Tested upload points",
-          "description": "",
+          "description": "Each row is one test attempt. Inspect opens its workload and time range. Repeated load levels remain separate attempts.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -8937,15 +8937,15 @@
                       "renameByName": {
                         "load": "Workers",
                         "phase": "Phase",
-                        "completed": "Completed iterations",
-                        "planned": "Planned iterations",
-                        "correctness": "Readback",
+                        "completed": "Iterations completed",
+                        "planned": "Iterations planned",
+                        "correctness": "Content checks",
                         "cleanup": "Cleanup",
                         "status": "Outcome",
-                        "reason": "Deciding evidence",
+                        "reason": "Reason",
                         "index": "Attempt",
                         "access": "Access verified",
-                        "revoked": "Owner revoked",
+                        "revoked": "Revoked (owner)",
                         "inspect": "Inspect"
                       }
                     }
@@ -9001,7 +9001,7 @@
                   {
                     "matcher": {
                       "id": "byName",
-                      "options": "Readback"
+                      "options": "Content checks"
                     },
                     "properties": [
                       {
@@ -9351,7 +9351,7 @@
         "spec": {
           "id": 1306,
           "title": "Tested activity levels",
-          "description": "",
+          "description": "Each row is one test attempt. Inspect opens its workload and time range. Repeated load levels remain separate attempts.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -9430,10 +9430,10 @@
                         "correctness": "Verification",
                         "cleanup": "Cleanup",
                         "status": "Outcome",
-                        "reason": "Deciding evidence",
+                        "reason": "Reason",
                         "index": "Attempt",
                         "access": "Access verified",
-                        "revoked": "Owner revoked",
+                        "revoked": "Revoked (owner)",
                         "inspect": "Inspect"
                       }
                     }
@@ -9635,7 +9635,7 @@
         "spec": {
           "id": 1307,
           "title": "Tested recipient batches",
-          "description": "",
+          "description": "Each row is one test attempt. Inspect opens its workload and time range. Repeated load levels remain separate attempts.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -9714,10 +9714,10 @@
                         "correctness": "Verification",
                         "cleanup": "Cleanup",
                         "status": "Outcome",
-                        "reason": "Deciding evidence",
+                        "reason": "Reason",
                         "index": "Attempt",
                         "access": "Access verified",
-                        "revoked": "Owner revoked",
+                        "revoked": "Revoked (owner)",
                         "inspect": "Inspect"
                       }
                     }
@@ -10020,8 +10020,8 @@
         "kind": "Panel",
         "spec": {
           "id": 1310,
-          "title": "Offered upload workers",
-          "description": "",
+          "title": "Upload workers",
+          "description": "k6 virtual users assigned to uploads. Each worker runs one upload at a time. The current query can keep the last worker count visible after an attempt ends.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -10042,7 +10042,7 @@
                         "instant": false,
                         "range": true,
                         "format": "time_series",
-                        "legendFormat": "Offered upload workers"
+                        "legendFormat": "Upload workers"
                       }
                     },
                     "refId": "A",
@@ -10293,8 +10293,8 @@
         "kind": "Panel",
         "spec": {
           "id": 1314,
-          "title": "Offered upload workers",
-          "description": "",
+          "title": "Upload workers",
+          "description": "k6 virtual users assigned to uploads. Each worker runs one upload at a time. The current query can keep the last worker count visible after an attempt ends.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -10315,7 +10315,7 @@
                         "instant": false,
                         "range": true,
                         "format": "time_series",
-                        "legendFormat": "Offered upload workers"
+                        "legendFormat": "Upload workers"
                       }
                     },
                     "refId": "A",
@@ -10580,7 +10580,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2001,
-          "title": "Recorded workload",
+          "title": "Selected run",
           "description": "",
           "links": [],
           "data": {
@@ -10759,8 +10759,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2002,
-          "title": "Recorded run \u00b7 restore its window",
-          "description": "",
+          "title": "Run time range",
+          "description": "Run + context shows the run with 1 minute before and after. Run only removes that margin. All points clears the point selection and restores the full run with context.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -10927,7 +10927,7 @@
                         "id": "links",
                         "value": [
                           {
-                            "title": "Download sanitized report evidence",
+                            "title": "Download recorded results (JSON)",
                             "url": "/api/datasources/proxy/uid/load-reports/evidence/${run:percentencode}.json",
                             "targetBlank": false
                           }
@@ -10999,7 +10999,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2003,
-          "title": "Selected tested point",
+          "title": "Selected point",
           "description": "",
           "links": [],
           "data": {
@@ -11017,7 +11017,7 @@
             "spec": {
               "options": {
                 "mode": "markdown",
-                "content": "**${point:text}**\n\nThe summary and telemetry follow this selection. Use **Inspect** for a point, or **All points** above to restore the full run. Native tabs preserve your plotted time."
+                "content": "**${point:text}**\n\nUse **Inspect** to open one test attempt. **All points** shows the full run. Switching tabs keeps the selected point and time range."
               },
               "fieldConfig": {
                 "defaults": {
@@ -11034,8 +11034,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2004,
-          "title": "Inspect a tested point",
-          "description": "",
+          "title": "Choose a point",
+          "description": "Each point is one test attempt at a configured load. Inspect opens it in Workload. Point + context includes 30 seconds before and 1 minute after; Point only uses its exact time range. Older reports without point times use the full run.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11261,8 +11261,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2005,
-          "title": "Recorded upload phases",
-          "description": "",
+          "title": "Upload phases",
+          "description": "k6 samples grouped by test phase. The current query can keep a phase visible after its attempt ends.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11346,7 +11346,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2006,
-          "title": "Uploads completed / planned \u00b7 selected points",
+          "title": "Uploads completed / planned",
           "description": "",
           "links": [],
           "data": {
@@ -11444,8 +11444,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2007,
-          "title": "Payload uploaded",
-          "description": "",
+          "title": "Data uploaded",
+          "description": "Total file content uploaded successfully, excluding HTTP overhead.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11516,8 +11516,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2008,
-          "title": "Highest final attempt p95",
-          "description": "",
+          "title": "Worst final upload p95",
+          "description": "Highest final p95 reported across the selected attempts. For each attempt, 95% of measured requests took this long or less. Read the failure count alongside latency.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11589,7 +11589,7 @@
         "spec": {
           "id": 2009,
           "title": "Failed uploads",
-          "description": "",
+          "description": "Zero is shown only when every selected attempt records 100% successful uploads. Otherwise the failure count is unavailable.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11804,7 +11804,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2012,
-          "title": "Peak changes readers",
+          "title": "Peak changes-feed readers",
           "description": "",
           "links": [],
           "data": {
@@ -11876,7 +11876,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2013,
-          "title": "Highest upload p95",
+          "title": "Worst upload p95",
           "description": "",
           "links": [],
           "data": {
@@ -11948,8 +11948,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2014,
-          "title": "Recipient access proofs",
-          "description": "",
+          "title": "Successful recipient access checks",
+          "description": "Sum of successful access checks across the selected batches. A recipient checked in several batches is counted each time.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -12020,8 +12020,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2015,
-          "title": "Owner-observed revocations",
-          "description": "",
+          "title": "Revocations seen by the owner",
+          "description": "Revocations reported on the owner side, summed across selected batches. This alone does not prove that recipient access was denied.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -12092,7 +12092,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2016,
-          "title": "Longest add + verify",
+          "title": "Longest time to add and verify",
           "description": "",
           "links": [],
           "data": {
@@ -12164,7 +12164,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2017,
-          "title": "Longest revoke",
+          "title": "Longest time to revoke access",
           "description": "",
           "links": [],
           "data": {
@@ -12314,7 +12314,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2019,
-          "title": "Evidence and source coverage",
+          "title": "Results and metric sources",
           "description": "",
           "links": [],
           "data": {
@@ -12332,7 +12332,7 @@
             "spec": {
               "options": {
                 "mode": "markdown",
-                "content": "Content verification, cleanup and performance are independent. Download the sanitized evidence from **Recorded run** above. Original producer reports remain the archive.\n\n**Local:** runner Prometheus \u00b7 5 s. **DEV:** runner workload metrics plus optional read-only InfluxDB \u00b7 60 s \u00b7 shared hosts. Missing measurements are unavailable, never zero."
+                "content": "**Download evidence** in **Run time range** saves the results shown here as JSON. Keep the original test report for the full details.\n\nWorkload metrics: runner Prometheus, every 5 s. DEV infrastructure: optional InfluxDB, every 60 s, across shared hosts. Missing data is shown as unavailable."
               },
               "fieldConfig": {
                 "defaults": {
@@ -12349,7 +12349,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2020,
-          "title": "Recorded context and versions",
+          "title": "Run settings and versions",
           "description": "",
           "links": [],
           "data": {
@@ -12418,7 +12418,7 @@
                         "harness_revision": "Harness revision",
                         "topology": "Topology",
                         "dataset": "Dataset",
-                        "vus_budget": "VUs budget",
+                        "vus_budget": "Worker limit",
                         "bytes_budget": "Upload byte budget",
                         "runtime_budget": "Runtime budget",
                         "schema": "Result schema"
@@ -12454,7 +12454,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2021,
-          "title": "Stop reason / deciding evidence",
+          "title": "Why the run stopped",
           "description": "",
           "links": [],
           "data": {
@@ -12633,7 +12633,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2022,
-          "title": "Recorded workload",
+          "title": "Selected run",
           "description": "",
           "links": [],
           "data": {
@@ -12812,8 +12812,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2023,
-          "title": "Recorded run \u00b7 restore its window",
-          "description": "",
+          "title": "Run time range",
+          "description": "Run + context shows the run with 1 minute before and after. Run only removes that margin. All points clears the point selection and restores the full run with context.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -12980,7 +12980,7 @@
                         "id": "links",
                         "value": [
                           {
-                            "title": "Download sanitized report evidence",
+                            "title": "Download recorded results (JSON)",
                             "url": "/api/datasources/proxy/uid/load-reports/evidence/${run:percentencode}.json",
                             "targetBlank": false
                           }
@@ -13196,7 +13196,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2026,
-          "title": "Peak changes readers",
+          "title": "Peak changes-feed readers",
           "description": "",
           "links": [],
           "data": {
@@ -13268,7 +13268,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2027,
-          "title": "Highest upload p95",
+          "title": "Worst upload p95",
           "description": "",
           "links": [],
           "data": {
@@ -13340,8 +13340,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2028,
-          "title": "Recipient access proofs",
-          "description": "",
+          "title": "Successful recipient access checks",
+          "description": "Sum of successful access checks across the selected batches. A recipient checked in several batches is counted each time.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -13412,8 +13412,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2029,
-          "title": "Owner-observed revocations",
-          "description": "",
+          "title": "Revocations seen by the owner",
+          "description": "Revocations reported on the owner side, summed across selected batches. This alone does not prove that recipient access was denied.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -13484,7 +13484,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2030,
-          "title": "Longest add + verify",
+          "title": "Longest time to add and verify",
           "description": "",
           "links": [],
           "data": {
@@ -13556,7 +13556,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2031,
-          "title": "Longest revoke",
+          "title": "Longest time to revoke access",
           "description": "",
           "links": [],
           "data": {
@@ -13628,7 +13628,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2032,
-          "title": "Recorded workload",
+          "title": "Selected run",
           "description": "",
           "links": [],
           "data": {
@@ -13807,8 +13807,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2033,
-          "title": "Recorded run \u00b7 restore its window",
-          "description": "",
+          "title": "Run time range",
+          "description": "Run + context shows the run with 1 minute before and after. Run only removes that margin. All points clears the point selection and restores the full run with context.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -13975,7 +13975,7 @@
                         "id": "links",
                         "value": [
                           {
-                            "title": "Download sanitized report evidence",
+                            "title": "Download recorded results (JSON)",
                             "url": "/api/datasources/proxy/uid/load-reports/evidence/${run:percentencode}.json",
                             "targetBlank": false
                           }
@@ -14047,7 +14047,7 @@
         "kind": "Panel",
         "spec": {
           "id": 2034,
-          "title": "Selected tested point",
+          "title": "Selected point",
           "description": "",
           "links": [],
           "data": {
@@ -14065,7 +14065,7 @@
             "spec": {
               "options": {
                 "mode": "markdown",
-                "content": "**${point:text}**\n\nThe summary and telemetry follow this selection. Use **Inspect** for a point, or **All points** above to restore the full run. Native tabs preserve your plotted time."
+                "content": "**${point:text}**\n\nUse **Inspect** to open one test attempt. **All points** shows the full run. Switching tabs keeps the selected point and time range."
               },
               "fieldConfig": {
                 "defaults": {
@@ -14082,8 +14082,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2035,
-          "title": "Inspect a tested point",
-          "description": "",
+          "title": "Choose a point",
+          "description": "Each point is one test attempt at a configured load. Inspect opens it in Workload. Point + context includes 30 seconds before and 1 minute after; Point only uses its exact time range. Older reports without point times use the full run.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -14309,8 +14309,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2036,
-          "title": "The plotted window excludes this workload",
-          "description": "The report is available, but its workload samples are outside the time picker. Click the recorded window to restore the selected run.",
+          "title": "Selected time range is outside this run or point",
+          "description": "The results are available, but the selected time range does not overlap the run or point. Click below to show the full run.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -14391,7 +14391,7 @@
                     "mode": "fixed",
                     "fixedColor": "orange"
                   },
-                  "displayName": "Click to open the recorded run + context",
+                  "displayName": "Click to show the run with 1 min before and after",
                   "mappings": [],
                   "links": [
                     {
@@ -14411,8 +14411,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2037,
-          "title": "The plotted window excludes this workload",
-          "description": "The report is available, but its workload samples are outside the time picker. Click the recorded window to restore the selected run.",
+          "title": "Selected time range is outside this run or point",
+          "description": "The results are available, but the selected time range does not overlap the run or point. Click below to show the full run.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -14493,7 +14493,7 @@
                     "mode": "fixed",
                     "fixedColor": "orange"
                   },
-                  "displayName": "Click to open the recorded run + context",
+                  "displayName": "Click to show the run with 1 min before and after",
                   "mappings": [],
                   "links": [
                     {
@@ -14513,8 +14513,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2038,
-          "title": "The plotted window excludes this workload",
-          "description": "The report is available, but its workload samples are outside the time picker. Click the recorded window to restore the selected run.",
+          "title": "Selected time range is outside this run or point",
+          "description": "The results are available, but the selected time range does not overlap the run or point. Click below to show the full run.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -14595,7 +14595,7 @@
                     "mode": "fixed",
                     "fixedColor": "orange"
                   },
-                  "displayName": "Click to open the recorded run + context",
+                  "displayName": "Click to show the run with 1 min before and after",
                   "mappings": [],
                   "links": [
                     {
@@ -15525,7 +15525,7 @@
                     {
                       "kind": "RowsLayoutRow",
                       "spec": {
-                        "title": "Advanced diagnostics \u00b7 recorded report fields",
+                        "title": "Advanced diagnostics",
                         "collapse": true,
                         "hideHeader": false,
                         "layout": {

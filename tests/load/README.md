@@ -9,7 +9,7 @@ See [Testing architecture](../../docs/testing.md) for lifecycle boundaries,
 correctness and result contracts, and the planned bounded shared DEV rollout.
 
 For classified workload limits, tested bounds and fanout readiness evidence, see
-[Load test overview](CAPACITY-OVERVIEW.md). Workload and infrastructure diagnostics remain available.
+[Load test results](CAPACITY-OVERVIEW.md). Workload and infrastructure diagnostics remain available.
 
 The harness includes authenticated exact-work and fixed-duration file-upload
 workloads for personal drives, shared-drive activity and upload workloads, and an

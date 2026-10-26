@@ -1,6 +1,6 @@
 # Load test dashboard
 
-The native Grafana dashboard **Load test overview** has three tabs. It serves
+The native Grafana dashboard **Load test results** has three tabs. It serves
 local and DEV runs, in regression and capacity mode, using the same controls.
 
 ```sh
@@ -12,7 +12,7 @@ make capacity-dashboard-url
 
 The top bar contains **Environment → Mode → Run**. File size, personal/shared
 upload target and campaign describe the selected report; they are not filters.
-The compact context and **Recorded run** controls appear on every tab.
+The compact context and **Run time range** controls appear on every tab.
 **Run + context** and **All points** restore the recorded UTC window with a
 one-minute margin. **Run only** uses the recorded start/end without margins.
 Producer and campaign links already include the window.

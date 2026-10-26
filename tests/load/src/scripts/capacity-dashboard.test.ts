@@ -101,7 +101,7 @@ test('DEV infrastructure cannot display local metrics or query an absent remote 
 })
 
 test('point selection filters raw k6 tags without joining historical telemetry to a later report scrape', () => {
-  for (const title of ['Successful upload throughput', 'Upload latency by attempt', 'Offered upload workers']) {
+  for (const title of ['Successful uploads per second', 'Upload latency by attempt', 'Upload workers']) {
     for (const query of queries(named(title)).filter(q => q.datasource.name === 'prometheus')) {
       assert.match(query.spec.expr!, /campaignid="\$run",load_target="\$env",mode="\$mode"/)
       assert.match(query.spec.expr!, /executionid=~"\$execution"/)
@@ -116,7 +116,7 @@ test('point selection filters raw k6 tags without joining historical telemetry t
 })
 
 test('run and point links carry both the actual identity and the recorded time window', () => {
-  const window = named('Recorded run · restore its window')
+  const window = named('Run time range')
   const windowLinks = window.spec.vizConfig.spec.fieldConfig.overrides
     .flatMap(o => o.properties.filter(p => p.id === 'links').flatMap(p => p.value as { url: string }[]))
   const all = windowLinks.find(l => l.url.includes('dtab=overview') && l.url.includes('focus_from_ms'))!
@@ -149,9 +149,9 @@ test('report facts use their own datasource and every tab can restore the full r
   for (const tab of dashboard.spec.layout.spec!.tabs!) {
     const displayed = visible(tab, { env: 'local', kind: 'upload', mode: 'capacity' })
     const titles = displayed.map(p => p.spec.title)
-    assert.ok(titles.includes('Recorded workload'))
-    assert.ok(titles.includes('Recorded run · restore its window'))
-    const controls = displayed.find(p => p.spec.title === 'Recorded run · restore its window')!
+    assert.ok(titles.includes('Selected run'))
+    assert.ok(titles.includes('Run time range'))
+    const controls = displayed.find(p => p.spec.title === 'Run time range')!
     for (const url of controls.spec.vizConfig.spec.fieldConfig.overrides
       .flatMap(o => o.properties.filter(p => p.id === 'links').flatMap(p => p.value as { url: string }[]))) {
       if (url.url.includes('dtab=')) assert.ok(url.url.includes(`dtab=${tab.spec!.title!.toLowerCase()}`))
@@ -188,13 +188,13 @@ test('an unrelated time window shows a recovery action instead of empty workload
   const tab = dashboard.spec.layout.spec!.tabs![1]!
   const values = { env: 'local', kind: 'upload', mode: 'capacity', window_state: 'outside' }
   const outside = visible(tab, values).map(p => p.spec.title)
-  assert.ok(outside.includes('The plotted window excludes this workload'))
-  assert.ok(outside.includes('Recorded workload'))
-  for (const title of ['Recorded upload phases', 'Successful upload throughput', 'Upload latency by attempt', 'Offered upload workers']) {
+  assert.ok(outside.includes('Selected time range is outside this run or point'))
+  assert.ok(outside.includes('Selected run'))
+  for (const title of ['Upload phases', 'Successful uploads per second', 'Upload latency by attempt', 'Upload workers']) {
     assert.ok(!outside.includes(title), title)
     assert.ok(visible(tab, { ...values, window_state: 'inside' }).some(p => p.spec.title === title), title)
   }
-  const recovery = named('The plotted window excludes this workload')
+  const recovery = named('Selected time range is outside this run or point')
   const links = recovery.spec.vizConfig.spec.fieldConfig.defaults.links as { url: string }[]
   assert.match(links[0]!.url, /var-point=\$__all/)
   assert.match(links[0]!.url, /from=\$\{__field.labels.focus_from_ms\}&to=\$\{__field.labels.focus_to_ms\}/)
@@ -214,7 +214,7 @@ test('local diagnostics distinguish no HTTP errors, missing scrapes, process cor
   assert.equal(cpu.spec.vizConfig.spec.fieldConfig.defaults.unit, 'suffix: cores')
   const gc = named('Stack GC pause')
   assert.match(queries(gc)[0]!.spec.expr!, /quantile=~"1\|1.0"/)
-  const errors = queries(named('Stack HTTP error rate in range'))[0]!.spec.expr!
+  const errors = queries(named('Stack HTTP error rate'))[0]!.spec.expr!
   assert.match(errors, /or 0 \* sum\(increase\(http_all_total_duration_count/)
   assert.doesNotMatch(errors, /vector\(0\)/)
 })
