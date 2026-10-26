@@ -322,6 +322,15 @@ When the client receives the service URL from the stack, it starts to listen for
 messages coming from that URL. Once the listener is started, it opens an iframe
 that points to the service's URL.
 
+Some permissions must always be allowed on the iframe, whatever the intent.
+Today, it is `clipboard-write` (`<iframe allow="clipboard-write">`): the
+service runs on another origin, and without it the browser blocks the
+Clipboard API inside the service. cozy-interapp sets it.
+
+In the future, if an intent needs a special permission, a new field may be
+introduced on the intent in the manifest, and the client opening the iframe
+must then allow what it lists.
+
 #### Service to Client
 
 At this point, the service app is opened on the route that it provided in the
