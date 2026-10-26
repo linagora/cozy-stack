@@ -15,6 +15,8 @@ export async function fakeActors(t: TestContext) {
   const uuids = new Map([org, writer, reader].map(d => [d, randomUUID()]))
   const state = {
     uuids, replaced: '', readOnlyWrites: false, keepRevoked: false, neverReady: false, removalStatus: 204,
+    // A drive creation that commits but answers with an empty body.
+    emptyDriveReply: false,
     // After the writer's group is removed: its reads answer 403 once, then 200; its writes answer this.
     flapAfterRevoke: false, revokedWriteStatus: 403, revokedReads: 0,
     groups: [] as Array<{ id: string, readOnly: boolean, members: string[], revoked: boolean, granted?: boolean }>,
@@ -37,6 +39,7 @@ export async function fakeActors(t: TestContext) {
     if (req.headers.authorization !== `Bearer token-${host}`) return send(401)
     state.requests.push(`${host.slice(5, 6)} ${route}`)
     if (route === 'POST /sharings/drives') {
+      if (state.emptyDriveReply) return send(201)
       return send(201, { data: { id: 'sid', attributes: { org_drive: true, rules: [{ values: ['root'] }],
         members: [{ instance: `http://${org}`, status: 'owner' }] } } })
     }

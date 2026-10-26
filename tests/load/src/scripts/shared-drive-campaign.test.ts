@@ -151,6 +151,20 @@ test('member actors play the ramp roles, and a proven access failure outweighs t
     producerExitCode: code }, report), { code: 1, reason: envelope?.reason })
 })
 
+test('a ramp that runs out of time after preparing its actors still removes their fixtures', async t => {
+  const f = await fixture(t)
+  const actors = await fakeActors(t)
+  // A fast clock: preparing the actors outlasts MAX_RUNTIME, so setup stops before k6.
+  const clock = join(f.dockerDir, 'clock.mjs')
+  writeFileSync(clock, 'const real = Date.now, start = real()\nDate.now = () => start + (real() - start) * 2000\n')
+  const { code, output } = await f.start({ ...budgets, ...f.local, ...actors.env, RAMP_LEVELS: '1',
+    RAMP_STEP_DURATION: '5s', MAX_RUNTIME: '200s' }, ['--import', clock]).done
+  equal(code, 2, output)
+  match(output, /MAX_RUNTIME expired during ramp setup; its fixtures were removed/)
+  deepEqual([actors.state.root, actors.state.docs.size], ['gone', 0])
+  ok(!f.docker().some(c => c.args?.[1] === 'run'))
+})
+
 test('a local ramp cleans only its own data in the drive and never stops other runs', async t => {
   const f = await fixture(t)
   f.state.host = 'local.test:8080'

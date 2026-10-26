@@ -41,6 +41,8 @@ export interface DriveActors {
   // Proves the reader cannot write, removes the writer's group and proves its access ends while the
   // reader's stays, then removes the fixtures. Throws AccessFailure for a proven access failure.
   finish(): Promise<void>
+  // Removes the fixtures without a verdict, when the run fails before its workload.
+  abandon(): Promise<{ cleaned: string[], retained: string[] }>
 }
 
 function setting(env: Env, name: string): string {
@@ -69,7 +71,8 @@ async function poll(settleMs: number, until: () => Promise<boolean>): Promise<bo
   }
 }
 
-export async function prepareActors(env: Env, executionId: string): Promise<DriveActors> {
+// Preparation waits no longer than the run's deadline.
+export async function prepareActors(env: Env, executionId: string, deadline = Infinity): Promise<DriveActors> {
   const domain = setting(env, 'ACTORS_DOMAIN')
   const manifest = readManifest(env.SEED_MANIFEST || manifestPath(domain), domain)
   const members = manifest.instances.filter(i => i.role === 'member')
@@ -78,6 +81,8 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
   // How long members may take to reach the drive, and to lose it once their grant is removed. A Stack
   // still working through an earlier run's jobs can take minutes to accept.
   const settleMs = Number(env.ACTORS_SETTLE_MS || 300_000)
+  check(Number.isSafeInteger(settleMs) && settleMs >= 0, 'ACTORS_SETTLE_MS must be a whole number of milliseconds')
+  const preparing = () => Math.max(0, Math.min(settleMs, deadline - Date.now()))
   const adminURL = new URL(setting(env, 'SEED_ADMIN_URL'))
   const stackOrigin = setting(env, 'SEED_STACK_URL')
   const auth = `Basic ${Buffer.from(`${env.SEED_ADMIN_USERNAME || 'admin'}:${setting(env, 'SEED_ADMIN_PASSWORD')}`)
@@ -114,6 +119,14 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
   const name = `twake-load-actors-${executionId}`
   const fixtures = {
     drive: null as { id: string, root: string } | null, groups: [] as string[], contacts: [] as string[],
+    // Creations whose identity never came back: they may have committed, so they may remain.
+    unknown: [] as string[],
+  }
+  const create = async <T>(label: string, attempt: () => Promise<T>): Promise<T> => {
+    fixtures.unknown.push(label)
+    const created = await attempt()
+    fixtures.unknown.splice(fixtures.unknown.indexOf(label), 1)
+    return created
   }
   // Removes what this run created, whatever failed; anything left is named, never ignored.
   const removeFixtures = async (): Promise<{ cleaned: string[], retained: string[] }> => {
@@ -127,28 +140,39 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
     if (drive) await remove(name, () => removeDrive(owner, drive.id, drive.root, 2000, POLL_MS, Date.now() + 300_000))
     for (const id of fixtures.groups) await remove(id, () => removeDoc(owner, 'io.cozy.contacts.groups', id))
     for (const id of fixtures.contacts) await remove(id, () => removeDoc(owner, 'io.cozy.contacts', id))
+    retained.push(...fixtures.unknown.map(label => `${label} (creation outcome unknown)`))
     return { cleaned, retained }
   }
 
   try {
-    const created = (await json(owner('POST', '/sharings/drives', JSON.stringify({ data: {
-      type: 'io.cozy.sharings', attributes: { name, description: name } } }), 'application/vnd.api+json'),
-    201, 'Creating the drive')).data
-    check(created?.id && created.attributes?.rules?.[0]?.values?.[0], 'The drive has no ID or root')
-    const drive = { id: String(created.id), root: String(created.attributes.rules[0].values[0]) }
-    fixtures.drive = drive
+    const created = await create(`drive ${name}`, async () => {
+      const reply = (await json(owner('POST', '/sharings/drives', JSON.stringify({ data: {
+        type: 'io.cozy.sharings', attributes: { name, description: name } } }), 'application/vnd.api+json'),
+      201, 'Creating the drive')).data
+      check(reply?.id && reply.attributes?.rules?.[0]?.values?.[0], 'The drive has no ID or root')
+      fixtures.drive = { id: String(reply.id), root: String(reply.attributes.rules[0].values[0]) }
+      return reply
+    })
+    const drive = fixtures.drive!
     check(created.attributes.org_drive === true, 'Expected an organization drive')
     const scheme = new URL(created.attributes.members[0].instance).protocol
     const group = async (member: Actor) => {
-      const group = await json(owner('POST', '/data/io.cozy.contacts.groups/',
-        JSON.stringify({ name: `${name}-${member.role}` })), 201, 'Creating a group')
-      fixtures.groups.push(group.id)
-      const contact = await json(owner('POST', '/data/io.cozy.contacts/', JSON.stringify({
-        fullname: `Load-test ${member.role}`, email: [{ address: `${member.uuid}@spam.cozycloud.cc`, primary: true }],
-        cozy: [{ url: `${scheme}//${member.domain}/`, primary: true }],
-        relationships: { groups: { data: [{ _id: group.id, _type: 'io.cozy.contacts.groups' }] } },
-      })), 201, 'Creating a contact')
-      fixtures.contacts.push(contact.id)
+      const group = await create(`${member.role} group`, async () => {
+        const reply = await json(owner('POST', '/data/io.cozy.contacts.groups/',
+          JSON.stringify({ name: `${name}-${member.role}` })), 201, 'Creating a group')
+        check(reply?.id, 'The group has no ID')
+        fixtures.groups.push(reply.id)
+        return reply
+      })
+      await create(`${member.role} contact`, async () => {
+        const reply = await json(owner('POST', '/data/io.cozy.contacts/', JSON.stringify({
+          fullname: `Load-test ${member.role}`, email: [{ address: `${member.uuid}@spam.cozycloud.cc`, primary: true }],
+          cozy: [{ url: `${scheme}//${member.domain}/`, primary: true }],
+          relationships: { groups: { data: [{ _id: group.id, _type: 'io.cozy.contacts.groups' }] } },
+        })), 201, 'Creating a contact')
+        check(reply?.id, 'The contact has no ID')
+        fixtures.contacts.push(reply.id)
+      })
       return { id: group.id as string, type: 'io.cozy.contacts.groups' }
     }
     const [writerGroup, readerGroup] = [await group(actors.writer), await group(actors.reader)]
@@ -162,7 +186,7 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
     // before its sharing arrived can stay refused for a while, so the owner's roster comes first.
     const granted = Date.now()
     let roster: string[] = []
-    const ready = await poll(settleMs, async () => {
+    const ready = await poll(preparing(), async () => {
       const members = parse((await owner('GET', `/sharings/${drive.id}`)).body)?.data?.attributes?.members ?? []
       roster = members.slice(1).map((m: { status?: string }) => String(m.status))
       return roster.length === 2 && roster.every(status => status === 'ready')
@@ -171,7 +195,7 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
     const acceptMs = Date.now() - granted
     const rootPath = `/sharings/drives/${drive.id}/${drive.root}`
     let statuses: number[] = []
-    const accepted = await poll(settleMs, async () => {
+    const accepted = await poll(preparing(), async () => {
       statuses = await Promise.all([writer, reader].map(async api => (await api('GET', rootPath)).status))
       return statuses.every(status => status === 200)
     })
@@ -201,6 +225,7 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
           stack: stackClient(stackOrigin, actors.owner.domain, actors.owner.token) }),
       },
       env: { WRITER_ACCESS_TOKEN: actors.writer.token, READER_ACCESS_TOKEN: actors.reader.token },
+      abandon: removeFixtures,
       async finish() {
         // Whatever fails here, the fixtures go before the verdict.
         let failure: unknown = null

@@ -99,3 +99,23 @@ test('a failed setup or group removal still removes every fixture', async t => {
     ok(!f.state.requests.some(r => r.includes('POST')), 'nothing is written before the address is known')
   })
 })
+
+test('a creation whose identity never came back is reported as possibly remaining', async t => {
+  const f = await fixture(t)
+  f.state.emptyDriveReply = true
+  const failure = await prepareActors(f.env, 'run-1').then(() => null, (error: unknown) => error)
+  ok(failure instanceof FixtureError)
+  match(failure.message, /fixtures remain: drive twake-load-actors-run-1 \(creation outcome unknown\)/)
+  ok(!failure.message.includes('were removed'))
+  ok(!f.state.requests.some(r => r.includes('DELETE')), 'nothing it cannot identify is deleted')
+})
+
+test('preparation waits no longer than the run allows, and refuses an invalid bound', async t => {
+  const f = await fixture(t)
+  f.state.neverReady = true
+  const started = Date.now()
+  await rejects(prepareActors({ ...f.env, ACTORS_SETTLE_MS: '300000' }, 'run-1', Date.now() + 100),
+    /did not accept the drive in time/)
+  ok(Date.now() - started < 5000)
+  await rejects(prepareActors({ ...f.env, ACTORS_SETTLE_MS: 'soon' }, 'run-1'), /ACTORS_SETTLE_MS/)
+})

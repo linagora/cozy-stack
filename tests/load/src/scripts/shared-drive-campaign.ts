@@ -9,6 +9,7 @@ import { getUploadDataSizeBytes, isUploadDataSize } from '../fixtures/upload-siz
 import { getRampTotalDurationMs, parseRampCriteria, parseRampPlan } from '../lib/load-profile.ts'
 import { buildGrafanaLink, classifyRamp, K6_THRESHOLDS_FAILED } from './campaign-summary.ts'
 import { AccessFailure, prepareActors } from './drive-actors.ts'
+import { FixtureError } from './fixture-http.ts'
 import { DEFAULT_DRIVE_NAME } from './prepare-shared-drive.ts'
 import { rampEnvelope, topologyOf } from './result-envelope.ts'
 import { getBytes, getDurationMs, getPositiveInteger } from './upload/campaign-config.ts'
@@ -71,20 +72,29 @@ async function main(): Promise<number> {
   const deadline = Date.now() + config.deadlineMs
   // Member actors play the drive's roles from an organization fixture (drive-actors.ts).
   check(!env.ACTORS_DOMAIN || config.loadTarget === 'local', 'Shared-drive actors run on a local Stack only')
-  const actors = env.ACTORS_DOMAIN ? await prepareActors(env, config.executionId) : null
-  const target: Target = actors?.target ?? (config.loadTarget === 'dev' ? await devTarget(env) : localTarget(env))
-  // One k6 run holds one token for the whole ramp.
-  check(config.durationMs <= target.maxPointMs,
-    `The ramp needs ${Math.ceil(config.durationMs / 60_000)} minutes, beyond one k6 run on this target`)
-  const { stack } = await target.session()
-  check(stack, `The shared-drive ramp needs a Stack it can reach with a token: ${target.baseUrl}`)
-  check(Date.now() < deadline, 'MAX_RUNTIME expired during ramp setup')
-  const drive = actors?.drive ?? await ensureDrive(stack, deadline)
-  const recovery = target.lockedUrls.length ? await recover(target, [drive.root]) : null
-
+  const actors = env.ACTORS_DOMAIN ? await prepareActors(env, config.executionId, deadline) : null
   const reportPath = `data/results/${config.executionId}-shared-drive-ramp.json`
-  mkdirSync(`${harness}data/results`, { recursive: true })
-  rmSync(`${harness}${reportPath}`, { force: true })
+  const { target, drive, recovery } = await (async () => {
+    const target: Target = actors?.target ?? (config.loadTarget === 'dev' ? await devTarget(env) : localTarget(env))
+    // One k6 run holds one token for the whole ramp.
+    check(config.durationMs <= target.maxPointMs,
+      `The ramp needs ${Math.ceil(config.durationMs / 60_000)} minutes, beyond one k6 run on this target`)
+    const { stack } = await target.session()
+    check(stack, `The shared-drive ramp needs a Stack it can reach with a token: ${target.baseUrl}`)
+    check(Date.now() < deadline, 'MAX_RUNTIME expired during ramp setup')
+    const drive = actors?.drive ?? await ensureDrive(stack, deadline)
+    const recovery = target.lockedUrls.length ? await recover(target, [drive.root]) : null
+    mkdirSync(`${harness}data/results`, { recursive: true })
+    rmSync(`${harness}${reportPath}`, { force: true })
+    return { target, drive, recovery }
+  })().catch(async (error: unknown) => {
+    // Setup failed once the actors were prepared: their fixtures go all the same.
+    if (!actors) throw error
+    const { retained } = await actors.abandon()
+    throw new FixtureError(`${message(error)}; ${retained.length ? `fixtures remain: ${retained.join(' ')}`
+      : 'its fixtures were removed'}`)
+  })
+
   const run = await runK6Work(target, {
     executionId: config.executionId,
     makeTarget: 'shared-drive-ramp-run',
