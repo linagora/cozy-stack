@@ -411,6 +411,10 @@ test('the tree profile seeds the same structure and bytes for a seed, and verify
   alpha.name = 'alpha'
   byName('welcome.txt')[1].md5sum = shape(other.items).find(item => item.name === 'welcome.txt')!.md5sum
   match((await first.f.run(['verify', domain])).output, /file @drive\/handbook\/welcome.txt changed/)
+  writeFileSync(first.f.manifest, JSON.stringify({ ...first.manifest, profile_version: 2 }))
+  const requests = first.f.requests.length
+  match((await first.f.run(['verify', domain])).output, /tree profile version 2; this seeder knows version 1/)
+  equal(first.f.requests.length, requests)
 })
 
 test('drive-only seed reuses shared-drive creation and reads each root backlink with the same Host', async (t) => {

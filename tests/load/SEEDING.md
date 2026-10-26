@@ -180,6 +180,10 @@ export SEED_DOMAIN='seed-<32-hex-id>.load.example.test:8443'
 make seed-scale-cleanup
 ```
 
+Fixtures seeded before manifests existed have none, so cleanup refuses them:
+remove them with the release that seeded them, or through the admin API once
+you have checked they are yours.
+
 Cleanup needs the fixture's manifest and deletes only the instances it records,
 with the existing `DELETE /instances/:domain`. An instance is deleted only when it
 still has the recorded UUID; this also covers a creation whose reply was lost.

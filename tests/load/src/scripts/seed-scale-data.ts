@@ -256,6 +256,9 @@ async function main(): Promise<void> {
     const manifest = readManifest(manifestFile, domain)
     check(manifest.status === 'complete',
       `The fixture manifest is ${manifest.status}; only a complete fixture is usable`)
+    // Another version of the tree has other paths and bytes: comparing it with this one proves nothing.
+    check(manifest.profile !== 'tree' || manifest.profile_version === TREE_VERSION,
+      `The fixture is tree profile version ${manifest.profile_version}; this seeder knows version ${TREE_VERSION}`)
     const { parameters, content } = manifest
     const stackURL = parameters.files || parameters.drives ? origin('SEED_STACK_URL') : undefined
     for (const entry of manifest.instances) {
