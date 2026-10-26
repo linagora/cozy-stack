@@ -34,6 +34,10 @@ export function formatAuthMessage(token: string): string {
   return JSON.stringify({ method: 'AUTH', payload: token } satisfies RealtimeAuthMessage)
 }
 
+export function formatSubscribeMessage(doctype: string): string {
+  return JSON.stringify({ method: 'SUBSCRIBE', payload: { type: doctype } })
+}
+
 export function parseRealtimeMessage(
   rawMessage: string,
 ): RealtimeIncomingMessage | null {

@@ -29,7 +29,7 @@ import {
   getWsSessionDurationMs,
   parseDurationToMs,
 } from '../lib/duration.ts'
-import { parsePositiveIntegerEnv } from '../lib/env.ts'
+import { parseHosts, parsePositiveIntegerEnv } from '../lib/env.ts'
 import {
   getCompletedRampLevels,
   getRampPhaseAt,
@@ -90,9 +90,7 @@ const rawChangesReadersVus = parsePositiveIntegerEnv(__ENV, 'CHANGES_READER_VUS'
 const { contentChecksPerLevel } = parseRampCriteria(__ENV)
 
 // Member actors (drive-actors.ts): k6 reaches their domains, which only the Stack serves, at its address.
-export const actorHosts: Record<string, string> = Object.fromEntries(
-  (__ENV.ACTOR_HOSTS || '').split(',').filter(Boolean).map((entry: string) => entry.split('=')),
-)
+export const actorHosts = parseHosts(__ENV.ACTOR_HOSTS)
 
 export const options: Options = {
   hosts: actorHosts,

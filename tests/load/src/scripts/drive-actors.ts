@@ -53,7 +53,7 @@ function setting(env: Env, name: string): string {
 
 // k6 runs in Compose, where only load.localhost resolves: it reaches the fixture's domains at the
 // Stack container's address.
-function stackAddress(): string {
+export function stackAddress(): string {
   const run = (args: string[]) => spawnSync('docker', args, { cwd: harness, encoding: 'utf8' }).stdout?.trim() ?? ''
   const id = run(['compose', 'ps', '-q', 'cozy-stack'])
   const ip = id && run(['inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}', id]).split(' ')[0]

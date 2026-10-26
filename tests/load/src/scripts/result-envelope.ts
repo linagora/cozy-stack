@@ -5,7 +5,11 @@ import { isJsonRecord, type JsonRecord } from './capacity/k6-summary.ts'
 import { hasContentMismatch } from './capacity/upload-point.ts'
 
 export const RESULT_SCHEMA = 'cozy-load-result/1'
-const PRODUCERS = ['upload-capacity', 'upload-regression', 'shared-drive-ramp', 'org-drive-fanout'] as const
+const PRODUCERS = [
+  'upload-capacity', 'upload-regression', 'shared-drive-ramp', 'org-drive-fanout', 'mixed-workload',
+] as const
+// Fixed-load producers judge a rate, never a capacity.
+const FIXED_LOAD: readonly string[] = ['upload-regression', 'mixed-workload']
 const VERIFICATIONS = ['verified', 'failed', 'not_verified'] as const
 
 type Verification = typeof VERIFICATIONS[number]
@@ -73,7 +77,7 @@ export function validateEnvelope(value: unknown): ResultEnvelope | null {
   if (!shape) return null
   // The verdict must agree with its own evidence, so an incomplete envelope cannot pass.
   const passing = e.execution === 'completed' && e.correctness !== 'failed' && e.cleanup !== 'failed' &&
-    (e.producer === 'upload-regression' ? e.performance === 'passed' && c === null : c?.verified === true)
+    (FIXED_LOAD.includes(e.producer) ? e.performance === 'passed' && c === null : c?.verified === true)
   const consistent = (e.outcome !== 0 || passing) &&
     (e.outcome !== 1 || e.correctness === 'failed' || e.performance === 'failed') &&
     (!c?.verified || e.outcome === 0)
@@ -172,5 +176,23 @@ export function fanoutEnvelope(report: Record<string, any>, context: RunContext)
     workload: 'org-drive-fanout',
     criteria: { timeout_ms: settings.timeout_ms ?? null, stable_ms: settings.stable_ms ?? null },
     parameters: { mode: report.mode ?? null, ...settings },
+  })
+}
+
+export function mixedEnvelope(report: Record<string, any>, context: RunContext): ResultEnvelope {
+  const checks = report.correctness ?? {}
+  return envelope('mixed-workload', report, context, report.failure_reason, {
+    execution: context.interrupted ? 'interrupted' : report.status && report.status !== 'not_measured' &&
+      !report.problems?.length ? 'completed' : 'incomplete',
+    correctness: report.correctness_failures?.length ? 'failed'
+      : checks.metadata_checks > 0 && checks.upload_checks > 0 ? 'verified' : 'not_verified',
+    // A regression fails performance; a correctness failure alone says nothing about it.
+    performance: report.status === 'failed' && report.reasons?.length > (report.correctness_failures?.length ?? 0)
+      ? 'failed' : report.status === 'passed' ? 'passed' : 'not_measured',
+    capacity: null,
+    cleanup: cleanupOf([report.cleanup]),
+    workload: 'mixed-workload',
+    criteria: report.criteria ?? {},
+    parameters: { plan: report.plan ?? null, budgets: report.budgets ?? null, fixture: report.fixture ?? null },
   })
 }

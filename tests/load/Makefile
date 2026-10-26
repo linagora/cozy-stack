@@ -275,6 +275,34 @@ shared-drive-ramp-run: upload-binary observability-up
 		--summary-export="/results/$(EXECUTION_ID)-shared-drive-ramp-summary.json" \
 		/scripts/shared-drive-ramp.ts
 
+# k6 alone; mixed-workload runs it against a verified tree fixture with the instance's token.
+mixed-run: FILE_SIZE := 1K
+mixed-run: upload-binary observability-up
+	@mkdir -p data/results
+	@$(RECORD_EXIT) $(COMPOSE) run --rm \
+		-e BASE_URL="$(BASE_URL)" \
+		-e ACTOR_HOSTS="$(ACTOR_HOSTS)" \
+		-e FILE_SIZE=1K \
+		-e MIXED_RATE="$(MIXED_RATE)" \
+		-e MIXED_DURATION="$(MIXED_DURATION)" \
+		-e MIXED_MAX_VUS="$(MIXED_MAX_VUS)" \
+		-e MIXED_OBSERVERS="$(MIXED_OBSERVERS)" \
+		-e MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" \
+		-e P95_LIMIT_MS="$(P95_LIMIT_MS)" \
+		-e EXECUTION_ID="$(EXECUTION_ID)" \
+		k6 run -o experimental-prometheus-rw \
+		--tag campaignid="$(EXECUTION_ID)" \
+		--tag load_target="$(LOAD_TARGET)" \
+		--tag mode=regression \
+		--tag topology="$(LOAD_TOPOLOGY)" \
+		/scripts/mixed-workload.ts
+
+# A fixed arrival rate of workflows against a tree fixture (README, Mixed workload).
+.PHONY: mixed-workload
+mixed-workload: $(NODE_MODULES_MARKER)
+	@MIXED_DOMAIN="$(MIXED_DOMAIN)" MIXED_RATE="$(MIXED_RATE)" MIXED_DURATION="$(MIXED_DURATION)" MIXED_MAX_VUS="$(MIXED_MAX_VUS)" MIXED_OBSERVERS="$(MIXED_OBSERVERS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MAX_VUS="$(MAX_VUS)" MAX_REQUESTS="$(MAX_REQUESTS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" \
+		$(RECORD_EXIT) node --import tsx src/scripts/mixed-campaign.ts
+
 # The shared-drive ramp through the campaign runner: LOAD_TARGET=dev holds the shared DEV lock, as for
 # uploads. The runner creates or reuses the test drive itself.
 SHARED_DRIVE_CAMPAIGN = LOAD_TARGET="$(LOAD_TARGET)" BASE_URL="$(BASE_URL)" STACK_URL="$(STACK_URL)" FILE_SIZE="$(FILE_SIZE)" RAMP_LEVELS="$(RAMP_LEVELS)" RAMP_STEP_DURATION="$(RAMP_STEP_DURATION)" RAMP_WRITERS_PER_LEVEL="$(RAMP_WRITERS_PER_LEVEL)" RAMP_WS_READERS_PER_LEVEL="$(RAMP_WS_READERS_PER_LEVEL)" RAMP_CHANGES_READERS_PER_LEVEL="$(RAMP_CHANGES_READERS_PER_LEVEL)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_DELIVERY_RATIO="$(MIN_DELIVERY_RATIO)" MAX_VUS="$(MAX_VUS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" EXECUTION_ID="$(EXECUTION_ID)" \
