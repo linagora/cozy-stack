@@ -54,9 +54,10 @@ export async function fakeActors(t: TestContext) {
     }
     if (route === 'POST /sharings/sid/recipients') {
       const relationships = JSON.parse(body).data.relationships
-      const [relation] = Object.keys(relationships)
-      const group = state.groups.find(g => g.id === relationships[relation!].data[0].id)!
-      Object.assign(group, { readOnly: relation === 'read_only_recipients', granted: true })
+      for (const relation of Object.keys(relationships)) {
+        const group = state.groups.find(g => g.id === relationships[relation].data[0].id)!
+        Object.assign(group, { readOnly: relation === 'read_only_recipients', granted: true })
+      }
       return send(200, {})
     }
     if (route === 'GET /sharings/sid') {

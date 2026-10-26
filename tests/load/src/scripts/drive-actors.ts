@@ -114,7 +114,7 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
   check(created?.id && created.attributes?.org_drive === true, 'Expected an organization drive')
   const scheme = new URL(created.attributes.members[0].instance).protocol
   const fixtures = { groups: [] as string[], contacts: [] as string[] }
-  const grant = async (member: Actor, relation: string) => {
+  const group = async (member: Actor) => {
     const group = await json(owner('POST', '/data/io.cozy.contacts.groups/',
       JSON.stringify({ name: `${name}-${member.role}` })), 201, 'Creating a group')
     fixtures.groups.push(group.id)
@@ -124,14 +124,14 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
       relationships: { groups: { data: [{ _id: group.id, _type: 'io.cozy.contacts.groups' }] } },
     })), 201, 'Creating a contact')
     fixtures.contacts.push(contact.id)
-    await json(owner('POST', `/sharings/${drive.id}/recipients`, JSON.stringify({ data: {
-      type: 'io.cozy.sharings', id: drive.id,
-      relationships: { [relation]: { data: [{ id: group.id, type: 'io.cozy.contacts.groups' }] } } } }),
-    'application/vnd.api+json'), 200, `Granting the ${member.role}`)
-    return group.id as string
+    return { id: group.id as string, type: 'io.cozy.contacts.groups' }
   }
-  const writerGroup = await grant(actors.writer, 'recipients')
-  await grant(actors.reader, 'read_only_recipients')
+  const [writerGroup, readerGroup] = [await group(actors.writer), await group(actors.reader)]
+  // One request grants both: a grant added while the first member is still accepting can be lost.
+  await json(owner('POST', `/sharings/${drive.id}/recipients`, JSON.stringify({ data: {
+    type: 'io.cozy.sharings', id: drive.id,
+    relationships: { recipients: { data: [writerGroup] }, read_only_recipients: { data: [readerGroup] } } } }),
+  'application/vnd.api+json'), 200, 'Granting the members')
 
   // Members of the organization accept its drives on their own (ORG-DRIVE-FANOUT.md). A member asked
   // before its sharing arrived can stay refused for a while, so the owner's roster comes first.
@@ -180,7 +180,7 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
       access.reader_write = (await upload(reader, 'reader')).status
       const sharing = await json(owner('GET', `/sharings/${drive.id}`), 200, 'Reading the drive')
       const groups: Array<{ id?: string }> = sharing?.data?.attributes?.groups ?? []
-      const index = groups.findIndex(g => g.id === writerGroup)
+      const index = groups.findIndex(g => g.id === writerGroup.id)
       check(index >= 0, "The writer's group is missing from the drive")
       const removal = await owner('DELETE', `/sharings/${drive.id}/groups/${index}`)
       check(removal.status === 204, `Removing the writer's group: HTTP ${removal.status}`)
