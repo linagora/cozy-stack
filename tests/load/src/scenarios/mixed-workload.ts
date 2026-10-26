@@ -11,7 +11,7 @@ import { fetchCreatedTestDirectory, type TestDirectory } from '../lib/cozy-files
 import { formatAuthMessage, formatSubscribeMessage, parseRealtimeMessage } from '../lib/cozy-realtime.ts'
 import { parseDurationToMs } from '../lib/duration.ts'
 import { parseHosts, parsePositiveIntegerEnv } from '../lib/env.ts'
-import { buildMixedThresholds, evaluateMixed, type MixedReport } from '../lib/mixed-workload.ts'
+import { buildMixedThresholds, evaluateMixed, type MixedReport, WARMUP_GRACE_MS } from '../lib/mixed-workload.ts'
 import { parseUploadedFile } from '../lib/upload-consistency.ts'
 
 // A fixed arrival rate of workflows against a verified tree fixture (mixed-campaign.ts writes its IDs
@@ -27,6 +27,10 @@ const baseUrl = (__ENV.BASE_URL || '').replace(/\/+$/, '')
 const headers = { Authorization: `Bearer ${__ENV.COZY_ACCESS_TOKEN}` }
 const rate = parsePositiveIntegerEnv(__ENV, 'MIXED_RATE', 1)
 const durationMs = parseDurationToMs(__ENV.MIXED_DURATION || '2m')
+// A soak warms up at the same rate before its judged steady phase.
+const warmupMs = parseDurationToMs(__ENV.MIXED_WARMUP || '0s')
+// The steady phase starts once the warm-up's in-flight workflows are done or interrupted.
+const graceMs = warmupMs ? WARMUP_GRACE_MS : 0
 const maxVus = parsePositiveIntegerEnv(__ENV, 'MIXED_MAX_VUS', 10)
 const observers = Number(__ENV.MIXED_OBSERVERS || '0')
 const criteria = {
@@ -45,21 +49,27 @@ export const unvalidated = new Counter('mixed_unvalidated_responses')
 export const observerEvents = new Counter('mixed_observer_events')
 export const observerSessions = new Counter('mixed_observer_sessions')
 
+function arrivals(startMs: number, lengthMs: number) {
+  return {
+    executor: 'constant-arrival-rate',
+    rate,
+    timeUnit: '1s',
+    startTime: `${startMs}ms`,
+    duration: `${lengthMs}ms`,
+    preAllocatedVUs: Math.min(maxVus, rate * 2),
+    maxVUs: maxVus,
+    exec: 'workflow',
+  } as const
+}
+
 export const options: Options = {
   hosts: parseHosts(__ENV.ACTOR_HOSTS),
   scenarios: {
-    workflows: {
-      executor: 'constant-arrival-rate',
-      rate,
-      timeUnit: '1s',
-      duration: `${durationMs}ms`,
-      preAllocatedVUs: Math.min(maxVus, rate * 2),
-      maxVUs: maxVus,
-      exec: 'workflow',
-    },
-    ...(observers > 0
-      ? { observers: { executor: 'constant-vus', vus: observers, duration: `${durationMs}ms`, exec: 'observe' } }
-      : {}),
+    ...(warmupMs > 0 ? { warmup: { ...arrivals(0, warmupMs), gracefulStop: `${graceMs}ms` } } : {}),
+    steady: arrivals(warmupMs + graceMs, durationMs),
+    ...(observers > 0 ? { observers: {
+      executor: 'constant-vus', vus: observers, duration: `${warmupMs + graceMs + durationMs}ms`, exec: 'observe',
+    } } : {}),
   },
   thresholds: buildMixedThresholds(),
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)', 'count'],
@@ -125,7 +135,7 @@ export function workflow(uploads: TestDirectory): void {
 let observed = false
 
 export function observe(): void {
-  const remainingMs = durationMs - (Date.now() - exec.scenario.startTime)
+  const remainingMs = warmupMs + graceMs + durationMs - (Date.now() - exec.scenario.startTime)
   if (observed || remainingMs < 1000) {
     sleep(1)
     return

@@ -8,16 +8,23 @@ const plan = { durationS: 60, maxVus: 10, observers: 1, rate: 2 }
 const criteria = { minimumSuccessRate: 0.99, p95LimitMs: 1000 }
 
 type Sample = { iterations?: number, dropped?: number, p95?: number, errors?: number, metadataFails?: number,
-  uploadFails?: number, checked?: number, unvalidated?: number }
+  uploadFails?: number, checked?: number, unvalidated?: number, warmupChecked?: number }
 
 function metrics({ iterations = 120, dropped = 0, p95 = 100, errors = 0, metadataFails = 0, uploadFails = 0,
-  checked = iterations, unvalidated = 0 }: Sample): SummaryMetrics {
+  checked = iterations, unvalidated = 0, warmupChecked = 0 }: Sample): SummaryMetrics {
   const failed = Math.round(errors * iterations)
+  const [steadyMetadata, steadyUploads] = [checked - failed - metadataFails, checked - failed - uploadFails]
   const result: SummaryMetrics = {
-    iterations: { values: { count: iterations } },
-    dropped_iterations: { values: { count: dropped } },
-    mixed_metadata_match: { values: { passes: checked - failed - metadataFails, fails: metadataFails } },
-    mixed_upload_match: { values: { passes: checked - failed - uploadFails, fails: uploadFails } },
+    'iterations{scenario:steady}': { values: { count: iterations } },
+    'dropped_iterations{scenario:steady}': { values: { count: dropped } },
+    // Warm-up arrivals are reported apart, and never judged.
+    'iterations{scenario:warmup}': { values: { count: 30 } },
+    'dropped_iterations{scenario:warmup}': { values: { count: 9 } },
+    // Every phase's checks, and the steady phase's alone.
+    mixed_metadata_match: { values: { passes: warmupChecked + steadyMetadata, fails: metadataFails } },
+    mixed_upload_match: { values: { passes: warmupChecked + steadyUploads, fails: uploadFails } },
+    'mixed_metadata_match{scenario:steady}': { values: { passes: steadyMetadata, fails: metadataFails } },
+    'mixed_upload_match{scenario:steady}': { values: { passes: steadyUploads, fails: uploadFails } },
     mixed_observer_events: { values: { count: iterations } },
     mixed_observer_sessions: { values: { count: 1 } },
     mixed_unvalidated_responses: { values: { count: unvalidated } },
@@ -38,6 +45,7 @@ describe('evaluateMixed', (): void => {
       ['workflows/s', 120, 118, 1.967])
     deepEqual(report.operations.upload, { error_rate: 0, p95_ms: 100, rate_per_s: 1.967, requests: 118 })
     deepEqual([report.status, report.reasons, report.correctness.metadata_checks], ['passed', [], 118])
+    deepEqual(report.warmup, { workflows: 30, dropped_iterations: 9 })
   })
 
   it('tells a generator that fell behind from a slow or failing target', (): void => {
@@ -67,6 +75,12 @@ describe('evaluateMixed', (): void => {
     equal(evaluateMixed(metrics({}), plan, criteria).correctness.complete, true)
   })
 
+  it('warm-up checks never stand in for unchecked steady responses', (): void => {
+    const report = evaluateMixed(metrics({ checked: 0, warmupChecked: 120 }), plan, criteria)
+    deepEqual([report.status, report.correctness.complete, report.correctness.metadata_checks],
+      ['not_measured', false, 0])
+  })
+
   it('a response that could not be validated keeps the run from passing', (): void => {
     const report = evaluateMixed(metrics({ unvalidated: 1 }), plan, criteria)
     deepEqual([report.status, report.correctness.complete, report.reasons],
@@ -79,6 +93,6 @@ describe('evaluateMixed', (): void => {
   })
 
   it('keeps a submetric per operation', (): void => {
-    deepEqual(Object.keys(buildMixedThresholds()).length, 9)
+    deepEqual(Object.keys(buildMixedThresholds()).length, 15)
   })
 })

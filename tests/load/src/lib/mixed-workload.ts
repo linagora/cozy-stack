@@ -3,6 +3,9 @@ import type { SummaryMetrics } from './load-profile.ts'
 // One workflow lists a fixture directory, reads and checks a fixture file's
 // metadata, and uploads a small file into the run's own directory.
 export const MIXED_OPERATIONS = ['list', 'metadata', 'upload'] as const
+// The warm-up's last workflows end within this grace, after which the steady phase starts: the two never
+// overlap, so no more than the configured VUs ever run.
+export const WARMUP_GRACE_MS = 10_000
 export type MixedOperation = (typeof MIXED_OPERATIONS)[number]
 
 export type MixedPlan = {
@@ -22,6 +25,8 @@ export type MixedStatus = 'passed' | 'failed' | 'generator_saturated' | 'not_mea
 
 export type MixedReport = {
   unit: 'workflows/s'
+  // Arrivals before the steady phase: never judged.
+  warmup: { workflows: number, dropped_iterations: number }
   plan: { duration_s: number, max_vus: number, observers: number, rate: number }
   criteria: { minimum_success_rate: number, p95_limit_ms: number }
   offered_workflows: number
@@ -46,16 +51,27 @@ export type MixedReport = {
   status: MixedStatus
 }
 
+// Only the steady scenario is judged; a warm-up scenario may run before it.
 export const operationMetric = (metric: string, operation: MixedOperation): string =>
-  `${metric}{operation:${operation}}`
+  `${metric}{operation:${operation},scenario:steady}`
+const phaseMetric = (metric: string, phase: 'steady' | 'warmup'): string => `${metric}{scenario:${phase}}`
 
-// Always-passing thresholds keep a submetric per operation in the summary.
+// Always-passing thresholds keep a submetric per operation and phase in the summary.
 export function buildMixedThresholds(): Record<string, string[]> {
-  return Object.fromEntries(MIXED_OPERATIONS.flatMap((operation: MixedOperation) => [
-    [operationMetric('http_reqs', operation), ['count>=0']],
-    [operationMetric('http_req_duration', operation), ['p(95)>=0']],
-    [operationMetric('http_req_failed', operation), ['rate>=0']],
-  ]))
+  return Object.fromEntries([
+    ...MIXED_OPERATIONS.flatMap((operation: MixedOperation) => [
+      [operationMetric('http_reqs', operation), ['count>=0']],
+      [operationMetric('http_req_duration', operation), ['p(95)>=0']],
+      [operationMetric('http_req_failed', operation), ['rate>=0']],
+    ]),
+    ...(['steady', 'warmup'] as const).flatMap(phase => [
+      [phaseMetric('iterations', phase), ['count>=0']],
+      [phaseMetric('dropped_iterations', phase), ['count>=0']],
+    ]),
+    // The steady phase's own checks, to compare with its own successful responses.
+    [phaseMetric('mixed_metadata_match', 'steady'), ['rate>=0']],
+    [phaseMetric('mixed_upload_match', 'steady'), ['rate>=0']],
+  ])
 }
 
 function value(metrics: SummaryMetrics, name: string, field: string): number | null {
@@ -66,8 +82,8 @@ function value(metrics: SummaryMetrics, name: string, field: string): number | n
 const round = (reading: number, digits: number): number => Number(reading.toFixed(digits))
 
 export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria: MixedCriteria): MixedReport {
-  const achieved = value(metrics, 'iterations', 'count')
-  const dropped = value(metrics, 'dropped_iterations', 'count') ?? 0
+  const achieved = value(metrics, phaseMetric('iterations', 'steady'), 'count')
+  const dropped = value(metrics, phaseMetric('dropped_iterations', 'steady'), 'count') ?? 0
   const operations = Object.fromEntries(MIXED_OPERATIONS.map((operation: MixedOperation) => {
     const requests = value(metrics, operationMetric('http_reqs', operation), 'count') ?? 0
     const samples = value(metrics, operationMetric('http_req_duration', operation), 'count') ?? 0
@@ -82,8 +98,15 @@ export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria
   const checks = (name: string) => ({
     passes: value(metrics, name, 'passes') ?? 0, fails: value(metrics, name, 'fails') ?? 0,
   })
+  // Wrong content in any phase is proven; completeness compares the steady phase's checks with its own
+  // successful responses, so warm-up checks never stand in for unchecked steady ones.
   const metadata = checks('mixed_metadata_match')
   const upload = checks('mixed_upload_match')
+  const steadyChecks = (name: string) => {
+    const { passes, fails } = checks(phaseMetric(name, 'steady'))
+    return passes + fails
+  }
+  const checked = { metadata: steadyChecks('mixed_metadata_match'), upload: steadyChecks('mixed_upload_match') }
   // k6 counts a successful request as a false sample of http_req_failed.
   const succeeded = (operation: MixedOperation) =>
     value(metrics, operationMetric('http_req_failed', operation), 'fails') ?? 0
@@ -91,10 +114,10 @@ export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria
   const unvalidated = value(metrics, 'mixed_unvalidated_responses', 'count') ?? 0
   const incomplete = [
     ...(unvalidated ? [`${unvalidated} successful responses could not be validated`] : []),
-    ...(metadata.passes + metadata.fails < expected.metadata
-      ? [`${metadata.passes + metadata.fails} of ${expected.metadata} successful metadata reads were checked`] : []),
-    ...(upload.passes + upload.fails < expected.upload
-      ? [`${upload.passes + upload.fails} of ${expected.upload} successful uploads were checked`] : []),
+    ...(checked.metadata < expected.metadata
+      ? [`${checked.metadata} of ${expected.metadata} successful metadata reads were checked`] : []),
+    ...(checked.upload < expected.upload
+      ? [`${checked.upload} of ${expected.upload} successful uploads were checked`] : []),
   ]
   const correctnessFailures = [
     ...(metadata.fails ? [`${metadata.fails} metadata reads differed from the fixture`] : []),
@@ -131,6 +154,10 @@ export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria
 
   return {
     unit: 'workflows/s',
+    warmup: {
+      workflows: value(metrics, phaseMetric('iterations', 'warmup'), 'count') ?? 0,
+      dropped_iterations: value(metrics, phaseMetric('dropped_iterations', 'warmup'), 'count') ?? 0,
+    },
     plan: { duration_s: plan.durationS, max_vus: plan.maxVus, observers: plan.observers, rate: plan.rate },
     criteria: { minimum_success_rate: criteria.minimumSuccessRate, p95_limit_ms: criteria.p95LimitMs },
     offered_workflows: plan.rate * plan.durationS,
@@ -139,9 +166,9 @@ export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria
     dropped_iterations: dropped,
     operations,
     correctness: {
-      metadata_checks: metadata.passes + metadata.fails, metadata_mismatches: metadata.fails,
+      metadata_checks: checked.metadata, metadata_mismatches: metadata.fails,
       metadata_expected: expected.metadata,
-      upload_checks: upload.passes + upload.fails, upload_mismatches: upload.fails, upload_expected: expected.upload,
+      upload_checks: checked.upload, upload_mismatches: upload.fails, upload_expected: expected.upload,
       unvalidated,
       complete: !incomplete.length && expected.metadata > 0 && expected.upload > 0,
     },

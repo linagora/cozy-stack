@@ -582,6 +582,43 @@ target, they are part of that regression, exit 1. Wrong metadata or a
 wrongly recorded upload exits 1. Shared DEV has no tree fixture yet, so the
 workload runs locally only.
 
+### Soak
+
+`make mixed-soak` keeps the same workload up for longer, to catch memory,
+goroutines, queues or data that accumulate. It runs a warm-up at the same
+rate (`MIXED_WARMUP`, default 1m, never judged), then, once the warm-up's last
+workflows ended within a 10 s grace, the judged steady phase
+(`MIXED_DURATION`, default 10m), so the two never run more than
+`MIXED_MAX_VUS` workers together. It then waits `MIXED_DRAIN` (default 1m)
+before the final verification. The report records each phase's times apart, the
+warm-up's workflows, and the Stack's goroutines, heap and resident memory
+from its admin `/metrics` before the run and after the drain. Goroutines must
+come back within `SOAK_MAX_GOROUTINE_GROWTH` (default 1.25×, plus 20) and the
+heap within `SOAK_MAX_HEAP_GROWTH` (default 1.5×, plus 16 MiB); a Stack that
+keeps what the run allocated exits 1. Every successful steady-phase response
+must have been checked, whatever the warm-up checked, and wrong content in the
+warm-up still exits 1. The request, byte and time caps cover
+the warm-up and its grace, the observers, both fixture verifications, cleanup
+and the metrics samples.
+
+```console
+$ make mixed-soak MIXED_DOMAIN='seed-<32-hex-id>.localhost:8080' MIXED_RATE=2 MIXED_DURATION=5m
+$ make mixed-soak MIXED_DOMAIN=... MIXED_RATE=2 MIXED_DURATION=1h \
+    SOAK_TRIAL=data/results/<trial EXECUTION_ID>-mixed-workload.json
+```
+
+A soak longer than 10 minutes needs `SOAK_TRIAL`: the report of a passed
+shorter run of the same fixture at its rate or higher. On Ctrl-C or SIGTERM,
+k6 stops, the run's directory is removed with any write still landing in it,
+the drain is skipped, and the report keeps the interrupted outcome. One mixed
+workload or soak runs per local Stack at a time: the runner holds
+`data/results/.mixed-workload.lock` (a lock whose process is gone is taken
+over), so a scheduled run that finds another in progress exits 2. It also
+exits 2 while a k6 container still runs a mixed workload, such as one a killed
+coordinator left behind, or while a listed k6 container cannot be inspected;
+stop that container first. Soaks never
+run on shared DEV; process kills and dependency outages stay isolated work.
+
 ## Campaigns
 
 A campaign runs several measurements in a row and keeps everything about the

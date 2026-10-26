@@ -285,6 +285,7 @@ mixed-run: upload-binary observability-up
 		-e FILE_SIZE=1K \
 		-e MIXED_RATE="$(MIXED_RATE)" \
 		-e MIXED_DURATION="$(MIXED_DURATION)" \
+		-e MIXED_WARMUP="$(MIXED_WARMUP)" \
 		-e MIXED_MAX_VUS="$(MIXED_MAX_VUS)" \
 		-e MIXED_OBSERVERS="$(MIXED_OBSERVERS)" \
 		-e MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" \
@@ -297,10 +298,12 @@ mixed-run: upload-binary observability-up
 		--tag topology="$(LOAD_TOPOLOGY)" \
 		/scripts/mixed-workload.ts
 
-# A fixed arrival rate of workflows against a tree fixture (README, Mixed workload).
-.PHONY: mixed-workload
-mixed-workload: $(NODE_MODULES_MARKER)
-	@MIXED_DOMAIN="$(MIXED_DOMAIN)" MIXED_RATE="$(MIXED_RATE)" MIXED_DURATION="$(MIXED_DURATION)" MIXED_MAX_VUS="$(MIXED_MAX_VUS)" MIXED_OBSERVERS="$(MIXED_OBSERVERS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MAX_VUS="$(MAX_VUS)" MAX_REQUESTS="$(MAX_REQUESTS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" \
+# A fixed arrival rate of workflows against a tree fixture (README, Mixed workload); mixed-soak keeps it
+# up for longer between a warm-up and a drain.
+.PHONY: mixed-workload mixed-soak
+mixed-soak: MIXED_PROFILE := soak
+mixed-workload mixed-soak: $(NODE_MODULES_MARKER)
+	@MIXED_PROFILE="$(MIXED_PROFILE)" MIXED_WARMUP="$(MIXED_WARMUP)" MIXED_DRAIN="$(MIXED_DRAIN)" SOAK_TRIAL="$(SOAK_TRIAL)" SOAK_MAX_GOROUTINE_GROWTH="$(SOAK_MAX_GOROUTINE_GROWTH)" SOAK_MAX_HEAP_GROWTH="$(SOAK_MAX_HEAP_GROWTH)" MIXED_DOMAIN="$(MIXED_DOMAIN)" MIXED_RATE="$(MIXED_RATE)" MIXED_DURATION="$(MIXED_DURATION)" MIXED_MAX_VUS="$(MIXED_MAX_VUS)" MIXED_OBSERVERS="$(MIXED_OBSERVERS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MAX_VUS="$(MAX_VUS)" MAX_REQUESTS="$(MAX_REQUESTS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" \
 		$(RECORD_EXIT) node --import tsx src/scripts/mixed-campaign.ts
 
 # The shared-drive ramp through the campaign runner: LOAD_TARGET=dev holds the shared DEV lock, as for
