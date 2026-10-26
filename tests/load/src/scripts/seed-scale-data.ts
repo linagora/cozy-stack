@@ -1,6 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
 import { FixtureError as CliError, request, type Reply } from './fixture-http.ts'
+import {
+  manifestPath, readManifest, removeManifest, writeManifest, type FixtureManifest, type ManifestInstance,
+} from './fixture-manifest.ts'
 import { createSharedDrive } from './prepare-shared-drive.ts'
 
 function check(value: unknown, message: string): asserts value {
@@ -46,9 +49,12 @@ interface Resource {
   id: string
   type?: string
   attributes?: {
-    domain?: string, uuid?: string, type?: string, org_id?: string, org_domain?: string, context?: string
+    domain?: string, uuid?: string, type?: string, org_id?: string, org_domain?: string, context?: string,
+    md5sum?: string, size?: string, dir_id?: string
   }
-  relationships?: { referenced_by?: { data?: Array<{ type?: string, id?: string }> } }
+  relationships?: {
+    referenced_by?: { data?: Array<{ type?: string, id?: string }> }, contents?: { meta?: { count?: number } }
+  }
 }
 function resource(reply: Reply): Resource {
   let data: Resource | undefined
@@ -65,6 +71,25 @@ function identity(item: Resource, requireUUID = true): boolean {
     typeof value === 'string' && value.length > 0 && !/[\s\x00-\x1f\x7f]/.test(value))
 }
 
+type PublicAPI = (method: string, path: string, body?: string | Buffer, headers?: Record<string, string>) =>
+  Promise<Reply>
+
+async function checkDriveRoot(api: PublicAPI, root: string, sharing: string): Promise<void> {
+  const dir = resource(expectStatus(await api('GET', `/files/${encodeURIComponent(root)}`), 200))
+  const refs = dir.relationships?.referenced_by?.data
+  const backlink = Array.isArray(refs) && refs.some((ref) => ref?.type === 'io.cozy.sharings' && ref.id === sharing)
+  check(dir.id === root && dir.type === 'io.cozy.files' && dir.attributes?.type === 'directory' && backlink,
+    'Shared-drive root or backlink mismatch')
+}
+
+// The Stack counts root entries without the trash.
+async function rootEntries(api: PublicAPI): Promise<number> {
+  const root = resource(expectStatus(await api('GET', '/files/io.cozy.files.root-dir?page[limit]=1'), 200))
+  const entries = root.relationships?.contents?.meta?.count
+  check(Number.isSafeInteger(entries) && entries! >= 0, 'Invalid root directory count')
+  return entries!
+}
+
 function partial(error: unknown, domain: string): CliError {
   const message = error instanceof CliError ? error.message : 'Seed API operation failed'
   return new CliError(`${message}. Instance ${domain} may be partial; ` +
@@ -73,9 +98,10 @@ function partial(error: unknown, domain: string): CliError {
 
 async function main(): Promise<void> {
   const [command, suppliedDomain, ...extra] = process.argv.slice(2)
-  check(['seed', 'cleanup', 'seed-org', 'cleanup-org'].includes(command ?? '') && !extra.length &&
-    (!command?.startsWith('cleanup') || suppliedDomain),
-  'Usage: seed[-org] [domain] | cleanup[-org] <domain>; credentials belong in environment variables')
+  check(['seed', 'cleanup', 'seed-org', 'cleanup-org', 'verify'].includes(command ?? '') && !extra.length &&
+    (command?.startsWith('seed') || suppliedDomain),
+  'Usage: seed[-org] [domain] | cleanup[-org] <domain> | verify <domain>; ' +
+    'credentials belong in environment variables')
   const organization = command?.endsWith('-org')
   check(suppliedDomain || process.env.SEED_DOMAIN_SUFFIX,
     'SEED_DOMAIN_SUFFIX is required when no seed domain is supplied')
@@ -96,11 +122,36 @@ async function main(): Promise<void> {
   }
   // Echo's domain route does not decode %3A; preserve the validated literal public port.
   const instancePath = `/instances/${domain}`
+  const manifestFile = manifestPath(domain)
+  const session = async (stackURL: URL | undefined, name: string) => {
+    check(stackURL, 'SEED_STACK_URL is required for population')
+    const accessToken = expectStatus(await admin('POST', '/instances/token', {
+      Domain: name, Audience: 'cli', Scope: 'io.cozy.files io.cozy.sharings',
+    }), 200).body
+    check(accessToken && !/[\s\x00-\x1f\x7f]/.test(accessToken), 'Invalid CLI token')
+    const api: PublicAPI = (method, path, body = '', headers = {}) =>
+      request(new URL(path, stackURL), method, {
+        ...headers, Host: name, Authorization: `Bearer ${accessToken}`,
+      }, timeout, body)
+    return { accessToken, api }
+  }
   if (command === 'cleanup') {
-    const deleted = await admin('DELETE', instancePath)
-    check(deleted.status === 204 || deleted.status === 404, `Cleanup failed: HTTP ${deleted.status}`)
-    const readback = await admin('GET', instancePath)
-    check(readback.status === 404, `Cleanup absence not confirmed: HTTP ${readback.status}`)
+    // Only recorded identities are deleted: a planned UUID also proves a creation whose reply was lost.
+    const manifest = readManifest(manifestFile, domain)
+    check(!manifest.organization, `${manifestFile} records an organization; use cleanup-org`)
+    for (const entry of manifest.instances) {
+      const path = `/instances/${entry.domain}`
+      const current = await admin('GET', path)
+      if (current.status !== 404) {
+        check(resource(expectStatus(current, 200)).attributes?.uuid === entry.uuid,
+          `${entry.domain} is not the recorded instance; kept`)
+        const deleted = await admin('DELETE', path)
+        check(deleted.status === 204 || deleted.status === 404, `Cleanup failed: HTTP ${deleted.status}`)
+      }
+      const readback = await admin('GET', path)
+      check(readback.status === 404, `Cleanup absence not confirmed: HTTP ${readback.status}`)
+    }
+    removeManifest(manifestFile)
     console.log(`Cleanup complete: ${domain}`)
     return
   }
@@ -157,6 +208,10 @@ async function main(): Promise<void> {
     a.attributes?.domain === b.attributes?.domain && a.attributes?.uuid === b.attributes?.uuid &&
     a.attributes?.org_id === b.attributes?.org_id && a.attributes?.org_domain === b.attributes?.org_domain
   if (command === 'cleanup-org') {
+    const manifest = readManifest(manifestFile, domain)
+    check(manifest.organization === orgID, `${manifestFile} records no organization; use cleanup`)
+    const recorded = (item: Resource) => manifest.instances.some((entry) =>
+      entry.domain === item.attributes?.domain && entry.uuid === item.attributes.uuid)
     try {
       const rootReply = await admin('GET', instancePath)
       const root = rootReply.status === 404 ? undefined : resource(expectStatus(rootReply, 200))
@@ -169,6 +224,7 @@ async function main(): Promise<void> {
       const listedRoot = candidates.find((item) => item.attributes?.domain === domain)
       check(root ? listedRoot && same(root, listedRoot) : !listedRoot,
         'Organization root registry identity mismatch')
+      check(!root || recorded(root), 'Organization root is not the recorded instance; kept')
       const remove = async (item: Resource) => {
         const path = `/instances/${item.attributes!.domain!}`
         const current = resource(expectStatus(await admin('GET', path), 200))
@@ -178,14 +234,51 @@ async function main(): Promise<void> {
         check(deleted.status === 204 || deleted.status === 404, `Cleanup failed: HTTP ${deleted.status}`)
         expectStatus(await admin('GET', path), 404)
       }
-      for (const item of candidates) if (item !== listedRoot) await remove(item)
+      // Unrecorded members are someone else's: they stay, and so does the root.
+      for (const item of candidates) if (item !== listedRoot && recorded(item)) await remove(item)
       check((await list()).filter(inScope).every((item) => item.attributes?.domain === domain),
         'Organization members remain; root retained')
       if (root) await remove(root)
       expectStatus(await admin('GET', instancePath), 404)
       check(!(await list()).some(inScope), 'Organization scope remains after cleanup')
-      console.log(`Cleanup complete: ${domain}`)
     } catch (error) { throw partial(error, domain) }
+    removeManifest(manifestFile)
+    console.log(`Cleanup complete: ${domain}`)
+    return
+  }
+  if (command === 'verify') {
+    // Before use and after a run: recorded identities, objects, content and root entries must be unchanged.
+    const manifest = readManifest(manifestFile, domain)
+    check(manifest.status === 'complete',
+      `The fixture manifest is ${manifest.status}; only a complete fixture is usable`)
+    const { parameters, content } = manifest
+    const stackURL = parameters.files || parameters.drives ? origin('SEED_STACK_URL') : undefined
+    for (const entry of manifest.instances) {
+      const current = resource(expectStatus(await admin('GET', `/instances/${entry.domain}`), 200)).attributes
+      check(current?.domain === entry.domain && current.uuid === entry.uuid &&
+        (current.org_id ?? null) === manifest.organization, `${entry.domain} is not the recorded instance`)
+      const populated = entry.role !== 'organization'
+      check(entry.created && entry.files.length === (populated ? parameters.files : 0) &&
+        entry.drives.length === (populated ? parameters.drives : 0), `${entry.domain} lacks recorded objects`)
+      if (!populated || (!parameters.files && !parameters.drives)) continue
+      const { api } = await session(stackURL, entry.domain)
+      for (const id of entry.files) {
+        const file = resource(expectStatus(await api('GET', `/files/${encodeURIComponent(id)}`), 200))
+        check(file.id === id && file.attributes?.md5sum === content.md5 && Number(file.attributes.size) ===
+          content.bytes && file.attributes.dir_id === 'io.cozy.files.root-dir', `${entry.domain}: file ${id} changed`)
+      }
+      for (const drive of entry.drives) await checkDriveRoot(api, drive.root, drive.sharing)
+      const entries = await rootEntries(api)
+      check(entries === entry.root_entries,
+        `${entry.domain}: the root holds ${entries} entries; the manifest records ${entry.root_entries}`)
+    }
+    if (manifest.organization) {
+      const members = (await list()).filter(inScope)
+      check(members.length === manifest.instances.length && manifest.instances.every((entry) =>
+        members.some((item) => item.attributes?.domain === entry.domain && item.attributes.uuid === entry.uuid)),
+      'Organization membership differs from the manifest')
+    }
+    console.log(`Fixture verified: ${domain}`)
     return
   }
   const contextName = process.env.SEED_CONTEXT_NAME
@@ -199,8 +292,18 @@ async function main(): Promise<void> {
   const names = [domain, ...Array.from({ length: users }, () =>
     `seed-${randomBytes(16).toString('hex')}${suffix}`)]
   for (const name of names) console.log(`Seed instance: ${name}`)
-  const create = async (name: string): Promise<Resource> => {
-    const uuid = randomUUID()
+  const body = Buffer.alloc(1024, 's')
+  const md5 = createHash('md5').update(body).digest('base64')
+  // UUIDs are chosen before any write, so cleanup can prove ownership even after a lost creation reply.
+  const manifest: FixtureManifest = {
+    version: 1, profile: 'flat', status: 'preparing', domain, organization: organization ? orgID : null,
+    parameters: { users, files, drives, context: contextName ?? null }, content: { bytes: body.length, md5 },
+    instances: names.map((name, index) => ({
+      domain: name, uuid: randomUUID(), role: organization ? (index ? 'member' : 'organization') : 'owner',
+      created: false, files: [], drives: [],
+    })),
+  }
+  const create = async ({ domain: name, uuid }: ManifestInstance): Promise<Resource> => {
     const created = resource(expectStatus(await admin('POST', '/instances', {
       Domain: name, UUID: uuid, Locale: 'en', Email: `${uuid}@spam.cozycloud.cc`,
       PublicName: 'Disposable seed fixture', CouchCluster: '-1', SwiftLayout: '-1', AutoUpdate: 'false',
@@ -216,29 +319,20 @@ async function main(): Promise<void> {
     check(matches(persisted) && persisted.id === created.id, 'Instance readback identity mismatch')
     return persisted
   }
-  const populate = async (domain: string): Promise<void> => {
+  const populate = async (entry: ManifestInstance): Promise<void> => {
     if (!files && !drives) return
-    check(stackURL, 'SEED_STACK_URL is required for population')
-    if (organization) console.log(`Seed owner: ${domain}; files=${files}; drives=${drives}`)
-    const accessToken = expectStatus(await admin('POST', '/instances/token', {
-      Domain: domain, Audience: 'cli', Scope: 'io.cozy.files io.cozy.sharings',
-    }), 200).body
-    check(accessToken && !/[\s\x00-\x1f\x7f]/.test(accessToken), 'Invalid CLI token')
-    const publicAPI = (method: string, path: string, body: string | Buffer = '', headers = {}) =>
-      request(new URL(path, stackURL), method, {
-        ...headers, Host: domain, Authorization: `Bearer ${accessToken}`,
-      }, timeout, body)
-    const body = Buffer.alloc(1024, 's')
-    const md5 = createHash('md5').update(body).digest('base64')
+    if (organization) console.log(`Seed owner: ${entry.domain}; files=${files}; drives=${drives}`)
+    const { accessToken, api: publicAPI } = await session(stackURL, entry.domain)
     for (let index = 1; index <= files; index++) {
       const query = new URLSearchParams({ Type: 'file', Name: `seed-file-${index}.txt` })
-      resource(expectStatus(await publicAPI('POST', `/files/io.cozy.files.root-dir?${query}`, body, {
+      const file = resource(expectStatus(await publicAPI('POST', `/files/io.cozy.files.root-dir?${query}`, body, {
         'Content-Type': 'text/plain', 'Content-MD5': md5,
       }), 201))
+      entry.files.push(file.id)
     }
     for (let index = 1; index <= drives; index++) {
       const drive = await createSharedDrive({
-        baseUrl: stackURL.origin, accessToken, driveName: `Seed shared drive ${index}`,
+        baseUrl: stackURL!.origin, accessToken, driveName: `Seed shared drive ${index}`,
         fetcher: async (input, init) => {
           const headers = Object.fromEntries(new Headers(init?.headers))
           const path = new URL(String(input)).pathname
@@ -249,15 +343,12 @@ async function main(): Promise<void> {
       })
       check(typeof drive.sharingId === 'string' && drive.sharingId.trim() &&
         typeof drive.rootDirectoryId === 'string' && drive.rootDirectoryId.trim(), 'Invalid shared-drive identity')
-      const root = resource(expectStatus(await publicAPI('GET',
-        `/files/${encodeURIComponent(drive.rootDirectoryId)}`), 200))
-      const refs = root.relationships?.referenced_by?.data
-      const backlink = Array.isArray(refs) && refs.some((ref) =>
-        ref?.type === 'io.cozy.sharings' && ref.id === drive.sharingId)
-      check(root.id === drive.rootDirectoryId && root.type === 'io.cozy.files' &&
-        root.attributes?.type === 'directory' && backlink, 'Shared-drive root or backlink mismatch')
+      await checkDriveRoot(publicAPI, drive.rootDirectoryId, drive.sharingId)
+      entry.drives.push({ sharing: drive.sharingId, root: drive.rootDirectoryId })
     }
+    entry.root_entries = await rootEntries(publicAPI)
   }
+  let recording = false
   try {
     for (const name of names) {
       const absent = await admin('GET', `/instances/${name}`)
@@ -265,19 +356,31 @@ async function main(): Promise<void> {
         `Instance lookup failed: HTTP ${absent.status}`)
     }
     if (organization) check(!(await list()).some(inScope), 'Organization scope already exists')
+    writeManifest(manifestFile, manifest, true)
+    recording = true
+    console.log(`Seed manifest: ${manifestFile}`)
     const created: Resource[] = []
-    for (const name of names) {
-      created.push(await create(name))
-      if (!organization || name !== domain) await populate(name)
+    for (const entry of manifest.instances) {
+      created.push(await create(entry))
+      entry.created = true
+      writeManifest(manifestFile, manifest)
+      if (entry.role !== 'organization') await populate(entry)
+      writeManifest(manifestFile, manifest)
     }
     if (organization) {
       const members = (await list()).filter(inScope)
       check(members.length === created.length && created.every((expected) =>
         members.some((item) => same(item, expected))), 'Organization membership mismatch')
     }
+    manifest.status = 'complete'
+    writeManifest(manifestFile, manifest)
     const counts = `${organization ? `users=${users}; ` : ''}files=${files}; drives=${drives}`
     console.log(`Seed complete: ${domain}; ${counts}`)
-  } catch (error) { throw partial(error, domain) }
+  } catch (error) {
+    // The manifest keeps every confirmed object and planned identity for verification and cleanup.
+    if (recording) writeManifest(manifestFile, { ...manifest, status: 'failed' })
+    throw partial(error, domain)
+  }
 }
 
 main().catch((error: unknown) => {

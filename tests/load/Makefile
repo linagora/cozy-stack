@@ -82,6 +82,7 @@ help:
 	@echo "make seed-scale-cleanup SEED_DOMAIN=...        Delete that disposable fixture instance"
 	@echo "make seed-org SEED_USERS=50                    Build an organization with empty user instances"
 	@echo "make seed-org-cleanup SEED_DOMAIN=...          Delete the organization fixture and its users"
+	@echo "make seed-verify SEED_DOMAIN=...               Check a seeded fixture against its manifest"
 	@echo "make org-drive-fanout FANOUT_LEVELS=10,50,100   Check group auto-accept and revoke convergence"
 	@echo "make dev-upload DEV_INSTANCE=... MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m  Regression on shared DEV"
 	@echo "make dev-capacity DEV_INSTANCE=... MAX_VUS=8 MAX_UPLOAD_BYTES=200M MAX_RUNTIME=30m  Capacity on shared DEV"
@@ -124,12 +125,15 @@ $(NODE_MODULES_MARKER): package.json package-lock.json
 
 install: $(NODE_MODULES_MARKER)
 
-.PHONY: seed-scale seed-scale-cleanup
+.PHONY: seed-scale seed-scale-cleanup seed-verify
 seed-scale: $(NODE_MODULES_MARKER)
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts seed $${SEED_DOMAIN:+"$$SEED_DOMAIN"}
 
 seed-scale-cleanup: $(NODE_MODULES_MARKER)
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts cleanup "$$SEED_DOMAIN"
+
+seed-verify: $(NODE_MODULES_MARKER)
+	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts verify "$$SEED_DOMAIN"
 
 .PHONY: seed-org seed-org-cleanup
 # A Cloudery token file seeds through the Cloudery partner API instead (SEEDING.md).

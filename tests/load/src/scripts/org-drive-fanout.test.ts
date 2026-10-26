@@ -166,7 +166,7 @@ async function fixture(t: TestContext, override?: Override) {
       ...inherited, SEED_ADMIN_URL: origins.admin, SEED_STACK_URL: origins.stack, SEED_ADMIN_PASSWORD: secret,
       SEED_DOMAIN_SUFFIX: 'localhost:8080', SEED_CONTEXT_NAME: 'fanout-test', FANOUT_ORG_DOMAIN: root,
       FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '800', FANOUT_POLL_MS: '10', FANOUT_STABLE_MS: '20',
-      FANOUT_POLL_CONCURRENCY: '2', ...env,
+      FANOUT_POLL_CONCURRENCY: '2', SEED_MANIFEST: join(dir, 'seed-manifest.json'), ...env,
     } })
     options.onSpawn?.(child)
     child.stdout.on('data', chunk => { stdout += String(chunk) })

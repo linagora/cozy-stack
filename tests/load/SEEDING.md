@@ -94,6 +94,28 @@ and zero drives. Bounds are 0..1,000,000 files and 0..100,000 drives, with at le
 one requested object. Those bounds are not a performance guarantee. The builder
 never changes the harness's normal `.env` or prints access tokens.
 
+## Fixture manifest
+
+Each seed records its fixture in a private manifest,
+`data/results/seed-<32-hex-id>-fixture.json` (`SEED_MANIFEST` overrides the path).
+It holds the profile (`flat`, the dataset above), generation parameters, the
+expected content checksum and every instance's domain, UUID and role, with the
+file and shared-drive IDs it confirmed and the root entry count. It never holds
+tokens. Instance UUIDs are chosen before any write, and the manifest is written
+before the first instance is created, then after each step, so a failed seed
+leaves a `failed` manifest with every planned identity and confirmed object. A
+seed refuses to replace an existing manifest.
+
+```sh
+make seed-verify SEED_DOMAIN='seed-<32-hex-id>.load.example.test:8443'
+```
+
+Verify the fixture before using it and again after a run. Only a `complete`
+manifest passes. Verification reads every recorded instance, file and drive root
+and fails if an identity, a count, a file's checksum, size or location, a drive
+backlink, the root entry count or the organization membership differs from the
+manifest. It never writes.
+
 ## Save and restore separately
 
 Snapshot management depends on the deployment and is **not implemented by this
@@ -138,8 +160,13 @@ export SEED_DOMAIN='seed-<32-hex-id>.load.example.test:8443'
 make seed-scale-cleanup
 ```
 
-Cleanup uses the existing `DELETE /instances/:domain`, accepts an already-absent
-instance, and confirms absence through the existing admin API. It does not need
-`SEED_STACK_URL` or valid generation counts. Only explicit disposable `seed-...`
-domains are accepted. For a restored test run, discard the entire owned environment
-instead; never delete a shared bucket or someone else's volumes.
+Cleanup needs the fixture's manifest and deletes only the instances it records,
+with the existing `DELETE /instances/:domain`. An instance is deleted only when it
+still has the recorded UUID; this also covers a creation whose reply was lost.
+Another UUID at a recorded domain is kept and cleanup fails. A missing, unreadable
+or mismatched manifest fails before any request. Cleanup accepts already-absent
+instances, confirms absence through the existing admin API and then removes the
+manifest. It does not need `SEED_STACK_URL` or valid generation counts. Only
+explicit disposable `seed-...` domains are accepted. For a restored test run,
+discard the entire owned environment instead; never delete a shared bucket or
+someone else's volumes.

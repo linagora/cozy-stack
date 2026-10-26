@@ -50,4 +50,5 @@ test('Make keeps an explicit organization cleanup domain in one argument', t => 
   const domain = 'seed-example.localhost:18090 with spaces'
   const result = run(t, 'seed-org-cleanup', { SEED_DOMAIN: domain })
   deepEqual(result.args, ['src/scripts/seed-scale-data.ts', 'cleanup-org', domain])
+  deepEqual(run(t, 'seed-verify', { SEED_DOMAIN: domain }).args, ['src/scripts/seed-scale-data.ts', 'verify', domain])
 })

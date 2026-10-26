@@ -1,9 +1,11 @@
 import { deepEqual, equal, match, ok } from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type RequestListener, type ServerResponse } from 'node:http'
 import { createServer as createSecureServer } from 'node:https'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { type TLSSocket } from 'node:tls'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +15,7 @@ const password = 'private-admin-password'
 const token = 'private-cli-token'
 const script = fileURLToPath(new URL('./seed-scale-data.ts', import.meta.url))
 const certificate = fileURLToPath(new URL('./fixtures/seed-loopback-cert.pem', import.meta.url))
+const md5 = createHash('md5').update(Buffer.alloc(1024, 's')).digest('base64')
 const testTLS = { cert: readFileSync(certificate),
   key: readFileSync(new URL('./fixtures/seed-loopback-key.pem', import.meta.url)) }
 interface Request {
@@ -67,8 +70,13 @@ async function fixture(t: TestContext, override?: Override, tlsHost?: string) {
           const existed = instances.delete(name)
           send(existed ? 204 : 404)
         } else send(instances.has(name) ? 200 : 404, { data: instances.get(name) })
+      } else if (api === 'stack' && pathname === '/files/io.cozy.files.root-dir' && req.method === 'GET') {
+        send(200, { data: { id: 'io.cozy.files.root-dir', relationships: { contents: { meta: { count: file + drive } } } } })
       } else if (api === 'stack' && pathname === '/files/io.cozy.files.root-dir') {
         send(201, { data: { id: `file-${++file}`, type: 'io.cozy.files' } })
+      } else if (api === 'stack' && pathname.startsWith('/files/file-')) {
+        send(200, { data: { id: pathname.slice('/files/'.length), type: 'io.cozy.files',
+          attributes: { md5sum: md5, size: '1024', dir_id: 'io.cozy.files.root-dir' } } })
       } else if (api === 'stack' && pathname === '/sharings/drives') {
         drive++
         send(201, { data: { id: `sharing-${drive}`, attributes: {
@@ -92,12 +100,15 @@ async function fixture(t: TestContext, override?: Override, tlsHost?: string) {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     })
   }
+  const dir = mkdtempSync(join(tmpdir(), 'seed-scale-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const manifest = join(dir, 'manifest.json')
   async function run(args = ['seed', domain], env: Record<string, string | undefined> = {}) {
     output = ''
     const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('SEED_')))
     const child = spawn(process.execPath, ['--import', 'tsx', script, ...args], {
       env: { ...inherited, SEED_ADMIN_URL: origins.admin, SEED_STACK_URL: origins.stack,
-        SEED_ADMIN_PASSWORD: password, SEED_FILES: '2', SEED_DRIVES: '0', ...env },
+        SEED_ADMIN_PASSWORD: password, SEED_FILES: '2', SEED_DRIVES: '0', SEED_MANIFEST: manifest, ...env },
       timeout: 6000,
     })
     child.stdout.on('data', (chunk) => { output += String(chunk) })
@@ -108,7 +119,7 @@ async function fixture(t: TestContext, override?: Override, tlsHost?: string) {
     })
     return { code, output }
   }
-  return { requests, instances, unrelated, run }
+  return { requests, instances, unrelated, run, manifest }
 }
 
 test('file-only seed uses dedicated APIs, Basic auth and exact public Host including port', async (t) => {
@@ -121,7 +132,7 @@ test('file-only seed uses dedicated APIs, Basic auth and exact public Host inclu
   deepEqual(f.requests.map((r) => `${r.api} ${r.method} ${r.url.pathname}`), [
     `admin GET /instances/${domain}`, 'admin POST /instances', `admin GET /instances/${domain}`,
     'admin POST /instances/token', 'stack POST /files/io.cozy.files.root-dir',
-    'stack POST /files/io.cozy.files.root-dir',
+    'stack POST /files/io.cozy.files.root-dir', 'stack GET /files/io.cozy.files.root-dir',
   ])
   for (const r of f.requests.filter((r) => r.api === 'admin')) {
     equal(r.headers.authorization, `Basic ${Buffer.from(`admin:${password}`).toString('base64')}`)
@@ -140,7 +151,7 @@ test('file-only seed uses dedicated APIs, Basic auth and exact public Host inclu
   equal(credentials.get('Domain'), domain)
   equal(credentials.get('Audience'), 'cli')
   equal(credentials.get('Scope'), 'io.cozy.files io.cozy.sharings')
-  const files = f.requests.filter((r) => r.api === 'stack')
+  const files = f.requests.filter((r) => r.api === 'stack' && r.method === 'POST')
   for (const [index, r] of files.entries()) {
     equal(r.headers.host, domain)
     equal(r.headers.authorization, `Bearer ${token}`)
@@ -154,6 +165,14 @@ test('file-only seed uses dedicated APIs, Basic auth and exact public Host inclu
   deepEqual(files[0]!.body, files[1]!.body)
   ok(!result.output.includes(password) && !result.output.includes(token))
   ok(f.instances.has(f.unrelated))
+  const manifest = JSON.parse(readFileSync(f.manifest, 'utf8'))
+  deepEqual(manifest, {
+    version: 1, profile: 'flat', status: 'complete', domain, organization: null,
+    parameters: { users: 0, files: 2, drives: 0, context: null }, content: { bytes: 1024, md5 },
+    instances: [{ domain, uuid: creation.get('UUID'), role: 'owner', created: true,
+      files: ['file-1', 'file-2'], drives: [], root_entries: 2 }],
+  })
+  ok(!readFileSync(f.manifest, 'utf8').includes(token))
 })
 
 test('HTTPS verifies the connection hostname while preserving the exact tenant Host', async (t) => {
@@ -168,6 +187,7 @@ test('HTTPS verifies the connection hostname while preserving the exact tenant H
     const publicRequests = f.requests.filter((r) => r.api === 'stack')
     deepEqual(publicRequests.map((r) => `${r.method} ${r.url.pathname}`), [
       'POST /files/io.cozy.files.root-dir', 'POST /sharings/drives', 'GET /files/root-1',
+      'GET /files/io.cozy.files.root-dir',
     ])
     for (const r of publicRequests) {
       equal(r.headers.host, domain)
@@ -193,28 +213,142 @@ test('HTTPS rejects untrusted certificates and trusted certificates for a differ
   })
 })
 
-test('cleanup deletes only its domain, reads back absence and accepts an absent instance', async (t) => {
+test('cleanup deletes only the recorded instance, reads back absence and removes the manifest', async (t) => {
   const f = await fixture(t)
-  f.instances.set(domain, { id: 'fixture', attributes: { domain, uuid: 'fixture-uuid' } })
+  equal((await f.run()).code, 0)
+  const uuid = JSON.parse(readFileSync(f.manifest, 'utf8')).instances[0].uuid
+  f.requests.splice(0)
   const env = { SEED_STACK_URL: undefined, SEED_FILES: 'invalid', SEED_DRIVES: '-1',
     SEED_ADMIN_USERNAME: 'fixture-admin' }
-  for (const present of [true, false]) {
-    equal(f.instances.has(domain), present)
-    const result = await f.run(['cleanup', domain], env)
-    equal(result.code, 0, result.output)
-    ok(result.output.includes(`Cleanup complete: ${domain}`))
-    equal(f.instances.has(domain), false)
-    ok(f.instances.has(f.unrelated))
-    const cleanupRequests = f.requests.splice(0)
-    equal(cleanupRequests.length, 2)
-    const [deletion, readback] = cleanupRequests
-    equal(deletion!.method, 'DELETE')
-    equal(deletion!.rawPath, `/instances/${domain}`)
-    equal(readback!.method, 'GET')
-    equal(readback!.rawPath, deletion!.rawPath)
-    equal(deletion!.headers.authorization,
-      `Basic ${Buffer.from(`fixture-admin:${password}`).toString('base64')}`)
+  const result = await f.run(['cleanup', domain], env)
+  equal(result.code, 0, result.output)
+  ok(result.output.includes(`Cleanup complete: ${domain}`))
+  equal(f.instances.has(domain), false)
+  ok(f.instances.has(f.unrelated))
+  deepEqual(f.requests.map((r) => `${r.method} ${r.rawPath}`),
+    ['GET', 'DELETE', 'GET'].map((method) => `${method} /instances/${domain}`))
+  for (const r of f.requests) {
+    equal(r.headers.authorization, `Basic ${Buffer.from(`fixture-admin:${password}`).toString('base64')}`)
   }
+  ok(uuid)
+  // The manifest is gone with the fixture: cleaning up again fails closed.
+  const again = await f.run(['cleanup', domain], env)
+  equal(again.code, 1)
+  match(again.output, /No readable fixture manifest/)
+  equal(f.requests.length, 3)
+})
+
+test('cleanup fails closed without a manifest of this fixture and never deletes another instance', async (t) => {
+  const f = await fixture(t)
+  const other = { id: 'other', attributes: { domain, uuid: 'another-run' } }
+  f.instances.set(domain, other)
+  for (const content of [undefined, 'not json', JSON.stringify({ version: 2 })]) {
+    if (content !== undefined) writeFileSync(f.manifest, content)
+    const result = await f.run(['cleanup', domain])
+    equal(result.code, 1)
+    match(result.output, /fixture manifest/)
+  }
+  equal(f.requests.length, 0)
+  // A recorded domain now held by another UUID is someone else's instance.
+  writeFileSync(f.manifest, JSON.stringify({
+    version: 1, profile: 'flat', status: 'failed', domain, organization: null,
+    parameters: { users: 0, files: 2, drives: 0, context: null }, content: { bytes: 1024, md5 },
+    instances: [{ domain, uuid: 'this-run', role: 'owner', created: false, files: [], drives: [] }],
+  }))
+  const result = await f.run(['cleanup', domain])
+  equal(result.code, 1)
+  match(result.output, /not the recorded instance; kept/)
+  equal(f.instances.get(domain), other)
+  ok(f.instances.has(f.unrelated))
+  ok(f.requests.every((r) => r.method === 'GET'))
+})
+
+test('verify checks recorded identities, objects, content and root entries before use and after a run', async (t) => {
+  let extra = 0
+  let changed = ''
+  const f = await fixture(t, (r, res) => {
+    if (r.api !== 'stack' || r.method !== 'GET') return
+    if (extra && r.url.pathname === '/files/io.cozy.files.root-dir') {
+      res.end(JSON.stringify({ data: { id: r.url.pathname.slice(7),
+        relationships: { contents: { meta: { count: 3 + extra } } } } }))
+      return true
+    }
+    if (!changed || r.url.pathname !== '/files/file-2') return
+    res.end(JSON.stringify({ data: { id: 'file-2',
+      attributes: { md5sum: changed, size: '1024', dir_id: 'io.cozy.files.root-dir' } } }))
+    return true
+  })
+  equal((await f.run(['seed', domain], { SEED_DRIVES: '1' })).code, 0)
+  f.requests.splice(0)
+  const verified = await f.run(['verify', domain], { SEED_FILES: 'ignored' })
+  equal(verified.code, 0, verified.output)
+  ok(verified.output.includes(`Fixture verified: ${domain}`))
+  deepEqual(f.requests.map((r) => `${r.api} ${r.method} ${r.url.pathname}`), [
+    `admin GET /instances/${domain}`, 'admin POST /instances/token', 'stack GET /files/file-1',
+    'stack GET /files/file-2', 'stack GET /files/root-1', 'stack GET /files/io.cozy.files.root-dir',
+  ])
+  // A run that leaves an entry at the root or changes a file no longer matches the fixture.
+  extra = 1
+  let result = await f.run(['verify', domain])
+  equal(result.code, 1)
+  match(result.output, /the root holds 4 entries; the manifest records 3/)
+  extra = 0
+  changed = 'other'
+  result = await f.run(['verify', domain])
+  equal(result.code, 1)
+  match(result.output, /file file-2 changed/)
+  f.instances.set(domain, { id: 'replaced', attributes: { domain, uuid: 'another' } })
+  result = await f.run(['verify', domain])
+  equal(result.code, 1)
+  match(result.output, /is not the recorded instance/)
+  ok(f.requests.every((r) => r.method === 'GET' || r.url.pathname === '/instances/token'))
+})
+
+test('a partial generation records its confirmed objects; verify refuses it and cleanup removes only it',
+  async (t) => {
+    const f = await fixture(t, (r, res) => {
+      if (r.method !== 'POST' || r.url.searchParams.get('Name') !== 'seed-file-2.txt') return
+      res.writeHead(500).end()
+      return true
+    })
+    const seeded = await f.run(['seed', domain], { SEED_FILES: '3' })
+    equal(seeded.code, 1)
+    match(seeded.output, /may be partial/)
+    const manifest = JSON.parse(readFileSync(f.manifest, 'utf8'))
+    equal(manifest.status, 'failed')
+    deepEqual(manifest.instances.map((i: any) => [i.created, i.files]), [[true, ['file-1']]])
+    const verified = await f.run(['verify', domain])
+    equal(verified.code, 1)
+    match(verified.output, /manifest is failed; only a complete fixture is usable/)
+    const cleaned = await f.run(['cleanup', domain])
+    equal(cleaned.code, 0, cleaned.output)
+    deepEqual([...f.instances.keys()], [f.unrelated])
+  })
+
+test('a lost creation reply leaves the planned identity, which cleanup can still prove and delete', async (t) => {
+  const f = await fixture(t, (r, res) => {
+    if (r.method !== 'POST' || r.url.pathname !== '/instances') return
+    f.instances.set(domain, { id: 'accepted', attributes: { domain, uuid: r.url.searchParams.get('UUID')! } })
+    res.destroy()
+    return true
+  })
+  equal((await f.run()).code, 1)
+  const manifest = JSON.parse(readFileSync(f.manifest, 'utf8'))
+  deepEqual([manifest.status, manifest.instances[0].created], ['failed', false])
+  equal(manifest.instances[0].uuid, f.instances.get(domain)!.attributes.uuid)
+  const cleaned = await f.run(['cleanup', domain])
+  equal(cleaned.code, 0, cleaned.output)
+  deepEqual([...f.instances.keys()], [f.unrelated])
+})
+
+test('seed refuses to replace an existing manifest before any write', async (t) => {
+  const f = await fixture(t)
+  writeFileSync(f.manifest, 'another fixture')
+  const result = await f.run()
+  equal(result.code, 1)
+  match(result.output, /an existing manifest may record another fixture/)
+  ok(f.requests.every((r) => r.method === 'GET'))
+  equal(readFileSync(f.manifest, 'utf8'), 'another fixture')
 })
 
 test('drive-only seed reuses shared-drive creation and reads each root backlink with the same Host', async (t) => {
@@ -225,6 +359,7 @@ test('drive-only seed reuses shared-drive creation and reads each root backlink 
   const writes = f.requests.filter((r) => r.api === 'stack')
   deepEqual(writes.map((r) => `${r.method} ${r.url.pathname}`), [
     'POST /sharings/drives', 'GET /files/root-1', 'POST /sharings/drives', 'GET /files/root-2',
+    'GET /files/io.cozy.files.root-dir',
   ])
   for (const r of writes) {
     equal(r.headers.host, domain)
@@ -264,10 +399,11 @@ test('autogenerated domains are fresh and use the configured suffix and default 
     const generated = creation.url.searchParams.get('Domain')!
     match(generated, /^seed-[a-f0-9]{32}\.localhost:8080$/)
     domains.push(generated)
-    equal(f.requests.filter((r) => r.api === 'stack').length, 100)
+    equal(f.requests.filter((r) => r.api === 'stack').length, 101)
     ok(f.requests.filter((r) => r.api === 'stack').every((r) => r.headers.host === generated))
     ok(result.output.includes('files=100; drives=0'))
     f.requests.splice(0)
+    rmSync(f.manifest)
   }
   equal(new Set(domains).size, 2)
 })
@@ -445,16 +581,22 @@ test('oversized, disconnected and truncated replies retain partial data without 
 test('cleanup rejects unsuccessful DELETE and any readback other than 404', async (t) => {
   for (const [method, status] of [['DELETE', 200], ['DELETE', 302], ['DELETE', 500],
     ['GET', 200], ['GET', 401], ['GET', 500]] as const) await t.test(`${method} ${status}`, async (t) => {
+    let deleted = false
     const f = await fixture(t, (r, res) => {
-      if (r.method !== method) return
+      if (r.method === 'DELETE') deleted = true
+      if (r.method !== method || r.api !== 'admin' || (method === 'GET' && !deleted)) return
       res.writeHead(status, { Location: '/must-not-follow' }).end(password)
       return true
     })
+    equal((await f.run()).code, 0)
+    f.requests.splice(0)
     const result = await f.run(['cleanup', domain], { SEED_STACK_URL: undefined })
     equal(result.code, 1, result.output)
     match(result.output, new RegExp(`HTTP ${status}`))
     ok(!result.output.includes('Cleanup complete:') && !result.output.includes(password))
-    deepEqual(f.requests.map((r) => r.method), method === 'DELETE' ? ['DELETE'] : ['DELETE', 'GET'])
+    deepEqual(f.requests.map((r) => r.method), method === 'DELETE' ? ['GET', 'DELETE'] : ['GET', 'DELETE', 'GET'])
     ok(f.instances.has(f.unrelated))
+    // Nothing is confirmed absent, so the manifest stays for the next attempt.
+    ok(readFileSync(f.manifest, 'utf8'))
   })
 })

@@ -1,7 +1,10 @@
 import { deepEqual, equal, match, ok } from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
@@ -27,6 +30,16 @@ const member = (hex: string) => `seed-${hex.repeat(32)}.localhost:8080`
 function instance(name: string, scope = true): Instance {
   return { id: `id-${name}`, attributes: { domain: name, uuid: randomUUID(),
     ...(scope ? { org_id: orgID, org_domain: orgDomain } : {}) } }
+}
+
+// The manifest a seed of these instances would have written; absent names get a fresh UUID.
+function record(f: { manifest: string, instances: Map<string, Instance> }, names: string[]) {
+  writeFileSync(f.manifest, JSON.stringify({
+    version: 1, profile: 'flat', status: 'complete', domain, organization: orgID,
+    parameters: { users: names.length - 1, files: 0, drives: 0, context: null }, content: { bytes: 1024, md5: 'x' },
+    instances: names.map((name, index) => ({ domain: name, uuid: f.instances.get(name)?.attributes.uuid ?? randomUUID(),
+      role: index ? 'member' : 'organization', created: true, files: [], drives: [] })),
+  }))
 }
 
 async function fixture(t: TestContext, override?: Override) {
@@ -71,6 +84,8 @@ async function fixture(t: TestContext, override?: Override) {
         const name = pathname.slice('/instances/'.length)
         if (r.method === 'DELETE') send(instances.delete(name) ? 204 : 404)
         else send(instances.has(name) ? 200 : 404, { data: instances.get(name) })
+      } else if (api === 'stack' && pathname === '/files/io.cozy.files.root-dir' && r.method === 'GET') {
+        send(200, { data: { id: 'io.cozy.files.root-dir', relationships: { contents: { meta: { count: 3 } } } } })
       } else if (api === 'stack' && pathname === '/files/io.cozy.files.root-dir') {
         send(201, { data: { id: 'file' } })
       } else if (api === 'stack' && pathname === '/sharings/drives') {
@@ -89,11 +104,15 @@ async function fixture(t: TestContext, override?: Override) {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     })
   }
+  const dir = mkdtempSync(join(tmpdir(), 'seed-org-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const manifest = join(dir, 'manifest.json')
   async function run(args = ['seed-org', domain], env: Record<string, string | undefined> = {}) {
     output = ''
     const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('SEED_')))
     const child = spawn(process.execPath, ['--import', 'tsx', script, ...args], {
-      env: { ...inherited, SEED_ADMIN_URL: origins.admin, SEED_ADMIN_PASSWORD: password, ...env },
+      env: { ...inherited, SEED_ADMIN_URL: origins.admin, SEED_ADMIN_PASSWORD: password, SEED_MANIFEST: manifest,
+        ...env },
       timeout: 15_000,
     })
     child.stdout.on('data', (chunk) => { output += String(chunk) })
@@ -104,7 +123,7 @@ async function fixture(t: TestContext, override?: Override) {
     })
     return { code, output }
   }
-  return { instances, requests, origins, run }
+  return { instances, requests, origins, run, manifest }
 }
 
 const creations = (requests: Request[]) => requests.filter((r) => r.method === 'POST' &&
@@ -230,6 +249,7 @@ test('registry pagination refuses unsafe links and cycles before credentials or 
         res.end(JSON.stringify({ data: [], links: { next: ++pages < 3 ? links[mode] : null } }))
         return true
       })
+      if (command === 'cleanup-org') record(f, [domain])
       const result = await f.run([command, domain])
       equal(result.code, 1, result.output)
       match(result.output, /pagination|instance list/i)
@@ -254,6 +274,7 @@ test('cleanup-org pages all members, deletes root last and preserves foreign ins
   for (const name of members) f.instances.set(name, instance(name))
   const ordinary = instance(member('e'), false)
   f.instances.set(ordinary.attributes.domain, ordinary)
+  record(f, [domain, ...members])
   const result = await f.run(['cleanup-org', domain], {
     SEED_USERS: 'bad', SEED_FILES: '-1', SEED_DRIVES: 'bad', SEED_STACK_URL: undefined,
   })
@@ -276,6 +297,35 @@ test('cleanup-org pages all members, deletes root last and preserves foreign ins
     .some((r) => r.url.pathname === '/instances'))
   equal(f.requests.at(-1)!.url.pathname, '/instances')
   ok(f.requests.every((r) => r.api === 'admin' && r.url.pathname !== '/instances/token'))
+  match(String((await f.run(['cleanup-org', domain])).output), /No readable fixture manifest/)
+})
+
+test('an unrecorded member of the organization fails verify and keeps the root through cleanup', async (t) => {
+  const f = await fixture(t)
+  equal((await f.run(['seed-org', domain], { SEED_USERS: '2' })).code, 0)
+  const verified = await f.run(['verify', domain])
+  equal(verified.code, 0, verified.output)
+  const stranger = instance(member('e'))
+  f.instances.set(stranger.attributes.domain, stranger)
+  match((await f.run(['verify', domain])).output, /membership differs from the manifest/)
+  const result = await f.run(['cleanup-org', domain])
+  equal(result.code, 1)
+  match(result.output, /members remain; root retained/)
+  deepEqual([...f.instances.keys()].sort(), [domain, stranger.attributes.domain].sort())
+  ok(readFileSync(f.manifest, 'utf8'))
+})
+
+test('cleanup-org deletes nothing when the root is no longer the recorded instance', async (t) => {
+  const f = await fixture(t)
+  f.instances.set(domain, instance(domain))
+  f.instances.set(member('b'), instance(member('b')))
+  record(f, [domain, member('b')])
+  f.instances.set(domain, instance(domain))
+  const result = await f.run(['cleanup-org', domain])
+  equal(result.code, 1)
+  match(result.output, /root is not the recorded instance; kept/)
+  equal(f.requests.filter((r) => r.method !== 'GET').length, 0)
+  equal(f.instances.size, 2)
 })
 
 test('cleanup-org refuses the entire plan if any selected candidate is foreign or malformed', async (t) => {
@@ -291,6 +341,7 @@ test('cleanup-org refuses the entire plan if any selected candidate is foreign o
     const bad = instance(member('c'))
     Object.assign(bad.attributes, changed)
     f.instances.set(bad.attributes.domain, bad)
+    record(f, [domain, member('b')])
     const result = await f.run(['cleanup-org', domain])
     equal(result.code, 1, result.output)
     match(result.output, /scope|identity|instance list|Domain must/i)
@@ -303,6 +354,7 @@ test('cleanup-org refuses a non-organization root even if unrelated valid fixtur
   const f = await fixture(t)
   f.instances.set(domain, instance(domain, false))
   f.instances.set(member('b'), instance(member('b')))
+  record(f, [domain, member('b')])
   const result = await f.run(['cleanup-org', domain])
   equal(result.code, 1, result.output)
   match(result.output, /scope|identity/i)
@@ -323,16 +375,19 @@ test('per-user data has explicit owners, isolated hosts and tokens, and root bac
     const owned = f.requests.filter((r) => r.api === 'stack' && r.headers.host === name)
     deepEqual(owned.map((r) => `${r.method} ${r.url.pathname}`), [
       'POST /files/io.cozy.files.root-dir', 'POST /files/io.cozy.files.root-dir',
-      'POST /sharings/drives', `/files/root-${names.indexOf(name) + 1}`,
+      'POST /sharings/drives', `/files/root-${names.indexOf(name) + 1}`, '/files/io.cozy.files.root-dir',
     ].map((value) => value.startsWith('/') ? `GET ${value}` : value))
     for (const r of owned) equal(r.headers.authorization, `Bearer token-${name}`)
-    for (const r of owned.filter((r) => r.url.pathname === '/files/io.cozy.files.root-dir')) {
+    for (const r of owned.filter((r) => r.method === 'POST' && r.url.pathname === '/files/io.cozy.files.root-dir')) {
       equal(r.body.length, 1024)
       equal(r.headers['content-md5'], createHash('md5').update(r.body).digest('base64'))
     }
   }
   equal(f.requests.filter((r) => r.api === 'stack' && r.headers.host === domain).length, 0)
-  equal(f.requests.filter((r) => r.api === 'stack').length, 8)
+  equal(f.requests.filter((r) => r.api === 'stack').length, 10)
+  const manifest = JSON.parse(readFileSync(f.manifest, 'utf8'))
+  deepEqual(manifest.instances.map((i: any) => [i.role, i.files.length, i.drives.length, i.root_entries]),
+    [['organization', 0, 0, undefined], ['member', 2, 1, 3], ['member', 2, 1, 3]])
 })
 
 test('final organization membership must retain exact identities and both organization fields', async (t) => {
@@ -499,6 +554,7 @@ test('cleanup-org handles partial fixtures, missing roots, zero members and abse
     if (mode === 'root-only') f.instances.set(domain, instance(domain))
     const unrelated = instance(member('f'), false)
     f.instances.set(member('f'), unrelated)
+    record(f, [domain, member('b')])
     const result = await f.run(['cleanup-org', domain])
     equal(result.code, 0, result.output)
     deepEqual([...f.instances.values()], [unrelated])
@@ -519,6 +575,7 @@ test('cleanup-org rechecks domain, ID, UUID and organization fields before delet
     })
     f.instances.set(domain, instance(domain))
     f.instances.set(member('b'), instance(member('b')))
+    record(f, [domain, member('b')])
     const result = await f.run(['cleanup-org', domain])
     equal(result.code, 1, result.output)
     match(result.output, /identity|scope|Domain must/)
@@ -536,6 +593,7 @@ test('cleanup-org lost DELETE replies warn about partial state and retain the ro
   })
   f.instances.set(domain, instance(domain))
   f.instances.set(member('b'), instance(member('b')))
+  record(f, [domain, member('b')])
   const result = await f.run(['cleanup-org', domain])
   equal(result.code, 1, result.output)
   match(result.output, /may be partial.*explicit cleanup.*writes have stopped/)
@@ -569,6 +627,7 @@ test('cleanup-org refuses failed deletions, missing absence proofs and leftover 
       })
       f.instances.set(domain, instance(domain))
       f.instances.set(member('b'), instance(member('b')))
+      record(f, [domain, member('b')])
       const result = await f.run(['cleanup-org', domain])
       equal(result.code, 1, result.output)
       match(result.output, /may be partial/)

@@ -54,7 +54,11 @@ Equivalent direct commands:
 node --import tsx src/scripts/seed-scale-data.ts seed-org
 node --import tsx src/scripts/seed-scale-data.ts seed-org "$SEED_DOMAIN"
 node --import tsx src/scripts/seed-scale-data.ts cleanup-org "$SEED_DOMAIN"
+node --import tsx src/scripts/seed-scale-data.ts verify "$SEED_DOMAIN"
 ```
+
+The [fixture manifest](SEEDING.md#fixture-manifest) records the organization and
+every member; `make seed-verify` checks them before and after a run.
 
 ## Explicit cleanup
 
@@ -65,9 +69,11 @@ make seed-org-cleanup
 ```
 
 Cleanup enumerates the organization scope through the admin API, checks its
-members and deletes user instances before the organization instance. It reads
-back absence and preserves unrelated organizations/instances. Generation counts
-and `SEED_STACK_URL` are not required for cleanup.
+members and deletes the members the manifest records before the organization
+instance. Members it does not record are kept, and so is the organization
+instance, and cleanup fails. It reads back absence, preserves unrelated
+organizations/instances and removes the manifest once everything is absent.
+Generation counts and `SEED_STACK_URL` are not required for cleanup.
 
 There are no retries, automatic cleanup, resume jobs or cross-operator locking.
 A failed run leaves partial data. Stop generation and establish that accepted
