@@ -428,8 +428,8 @@ export function getReportSamples(
           : pointChecks.correctness === 'Verified' && pointChecks.cleanup === 'Verified' ? 'Verified' : 'Unverified',
       }, 1)
       if (!['not_run', 'not_measured', 'missing_result'].includes(status)) {
-        emit('point_value', { ...dimensions, metric: 'load' }, load)
-        emit('point_value', { ...dimensions, metric: 'point_index' }, index + 1)
+        emit('point_value', { ...dimensions, executionid: executionId, metric: 'load' }, load)
+        emit('point_value', { ...dimensions, executionid: executionId, metric: 'point_index' }, index + 1)
       }
       emit('point_info', {
         ...dimensions, status: status === 'missing_result' ? 'inconclusive' : status,

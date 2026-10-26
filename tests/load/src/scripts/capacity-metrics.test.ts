@@ -445,6 +445,8 @@ test('timeline bounds carry the actual execution identity and activity counts co
   assert.equal(bounds.length, 2)
   assert.ok(bounds.every(row => row.labels.executionid === 'test-attempt'))
   assert.equal(bounds[1]!.value - bounds[0]!.value, 10)
+  const workerLevel = rows.find(row => row.labels.kind === 'upload' && row.labels.metric === 'load')
+  assert.equal(workerLevel?.labels.executionid, 'test-attempt')
   const uploads = rows.filter(row => row.labels.metric === 'completed_uploads')
   assert.deepEqual(uploads.map(row => [row.labels.index, row.value]), [['1', 0]])
 })

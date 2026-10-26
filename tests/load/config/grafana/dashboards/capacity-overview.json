@@ -4383,7 +4383,7 @@
         "spec": {
           "id": 122,
           "title": "Configured upload workers",
-          "description": "Worker count configured for each recorded attempt, including attempts too short for a k6 sample. This is the offered load, not a measurement of busy workers.",
+          "description": "Configured workers for each recorded attempt. When attempt times are missing, the line uses saved k6 sample windows (5 s); very short attempts may have no samples.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -4400,7 +4400,7 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time())))",
+                        "expr": "max((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(executionid) ((k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"} > 0) and (timestamp(k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"}) > time() - 5))) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at))",
                         "instant": false,
                         "range": true,
                         "format": "time_series",
@@ -10127,7 +10127,7 @@
         "spec": {
           "id": 1310,
           "title": "Configured upload workers",
-          "description": "Worker count configured for each recorded attempt, including attempts too short for a k6 sample. This is the offered load, not a measurement of busy workers.",
+          "description": "Configured workers for each recorded attempt. When attempt times are missing, the line uses saved k6 sample windows (5 s); very short attempts may have no samples.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -10144,7 +10144,7 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time())))",
+                        "expr": "max((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(executionid) ((k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"} > 0) and (timestamp(k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"}) > time() - 5))) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at))",
                         "instant": false,
                         "range": true,
                         "format": "time_series",
@@ -10405,7 +10405,7 @@
         "spec": {
           "id": 1314,
           "title": "Configured upload workers",
-          "description": "Worker count configured for each recorded attempt, including attempts too short for a k6 sample. This is the offered load, not a measurement of busy workers.",
+          "description": "Configured workers for each recorded attempt. When attempt times are missing, the line uses saved k6 sample windows (5 s); very short attempts may have no samples.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -10422,7 +10422,7 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time())))",
+                        "expr": "max((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(executionid) ((k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"} > 0) and (timestamp(k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"}) > time() - 5))) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at))",
                         "instant": false,
                         "range": true,
                         "format": "time_series",
@@ -11289,7 +11289,7 @@
         "spec": {
           "id": 2005,
           "title": "Upload phases",
-          "description": "Recorded attempt phases. Phase bands stop at the attempt end. Older reports without attempt times have no phase band.",
+          "description": "Recorded phases from attempt times. Reports without attempt times use saved k6 sample windows (5 s); very short attempts may have no samples.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11308,7 +11308,7 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "max by (phase) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) > bool 0)",
+                        "expr": "max by (phase) (((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(executionid) ((k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"} > 0) and (timestamp(k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"}) > time() - 5))) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) > bool 0)",
                         "instant": false,
                         "range": true,
                         "format": "time_series",

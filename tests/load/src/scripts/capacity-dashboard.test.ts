@@ -120,11 +120,23 @@ test('telemetry uses recorded attempt bounds pinned independently of the chart w
   }
   const workers = queries(named('Configured upload workers'))[0]!.spec.expr!
   assert.match(workers, /metric="load"} @ \$report_at/)
-  assert.doesNotMatch(workers, /k6_vus|vector\(0\)/)
+  assert.doesNotMatch(workers, /max\(k6_vus|vector\(0\)/)
   for (const name of ['execution', 'activity_level']) {
     const variable = dashboard.spec.variables.find(v => v.spec.name === name)!
     assert.match(variable.spec.query!.spec.query, /point_id=~"\$point"/)
     assert.equal(variable.spec.allValue, undefined, 'All expands only the selected point’s recorded values')
+  }
+})
+
+test('untimed upload points use fresh worker samples without inventing point bounds', () => {
+  const timelines = panels.filter(panel => ['Configured upload workers', 'Upload phases'].includes(panel.spec.title))
+  for (const panel of timelines) {
+    const expression = queries(panel)[0]!.spec.expr!
+    assert.match(expression, /metric="load"} @ \$report_at and on\(executionid\)/)
+    assert.match(expression, /k6_vus\{campaignid="\$run",load_target="\$env",mode="\$mode",executionid=~"\$execution"}/)
+    assert.match(expression, /timestamp\(k6_vus\{.*}\) > time\(\) - 5/)
+    assert.match(expression, /unless on\(executionid\) cozy_load_point_value\{.*metric="ended_at_seconds"} @ \$report_at/)
+    assert.doesNotMatch(expression, /vector\(0\)/)
   }
 })
 
