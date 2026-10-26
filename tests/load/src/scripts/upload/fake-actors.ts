@@ -14,7 +14,9 @@ export const [org, writer, reader] = [domain('a'), domain('b'), domain('c')]
 export async function fakeActors(t: TestContext) {
   const uuids = new Map([org, writer, reader].map(d => [d, randomUUID()]))
   const state = {
-    uuids, replaced: '', readOnlyWrites: false, keepRevoked: false,
+    uuids, replaced: '', readOnlyWrites: false, keepRevoked: false, neverReady: false, removalStatus: 204,
+    // After the writer's group is removed: its reads answer 403 once, then 200; its writes answer this.
+    flapAfterRevoke: false, revokedWriteStatus: 403, revokedReads: 0,
     groups: [] as Array<{ id: string, readOnly: boolean, members: string[], revoked: boolean, granted?: boolean }>,
     contacts: new Map<string, string>(), docs: new Set<string>(), root: 'live', requests: [] as string[],
   }
@@ -62,18 +64,24 @@ export async function fakeActors(t: TestContext) {
     }
     if (route === 'GET /sharings/sid') {
       const members = state.groups.filter(g => g.members.length && g.granted)
-        .map(g => ({ status: g.revoked ? 'revoked' : 'ready' }))
+        .map(g => ({ status: state.neverReady ? 'pending' : g.revoked ? 'revoked' : 'ready' }))
       return send(200, { data: { attributes: { groups: state.groups.map(g => ({ id: g.id, revoked: g.revoked })),
         members: [{ status: 'owner' }, ...members] } } })
     }
     const index = url.pathname.match(/^\/sharings\/sid\/groups\/(\d+)$/)?.[1]
     if (req.method === 'DELETE' && index) {
+      if (state.removalStatus !== 204) return send(state.removalStatus)
       state.groups[Number(index)]!.revoked = !state.keepRevoked
       return send(204)
     }
     if (url.pathname === '/sharings/drives/sid/root') {
       const g = grant(host)
-      if (req.method === 'GET') return send(g ? 200 : 403, {})
+      const revoked = !g && state.groups.some(group => group.members.includes(host) && group.revoked)
+      if (req.method === 'GET') {
+        if (revoked && state.flapAfterRevoke) return send(state.revokedReads++ === 0 ? 403 : 200, {})
+        return send(g ? 200 : 403, {})
+      }
+      if (revoked) return send(state.revokedWriteStatus, {})
       return send(g && (!g.readOnly || state.readOnlyWrites) ? 201 : 403, {})
     }
     if (route === 'GET /files/trash') return send(200, { data: [] })

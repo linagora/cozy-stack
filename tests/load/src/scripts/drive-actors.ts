@@ -59,6 +59,9 @@ function stackAddress(): string {
   return ip
 }
 
+// An explicit refusal: forbidden, or no longer found.
+const denied = (status: number) => status === 403 || status === 404
+
 async function poll(settleMs: number, until: () => Promise<boolean>): Promise<boolean> {
   for (const deadline = Date.now() + settleMs; ; await sleep(POLL_MS)) {
     if (await until()) return true
@@ -106,105 +109,144 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
     return parse(body)
   }
 
-  const name = `twake-load-actors-${executionId}`
-  const created = (await json(owner('POST', '/sharings/drives', JSON.stringify({ data: {
-    type: 'io.cozy.sharings', attributes: { name, description: name } } }), 'application/vnd.api+json'),
-  201, 'Creating the drive')).data
-  const drive = { id: String(created?.id), root: String(created?.attributes?.rules?.[0]?.values?.[0]) }
-  check(created?.id && created.attributes?.org_drive === true, 'Expected an organization drive')
-  const scheme = new URL(created.attributes.members[0].instance).protocol
-  const fixtures = { groups: [] as string[], contacts: [] as string[] }
-  const group = async (member: Actor) => {
-    const group = await json(owner('POST', '/data/io.cozy.contacts.groups/',
-      JSON.stringify({ name: `${name}-${member.role}` })), 201, 'Creating a group')
-    fixtures.groups.push(group.id)
-    const contact = await json(owner('POST', '/data/io.cozy.contacts/', JSON.stringify({
-      fullname: `Load-test ${member.role}`, email: [{ address: `${member.uuid}@spam.cozycloud.cc`, primary: true }],
-      cozy: [{ url: `${scheme}//${member.domain}/`, primary: true }],
-      relationships: { groups: { data: [{ _id: group.id, _type: 'io.cozy.contacts.groups' }] } },
-    })), 201, 'Creating a contact')
-    fixtures.contacts.push(contact.id)
-    return { id: group.id as string, type: 'io.cozy.contacts.groups' }
-  }
-  const [writerGroup, readerGroup] = [await group(actors.writer), await group(actors.reader)]
-  // One request grants both: a grant added while the first member is still accepting can be lost.
-  await json(owner('POST', `/sharings/${drive.id}/recipients`, JSON.stringify({ data: {
-    type: 'io.cozy.sharings', id: drive.id,
-    relationships: { recipients: { data: [writerGroup] }, read_only_recipients: { data: [readerGroup] } } } }),
-  'application/vnd.api+json'), 200, 'Granting the members')
-
-  // Members of the organization accept its drives on their own (ORG-DRIVE-FANOUT.md). A member asked
-  // before its sharing arrived can stay refused for a while, so the owner's roster comes first.
-  const granted = Date.now()
-  let roster: string[] = []
-  const ready = await poll(settleMs, async () => {
-    const members = parse((await owner('GET', `/sharings/${drive.id}`)).body)?.data?.attributes?.members ?? []
-    roster = members.slice(1).map((m: { status?: string }) => String(m.status))
-    return roster.length === 2 && roster.every(status => status === 'ready')
-  })
-  check(ready, `The members did not accept the drive in time: ${roster.join(', ') || 'no recipients'}`)
-  const acceptMs = Date.now() - granted
-  const rootPath = `/sharings/drives/${drive.id}/${drive.root}`
-  let statuses: number[] = []
-  const accepted = await poll(settleMs, async () => {
-    statuses = await Promise.all([writer, reader].map(async api => (await api('GET', rootPath)).status))
-    return statuses.every(status => status === 200)
-  })
-  check(accepted, `The members did not reach the drive in time: writer HTTP ${statuses[0]}, reader HTTP ${statuses[1]}`)
-  const upload = (api: Api, role: Role) =>
-    api('POST', `${rootPath}?Type=file&Name=${name}-${role}.txt`, role, 'text/plain')
-  const access: Record<string, number> = {
-    writer_read: (await writer('GET', rootPath)).status, writer_write: (await upload(writer, 'writer')).status,
-    reader_read: (await reader('GET', rootPath)).status,
-  }
-  check(access.writer_write === 201, `The writer could not write to the drive: HTTP ${access.writer_write}`)
-
-  const report: ActorsReport = {
-    fixture: domain, drive: drive.id, access, accept_ms: acceptMs,
-    placement: Object.values(actors).map(({ role, domain: d }) => ({ role, domain: d, stack: adminURL.host,
-      path: role === 'owner' ? 'owner' : 'same-stack' })),
-  }
+  // Before any write: without the Stack's address k6 cannot reach the members.
   const address = stackAddress()
-  const url = (actor: Actor) => `${scheme}//${actor.domain}`
-  return {
-    drive, report,
-    target: {
-      kind: 'local', baseUrl: url(actors.owner), lockedUrls: [], maxPointMs: Infinity,
-      makeArgs: [`WRITER_BASE_URL=${url(actors.writer)}`, `READER_BASE_URL=${url(actors.reader)}`,
-        `ACTOR_HOSTS=${Object.values(actors).map(a => `${new URL(url(a)).hostname}=${address}`).join(',')}`],
-      session: async () => ({ token: actors.owner.token,
-        stack: stackClient(stackOrigin, actors.owner.domain, actors.owner.token) }),
-    },
-    env: { WRITER_ACCESS_TOKEN: actors.writer.token, READER_ACCESS_TOKEN: actors.reader.token },
-    async finish() {
-      access.reader_write = (await upload(reader, 'reader')).status
-      const sharing = await json(owner('GET', `/sharings/${drive.id}`), 200, 'Reading the drive')
-      const groups: Array<{ id?: string }> = sharing?.data?.attributes?.groups ?? []
-      const index = groups.findIndex(g => g.id === writerGroup.id)
-      check(index >= 0, "The writer's group is missing from the drive")
-      const removal = await owner('DELETE', `/sharings/${drive.id}/groups/${index}`)
-      check(removal.status === 204, `Removing the writer's group: HTTP ${removal.status}`)
-      // The roster can keep the writer for a while; its drive access must end.
-      const revoked = await poll(settleMs, async () => [403, 404].includes((await writer('GET', rootPath)).status))
-      const revocation = {
-        writer_read: (await writer('GET', rootPath)).status, writer_write: (await upload(writer, 'writer')).status,
-        reader_read: (await reader('GET', rootPath)).status,
-      }
-      report.revocation = revocation
-      const cleaned: string[] = []
-      const retained: string[] = []
-      const keep = (label: string, removed: boolean) => (removed ? cleaned : retained).push(label)
-      keep(name, await removeDrive(owner, drive.id, drive.root, 2000, POLL_MS, Date.now() + 300_000))
-      for (const id of fixtures.groups) keep(id, await removeDoc(owner, 'io.cozy.contacts.groups', id))
-      for (const id of fixtures.contacts) keep(id, await removeDoc(owner, 'io.cozy.contacts', id))
-      report.cleanup = { cleaned, retained }
-      if (access.reader_write < 300) throw new AccessFailure('The read-only member could write to the drive')
-      if (!revoked || revocation.writer_write < 300) {
-        throw new AccessFailure('The writer kept drive access after its group was removed')
-      }
-      if (revocation.reader_read !== 200) throw new AccessFailure('The reader lost drive access with the writer')
-      check(access.reader_write === 403, `Unexpected read-only write: HTTP ${access.reader_write}`)
-      if (retained.length) throw new FixtureError(`Actor fixtures remain: ${retained.join(' ')}`)
-    },
+  const name = `twake-load-actors-${executionId}`
+  const fixtures = {
+    drive: null as { id: string, root: string } | null, groups: [] as string[], contacts: [] as string[],
+  }
+  // Removes what this run created, whatever failed; anything left is named, never ignored.
+  const removeFixtures = async (): Promise<{ cleaned: string[], retained: string[] }> => {
+    const cleaned: string[] = []
+    const retained: string[] = []
+    const remove = async (label: string, removal: () => Promise<boolean>) => {
+      const removed = await removal().catch(() => false)
+      ;(removed ? cleaned : retained).push(label)
+    }
+    const { drive } = fixtures
+    if (drive) await remove(name, () => removeDrive(owner, drive.id, drive.root, 2000, POLL_MS, Date.now() + 300_000))
+    for (const id of fixtures.groups) await remove(id, () => removeDoc(owner, 'io.cozy.contacts.groups', id))
+    for (const id of fixtures.contacts) await remove(id, () => removeDoc(owner, 'io.cozy.contacts', id))
+    return { cleaned, retained }
+  }
+
+  try {
+    const created = (await json(owner('POST', '/sharings/drives', JSON.stringify({ data: {
+      type: 'io.cozy.sharings', attributes: { name, description: name } } }), 'application/vnd.api+json'),
+    201, 'Creating the drive')).data
+    check(created?.id && created.attributes?.rules?.[0]?.values?.[0], 'The drive has no ID or root')
+    const drive = { id: String(created.id), root: String(created.attributes.rules[0].values[0]) }
+    fixtures.drive = drive
+    check(created.attributes.org_drive === true, 'Expected an organization drive')
+    const scheme = new URL(created.attributes.members[0].instance).protocol
+    const group = async (member: Actor) => {
+      const group = await json(owner('POST', '/data/io.cozy.contacts.groups/',
+        JSON.stringify({ name: `${name}-${member.role}` })), 201, 'Creating a group')
+      fixtures.groups.push(group.id)
+      const contact = await json(owner('POST', '/data/io.cozy.contacts/', JSON.stringify({
+        fullname: `Load-test ${member.role}`, email: [{ address: `${member.uuid}@spam.cozycloud.cc`, primary: true }],
+        cozy: [{ url: `${scheme}//${member.domain}/`, primary: true }],
+        relationships: { groups: { data: [{ _id: group.id, _type: 'io.cozy.contacts.groups' }] } },
+      })), 201, 'Creating a contact')
+      fixtures.contacts.push(contact.id)
+      return { id: group.id as string, type: 'io.cozy.contacts.groups' }
+    }
+    const [writerGroup, readerGroup] = [await group(actors.writer), await group(actors.reader)]
+    // One request grants both: a grant added while the first member is still accepting can be lost.
+    await json(owner('POST', `/sharings/${drive.id}/recipients`, JSON.stringify({ data: {
+      type: 'io.cozy.sharings', id: drive.id,
+      relationships: { recipients: { data: [writerGroup] }, read_only_recipients: { data: [readerGroup] } } } }),
+    'application/vnd.api+json'), 200, 'Granting the members')
+
+    // Members of the organization accept its drives on their own (ORG-DRIVE-FANOUT.md). A member asked
+    // before its sharing arrived can stay refused for a while, so the owner's roster comes first.
+    const granted = Date.now()
+    let roster: string[] = []
+    const ready = await poll(settleMs, async () => {
+      const members = parse((await owner('GET', `/sharings/${drive.id}`)).body)?.data?.attributes?.members ?? []
+      roster = members.slice(1).map((m: { status?: string }) => String(m.status))
+      return roster.length === 2 && roster.every(status => status === 'ready')
+    })
+    check(ready, `The members did not accept the drive in time: ${roster.join(', ') || 'no recipients'}`)
+    const acceptMs = Date.now() - granted
+    const rootPath = `/sharings/drives/${drive.id}/${drive.root}`
+    let statuses: number[] = []
+    const accepted = await poll(settleMs, async () => {
+      statuses = await Promise.all([writer, reader].map(async api => (await api('GET', rootPath)).status))
+      return statuses.every(status => status === 200)
+    })
+    check(accepted,
+      `The members did not reach the drive in time: writer HTTP ${statuses[0]}, reader HTTP ${statuses[1]}`)
+    const upload = (api: Api, role: Role) =>
+      api('POST', `${rootPath}?Type=file&Name=${name}-${role}.txt`, role, 'text/plain')
+    const access: Record<string, number> = {
+      writer_read: (await writer('GET', rootPath)).status, writer_write: (await upload(writer, 'writer')).status,
+      reader_read: (await reader('GET', rootPath)).status,
+    }
+    check(access.writer_write === 201, `The writer could not write to the drive: HTTP ${access.writer_write}`)
+
+    const report: ActorsReport = {
+      fixture: domain, drive: drive.id, access, accept_ms: acceptMs,
+      placement: Object.values(actors).map(({ role, domain: d }) => ({ role, domain: d, stack: adminURL.host,
+        path: role === 'owner' ? 'owner' : 'same-stack' })),
+    }
+    const url = (actor: Actor) => `${scheme}//${actor.domain}`
+    return {
+      drive, report,
+      target: {
+        kind: 'local', baseUrl: url(actors.owner), lockedUrls: [], maxPointMs: Infinity,
+        makeArgs: [`WRITER_BASE_URL=${url(actors.writer)}`, `READER_BASE_URL=${url(actors.reader)}`,
+          `ACTOR_HOSTS=${Object.values(actors).map(a => `${new URL(url(a)).hostname}=${address}`).join(',')}`],
+        session: async () => ({ token: actors.owner.token,
+          stack: stackClient(stackOrigin, actors.owner.domain, actors.owner.token) }),
+      },
+      env: { WRITER_ACCESS_TOKEN: actors.writer.token, READER_ACCESS_TOKEN: actors.reader.token },
+      async finish() {
+        // Whatever fails here, the fixtures go before the verdict.
+        let failure: unknown = null
+        try {
+          access.reader_write = (await upload(reader, 'reader')).status
+          const sharing = await json(owner('GET', `/sharings/${drive.id}`), 200, 'Reading the drive')
+          const groups: Array<{ id?: string }> = sharing?.data?.attributes?.groups ?? []
+          const index = groups.findIndex(g => g.id === writerGroup.id)
+          check(index >= 0, "The writer's group is missing from the drive")
+          const removal = await owner('DELETE', `/sharings/${drive.id}/groups/${index}`)
+          check(removal.status === 204, `Removing the writer's group: HTTP ${removal.status}`)
+          // The roster can keep the writer for a while; its drive access must end.
+          await poll(settleMs, async () => denied((await writer('GET', rootPath)).status))
+          report.revocation = {
+            writer_read: (await writer('GET', rootPath)).status,
+            writer_write: (await upload(writer, 'writer')).status,
+            reader_read: (await reader('GET', rootPath)).status,
+          }
+        } catch (error) {
+          failure = error
+        }
+        report.cleanup = await removeFixtures()
+        if (access.reader_write !== undefined && access.reader_write < 300) {
+          throw new AccessFailure('The read-only member could write to the drive')
+        }
+        const revocation = report.revocation
+        if (revocation && (revocation.writer_read! < 300 || revocation.writer_write! < 300)) {
+          throw new AccessFailure('The writer kept drive access after its group was removed')
+        }
+        if (revocation && denied(revocation.reader_read!)) {
+          throw new AccessFailure('The reader lost drive access with the writer')
+        }
+        if (failure) throw failure
+        // Only explicit refusals prove the writer is out; a server error proves nothing.
+        check(denied(revocation!.writer_read!) && denied(revocation!.writer_write!),
+          `The writer's access was not shown to end: ${JSON.stringify(revocation)}`)
+        check(revocation!.reader_read === 200,
+          `The reader's access was not shown to stay: ${JSON.stringify(revocation)}`)
+        check(access.reader_write === 403, `Unexpected read-only write: HTTP ${access.reader_write}`)
+        const { retained } = report.cleanup
+        if (retained.length) throw new FixtureError(`Actor fixtures remain: ${retained.join(' ')}`)
+      },
+    }
+  } catch (error) {
+    const { retained } = await removeFixtures()
+    const fate = retained.length ? `fixtures remain: ${retained.join(' ')}` : 'its fixtures were removed'
+    throw new FixtureError(`${error instanceof Error ? error.message : String(error)}; ${fate}`)
   }
 }

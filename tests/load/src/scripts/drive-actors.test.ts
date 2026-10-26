@@ -4,12 +4,13 @@ import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 
 import { AccessFailure, prepareActors } from './drive-actors.ts'
+import { FixtureError } from './fixture-http.ts'
 import { fakeActors, org, reader, writer } from './upload/fake-actors.ts'
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, docker = '[ "$1" = compose ] && echo stack-1 || echo "172.18.0.5 "') {
   const f = await fakeActors(t)
   // Stands in for docker: the Stack container and its address.
-  writeFileSync(join(f.dir, 'docker'), '#!/bin/sh\n[ "$1" = compose ] && echo stack-1 || echo "172.18.0.5 "\n')
+  writeFileSync(join(f.dir, 'docker'), `#!/bin/sh\n${docker}\n`)
   chmodSync(join(f.dir, 'docker'), 0o700)
   const path = process.env.PATH
   process.env.PATH = `${f.dir}:${path}`
@@ -61,5 +62,40 @@ test('a read-only member that can write, or a writer that keeps access, is an ac
     match(failure.message, flaw === 'readOnlyWrites' ? /read-only member could write/ : /kept drive access/)
     // The fixtures go even so.
     deepEqual(actors.report.cleanup?.retained, [])
+  })
+})
+
+test('the writer is out only when it is explicitly refused both reading and writing', async t => {
+  for (const [flaw, expected] of [['flap', AccessFailure], ['error', FixtureError]] as const) await t.test(flaw, async t => {
+    const f = await fixture(t)
+    const actors = await prepareActors(f.env, 'run-1')
+    // A refusal that flips back, or a server error, never proves the writer is out.
+    if (flaw === 'flap') f.state.flapAfterRevoke = true
+    else f.state.revokedWriteStatus = 500
+    const failure = await actors.finish().then(() => null, (error: unknown) => error)
+    ok(failure instanceof expected, String(failure))
+    match(failure.message, flaw === 'flap' ? /kept drive access/ : /access was not shown to end/)
+    deepEqual(actors.report.cleanup?.retained, [])
+  })
+})
+
+test('a failed setup or group removal still removes every fixture', async t => {
+  await t.test('members never accept', async t => {
+    const f = await fixture(t)
+    f.state.neverReady = true
+    await rejects(prepareActors(f.env, 'run-1'), /did not accept the drive in time: pending, pending; its fixtures were removed/)
+    deepEqual([f.state.root, f.state.docs.size], ['gone', 0])
+  })
+  await t.test('group removal fails', async t => {
+    const f = await fixture(t)
+    const actors = await prepareActors(f.env, 'run-1')
+    f.state.removalStatus = 500
+    await rejects(actors.finish(), /Removing the writer's group: HTTP 500/)
+    deepEqual([f.state.root, f.state.docs.size, actors.report.cleanup?.retained], ['gone', 0, []])
+  })
+  await t.test('no Stack address', async t => {
+    const f = await fixture(t, 'exit 1')
+    await rejects(prepareActors(f.env, 'run-1'), /Cannot find the Stack container address/)
+    ok(!f.state.requests.some(r => r.includes('POST')), 'nothing is written before the address is known')
   })
 })
