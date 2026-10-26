@@ -98,6 +98,30 @@ func TestInstances(t *testing.T) {
 		})
 	})
 
+	t.Run("SwiftPrefixWithoutSwift", func(t *testing.T) {
+		domain := "swift-prefix.cozy.localhost"
+		t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
+
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		e.POST("/instances").
+			WithQuery("Domain", domain).
+			WithQuery("Locale", "en").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(201)
+
+		inst, err := lifecycle.GetInstance(domain)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		e.GET("/instances/"+domain+"/swift-prefix").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON().Object().
+			Value("container").String().IsEqual("cozy-v3-" + inst.DBPrefix())
+	})
+
 	t.Run("MigrateStorage", func(t *testing.T) {
 		domain := "migrate-storage.cozy.localhost"
 		t.Cleanup(func() { _ = lifecycle.Destroy(domain) })

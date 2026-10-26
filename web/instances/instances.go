@@ -694,6 +694,10 @@ func getSwiftBucketName(c echo.Context) error {
 	}
 	if obj, ok := instance.VFS().(swifter); ok {
 		containerNames = obj.ContainerNames()
+	} else {
+		// Not on Swift (e.g. S3): give the name it would have instead of null,
+		// which tools like Bender cannot handle.
+		containerNames = map[string]string{"container": "cozy-v3-" + instance.DBPrefix()}
 	}
 
 	return c.JSON(http.StatusOK, containerNames)
