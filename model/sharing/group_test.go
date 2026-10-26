@@ -983,3 +983,50 @@ func testAddGroupFromOrgInstance(t *testing.T, centralized, common bool) {
 		assert.True(t, couchdb.IsNotFoundError(err), "do not resurrect deleted groups through stale local copies: %v", err)
 	}
 }
+
+func TestOrgGroupIncludesEveryRecipient(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	orgID := fmt.Sprintf("large%d", time.Now().UnixNano())
+	create := func(domain, email string) *instance.Instance {
+		inst, err := lifecycle.Create(&lifecycle.Options{Domain: domain, OrgID: orgID, OrgDomain: orgID + ".example", Email: email})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
+		return inst
+	}
+	org := create(orgID+".local", "")
+	alice := create("alice-"+orgID+".local", "self@example.test")
+	group := contact.NewGroup()
+	group.SetID(orgdirectory.GroupDocID(orgID, "everyone"))
+	group.M["name"] = "Everyone"
+	group.M[orgdirectory.DirectoryMetadataKey] = map[string]interface{}{"managed": true, "organizationId": orgID}
+	require.NoError(t, couchdb.CreateNamedDocWithDB(org, group))
+	var docs []interface{}
+	for i := 0; i <= 1000; i++ {
+		c := contact.New()
+		c.SetID(fmt.Sprintf("member-%04d", i))
+		email := fmt.Sprintf("member%04d@example.test", i)
+		if i == 0 {
+			email = "self@example.test"
+		}
+		c.M["email"] = []interface{}{map[string]interface{}{"address": email, "primary": true}}
+		c.M["relationships"] = map[string]interface{}{"groups": map[string]interface{}{"data": []interface{}{map[string]interface{}{"_id": group.ID(), "_type": consts.Groups}}}}
+		docs = append(docs, c)
+	}
+	require.NoError(t, couchdb.BulkUpdateDocs(org, consts.Contacts, docs, make([]interface{}, len(docs))))
+	localGroup := contact.NewGroup()
+	localGroup.SetID(group.ID())
+	localGroup.M["name"] = "Everyone"
+	require.NoError(t, couchdb.CreateNamedDocWithDB(alice, localGroup))
+	localDocs := docs[1:]
+	for _, doc := range localDocs {
+		doc.(*contact.Contact).SetRev("")
+	}
+	require.NoError(t, couchdb.BulkUpdateDocs(alice, consts.Contacts, localDocs, make([]interface{}, len(localDocs))))
+	members, err := MembersFromContacts(alice, []string{group.ID()}, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 1000, len(members), "all 1,000 recipients besides the sharer must be included")
+}

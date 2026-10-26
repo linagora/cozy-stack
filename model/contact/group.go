@@ -64,9 +64,17 @@ func (g *Group) GetAllContacts(db prefixer.Prefixer) ([]*Contact, error) {
 		},
 		Limit: 1000,
 	}
-	err := couchdb.FindDocs(db, consts.Contacts, req, &docs)
-	if err != nil {
-		return nil, err
+	for {
+		var page []*Contact
+		res, err := couchdb.FindDocsRaw(db, consts.Contacts, req, &page)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, page...)
+		if len(page) < req.Limit || res.Bookmark == "" || res.Bookmark == req.Bookmark {
+			break
+		}
+		req.Bookmark = res.Bookmark
 	}
 
 	// XXX I didn't find a way to make a mango request with the correct sort
