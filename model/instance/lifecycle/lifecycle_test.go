@@ -231,6 +231,28 @@ func TestLifecycle(t *testing.T) {
 		assert.Len(t, results, 1)
 	})
 
+	t.Run("InstanceHasRecents", func(t *testing.T) {
+		prefix := getDB(t, "test.cozycloud.cc")
+		doctypes, err := couchdb.AllDoctypes(prefix)
+		assert.NoError(t, err)
+		assert.Contains(t, doctypes, consts.FilesRecents)
+
+		var results []couchdb.JSONDoc
+		req := &couchdb.FindRequest{
+			UseIndex: "by-last-activity-and-id",
+			Selector: mango.And(
+				mango.Gt("last_activity_at", nil),
+				mango.Gt("_id", nil),
+			),
+			Sort: mango.SortBy{
+				{Field: "last_activity_at", Direction: mango.Desc},
+				{Field: "_id", Direction: mango.Desc},
+			},
+		}
+		err = couchdb.FindDocs(prefix, consts.FilesRecents, req, &results)
+		assert.NoError(t, err)
+	})
+
 	t.Run("RegisterPassphrase", func(t *testing.T) {
 		i, err := lifecycle.GetInstance("test.cozycloud.cc")
 		if !assert.NoError(t, err, "cant fetch i") {

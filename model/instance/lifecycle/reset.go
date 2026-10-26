@@ -50,6 +50,7 @@ func Reset(inst *instance.Instance) error {
 	g.Go(func() error { return couchdb.CreateDB(inst, consts.BitwardenCiphers) })
 	g.Go(func() error { return couchdb.CreateDB(inst, consts.SessionsLogins) })
 	g.Go(func() error { return couchdb.CreateDB(inst, consts.Notifications) })
+	g.Go(func() error { return couchdb.CreateDB(inst, consts.FilesRecents) })
 	g.Go(func() error { return couchdb.CreateDB(inst, consts.Contacts) })
 	g.Go(func() error {
 		if err := couchdb.CreateDB(inst, consts.Settings); err != nil {

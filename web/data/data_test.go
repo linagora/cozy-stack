@@ -200,6 +200,25 @@ func TestData(t *testing.T) {
 			Value("error").String().Contains("reserved")
 	})
 
+	t.Run("RecentsDoctype", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		_, recentsToken := setup.GetTestClient(consts.FilesRecents)
+
+		e.GET("/data/"+consts.FilesRecents+"/some-id").
+			WithHeader("Authorization", "Bearer "+recentsToken).
+			Expect().Status(403).
+			JSON().Object().
+			Value("error").String().Contains("reserved")
+
+		e.POST("/data/"+consts.FilesRecents+"/").
+			WithHeader("Authorization", "Bearer "+recentsToken).
+			WithHeader("Content-Type", "application/json").
+			WithBytes([]byte(`{"resource_key": "some-id" }`)).
+			Expect().Status(403).
+			JSON().Object().
+			Value("error").String().Contains("reserved")
+	})
+
 	t.Run("WrongID", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

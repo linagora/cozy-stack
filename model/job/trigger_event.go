@@ -94,8 +94,10 @@ func (t *EventTrigger) CombineRequest() string {
 }
 
 func eventMatchRule(e *realtime.Event, rule *permission.Rule) bool {
-	// Previously saved triggers must not receive private events either.
-	if e.Doc.DocType() == consts.PublicLinkEvents {
+	// Previously saved triggers must not receive private events either, nor
+	// the events of io.cozy.files.recents, which is only served by its
+	// dedicated endpoint.
+	if e.Doc.DocType() == consts.PublicLinkEvents || e.Doc.DocType() == consts.FilesRecents {
 		return false
 	}
 	if e.Doc.DocType() != rule.Type {

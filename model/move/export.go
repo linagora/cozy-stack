@@ -425,6 +425,9 @@ func exportDocuments(in *instance.Instance, doc *ExportDoc, now time.Time, tw *t
 		case consts.Files, consts.FilesVersions:
 			// we have code specific to those doctypes
 			continue
+		case consts.FilesRecents:
+			// Recents are personal activity, not user data to export
+			continue
 		}
 		dir := url.PathEscape(doctype)
 		err := couchdb.ForeachDocs(in, doctype, func(id string, doc json.RawMessage) error {
