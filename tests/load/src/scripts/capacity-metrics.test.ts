@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { renderMetrics, type ReportFile } from './capacity-metrics.ts'
+import { getReportSamples, renderMetrics, type ReportFile } from './capacity-metrics.ts'
 import { uploadEnvelope } from './result-envelope.ts'
 
 const counts = { valid: 1, invalid: 0, unsupported: 0 }
@@ -415,8 +415,33 @@ test('planned and unmeasured levels never become the largest tested load', () =>
   ] })], counts)
   const loads = samples(output, 'point_value').filter(line => line.includes('metric="load"'))
   assert.equal(loads.length, 1)
+  assert.equal(samples(output, 'point_value').filter(line => line.includes('metric="point_index"')).length, 1)
   assert.match(loads[0]!, /load="1"/)
   assert.equal(samples(output, 'point_info').length, 4, 'planned points stay visible as evidence')
+})
+
+test('timeline bounds carry the actual execution identity and activity counts come from recorded uploads', () => {
+  const rows = getReportSamples([report('upload', { attempts: [{ vus: 2, result: 'passed',
+    execution_id: 'test-attempt', started_at: '2026-10-26T10:00:00Z', ended_at: '2026-10-26T10:00:10Z',
+  }] }), report('shared_drive', { levels: [
+    { level: 1, status: 'passed', uploads: 0 }, { level: 2, status: 'passed' },
+  ] })], counts)
+  const bounds = rows.filter(row => ['started_at_seconds', 'ended_at_seconds'].includes(row.labels.metric ?? '') && row.name.endsWith('point_value'))
+  assert.equal(bounds.length, 2)
+  assert.ok(bounds.every(row => row.labels.executionid === 'test-attempt'))
+  assert.equal(bounds[1]!.value - bounds[0]!.value, 10)
+  const uploads = rows.filter(row => row.labels.metric === 'completed_uploads')
+  assert.deepEqual(uploads.map(row => [row.labels.index, row.value]), [['1', 0]])
+})
+
+test('recipient revocation counts require recipient observations even when the owner reports success', () => {
+  const points = [
+    { n: 2, status: 'passed', owner: { remove: { revoked_recipients: 2 } } },
+    { n: 2, status: 'failed', recipients: [{ remove: { converged: true } }, { remove: { converged: false } }] },
+  ]
+  const rows = getReportSamples([report('fanout', { points })], counts)
+    .filter(row => row.labels.metric === 'recipient_revocation_proofs')
+  assert.deepEqual(rows.map(row => [row.labels.index, row.value]), [['2', 1]])
 })
 
 test('upload work summaries require actual success and complete readback coverage', () => {

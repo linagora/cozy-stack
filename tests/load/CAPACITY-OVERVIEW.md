@@ -13,8 +13,8 @@ make capacity-dashboard-url
 The top bar contains **Environment → Mode → Run**. File size, personal/shared
 upload target and campaign describe the selected report; they are not filters.
 The compact context and **Run time range** controls appear on every tab.
-**Run + context** and **All points** restore the recorded UTC window with a
-one-minute margin. **Run only** uses the recorded start/end without margins.
+**Run + context** clears the point selection and restores the recorded UTC
+window with a one-minute margin. **Run only** uses the recorded start/end without margins.
 Producer and campaign links already include the window.
 
 A dropdown changes the selected report, not Grafana's time picker. Click
@@ -34,9 +34,10 @@ windows overlap; an unrelated window is not labelled as unrecorded test data.
 | Infrastructure | Local Prometheus or optional DEV InfluxDB over the same window |
 
 Click **Inspect** in a tested-point table. Its run-unique point identity and
-recorded timestamps set the point and time range. **All points** clears the
-selection and restores the full recorded run. Point-window controls offer the
-point with context or without margins; older reports explicitly fall back to
+recorded timestamps set the point and time range. **Run + context** clears the
+selection and restores the full recorded run. On Workload and Infrastructure,
+expand **Point: … · change** to choose another point directly. The controls offer
+the point with context or without margins; older reports explicitly fall back to
 the run window when point time is unavailable.
 Concurrency, phase and execution ID follow the point; raw IDs and numeric
 report fields stay under **Advanced diagnostics**. Selected-point work summaries
@@ -87,7 +88,28 @@ without raw report errors, tokens or target URLs. Keep the original producer
 report separately. Advanced diagnostics include Stack/harness revisions,
 profile, topology, dataset and recorded budgets.
 
-Upload phase bands use actual k6 samples. A configured p95 criterion becomes a
+Upload phase bands and configured worker counts use the recorded attempt times.
+They include short attempts that finish between k6 samples. They describe the
+configured load, not measured busy workers. Reports without attempt times cannot
+provide these bands.
+
+Latency and request rates stop at each recorded attempt's end. The hidden
+`report_at` variable pins report metrics to their latest scrape, independently
+of chart time, so early-point links still work. Latency has three curves: p50,
+p95 and p99. A value is displayed only when exactly one attempt supplies it;
+simultaneous values remain a gap rather than being averaged. Fine query steps
+preserve short attempts, but do not increase the source's collection frequency.
+Legacy reports without attempt times use only k6 samples less than five seconds
+old. Their exact boundaries remain unknown.
+
+Activity summaries show completed uploads, peak activity level, delivery ratios
+for the last selected level and worst upload p95. Fan-out summaries show the
+largest batch, recipient-side access and revocation checks for the last selected
+batch, and the number of tested batches. Missing recipient observations remain
+unavailable even when the owner reports success. Overview covers the whole run;
+Workload follows the selected points.
+
+A configured p95 criterion becomes a
 native threshold line; no line is inferred for observational runs. Capacity
 curves distinguish cleanup-unverified/retained point evidence in amber and do
 not join it into a verified-looking line. Whole-attempt throughput and latency

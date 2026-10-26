@@ -367,6 +367,39 @@
             "value": "inside"
           }
         }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "report_at",
+          "label": "Report sample time",
+          "hide": "hideVariable",
+          "refresh": "onTimeRangeChanged",
+          "skipUrlSync": true,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "load-reports"
+            },
+            "spec": {
+              "query": "query_result(max(timestamp(cozy_load_run_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\"})))",
+              "refId": "report_at"
+            }
+          },
+          "regex": "/([0-9]+(?:\\.[0-9]+)?)$/",
+          "sort": "alphabeticalAsc",
+          "definition": "query_result(max(timestamp(cozy_load_run_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\"})))",
+          "options": [],
+          "multi": false,
+          "includeAll": false,
+          "allowCustomValue": false,
+          "current": {
+            "text": "0",
+            "value": "0"
+          }
+        }
       }
     ],
     "elements": {
@@ -2326,11 +2359,11 @@
                         "load": 1,
                         "phase": 2,
                         "access": 3,
-                        "revoked": 4,
                         "correctness": 5,
                         "status": 6,
                         "reason": 7,
-                        "index": 8
+                        "index": 8,
+                        "recipient_revoked": 4
                       },
                       "renameByName": {
                         "load": "Recipients",
@@ -2343,8 +2376,8 @@
                         "reason": "Reason",
                         "index": "Attempt",
                         "access": "Access verified",
-                        "revoked": "Revoked (owner)",
-                        "inspect": "Inspect"
+                        "inspect": "Inspect",
+                        "recipient_revoked": "Revocation verified"
                       }
                     }
                   }
@@ -4275,7 +4308,7 @@
         "spec": {
           "id": 120,
           "title": "Successful uploads per second",
-          "description": "Successful upload requests per second, averaged over the query interval. The moving average can extend beyond the last upload.",
+          "description": "Successful uploads per second, averaged over the query interval and limited to each recorded attempt. Older reports without attempt times show only fresh samples.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -4292,7 +4325,7 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "sum(rate(k6_http_reqs_total{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}[$__rate_interval]))",
+                        "expr": "sum((rate(k6_http_reqs_total{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}[$__rate_interval]) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or ((rate(k6_http_reqs_total{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}[$__rate_interval]) and (timestamp(k6_http_reqs_total{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at))",
                         "instant": false,
                         "range": true,
                         "format": "time_series",
@@ -4349,8 +4382,8 @@
         "kind": "Panel",
         "spec": {
           "id": 122,
-          "title": "Upload workers",
-          "description": "k6 virtual users assigned to uploads. Each worker runs one upload at a time. The current query can keep the last worker count visible after an attempt ends.",
+          "title": "Configured upload workers",
+          "description": "Worker count configured for each recorded attempt, including attempts too short for a k6 sample. This is the offered load, not a measurement of busy workers.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -4367,11 +4400,12 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "max(k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"})",
+                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time())))",
                         "instant": false,
                         "range": true,
                         "format": "time_series",
-                        "legendFormat": "Upload workers"
+                        "legendFormat": "Configured workers",
+                        "interval": "1s"
                       }
                     },
                     "refId": "A",
@@ -4380,7 +4414,9 @@
                 }
               ],
               "transformations": [],
-              "queryOptions": {}
+              "queryOptions": {
+                "maxDataPoints": 2000
+              }
             }
           },
           "vizConfig": {
@@ -4410,8 +4446,10 @@
                   "custom": {
                     "lineWidth": 2,
                     "fillOpacity": 5,
-                    "showPoints": "auto",
-                    "spanNulls": false
+                    "showPoints": "always",
+                    "spanNulls": false,
+                    "lineInterpolation": "stepAfter",
+                    "pointSize": 3
                   }
                 },
                 "overrides": []
@@ -4424,8 +4462,8 @@
         "kind": "Panel",
         "spec": {
           "id": 121,
-          "title": "Upload latency by attempt",
-          "description": "Running p50, p95 and p99 for successful uploads in each attempt: 50%, 95% and 99% took this long or less. Attempts stay separate. Final values can remain visible after an attempt ends. A red line marks the configured p95 limit, if any.",
+          "title": "Upload latency",
+          "description": "Blue: p50. Cyan: p95. Amber: p99. Each value comes from a single attempt; simultaneous values are left blank. Percentiles are never averaged. The red line is the configured p95 limit. Successful uploads only.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -4442,9 +4480,10 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}",
-                        "legendFormat": "p50 \u00b7 {{concurrency}} workers \u00b7 {{phase}}",
-                        "range": true
+                        "expr": "max(((k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) and on() (count(((k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) == 1)",
+                        "legendFormat": "p50",
+                        "range": true,
+                        "interval": "100ms"
                       }
                     },
                     "refId": "p50",
@@ -4462,9 +4501,10 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}",
-                        "legendFormat": "p95 \u00b7 {{concurrency}} workers \u00b7 {{phase}}",
-                        "range": true
+                        "expr": "max(((k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) and on() (count(((k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) == 1)",
+                        "legendFormat": "p95",
+                        "range": true,
+                        "interval": "100ms"
                       }
                     },
                     "refId": "p95",
@@ -4482,9 +4522,10 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}",
-                        "legendFormat": "p99 \u00b7 {{concurrency}} workers \u00b7 {{phase}}",
-                        "range": true
+                        "expr": "max(((k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) and on() (count(((k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) == 1)",
+                        "legendFormat": "p99",
+                        "range": true,
+                        "interval": "100ms"
                       }
                     },
                     "refId": "p99",
@@ -4534,7 +4575,9 @@
                   }
                 }
               ],
-              "queryOptions": {}
+              "queryOptions": {
+                "maxDataPoints": 4000
+              }
             }
           },
           "vizConfig": {
@@ -4546,7 +4589,8 @@
                 "legend": {
                   "showLegend": true,
                   "displayMode": "list",
-                  "placement": "bottom"
+                  "placement": "bottom",
+                  "calcs": []
                 },
                 "tooltip": {
                   "mode": "multi",
@@ -4563,11 +4607,12 @@
                   "custom": {
                     "lineWidth": 2,
                     "fillOpacity": 5,
-                    "showPoints": "auto",
+                    "showPoints": "always",
                     "spanNulls": false,
                     "thresholdsStyle": {
                       "mode": "line"
-                    }
+                    },
+                    "pointSize": 3
                   },
                   "thresholds": {
                     "mode": "absolute",
@@ -5320,7 +5365,7 @@
         "kind": "Panel",
         "spec": {
           "id": 673,
-          "title": "Recipient access evidence",
+          "title": "Access check details",
           "description": "Owner readiness and successful recipient access checks are separate. Pending recipients have not passed the access check.",
           "links": [],
           "data": {
@@ -5338,7 +5383,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\"}",
+                        "expr": "cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=~\"recipients|recipient_access_proofs|owner_ready|owner_pending|add_elapsed_ms\"}",
                         "format": "table",
                         "instant": true,
                         "range": false
@@ -5355,25 +5400,24 @@
                   "spec": {
                     "id": "organize",
                     "options": {
-                      "excludeByName": {
-                        "Time": true,
-                        "__name__": true,
-                        "job": true,
-                        "instance": true,
-                        "load_target": true,
-                        "mode": true
+                      "includeByName": {
+                        "index": true,
+                        "load": true,
+                        "metric": true,
+                        "Value": true
                       },
                       "indexByName": {
-                        "metric": 0,
-                        "Value": 1,
-                        "load": 2,
-                        "index": 3,
-                        "phase": 4,
-                        "campaign": 5,
-                        "run": 6,
-                        "kind": 7
+                        "index": 0,
+                        "load": 1,
+                        "metric": 2,
+                        "Value": 3
                       },
-                      "renameByName": {}
+                      "renameByName": {
+                        "index": "Batch",
+                        "load": "Recipients",
+                        "metric": "Check",
+                        "Value": "Result"
+                      }
                     }
                   }
                 }
@@ -5391,13 +5435,7 @@
                 "showHeader": true,
                 "footer": {
                   "show": false
-                },
-                "sortBy": [
-                  {
-                    "displayName": "run",
-                    "desc": false
-                  }
-                ]
+                }
               },
               "fieldConfig": {
                 "defaults": {
@@ -5412,7 +5450,41 @@
                   "noValue": "Not recorded",
                   "unit": "none"
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Check"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "recipients": {
+                                "text": "Recipients"
+                              },
+                              "recipient_access_proofs": {
+                                "text": "Recipient access verified"
+                              },
+                              "owner_ready": {
+                                "text": "Ready according to owner"
+                              },
+                              "owner_pending": {
+                                "text": "Pending according to owner"
+                              },
+                              "add_elapsed_ms": {
+                                "text": "Add and verify time (ms)"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -5422,7 +5494,7 @@
         "kind": "Panel",
         "spec": {
           "id": 674,
-          "title": "Revocation evidence",
+          "title": "Revocation check details",
           "description": "A removal that has not started is not a successful revocation. Missing removal checks remain unavailable.",
           "links": [],
           "data": {
@@ -5440,7 +5512,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=~\"remove_.*\"}",
+                        "expr": "cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=~\"recipient_revocation_proofs|owner_revoked|remove_started|remove_verified|remove_elapsed_ms\"}",
                         "format": "table",
                         "instant": true,
                         "range": false
@@ -5457,25 +5529,24 @@
                   "spec": {
                     "id": "organize",
                     "options": {
-                      "excludeByName": {
-                        "Time": true,
-                        "__name__": true,
-                        "job": true,
-                        "instance": true,
-                        "load_target": true,
-                        "mode": true
+                      "includeByName": {
+                        "index": true,
+                        "load": true,
+                        "metric": true,
+                        "Value": true
                       },
                       "indexByName": {
-                        "metric": 0,
-                        "Value": 1,
-                        "load": 2,
-                        "index": 3,
-                        "phase": 4,
-                        "campaign": 5,
-                        "run": 6,
-                        "kind": 7
+                        "index": 0,
+                        "load": 1,
+                        "metric": 2,
+                        "Value": 3
                       },
-                      "renameByName": {}
+                      "renameByName": {
+                        "index": "Batch",
+                        "load": "Recipients",
+                        "metric": "Check",
+                        "Value": "Result"
+                      }
                     }
                   }
                 }
@@ -5493,13 +5564,7 @@
                 "showHeader": true,
                 "footer": {
                   "show": false
-                },
-                "sortBy": [
-                  {
-                    "displayName": "run",
-                    "desc": false
-                  }
-                ]
+                }
               },
               "fieldConfig": {
                 "defaults": {
@@ -5514,7 +5579,41 @@
                   "noValue": "Not recorded",
                   "unit": "none"
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Check"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "recipient_revocation_proofs": {
+                                "text": "Recipient revocation verified"
+                              },
+                              "owner_revoked": {
+                                "text": "Revoked according to owner"
+                              },
+                              "remove_started": {
+                                "text": "Removal started (1 = yes)"
+                              },
+                              "remove_verified": {
+                                "text": "Removal passed (1 = yes)"
+                              },
+                              "remove_elapsed_ms": {
+                                "text": "Removal time (ms)"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -6894,7 +6993,7 @@
             "spec": {
               "options": {
                 "mode": "markdown",
-                "content": "**DEV InfluxDB \u00b7 every 60 s**\n\nIncludes activity from all organizations on the selected hosts. Short spikes may fall between samples. HTTP p99 is shown per host. S3 and RabbitMQ metrics are unavailable."
+                "content": "**DEV InfluxDB \u00b7 every 60 s**\n\nIncludes activity from all organizations on the selected hosts. Short spikes may fall between samples. HTTP p99 is shown per host. S3 and RabbitMQ metrics are unavailable. Heap, Redis blocked-client and HAProxy queue measurements are also unavailable from this datasource mapping."
               },
               "fieldConfig": {
                 "defaults": {},
@@ -8577,7 +8676,7 @@
         "spec": {
           "id": 1303,
           "title": "Successful uploads per second",
-          "description": "Successful upload requests per second, averaged over the query interval. The moving average can extend beyond the last upload.",
+          "description": "Successful uploads per second, averaged over the query interval and limited to each recorded attempt. Older reports without attempt times show only fresh samples.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -8594,7 +8693,7 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "sum(rate(k6_http_reqs_total{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}[$__rate_interval]))",
+                        "expr": "sum((rate(k6_http_reqs_total{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}[$__rate_interval]) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or ((rate(k6_http_reqs_total{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}[$__rate_interval]) and (timestamp(k6_http_reqs_total{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at))",
                         "instant": false,
                         "range": true,
                         "format": "time_series",
@@ -8651,8 +8750,8 @@
         "kind": "Panel",
         "spec": {
           "id": 1304,
-          "title": "Upload latency by attempt",
-          "description": "Running p50, p95 and p99 for successful uploads in each attempt: 50%, 95% and 99% took this long or less. Attempts stay separate. Final values can remain visible after an attempt ends. A red line marks the configured p95 limit, if any.",
+          "title": "Upload latency",
+          "description": "Blue: p50. Cyan: p95. Amber: p99. Each value comes from a single attempt; simultaneous values are left blank. Percentiles are never averaged. The red line is the configured p95 limit. Successful uploads only.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -8669,9 +8768,10 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}",
-                        "legendFormat": "p50 \u00b7 {{concurrency}} workers \u00b7 {{phase}}",
-                        "range": true
+                        "expr": "max(((k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) and on() (count(((k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p50{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) == 1)",
+                        "legendFormat": "p50",
+                        "range": true,
+                        "interval": "100ms"
                       }
                     },
                     "refId": "p50",
@@ -8689,9 +8789,10 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}",
-                        "legendFormat": "p95 \u00b7 {{concurrency}} workers \u00b7 {{phase}}",
-                        "range": true
+                        "expr": "max(((k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) and on() (count(((k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) == 1)",
+                        "legendFormat": "p95",
+                        "range": true,
+                        "interval": "100ms"
                       }
                     },
                     "refId": "p95",
@@ -8709,9 +8810,10 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}",
-                        "legendFormat": "p99 \u00b7 {{concurrency}} workers \u00b7 {{phase}}",
-                        "range": true
+                        "expr": "max(((k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) and on() (count(((k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and on(executionid) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) or (((k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) and (timestamp(k6_http_req_duration_p99{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=\"file-upload\",status=\"201\"}) > time() - 5)) unless on(executionid) cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at)) == 1)",
+                        "legendFormat": "p99",
+                        "range": true,
+                        "interval": "100ms"
                       }
                     },
                     "refId": "p99",
@@ -8761,7 +8863,9 @@
                   }
                 }
               ],
-              "queryOptions": {}
+              "queryOptions": {
+                "maxDataPoints": 4000
+              }
             }
           },
           "vizConfig": {
@@ -8773,7 +8877,8 @@
                 "legend": {
                   "showLegend": true,
                   "displayMode": "list",
-                  "placement": "bottom"
+                  "placement": "bottom",
+                  "calcs": []
                 },
                 "tooltip": {
                   "mode": "multi",
@@ -8790,11 +8895,12 @@
                   "custom": {
                     "lineWidth": 2,
                     "fillOpacity": 5,
-                    "showPoints": "auto",
+                    "showPoints": "always",
                     "spanNulls": false,
                     "thresholdsStyle": {
                       "mode": "line"
-                    }
+                    },
+                    "pointSize": 3
                   },
                   "thresholds": {
                     "mode": "absolute",
@@ -9700,11 +9806,11 @@
                         "load": 1,
                         "phase": 2,
                         "access": 3,
-                        "revoked": 4,
                         "correctness": 5,
                         "status": 6,
                         "reason": 7,
-                        "index": 8
+                        "index": 8,
+                        "recipient_revoked": 4
                       },
                       "renameByName": {
                         "load": "Recipients",
@@ -9717,8 +9823,8 @@
                         "reason": "Reason",
                         "index": "Attempt",
                         "access": "Access verified",
-                        "revoked": "Revoked (owner)",
-                        "inspect": "Inspect"
+                        "inspect": "Inspect",
+                        "recipient_revoked": "Revocation verified"
                       }
                     }
                   }
@@ -10020,8 +10126,8 @@
         "kind": "Panel",
         "spec": {
           "id": 1310,
-          "title": "Upload workers",
-          "description": "k6 virtual users assigned to uploads. Each worker runs one upload at a time. The current query can keep the last worker count visible after an attempt ends.",
+          "title": "Configured upload workers",
+          "description": "Worker count configured for each recorded attempt, including attempts too short for a k6 sample. This is the offered load, not a measurement of busy workers.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -10038,11 +10144,12 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "max(k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"})",
+                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time())))",
                         "instant": false,
                         "range": true,
                         "format": "time_series",
-                        "legendFormat": "Upload workers"
+                        "legendFormat": "Configured workers",
+                        "interval": "1s"
                       }
                     },
                     "refId": "A",
@@ -10051,7 +10158,9 @@
                 }
               ],
               "transformations": [],
-              "queryOptions": {}
+              "queryOptions": {
+                "maxDataPoints": 2000
+              }
             }
           },
           "vizConfig": {
@@ -10081,8 +10190,10 @@
                   "custom": {
                     "lineWidth": 2,
                     "fillOpacity": 5,
-                    "showPoints": "auto",
-                    "spanNulls": false
+                    "showPoints": "always",
+                    "spanNulls": false,
+                    "lineInterpolation": "stepAfter",
+                    "pointSize": 3
                   }
                 },
                 "overrides": []
@@ -10293,8 +10404,8 @@
         "kind": "Panel",
         "spec": {
           "id": 1314,
-          "title": "Upload workers",
-          "description": "k6 virtual users assigned to uploads. Each worker runs one upload at a time. The current query can keep the last worker count visible after an attempt ends.",
+          "title": "Configured upload workers",
+          "description": "Worker count configured for each recorded attempt, including attempts too short for a k6 sample. This is the offered load, not a measurement of busy workers.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -10311,11 +10422,12 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "max(k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"})",
+                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time())))",
                         "instant": false,
                         "range": true,
                         "format": "time_series",
-                        "legendFormat": "Upload workers"
+                        "legendFormat": "Configured workers",
+                        "interval": "1s"
                       }
                     },
                     "refId": "A",
@@ -10324,7 +10436,9 @@
                 }
               ],
               "transformations": [],
-              "queryOptions": {}
+              "queryOptions": {
+                "maxDataPoints": 2000
+              }
             }
           },
           "vizConfig": {
@@ -10354,8 +10468,10 @@
                   "custom": {
                     "lineWidth": 2,
                     "fillOpacity": 5,
-                    "showPoints": "auto",
-                    "spanNulls": false
+                    "showPoints": "always",
+                    "spanNulls": false,
+                    "lineInterpolation": "stepAfter",
+                    "pointSize": 3
                   }
                 },
                 "overrides": []
@@ -10649,7 +10765,7 @@
                   "fields": "/.*/"
                 },
                 "text": {
-                  "valueSize": 30,
+                  "valueSize": 23,
                   "titleSize": 12
                 },
                 "wideLayout": false
@@ -10760,7 +10876,7 @@
         "spec": {
           "id": 2002,
           "title": "Run time range",
-          "description": "Run + context shows the run with 1 minute before and after. Run only removes that margin. All points clears the point selection and restores the full run with context.",
+          "description": "Run + context clears the point selection and shows the full run with 1 minute before and after. Run only removes that margin. Use one after changing runs; the dropdown does not reset time.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -10798,7 +10914,6 @@
                         "window": true,
                         "open_run": true,
                         "run_only": true,
-                        "all_points": true,
                         "evidence": true,
                         "focus_from_ms": true,
                         "focus_to_ms": true,
@@ -10809,7 +10924,6 @@
                         "window": 0,
                         "open_run": 1,
                         "run_only": 2,
-                        "all_points": 3,
                         "evidence": 4,
                         "focus_from_ms": 5,
                         "focus_to_ms": 6,
@@ -10820,7 +10934,6 @@
                         "window": "Recorded UTC window",
                         "open_run": "Run + context",
                         "run_only": "Run only",
-                        "all_points": "All points",
                         "evidence": "Evidence"
                       }
                     }
@@ -10881,30 +10994,6 @@
                           {
                             "title": "Recorded run without margins",
                             "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=$__all&dtab=overview&from=${__data.fields.start_ms}&to=${__data.fields.end_ms}",
-                            "targetBlank": false
-                          }
-                        ]
-                      },
-                      {
-                        "id": "custom.cellOptions",
-                        "value": {
-                          "type": "color-text"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "All points"
-                    },
-                    "properties": [
-                      {
-                        "id": "links",
-                        "value": [
-                          {
-                            "title": "All points and the full run window",
-                            "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=$__all&dtab=overview&from=${__data.fields.focus_from_ms}&to=${__data.fields.focus_to_ms}",
                             "targetBlank": false
                           }
                         ]
@@ -10995,47 +11084,12 @@
           }
         }
       },
-      "panel-2003": {
-        "kind": "Panel",
-        "spec": {
-          "id": 2003,
-          "title": "Selected point",
-          "description": "",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "text",
-            "version": "13.2.0",
-            "spec": {
-              "options": {
-                "mode": "markdown",
-                "content": "**${point:text}**\n\nUse **Inspect** to open one test attempt. **All points** shows the full run. Switching tabs keeps the selected point and time range."
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "noValue": "Not recorded",
-                  "unit": "none"
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
       "panel-2004": {
         "kind": "Panel",
         "spec": {
           "id": 2004,
           "title": "Choose a point",
-          "description": "Each point is one test attempt at a configured load. Inspect opens it in Workload. Point + context includes 30 seconds before and 1 minute after; Point only uses its exact time range. Older reports without point times use the full run.",
+          "description": "Choose an attempt and its time range. Point + context adds 30 seconds before and 1 minute after. Point only shows the exact attempt. Use Run + context above to return to all points.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11054,7 +11108,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\"}",
+                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\"}",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -11073,7 +11127,6 @@
                         "point_title": true,
                         "point_window": true,
                         "point_only": true,
-                        "inspect": true,
                         "point_id": true,
                         "start_ms": true,
                         "end_ms": true,
@@ -11084,7 +11137,6 @@
                         "point_title": 0,
                         "point_window": 1,
                         "point_only": 2,
-                        "inspect": 3,
                         "point_id": 4,
                         "start_ms": 5,
                         "end_ms": 6,
@@ -11094,8 +11146,7 @@
                       "renameByName": {
                         "point_title": "Tested point",
                         "point_window": "Point + context",
-                        "point_only": "Point only",
-                        "inspect": "Inspect"
+                        "point_only": "Point only"
                       }
                     }
                   }
@@ -11155,30 +11206,6 @@
                           {
                             "title": "Inspect recorded point window",
                             "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=${__data.fields.point_id}&dtab=workload&from=${__data.fields.raw_start_ms}&to=${__data.fields.raw_end_ms}",
-                            "targetBlank": false
-                          }
-                        ]
-                      },
-                      {
-                        "id": "custom.cellOptions",
-                        "value": {
-                          "type": "color-text"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "Inspect"
-                    },
-                    "properties": [
-                      {
-                        "id": "links",
-                        "value": [
-                          {
-                            "title": "Inspect point",
-                            "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=${__data.fields.point_id}&dtab=workload&from=${__data.fields.start_ms}&to=${__data.fields.end_ms}",
                             "targetBlank": false
                           }
                         ]
@@ -11262,7 +11289,7 @@
         "spec": {
           "id": 2005,
           "title": "Upload phases",
-          "description": "k6 samples grouped by test phase. The current query can keep a phase visible after its attempt ends.",
+          "description": "Recorded attempt phases. Phase bands stop at the attempt end. Older reports without attempt times have no phase band.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11281,18 +11308,21 @@
                         "name": "prometheus"
                       },
                       "spec": {
-                        "expr": "max by (phase) (k6_vus{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\"}) > bool 0",
+                        "expr": "max by (phase) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"} @ $report_at and on(run,index) ((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"started_at_seconds\"} @ $report_at <= time()) and on(run,index) (cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ended_at_seconds\"} @ $report_at >= time()))) > bool 0)",
                         "instant": false,
                         "range": true,
                         "format": "time_series",
-                        "legendFormat": "{{phase}}"
+                        "legendFormat": "{{phase}}",
+                        "interval": "1s"
                       }
                     }
                   }
                 }
               ],
               "transformations": [],
-              "queryOptions": {}
+              "queryOptions": {
+                "maxDataPoints": 2000
+              }
             }
           },
           "vizConfig": {
@@ -11660,8 +11690,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2010,
-          "title": "Peak writers",
-          "description": "",
+          "title": "Uploads completed",
+          "description": "Completed uploads across the selected activity levels. Missing counts remain unavailable.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11680,7 +11710,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"writers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"writers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "sum(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"completed_uploads\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"completed_uploads\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}))",
                         "instant": true,
                         "range": false,
                         "format": "time_series"
@@ -11732,8 +11762,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2011,
-          "title": "Peak WebSocket readers",
-          "description": "",
+          "title": "Peak activity level",
+          "description": "Each activity level scales writer, WebSocket and changes-feed roles using one identity.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11752,7 +11782,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"ws_readers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"ws_readers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"load\"})",
                         "instant": true,
                         "range": false,
                         "format": "time_series"
@@ -11804,8 +11834,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2012,
-          "title": "Peak changes-feed readers",
-          "description": "",
+          "title": "Delivery \u00b7 last selected level",
+          "description": "Observed notifications per expected notification at the last selected level. Delivery is separate from file-content verification.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11824,10 +11854,33 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"changes_readers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"changes_readers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"ws_delivery_ratio\"} and on(run,index) topk(1, cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"point_index\"})",
                         "instant": true,
                         "range": false,
-                        "format": "time_series"
+                        "format": "time_series",
+                        "legendFormat": "WebSocket"
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"changes_delivery_ratio\"} and on(run,index) topk(1, cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"point_index\"})",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series",
+                        "legendFormat": "Changes feed"
                       }
                     }
                   }
@@ -11845,7 +11898,7 @@
               "options": {
                 "colorMode": "value",
                 "graphMode": "none",
-                "textMode": "value",
+                "textMode": "value_and_name",
                 "reduceOptions": {
                   "values": false,
                   "calcs": [
@@ -11860,7 +11913,7 @@
               "fieldConfig": {
                 "defaults": {
                   "noValue": "Not recorded",
-                  "unit": "short",
+                  "unit": "percentunit",
                   "color": {
                     "mode": "fixed",
                     "fixedColor": "text"
@@ -11948,8 +12001,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2014,
-          "title": "Successful recipient access checks",
-          "description": "Sum of successful access checks across the selected batches. A recipient checked in several batches is counted each time.",
+          "title": "Largest selected batch",
+          "description": "Largest recipient count among the selected batches.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -11968,7 +12021,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "sum(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"recipient_access_proofs\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"recipient_access_proofs\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"load\"})",
                         "instant": true,
                         "range": false,
                         "format": "time_series"
@@ -12020,8 +12073,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2015,
-          "title": "Revocations seen by the owner",
-          "description": "Revocations reported on the owner side, summed across selected batches. This alone does not prove that recipient access was denied.",
+          "title": "Access verified \u00b7 last batch",
+          "description": "Recipient-side checks for the last selected batch. Owner-side status alone does not verify access or revocation.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -12040,7 +12093,189 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "sum(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"owner_revoked\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"owner_revoked\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\"} and on(run,index) topk(1, cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"point_index\"})",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "rowsToFields",
+                  "spec": {
+                    "id": "rowsToFields",
+                    "options": {
+                      "mappings": [
+                        {
+                          "fieldName": "index",
+                          "handlerKey": "field.name"
+                        },
+                        {
+                          "fieldName": "access",
+                          "handlerKey": "field.value"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "value",
+                "reduceOptions": {
+                  "values": true,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "/.*/"
+                },
+                "text": {
+                  "valueSize": 28
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "noValue": "Not recorded",
+                  "unit": "none",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-2016": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2016,
+          "title": "Revocation verified \u00b7 last batch",
+          "description": "Recipient-side checks for the last selected batch. Owner-side status alone does not verify access or revocation.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\"} and on(run,index) topk(1, cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"point_index\"})",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "rowsToFields",
+                  "spec": {
+                    "id": "rowsToFields",
+                    "options": {
+                      "mappings": [
+                        {
+                          "fieldName": "index",
+                          "handlerKey": "field.name"
+                        },
+                        {
+                          "fieldName": "recipient_revoked",
+                          "handlerKey": "field.value"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "value",
+                "reduceOptions": {
+                  "values": true,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "/.*/"
+                },
+                "text": {
+                  "valueSize": 28
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "noValue": "Not recorded",
+                  "unit": "none",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-2017": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2017,
+          "title": "Tested batches",
+          "description": "Number of recorded batches among the selected points.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"point_index\"})",
                         "instant": true,
                         "range": false,
                         "format": "time_series"
@@ -12077,150 +12312,6 @@
                 "defaults": {
                   "noValue": "Not recorded",
                   "unit": "short",
-                  "color": {
-                    "mode": "fixed",
-                    "fixedColor": "text"
-                  }
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
-      "panel-2016": {
-        "kind": "Panel",
-        "spec": {
-          "id": 2016,
-          "title": "Longest time to add and verify",
-          "description": "",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "refId": "A",
-                    "hidden": false,
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "load-reports"
-                      },
-                      "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"add_elapsed_ms\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"add_elapsed_ms\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}))",
-                        "instant": true,
-                        "range": false,
-                        "format": "time_series"
-                      }
-                    }
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "stat",
-            "version": "13.2.0",
-            "spec": {
-              "options": {
-                "colorMode": "value",
-                "graphMode": "none",
-                "textMode": "value",
-                "reduceOptions": {
-                  "values": false,
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": ""
-                },
-                "text": {
-                  "valueSize": 28
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "noValue": "Not recorded",
-                  "unit": "ms",
-                  "color": {
-                    "mode": "fixed",
-                    "fixedColor": "text"
-                  }
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
-      "panel-2017": {
-        "kind": "Panel",
-        "spec": {
-          "id": 2017,
-          "title": "Longest time to revoke access",
-          "description": "",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "refId": "A",
-                    "hidden": false,
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "load-reports"
-                      },
-                      "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"remove_elapsed_ms\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"remove_elapsed_ms\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}))",
-                        "instant": true,
-                        "range": false,
-                        "format": "time_series"
-                      }
-                    }
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "stat",
-            "version": "13.2.0",
-            "spec": {
-              "options": {
-                "colorMode": "value",
-                "graphMode": "none",
-                "textMode": "value",
-                "reduceOptions": {
-                  "values": false,
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": ""
-                },
-                "text": {
-                  "valueSize": 28
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "noValue": "Not recorded",
-                  "unit": "ms",
                   "color": {
                     "mode": "fixed",
                     "fixedColor": "text"
@@ -12702,7 +12793,7 @@
                   "fields": "/.*/"
                 },
                 "text": {
-                  "valueSize": 30,
+                  "valueSize": 23,
                   "titleSize": 12
                 },
                 "wideLayout": false
@@ -12813,7 +12904,7 @@
         "spec": {
           "id": 2023,
           "title": "Run time range",
-          "description": "Run + context shows the run with 1 minute before and after. Run only removes that margin. All points clears the point selection and restores the full run with context.",
+          "description": "Run + context clears the point selection and shows the full run with 1 minute before and after. Run only removes that margin. Use one after changing runs; the dropdown does not reset time.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -12851,7 +12942,6 @@
                         "window": true,
                         "open_run": true,
                         "run_only": true,
-                        "all_points": true,
                         "evidence": true,
                         "focus_from_ms": true,
                         "focus_to_ms": true,
@@ -12862,7 +12952,6 @@
                         "window": 0,
                         "open_run": 1,
                         "run_only": 2,
-                        "all_points": 3,
                         "evidence": 4,
                         "focus_from_ms": 5,
                         "focus_to_ms": 6,
@@ -12873,7 +12962,6 @@
                         "window": "Recorded UTC window",
                         "open_run": "Run + context",
                         "run_only": "Run only",
-                        "all_points": "All points",
                         "evidence": "Evidence"
                       }
                     }
@@ -12934,30 +13022,6 @@
                           {
                             "title": "Recorded run without margins",
                             "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=$__all&dtab=workload&from=${__data.fields.start_ms}&to=${__data.fields.end_ms}",
-                            "targetBlank": false
-                          }
-                        ]
-                      },
-                      {
-                        "id": "custom.cellOptions",
-                        "value": {
-                          "type": "color-text"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "All points"
-                    },
-                    "properties": [
-                      {
-                        "id": "links",
-                        "value": [
-                          {
-                            "title": "All points and the full run window",
-                            "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=$__all&dtab=workload&from=${__data.fields.focus_from_ms}&to=${__data.fields.focus_to_ms}",
                             "targetBlank": false
                           }
                         ]
@@ -13052,8 +13116,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2024,
-          "title": "Peak writers",
-          "description": "",
+          "title": "Uploads completed",
+          "description": "Completed uploads across the selected activity levels. Missing counts remain unavailable.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -13072,7 +13136,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"writers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"writers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "sum(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"completed_uploads\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"completed_uploads\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}))",
                         "instant": true,
                         "range": false,
                         "format": "time_series"
@@ -13124,8 +13188,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2025,
-          "title": "Peak WebSocket readers",
-          "description": "",
+          "title": "Peak activity level",
+          "description": "Each activity level scales writer, WebSocket and changes-feed roles using one identity.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -13144,7 +13208,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"ws_readers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"ws_readers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"})",
                         "instant": true,
                         "range": false,
                         "format": "time_series"
@@ -13196,8 +13260,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2026,
-          "title": "Peak changes-feed readers",
-          "description": "",
+          "title": "Delivery \u00b7 last selected level",
+          "description": "Observed notifications per expected notification at the last selected level. Delivery is separate from file-content verification.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -13216,10 +13280,33 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"changes_readers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"shared_drive\",metric=\"changes_readers\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"shared_drive\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"ws_delivery_ratio\"} and on(run,index) topk(1, cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"point_index\"})",
                         "instant": true,
                         "range": false,
-                        "format": "time_series"
+                        "format": "time_series",
+                        "legendFormat": "WebSocket"
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"changes_delivery_ratio\"} and on(run,index) topk(1, cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"point_index\"})",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series",
+                        "legendFormat": "Changes feed"
                       }
                     }
                   }
@@ -13237,7 +13324,7 @@
               "options": {
                 "colorMode": "value",
                 "graphMode": "none",
-                "textMode": "value",
+                "textMode": "value_and_name",
                 "reduceOptions": {
                   "values": false,
                   "calcs": [
@@ -13252,7 +13339,7 @@
               "fieldConfig": {
                 "defaults": {
                   "noValue": "Not recorded",
-                  "unit": "short",
+                  "unit": "percentunit",
                   "color": {
                     "mode": "fixed",
                     "fixedColor": "text"
@@ -13340,8 +13427,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2028,
-          "title": "Successful recipient access checks",
-          "description": "Sum of successful access checks across the selected batches. A recipient checked in several batches is counted each time.",
+          "title": "Largest selected batch",
+          "description": "Largest recipient count among the selected batches.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -13360,7 +13447,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "sum(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"recipient_access_proofs\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"recipient_access_proofs\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"load\"})",
                         "instant": true,
                         "range": false,
                         "format": "time_series"
@@ -13412,8 +13499,8 @@
         "kind": "Panel",
         "spec": {
           "id": 2029,
-          "title": "Revocations seen by the owner",
-          "description": "Revocations reported on the owner side, summed across selected batches. This alone does not prove that recipient access was denied.",
+          "title": "Access verified \u00b7 last batch",
+          "description": "Recipient-side checks for the last selected batch. Owner-side status alone does not verify access or revocation.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -13432,7 +13519,189 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "sum(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"owner_revoked\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"owner_revoked\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}))",
+                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\"} and on(run,index) topk(1, cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"point_index\"})",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "rowsToFields",
+                  "spec": {
+                    "id": "rowsToFields",
+                    "options": {
+                      "mappings": [
+                        {
+                          "fieldName": "index",
+                          "handlerKey": "field.name"
+                        },
+                        {
+                          "fieldName": "access",
+                          "handlerKey": "field.value"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "value",
+                "reduceOptions": {
+                  "values": true,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "/.*/"
+                },
+                "text": {
+                  "valueSize": 28
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "noValue": "Not recorded",
+                  "unit": "none",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-2030": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2030,
+          "title": "Revocation verified \u00b7 last batch",
+          "description": "Recipient-side checks for the last selected batch. Owner-side status alone does not verify access or revocation.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\"} and on(run,index) topk(1, cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"point_index\"})",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "rowsToFields",
+                  "spec": {
+                    "id": "rowsToFields",
+                    "options": {
+                      "mappings": [
+                        {
+                          "fieldName": "index",
+                          "handlerKey": "field.name"
+                        },
+                        {
+                          "fieldName": "recipient_revoked",
+                          "handlerKey": "field.value"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "value",
+                "reduceOptions": {
+                  "values": true,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "/.*/"
+                },
+                "text": {
+                  "valueSize": 28
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "noValue": "Not recorded",
+                  "unit": "none",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-2031": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2031,
+          "title": "Tested batches",
+          "description": "Number of recorded batches among the selected points.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",metric=\"point_index\"})",
                         "instant": true,
                         "range": false,
                         "format": "time_series"
@@ -13469,150 +13738,6 @@
                 "defaults": {
                   "noValue": "Not recorded",
                   "unit": "short",
-                  "color": {
-                    "mode": "fixed",
-                    "fixedColor": "text"
-                  }
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
-      "panel-2030": {
-        "kind": "Panel",
-        "spec": {
-          "id": 2030,
-          "title": "Longest time to add and verify",
-          "description": "",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "refId": "A",
-                    "hidden": false,
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "load-reports"
-                      },
-                      "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"add_elapsed_ms\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"add_elapsed_ms\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}))",
-                        "instant": true,
-                        "range": false,
-                        "format": "time_series"
-                      }
-                    }
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "stat",
-            "version": "13.2.0",
-            "spec": {
-              "options": {
-                "colorMode": "value",
-                "graphMode": "none",
-                "textMode": "value",
-                "reduceOptions": {
-                  "values": false,
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": ""
-                },
-                "text": {
-                  "valueSize": 28
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "noValue": "Not recorded",
-                  "unit": "ms",
-                  "color": {
-                    "mode": "fixed",
-                    "fixedColor": "text"
-                  }
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
-      "panel-2031": {
-        "kind": "Panel",
-        "spec": {
-          "id": 2031,
-          "title": "Longest time to revoke access",
-          "description": "",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "refId": "A",
-                    "hidden": false,
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "load-reports"
-                      },
-                      "spec": {
-                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"remove_elapsed_ms\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"fanout\",metric=\"remove_elapsed_ms\"} and on(run,index) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"fanout\",status!~\"not_run|not_measured|missing_result\"}))",
-                        "instant": true,
-                        "range": false,
-                        "format": "time_series"
-                      }
-                    }
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "stat",
-            "version": "13.2.0",
-            "spec": {
-              "options": {
-                "colorMode": "value",
-                "graphMode": "none",
-                "textMode": "value",
-                "reduceOptions": {
-                  "values": false,
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": ""
-                },
-                "text": {
-                  "valueSize": 28
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "noValue": "Not recorded",
-                  "unit": "ms",
                   "color": {
                     "mode": "fixed",
                     "fixedColor": "text"
@@ -13697,7 +13822,7 @@
                   "fields": "/.*/"
                 },
                 "text": {
-                  "valueSize": 30,
+                  "valueSize": 23,
                   "titleSize": 12
                 },
                 "wideLayout": false
@@ -13808,7 +13933,7 @@
         "spec": {
           "id": 2033,
           "title": "Run time range",
-          "description": "Run + context shows the run with 1 minute before and after. Run only removes that margin. All points clears the point selection and restores the full run with context.",
+          "description": "Run + context clears the point selection and shows the full run with 1 minute before and after. Run only removes that margin. Use one after changing runs; the dropdown does not reset time.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -13846,7 +13971,6 @@
                         "window": true,
                         "open_run": true,
                         "run_only": true,
-                        "all_points": true,
                         "evidence": true,
                         "focus_from_ms": true,
                         "focus_to_ms": true,
@@ -13857,7 +13981,6 @@
                         "window": 0,
                         "open_run": 1,
                         "run_only": 2,
-                        "all_points": 3,
                         "evidence": 4,
                         "focus_from_ms": 5,
                         "focus_to_ms": 6,
@@ -13868,7 +13991,6 @@
                         "window": "Recorded UTC window",
                         "open_run": "Run + context",
                         "run_only": "Run only",
-                        "all_points": "All points",
                         "evidence": "Evidence"
                       }
                     }
@@ -13929,30 +14051,6 @@
                           {
                             "title": "Recorded run without margins",
                             "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=$__all&dtab=infrastructure&from=${__data.fields.start_ms}&to=${__data.fields.end_ms}",
-                            "targetBlank": false
-                          }
-                        ]
-                      },
-                      {
-                        "id": "custom.cellOptions",
-                        "value": {
-                          "type": "color-text"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "All points"
-                    },
-                    "properties": [
-                      {
-                        "id": "links",
-                        "value": [
-                          {
-                            "title": "All points and the full run window",
-                            "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=$__all&dtab=infrastructure&from=${__data.fields.focus_from_ms}&to=${__data.fields.focus_to_ms}",
                             "targetBlank": false
                           }
                         ]
@@ -14043,47 +14141,12 @@
           }
         }
       },
-      "panel-2034": {
-        "kind": "Panel",
-        "spec": {
-          "id": 2034,
-          "title": "Selected point",
-          "description": "",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "text",
-            "version": "13.2.0",
-            "spec": {
-              "options": {
-                "mode": "markdown",
-                "content": "**${point:text}**\n\nUse **Inspect** to open one test attempt. **All points** shows the full run. Switching tabs keeps the selected point and time range."
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "noValue": "Not recorded",
-                  "unit": "none"
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
       "panel-2035": {
         "kind": "Panel",
         "spec": {
           "id": 2035,
           "title": "Choose a point",
-          "description": "Each point is one test attempt at a configured load. Inspect opens it in Workload. Point + context includes 30 seconds before and 1 minute after; Point only uses its exact time range. Older reports without point times use the full run.",
+          "description": "Choose an attempt and its time range. Point + context adds 30 seconds before and 1 minute after. Point only shows the exact attempt. Use Run + context above to return to all points.",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -14102,7 +14165,7 @@
                         "name": "load-reports"
                       },
                       "spec": {
-                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\"}",
+                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\"}",
                         "instant": true,
                         "range": false,
                         "format": "table"
@@ -14121,7 +14184,6 @@
                         "point_title": true,
                         "point_window": true,
                         "point_only": true,
-                        "inspect": true,
                         "point_id": true,
                         "start_ms": true,
                         "end_ms": true,
@@ -14132,7 +14194,6 @@
                         "point_title": 0,
                         "point_window": 1,
                         "point_only": 2,
-                        "inspect": 3,
                         "point_id": 4,
                         "start_ms": 5,
                         "end_ms": 6,
@@ -14142,8 +14203,7 @@
                       "renameByName": {
                         "point_title": "Tested point",
                         "point_window": "Point + context",
-                        "point_only": "Point only",
-                        "inspect": "Inspect"
+                        "point_only": "Point only"
                       }
                     }
                   }
@@ -14203,30 +14263,6 @@
                           {
                             "title": "Inspect recorded point window",
                             "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=${__data.fields.point_id}&dtab=infrastructure&from=${__data.fields.raw_start_ms}&to=${__data.fields.raw_end_ms}",
-                            "targetBlank": false
-                          }
-                        ]
-                      },
-                      {
-                        "id": "custom.cellOptions",
-                        "value": {
-                          "type": "color-text"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byName",
-                      "options": "Inspect"
-                    },
-                    "properties": [
-                      {
-                        "id": "links",
-                        "value": [
-                          {
-                            "title": "Inspect point",
-                            "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=${__data.fields.point_id}&dtab=workload&from=${__data.fields.start_ms}&to=${__data.fields.end_ms}",
                             "targetBlank": false
                           }
                         ]
@@ -14610,6 +14646,45 @@
             }
           }
         }
+      },
+      "panel-2039": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2039,
+          "title": "Sharing progress over time",
+          "description": "",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "text",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "mode": "markdown",
+                "content": "**Not recorded in these reports.**\n\nThe tables show the final access and revocation checks for each batch. They do not record how the recipient counts changed over time."
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
       }
     },
     "layout": {
@@ -14684,7 +14759,7 @@
                                 "spec": {
                                   "x": 0,
                                   "y": 0,
-                                  "width": 12,
+                                  "width": 8,
                                   "height": 3,
                                   "element": {
                                     "kind": "ElementReference",
@@ -14695,9 +14770,9 @@
                               {
                                 "kind": "GridLayoutItem",
                                 "spec": {
-                                  "x": 12,
+                                  "x": 8,
                                   "y": 0,
-                                  "width": 12,
+                                  "width": 16,
                                   "height": 3,
                                   "element": {
                                     "kind": "ElementReference",
@@ -15679,7 +15754,7 @@
                                 "spec": {
                                   "x": 0,
                                   "y": 0,
-                                  "width": 12,
+                                  "width": 8,
                                   "height": 3,
                                   "element": {
                                     "kind": "ElementReference",
@@ -15690,9 +15765,9 @@
                               {
                                 "kind": "GridLayoutItem",
                                 "spec": {
-                                  "x": 12,
+                                  "x": 8,
                                   "y": 0,
-                                  "width": 12,
+                                  "width": 16,
                                   "height": 3,
                                   "element": {
                                     "kind": "ElementReference",
@@ -15708,9 +15783,9 @@
                     {
                       "kind": "RowsLayoutRow",
                       "spec": {
-                        "title": "",
-                        "hideHeader": true,
-                        "collapse": false,
+                        "title": "Point: ${point:text} \u00b7 change",
+                        "hideHeader": false,
+                        "collapse": true,
                         "layout": {
                           "kind": "GridLayout",
                           "spec": {
@@ -15720,21 +15795,8 @@
                                 "spec": {
                                   "x": 0,
                                   "y": 0,
-                                  "width": 12,
-                                  "height": 5,
-                                  "element": {
-                                    "kind": "ElementReference",
-                                    "name": "panel-2003"
-                                  }
-                                }
-                              },
-                              {
-                                "kind": "GridLayoutItem",
-                                "spec": {
-                                  "x": 12,
-                                  "y": 0,
-                                  "width": 12,
-                                  "height": 5,
+                                  "width": 24,
+                                  "height": 6,
                                   "element": {
                                     "kind": "ElementReference",
                                     "name": "panel-2004"
@@ -15991,6 +16053,51 @@
                                   "variable": "kind",
                                   "operator": "equals",
                                   "value": "fanout"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "title": "",
+                        "collapse": false,
+                        "hideHeader": true,
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "visibility": "show",
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "variable": "kind",
+                                  "operator": "equals",
+                                  "value": "fanout"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 0,
+                                  "y": 0,
+                                  "width": 24,
+                                  "height": 3,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-2039"
+                                  }
                                 }
                               }
                             ]
@@ -16638,9 +16745,9 @@
                     {
                       "kind": "RowsLayoutRow",
                       "spec": {
-                        "title": "",
-                        "hideHeader": true,
-                        "collapse": false,
+                        "title": "Sharing check details",
+                        "hideHeader": false,
+                        "collapse": true,
                         "layout": {
                           "kind": "GridLayout",
                           "spec": {
@@ -16766,7 +16873,7 @@
                                 "spec": {
                                   "x": 0,
                                   "y": 0,
-                                  "width": 12,
+                                  "width": 8,
                                   "height": 3,
                                   "element": {
                                     "kind": "ElementReference",
@@ -16777,9 +16884,9 @@
                               {
                                 "kind": "GridLayoutItem",
                                 "spec": {
-                                  "x": 12,
+                                  "x": 8,
                                   "y": 0,
-                                  "width": 12,
+                                  "width": 16,
                                   "height": 3,
                                   "element": {
                                     "kind": "ElementReference",
@@ -16795,9 +16902,9 @@
                     {
                       "kind": "RowsLayoutRow",
                       "spec": {
-                        "title": "",
-                        "hideHeader": true,
-                        "collapse": false,
+                        "title": "Point: ${point:text} \u00b7 change",
+                        "hideHeader": false,
+                        "collapse": true,
                         "layout": {
                           "kind": "GridLayout",
                           "spec": {
@@ -16807,21 +16914,8 @@
                                 "spec": {
                                   "x": 0,
                                   "y": 0,
-                                  "width": 12,
-                                  "height": 5,
-                                  "element": {
-                                    "kind": "ElementReference",
-                                    "name": "panel-2034"
-                                  }
-                                }
-                              },
-                              {
-                                "kind": "GridLayoutItem",
-                                "spec": {
-                                  "x": 12,
-                                  "y": 0,
-                                  "width": 12,
-                                  "height": 5,
+                                  "width": 24,
+                                  "height": 6,
                                   "element": {
                                     "kind": "ElementReference",
                                     "name": "panel-2035"

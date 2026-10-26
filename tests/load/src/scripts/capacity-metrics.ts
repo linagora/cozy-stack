@@ -130,6 +130,10 @@ function fanoutValues(point: Record<string, unknown>): Record<string, number> {
   if (adds.some(add => typeof add.converged === 'boolean')) {
     values.recipient_access_proofs = adds.filter(add => add.converged === true).length
   }
+  const removals = recipients.map(recipient => record(recipient.remove))
+  if (removals.some(removal => typeof removal.converged === 'boolean')) {
+    values.recipient_revocation_proofs = removals.filter(removal => removal.converged === true).length
+  }
   if (remove.status === 'not_started') values.remove_started = 0
   if (allowed(remove.status, ['observing', 'passed', 'failed', 'inconclusive'], '') !== '') {
     values.remove_started = 1
@@ -402,6 +406,8 @@ export function getReportSamples(
         correctness: pointChecks.correctness, cleanup: pointChecks.cleanup,
         access: finite(fanout.recipient_access_proofs) ? `${fanout.recipient_access_proofs} / ${load}` : 'Not recorded',
         revoked: finite(fanout.owner_revoked) ? `${fanout.owner_revoked} / ${load}` : 'Not recorded',
+        recipient_revoked: finite(fanout.recipient_revocation_proofs)
+          ? `${fanout.recipient_revocation_proofs} / ${load}` : 'Not recorded',
         p95: finite(point.p95_ms) ? `${point.p95_ms.toFixed(1)} ms` : 'Not recorded',
         reason: safeReason,
         start_ms: !pointWindow ? finite(startedAt) ? String(Math.max(0, startedAt * 1000 - 60_000)) : ''
@@ -421,6 +427,7 @@ export function getReportSamples(
       }, 1)
       if (!['not_run', 'not_measured', 'missing_result'].includes(status)) {
         emit('point_value', { ...dimensions, metric: 'load' }, load)
+        emit('point_value', { ...dimensions, metric: 'point_index' }, index + 1)
       }
       emit('point_info', {
         ...dimensions, status: status === 'missing_result' ? 'inconclusive' : status,
@@ -433,6 +440,7 @@ export function getReportSamples(
       }) : kind === 'shared_drive' ? numbers(point, {
         upload_p95_ms: 'upload_p95_ms', success_rate: 'upload_success_rate',
         ws_delivery_ratio: 'ws_delivery_ratio', changes_delivery_ratio: 'changes_delivery_ratio',
+        completed_uploads: 'uploads',
       }) : fanoutValues(point)
       if (pointStart !== null && pointEnd !== null && pointEnd > pointStart) {
         values.started_at_seconds = pointStart / 1000
@@ -453,7 +461,9 @@ export function getReportSamples(
         values.failed_uploads = 0
       }
       if (kind === 'upload' && planned !== null) values.planned_iterations = planned
-      for (const [metric, value] of Object.entries(values)) emit('point_value', { ...dimensions, metric }, value)
+      for (const [metric, value] of Object.entries(values)) {
+        emit('point_value', { ...dimensions, executionid: executionId, metric }, value)
+      }
     })
   }
   for (const state of ['valid', 'invalid', 'unsupported'] as const) {

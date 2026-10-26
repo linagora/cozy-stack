@@ -100,14 +100,27 @@ test('DEV infrastructure cannot display local metrics or query an absent remote 
   assert.ok(local.flatMap(queries).every(q => q.group !== 'influxdb'))
 })
 
-test('point selection filters raw k6 tags without joining historical telemetry to a later report scrape', () => {
-  for (const title of ['Successful uploads per second', 'Upload latency by attempt', 'Upload workers']) {
+test('telemetry uses recorded attempt bounds pinned independently of the chart window', () => {
+  for (const title of ['Successful uploads per second', 'Upload latency']) {
     for (const query of queries(named(title)).filter(q => q.datasource.name === 'prometheus')) {
       assert.match(query.spec.expr!, /campaignid="\$run",load_target="\$env",mode="\$mode"/)
       assert.match(query.spec.expr!, /executionid=~"\$execution"/)
-      assert.doesNotMatch(query.spec.expr!, /group_left|avg\(|vector\(0\)/)
+      assert.match(query.spec.expr!, /metric="started_at_seconds"} @ \$report_at <= time\(\)/)
+      assert.match(query.spec.expr!, /metric="ended_at_seconds"} @ \$report_at >= time\(\)/)
+      assert.match(query.spec.expr!, /unless on\(executionid\)/)
+      assert.doesNotMatch(query.spec.expr!, /avg\(|vector\(0\)/)
     }
   }
+  const reportTime = dashboard.spec.variables.find(v => v.spec.name === 'report_at')!
+  assert.match(reportTime.spec.query!.spec.query, /max\(timestamp\(cozy_load_run_info/)
+  assert.equal(reportTime.spec.refresh, 'onTimeRangeChanged')
+  for (const query of queries(named('Upload latency')).filter(q => q.datasource.name === 'prometheus')) {
+    assert.match(query.spec.expr!, /and on\(\) \(count\(/)
+    assert.match(query.spec.expr!, /== 1\)$/)
+  }
+  const workers = queries(named('Configured upload workers'))[0]!.spec.expr!
+  assert.match(workers, /metric="load"} @ \$report_at/)
+  assert.doesNotMatch(workers, /k6_vus|vector\(0\)/)
   for (const name of ['execution', 'activity_level']) {
     const variable = dashboard.spec.variables.find(v => v.spec.name === name)!
     assert.match(variable.spec.query!.spec.query, /point_id=~"\$point"/)
@@ -143,7 +156,9 @@ test('run and point links carry both the actual identity and the recorded time w
 
 test('report facts use their own datasource and every tab can restore the full recorded window', () => {
   for (const panel of panels) for (const query of queries(panel)) {
-    if (query.spec.expr?.includes('cozy_load_')) assert.equal(query.datasource.name, 'load-reports')
+    if (query.spec.expr?.includes('cozy_load_')) {
+      assert.equal(query.datasource.name, query.spec.expr.includes('@ $report_at') ? 'prometheus' : 'load-reports')
+    }
     if (query.spec.expr?.includes('k6_')) assert.equal(query.datasource.name, 'prometheus')
   }
   for (const tab of dashboard.spec.layout.spec!.tabs!) {
@@ -190,7 +205,7 @@ test('an unrelated time window shows a recovery action instead of empty workload
   const outside = visible(tab, values).map(p => p.spec.title)
   assert.ok(outside.includes('Selected time range is outside this run or point'))
   assert.ok(outside.includes('Selected run'))
-  for (const title of ['Upload phases', 'Successful uploads per second', 'Upload latency by attempt', 'Upload workers']) {
+  for (const title of ['Upload phases', 'Successful uploads per second', 'Upload latency', 'Configured upload workers']) {
     assert.ok(!outside.includes(title), title)
     assert.ok(visible(tab, { ...values, window_state: 'inside' }).some(p => p.spec.title === title), title)
   }
@@ -198,6 +213,26 @@ test('an unrelated time window shows a recovery action instead of empty workload
   const links = recovery.spec.vizConfig.spec.fieldConfig.defaults.links as { url: string }[]
   assert.match(links[0]!.url, /var-point=\$__all/)
   assert.match(links[0]!.url, /from=\$\{__field.labels.focus_from_ms\}&to=\$\{__field.labels.focus_to_ms\}/)
+})
+
+test('point controls allow switching directly from one selected point to another', () => {
+  for (const panel of panels.filter(p => p.spec.title === 'Choose a point')) {
+    assert.doesNotMatch(queries(panel)[0]!.spec.expr!, /point_id=~"\$point"/)
+  }
+  const selectors = walk(dashboard.spec.layout).filter(node => node.spec?.title === 'Point: ${point:text} · change')
+  assert.equal(selectors.length, 2)
+  assert.ok(selectors.every(node => node.spec!.collapse))
+  assert.ok(!panels.some(p => p.spec.title === 'Selected point'))
+})
+
+test('summary ratios use the last measured batch and keep recipient revocation distinct from owner status', () => {
+  for (const title of ['Access verified · last batch', 'Revocation verified · last batch', 'Delivery · last selected level']) {
+    for (const panel of panels.filter(p => p.spec.title === title)) for (const query of queries(panel)) {
+      assert.match(query.spec.expr!, /and on\(run,index\) topk\(1, .*metric="point_index"/)
+      assert.doesNotMatch(query.spec.expr!, /owner_revoked|vector\(0\)/)
+    }
+  }
+  assert.match(JSON.stringify(named('Revocation verified · last batch').spec.data.spec.transformations), /recipient_revoked/)
 })
 
 test('the window check refreshes with the time picker and follows the selected point with a run-time fallback', () => {
