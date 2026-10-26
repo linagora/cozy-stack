@@ -188,6 +188,9 @@ function classifyUploadCapacity(result: JsonRecord): StepOutcome {
 }
 
 export function classifyRamp(result: JsonRecord): StepOutcome {
+  // Wrong content or a refused download is proven, whatever the levels measured.
+  const failures = Array.isArray(result.correctness_failures) ? result.correctness_failures.map(String) : []
+  if (failures.length) return { code: 1, reason: failures.join('; ') }
   if (result.status !== 'completed') {
     return { code: 2, reason: String(result.failure_reason ?? result.status ?? 'ramp report has no status') }
   }

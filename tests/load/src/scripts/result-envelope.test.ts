@@ -1,7 +1,7 @@
 import { deepEqual, equal, match, ok } from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { classifyStep, type CampaignStep } from './campaign-summary.ts'
+import { classifyRamp, classifyStep, type CampaignStep } from './campaign-summary.ts'
 import { renderMetrics } from './capacity-metrics.ts'
 import {
   declaredOutcome, fanoutEnvelope, rampEnvelope, uploadEnvelope, validateEnvelope, type ResultEnvelope, type RunContext,
@@ -98,6 +98,20 @@ test('unverified and interrupted measurements stay evidence, and failures name t
   context)
   deepEqual([corrupt.correctness, corrupt.capacity, corrupt.reason], ['failed', null, 'bytes'])
   ok(validateEnvelope(corrupt))
+})
+
+test('ramp readers that verified content, or read it wrong, set correctness', () => {
+  const ramp = { status: 'completed', outcome: 0, load_target: 'local', result_bound: 'lower_bound',
+    max_sustained_level: 2, first_failed_level: null, cleanup_success_rate: 1, cleanup: clean, criteria: {},
+    levels: [{ level: 1, content_verified: 2 }, { level: 2, content_verified: 2 }], correctness_failures: [] }
+  equal(rampEnvelope(ramp, context).correctness, 'verified')
+  const failures = ['level 2: 1 uploads read back different content']
+  // Proven wrong content outweighs every measured level, even an unverified cleanup.
+  const wrong = { ...ramp, status: 'infrastructure_failure', correctness_failures: failures }
+  deepEqual(classifyRamp(wrong), { code: 1, reason: failures[0] })
+  const envelope = rampEnvelope({ ...wrong, outcome: 1, failure_reason: failures[0] }, context)
+  deepEqual([envelope.correctness, envelope.capacity?.verified], ['failed', false])
+  ok(validateEnvelope(envelope))
 })
 
 test('the summary and the exporter present the declared verdict and never upgrade it', () => {

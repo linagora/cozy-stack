@@ -29,6 +29,7 @@ const plan: RampPlan = {
 }
 
 const criteria: RampCriteria = {
+  contentChecksPerLevel: 2,
   minimumDeliveryRatio: 0.9,
   minimumSuccessRate: 0.99,
   p95LimitMs: null,
@@ -38,6 +39,8 @@ const SAMPLES = 100
 
 type LevelSample = {
   changesDelivery?: number | undefined
+  changesReaders?: number | undefined
+  content?: { verified?: number, mismatch?: number, denied?: number, malformed?: number } | undefined
   changesP95?: number | undefined
   changesSuccess?: number | undefined
   uploadP95?: number | undefined
@@ -45,6 +48,7 @@ type LevelSample = {
   wsAuth?: number | undefined
   wsDelivery?: number | undefined
   wsHandshake?: number | undefined
+  wsReaders?: number | undefined
 }
 
 function rate(value: number | undefined): { values: Record<string, number> } {
@@ -67,8 +71,8 @@ function counter(value: number): { values: Record<string, number> } {
   return { values: { count: value } }
 }
 
-// Delivery ratios are turned into event counts: every reader should see one
-// event or change per successful upload of its level.
+// Delivery ratios are the worst reader's share of the level's uploads; every expected reader reports
+// unless a sample says otherwise. Totals follow the same ratio.
 function makeMetrics(samples: Record<number, LevelSample>): SummaryMetrics {
   const metrics: SummaryMetrics = { cleanup_success: rate(1) }
 
@@ -100,6 +104,16 @@ function makeMetrics(samples: Record<number, LevelSample>): SummaryMetrics {
           plan.vusPerLevel.changesReaders,
       ),
     )
+    const readers = (ratio: number | undefined, count: number) => ({ values: { count, min: Math.round((ratio ?? 1) * uploads) } })
+    metrics[name('shared_drive_ws_reader_unique')] = readers(sample.wsDelivery,
+      sample.wsReaders ?? level * plan.vusPerLevel.wsReaders)
+    metrics[name('shared_drive_changes_reader_unique')] = readers(sample.changesDelivery,
+      sample.changesReaders ?? level * plan.vusPerLevel.changesReaders)
+    const { verified = 2, mismatch = 0, denied = 0, malformed = 0 } = sample.content ?? {}
+    metrics[name('shared_drive_content_verified_total')] = counter(verified)
+    metrics[name('shared_drive_content_mismatch_total')] = counter(mismatch)
+    metrics[name('shared_drive_content_denied_total')] = counter(denied)
+    metrics[name('shared_drive_changes_malformed_total')] = counter(malformed)
   }
 
   return metrics
@@ -173,8 +187,9 @@ describe('parseRampCriteria', (): void => {
         MIN_DELIVERY_RATIO: '0.8',
         MIN_SUCCESS_RATE: '0.95',
         P95_LIMIT_MS: '500',
+        CONTENT_CHECKS_PER_LEVEL: '0',
       }),
-      { minimumDeliveryRatio: 0.8, minimumSuccessRate: 0.95, p95LimitMs: 500 },
+      { contentChecksPerLevel: 0, minimumDeliveryRatio: 0.8, minimumSuccessRate: 0.95, p95LimitMs: 500 },
     )
   })
 
@@ -184,6 +199,7 @@ describe('parseRampCriteria', (): void => {
     throws(() => parseRampCriteria({ MIN_DELIVERY_RATIO: '0' }), /MIN_DELIVERY_RATIO/)
     throws(() => parseRampCriteria({ MIN_DELIVERY_RATIO: '2' }), /MIN_DELIVERY_RATIO/)
     throws(() => parseRampCriteria({ P95_LIMIT_MS: '-1' }), /P95_LIMIT_MS/)
+    throws(() => parseRampCriteria({ CONTENT_CHECKS_PER_LEVEL: '1.5' }), /CONTENT_CHECKS_PER_LEVEL/)
   })
 })
 
@@ -200,13 +216,16 @@ describe('ramp schedule', (): void => {
     deepEqual(getCompletedRampLevels(plan, Number.POSITIVE_INFINITY), [])
   })
 
-  it('adds a transition and a hold stage per level', (): void => {
+  it('starts every VU in the first half of the transition, then holds', (): void => {
     deepEqual(buildRampingVuStages(plan, 3), [
-      { duration: '10000ms', target: 3 },
+      { duration: '5000ms', target: 3 },
+      { duration: '5000ms', target: 3 },
       { duration: '60000ms', target: 3 },
-      { duration: '10000ms', target: 6 },
+      { duration: '5000ms', target: 6 },
+      { duration: '5000ms', target: 6 },
       { duration: '60000ms', target: 6 },
-      { duration: '10000ms', target: 12 },
+      { duration: '5000ms', target: 12 },
+      { duration: '5000ms', target: 12 },
       { duration: '60000ms', target: 12 },
     ])
     equal(getRampTotalDurationMs(plan), 210_000)
@@ -214,7 +233,8 @@ describe('ramp schedule', (): void => {
 
   it('lets readers drain the feed after the last hold', (): void => {
     deepEqual(buildRampingVuStages({ ...plan, levels: [1] }, 2, { drain: true }), [
-      { duration: '10000ms', target: 2 },
+      { duration: '5000ms', target: 2 },
+      { duration: '5000ms', target: 2 },
       { duration: '60000ms', target: 2 },
       { duration: '10000ms', target: 2 },
     ])
@@ -269,13 +289,20 @@ describe('buildRampThresholds', (): void => {
       'http_req_failed',
       'shared_drive_changes_duration_ms{level:1}',
       'shared_drive_changes_items_total{level:1}',
+      'shared_drive_changes_malformed_total{level:1}',
+      'shared_drive_changes_reader_unique{level:1}',
       'shared_drive_changes_success_rate{level:1}',
+      'shared_drive_content_denied_total{level:1}',
+      'shared_drive_content_mismatch_total{level:1}',
+      'shared_drive_content_verified_total{level:1}',
       'shared_drive_ramp_hold_completed{level:1}',
       'shared_drive_upload_success_rate{level:1}',
       'shared_drive_ws_auth_rate{level:1}',
       'shared_drive_ws_events_total{event:CREATED,level:1}',
       'shared_drive_ws_handshake_rate{level:1}',
+      'shared_drive_ws_reader_unique{level:1}',
     ])
+    deepEqual(thresholds['shared_drive_ws_reader_unique{level:1}'], ['min>=0'])
     deepEqual(thresholds.http_req_failed, [
       { abortOnFail: true, delayAbortEval: '30s', threshold: 'rate<0.5' },
     ])
@@ -466,16 +493,44 @@ describe('evaluateRampLevels', (): void => {
     equal(report.result_bound, 'inconclusive')
   })
 
-  it('cannot judge delivery when the event counters are absent', (): void => {
+  it('cannot judge delivery when no reader reported', (): void => {
     const metrics = makeMetrics({ 1: healthy })
-    delete metrics[
-      rampLevelMetricName('shared_drive_ws_events_total', 1, { event: 'CREATED' })
-    ]
+    delete metrics[rampLevelMetricName('shared_drive_ws_reader_unique', 1)]
 
     const report = evaluateRampLevels(metrics, { ...plan, levels: [1] }, criteria)
 
     equal(report.levels[0]?.status, 'not_measured')
     deepEqual(report.levels[0]?.reasons, ['ws event delivery has no samples'])
+  })
+
+  it('a missing reader fails the level even when the others saw everything', (): void => {
+    const report = evaluateRampLevels(makeMetrics({ 1: healthy, 2: { ...healthy, wsReaders: 5 } }), plan, criteria)
+    equal(report.levels[1]?.status, 'failed')
+    deepEqual(report.levels[1]?.reasons, ['ws event delivery: 5 of 6 readers reported'])
+    equal(report.levels[1]?.ws_readers, 5)
+  })
+
+  it('repeated events cannot hide one reader missing uploads', (): void => {
+    const metrics = makeMetrics({ 1: { ...healthy, changesDelivery: 0.5 } })
+    // Duplicates push the total above what every reader should have seen.
+    metrics[rampLevelMetricName('shared_drive_changes_items_total', 1)] = counter(SAMPLES * 2 * 3)
+    const report = evaluateRampLevels(metrics, { ...plan, levels: [1] }, criteria)
+    deepEqual([report.levels[0]?.status, report.levels[0]?.reasons], ['failed', ['changes delivery 0.5 is below 0.9']])
+    equal(report.levels[0]?.changes_items, SAMPLES * 6)
+  })
+
+  it('wrong content or a refused download fails the level and the whole ramp', (): void => {
+    for (const [content, reason] of [[{ mismatch: 1 }, '1 uploads read back different content'],
+      [{ denied: 2 }, '2 reader downloads were denied']] as const) {
+      const report = evaluateRampLevels(makeMetrics({ 1: healthy, 2: { ...healthy, content } }), plan, criteria)
+      deepEqual([report.levels[1]?.status, report.levels[1]?.reasons], ['failed', [reason]])
+      deepEqual(report.correctness_failures, [`level 2: ${reason}`])
+    }
+    const clean = evaluateRampLevels(makeMetrics({ 1: { ...healthy, content: { malformed: 3 } } }),
+      { ...plan, levels: [1] }, criteria)
+    deepEqual([clean.correctness_failures, clean.levels[0]?.content_verified, clean.levels[0]?.changes_malformed],
+      [[], 2, 3])
+    equal(clean.criteria.content_checks_per_level, 2)
   })
 
   it('marks levels the run never reached', (): void => {

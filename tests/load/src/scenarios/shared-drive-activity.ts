@@ -36,13 +36,21 @@ import {
   getRampTotalDurationMs,
   getRampUploadPrefix,
   getServedRampPhase,
+  parseRampCriteria,
   parseRampUploadLevel,
   RAMP_EVENT_GRACE_MS,
   type RampPhase,
   type RampPlan,
 } from '../lib/load-profile.ts'
 import {
+  LevelObservations,
+  observedWholeHold,
+  parseUploadMarker,
+} from '../lib/reader-observations.ts'
+import { parseUploadedFile } from '../lib/upload-consistency.ts'
+import {
   getUploadTarget,
+  makeUploadTargetDownloadUrl,
   type SharedDriveUploadTarget,
 } from '../lib/upload-target.ts'
 
@@ -63,12 +71,21 @@ export const changesFeedDuration = new Trend('shared_drive_changes_duration_ms',
 export const changesFeedSuccessRate = new Rate('shared_drive_changes_success_rate')
 export const changesItemsReceived = new Counter('shared_drive_changes_items_total')
 export const changesPending = new Trend('shared_drive_changes_pending')
+export const changesMalformed = new Counter('shared_drive_changes_malformed_total')
+
+// Per reader and level: the unique uploads it saw, judged against the level's uploads.
+export const wsReaderUnique = new Trend('shared_drive_ws_reader_unique')
+export const changesReaderUnique = new Trend('shared_drive_changes_reader_unique')
+export const contentVerified = new Counter('shared_drive_content_verified_total')
+export const contentMismatch = new Counter('shared_drive_content_mismatch_total')
+export const contentDenied = new Counter('shared_drive_content_denied_total')
 
 // --- Configuration ---
 const rawDuration = __ENV.DURATION || '30s'
 const rawWritersVus = parsePositiveIntegerEnv(__ENV, 'WRITER_VUS', 3)
 const rawWsReadersVus = parsePositiveIntegerEnv(__ENV, 'WS_READER_VUS', 5)
 const rawChangesReadersVus = parsePositiveIntegerEnv(__ENV, 'CHANGES_READER_VUS', 3)
+const { contentChecksPerLevel } = parseRampCriteria(__ENV)
 
 // Member actors (drive-actors.ts): k6 reaches their domains, which only the Stack serves, at its address.
 export const actorHosts: Record<string, string> = Object.fromEntries(
@@ -251,9 +268,20 @@ export function writerLoop(data: SetupData): void {
     timeout: '30s',
   })
 
-  const success = check(res, {
+  let success = check(res, {
     'writer uploaded file successfully': (r) => r.status === 201,
   })
+  // The Stack's record of the upload must match what was sent; an unreadable
+  // reply is a failed upload, a different checksum or size is wrong content.
+  if (success) {
+    try {
+      const file = parseUploadedFile(String(res.body))
+      success = file.md5sum === expectedChecksum && file.size === uploadBody.byteLength && file.name === filename
+      if (!success) contentMismatch.add(1)
+    } catch {
+      success = false
+    }
+  }
   uploadSuccessRate.add(success ? 1 : 0)
 
   sleep(1)
@@ -282,9 +310,12 @@ export function wsReaderLoop(data: SetupData): void {
   }
 
   let hadAuthError = false
+  const observations = new LevelObservations()
+  let openedAtMs: number | null = null
 
   const res = ws.connect(wsUrl, params, (socket) => {
     socket.on('open', () => {
+      openedAtMs = getElapsedMs()
       socket.send(formatAuthMessage(data.reader.accessToken))
     })
 
@@ -298,6 +329,7 @@ export function wsReaderLoop(data: SetupData): void {
           wsAuthSuccessRate.add(0)
         } else if (parsed.event === 'CREATED' || parsed.event === 'UPDATED') {
           const payload = parsed.payload as RealtimeEventPayload | undefined
+          observations.record(payload?.doc?.name)
           // Ramp events count toward the level of the upload that caused them.
           wsEventsReceived.add(
             1,
@@ -332,12 +364,65 @@ export function wsReaderLoop(data: SetupData): void {
   check(hadAuthError, {
     'ws session completed without auth error': (err) => !err,
   })
+  // A session that was connected through the whole hold reports what it saw.
+  const level = phase?.level ?? null
+  if (data.rampPlan !== null && level !== null && handshakeOk && !hadAuthError &&
+      observedWholeHold(data.rampPlan, level, openedAtMs)) {
+    wsReaderUnique.add(observations.unique(level), { level: String(level) })
+  }
 
   sleep(1)
 }
 
 // --- Scenario 3: Changes Feed Readers ---
 let vuSince = 'now'
+const changesObservations = new LevelObservations()
+// When this reader's feed first answered: changes since then are its to see.
+let changesReadyAtMs: number | null = null
+const reportedLevels = new Set<number>()
+const contentChecks = new Map<string, number>()
+
+// Downloads a bounded sample of new files as the reader and compares them
+// with the bytes their writer derived from the name.
+function verifyContent(data: SetupData, id: string, name: unknown): void {
+  const level = parseRampUploadLevel(name)
+  const marker = parseUploadMarker(name)
+  const done = contentChecks.get(level) ?? 0
+  if (marker === null || done >= contentChecksPerLevel) {
+    return
+  }
+  contentChecks.set(level, done + 1)
+  const target: SharedDriveUploadTarget = {
+    kind: 'shared-drive', driveId: data.driveId, rootDirectoryId: data.testDir.id,
+  }
+  const res = http.get(makeUploadTargetDownloadUrl(data.reader.baseUrl, id, target), {
+    headers: { Authorization: `Bearer ${data.reader.accessToken}` },
+    responseType: 'binary',
+    tags: { name: 'GET /sharings/drives/:id/download/:file-id', scenario: 'changes_readers' },
+  })
+  const tags = { level }
+  if (res.status === 403) {
+    contentDenied.add(1, tags)
+  } else if (res.status === 200 && res.body instanceof ArrayBuffer) {
+    const matches = md5(res.body, 'base64') === md5(randomizeUploadData(marker), 'base64')
+    ;(matches ? contentVerified : contentMismatch).add(1, tags)
+  }
+}
+
+// Once a level's hold and drain are over, a reader ready before its hold
+// reports the unique uploads it saw.
+function reportCompletedLevels(data: SetupData): void {
+  if (data.rampPlan === null) {
+    return
+  }
+  for (const level of getCompletedRampLevels(data.rampPlan, getElapsedMs() - RAMP_EVENT_GRACE_MS)) {
+    if (reportedLevels.has(level)) continue
+    reportedLevels.add(level)
+    if (observedWholeHold(data.rampPlan, level, changesReadyAtMs)) {
+      changesReaderUnique.add(changesObservations.unique(level), { level: String(level) })
+    }
+  }
+}
 
 // Ramp changes count toward the level of the upload that caused them, even
 // when they are polled after that level's hold.
@@ -387,22 +472,34 @@ export function changesReaderLoop(data: SetupData): void {
   const ok = check(res, {
     'changes feed returned 200': (r) => r.status === 200,
   })
-  changesFeedSuccessRate.add(ok ? 1 : 0)
-
-  if (ok && typeof res.body === 'string') {
+  // A reply that cannot be read is a failed poll, never an empty one.
+  let parsed = null
+  if (ok) {
     try {
-      const parsed = parseChangesFeedResponse(res.body)
-      vuSince = parsed.last_seq
-      addChangesItems(data, parsed.results)
-      changesPending.add(parsed.pending)
-      if (parsed.pending > 0) {
-        return
-      }
+      parsed = parseChangesFeedResponse(String(res.body))
     } catch {
-      // Ignore parse error on truncated body
+      changesMalformed.add(1)
+    }
+  }
+  changesFeedSuccessRate.add(parsed === null ? 0 : 1)
+
+  if (parsed !== null) {
+    changesReadyAtMs ??= getElapsedMs()
+    vuSince = parsed.last_seq
+    addChangesItems(data, parsed.results)
+    for (const item of parsed.results) {
+      if (!item.deleted && changesObservations.record(item.doc?.name)) {
+        verifyContent(data, item.id, item.doc?.name)
+      }
+    }
+    changesPending.add(parsed.pending)
+    reportCompletedLevels(data)
+    if (parsed.pending > 0) {
+      return
     }
   }
 
+  reportCompletedLevels(data)
   sleep(1)
 }
 

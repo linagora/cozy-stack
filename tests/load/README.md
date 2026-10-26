@@ -334,7 +334,8 @@ Shared drives can be tested in two modes:
    Level L runs L writers, 3L WebSocket readers, and 2L changes readers
    (`RAMP_WRITERS_PER_LEVEL`, `RAMP_WS_READERS_PER_LEVEL`,
    `RAMP_CHANGES_READERS_PER_LEVEL`). Each level gets a 10s transition and
-   a hold of `RAMP_STEP_DURATION`. Samples taken during the hold are tagged
+   a hold of `RAMP_STEP_DURATION`; new VUs start in the first half of the
+   transition, so every reader is connected before the hold. Samples taken during the hold are tagged
    with `level`; transitions are tagged apart and never judged.
 
    After the run, `handleSummary()` judges each level on errors and
@@ -342,11 +343,22 @@ Shared drives can be tested in two modes:
 
    - the upload, changes, WebSocket handshake, and WebSocket auth success
      rates must reach `MIN_SUCCESS_RATE` (default 0.99);
-   - WebSocket readers must receive a `CREATED` event, and changes readers
-     a change, for every successful upload of the level. k6 cannot match
-     events to uploads across VUs, so this compares totals: received
-     divided by uploads × readers must reach `MIN_DELIVERY_RATIO`
-     (default 0.9), which absorbs the reconnect at each level boundary.
+   - every reader ready before the hold must report the level: a WebSocket
+     session connected before the hold began, or a changes reader whose feed
+     answered before it, reports the unique uploads of the level it saw once
+     the hold and a 2 s drain are over. A level fails when fewer readers report
+     than it runs, or when the worst reader saw less than `MIN_DELIVERY_RATIO`
+     (default 0.9) of the level's successful uploads. Repeated events and
+     coalesced revisions count once, so they never stand in for a missing file
+     or reader; totals stay in the report for reference;
+   - a changes reply that cannot be read is a failed poll;
+   - writers check that the Stack recorded each upload's checksum, size and
+     name. Each changes reader downloads up to `CONTENT_CHECKS_PER_LEVEL`
+     (default 2) new files per level and compares them with the bytes their
+     writer derived from the name. Wrong content or a refused download fails
+     the level and exits 1, whatever the other levels measured; the report
+     records the checks made as `content_verified` and the scope as
+     `criteria.content_checks_per_level`.
 
    Latency is judged only when `P95_LIMIT_MS` is set: the upload and
    changes p95 must then stay within it. Otherwise each level's p95 is

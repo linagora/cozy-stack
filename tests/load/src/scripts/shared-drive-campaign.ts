@@ -137,6 +137,7 @@ async function main(): Promise<number> {
   // A proven access failure outweighs any measured level.
   if (accessFailure) report.failure_reason = [accessFailure, report.failure_reason].filter(Boolean).join('; ')
   const { code, reason } = accessFailure ? { code: 1, reason: accessFailure } : classifyRamp(report)
+  if (code !== 0 && !report.failure_reason) report.failure_reason = reason
   report.outcome = code
   const versions = await readVersions(target)
   report.versions = versions

@@ -36,6 +36,8 @@ export type RampPhase = {
 // A level fails on errors or missing events. Latency is judged only when an
 // absolute limit is configured; otherwise the p95 is reported for reference.
 export type RampCriteria = {
+  // Downloads each changes reader verifies per level: the content verification scope.
+  contentChecksPerLevel: number
   minimumDeliveryRatio: number
   minimumSuccessRate: number
   p95LimitMs: number | null
@@ -61,8 +63,13 @@ export type RampResultBound = 'bracket' | 'lower_bound' | 'inconclusive'
 export type RampLevelResult = {
   changes_delivery_ratio: number | null
   changes_items: number | null
+  changes_malformed: number
   changes_p95_ms: number | null
+  changes_readers: number | null
   changes_success_rate: number | null
+  content_denied: number
+  content_mismatches: number
+  content_verified: number
   hold_completed: boolean
   level: number
   reasons: string[]
@@ -74,11 +81,15 @@ export type RampLevelResult = {
   ws_delivery_ratio: number | null
   ws_events: number | null
   ws_handshake_rate: number | null
+  ws_readers: number | null
 }
 
 export type RampReport = {
   cleanup_success_rate: number | null
+  // Wrong content or a refused download at any level: proven, whatever the levels measured.
+  correctness_failures: string[]
   criteria: {
+    content_checks_per_level: number
     minimum_delivery_ratio: number
     minimum_success_rate: number
     p95_limit_mode: 'absolute' | 'none'
@@ -109,6 +120,7 @@ type RateKey =
 type TrendKey = 'changes_p95_ms' | 'upload_p95_ms'
 type DeliveryKey = 'changes_delivery_ratio' | 'ws_delivery_ratio'
 type CountKey = 'changes_items' | 'ws_events'
+type ReadersKey = 'changes_readers' | 'ws_readers'
 
 type JudgedRate = { key: RateKey; label: string; metric: string }
 type JudgedTrend = {
@@ -118,14 +130,17 @@ type JudgedTrend = {
   tags: Record<string, string>
 }
 
-// Every reader should see one event or change per successful upload of its
-// level. k6 cannot match events to uploads across VUs, so delivery is judged
-// on totals; the minimum ratio absorbs the reconnect at each level boundary.
+// Every reader ready before a hold should see each successful upload of the level once. Each reader
+// reports the unique uploads it saw, so a repeated event or a healthy reader never stands in for a
+// missing one: every expected reader must report, and the worst must reach the minimum ratio. The
+// totals stay as diagnostics.
 type JudgedDelivery = {
   countKey: CountKey
   key: DeliveryKey
   label: string
   metric: string
+  readersKey: ReadersKey
+  readersMetric: string
   readersPerLevel: (vusPerLevel: RampVusPerLevel) => number
   tags: Record<string, string>
 }
@@ -170,6 +185,8 @@ const judgedDeliveries: readonly JudgedDelivery[] = [
     key: 'ws_delivery_ratio',
     label: 'ws event delivery',
     metric: 'shared_drive_ws_events_total',
+    readersKey: 'ws_readers',
+    readersMetric: 'shared_drive_ws_reader_unique',
     readersPerLevel: ({ wsReaders }: RampVusPerLevel): number => wsReaders,
     tags: { event: 'CREATED' },
   },
@@ -178,6 +195,8 @@ const judgedDeliveries: readonly JudgedDelivery[] = [
     key: 'changes_delivery_ratio',
     label: 'changes delivery',
     metric: 'shared_drive_changes_items_total',
+    readersKey: 'changes_readers',
+    readersMetric: 'shared_drive_changes_reader_unique',
     readersPerLevel: ({ changesReaders }: RampVusPerLevel): number =>
       changesReaders,
     tags: {},
@@ -263,7 +282,15 @@ export function parseRampCriteria(env: Environment): RampCriteria {
     p95LimitMs: env.P95_LIMIT_MS
       ? parsePositiveNumber('P95_LIMIT_MS', env.P95_LIMIT_MS)
       : null,
+    contentChecksPerLevel: parseCount('CONTENT_CHECKS_PER_LEVEL', env.CONTENT_CHECKS_PER_LEVEL || '2'),
   }
+}
+
+function parseCount(name: string, raw: string): number {
+  if (!/^[0-9]+$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new Error(`${name} must be a non-negative integer, got "${raw}"`)
+  }
+  return Number(raw)
 }
 
 function getLevelSpanMs(plan: RampPlan): number {
@@ -272,6 +299,10 @@ function getLevelSpanMs(plan: RampPlan): number {
 
 export function getRampTotalDurationMs(plan: RampPlan): number {
   return plan.levels.length * getLevelSpanMs(plan)
+}
+
+export function getRampHoldStartMs(plan: RampPlan, level: number): number {
+  return plan.levels.indexOf(level) * getLevelSpanMs(plan) + plan.transitionMs
 }
 
 export function getCompletedRampLevels(plan: RampPlan, elapsedMs: number): number[] {
@@ -286,10 +317,15 @@ export function buildRampingVuStages(
   vusPerLevel: number,
   { drain = false }: { drain?: boolean } = {},
 ): RampingVuStage[] {
+  // k6 starts VUs evenly over a stage. Ramping over the first half of the
+  // transition leaves the last reader the second half to connect, so every
+  // reader observes the whole hold.
+  const rampMs = Math.floor(plan.transitionMs / 2)
   const stages = plan.levels.flatMap((level: number): RampingVuStage[] => {
     const target = level * vusPerLevel
     return [
-      { duration: `${plan.transitionMs}ms`, target },
+      { duration: `${rampMs}ms`, target },
+      { duration: `${plan.transitionMs - rampMs}ms`, target },
       { duration: `${plan.holdMs}ms`, target },
     ]
   })
@@ -382,9 +418,12 @@ export function buildRampThresholds(
     for (const { metric, tags } of judgedTrends) {
       thresholds[rampLevelMetricName(metric, level, tags)] = ['p(95)>=0']
     }
-    for (const { metric, tags } of judgedDeliveries) {
+    for (const { metric, readersMetric, tags } of judgedDeliveries) {
       thresholds[rampLevelMetricName(metric, level, tags)] = ['count>=0']
+      // A trend threshold cannot use count; min keeps the submetric all the same.
+      thresholds[rampLevelMetricName(readersMetric, level)] = ['min>=0']
     }
+    for (const metric of contentCounters) thresholds[rampLevelMetricName(metric, level)] = ['count>=0']
   }
 
   return thresholds
@@ -414,6 +453,18 @@ function readP95(metrics: SummaryMetrics, name: string): number | null {
     Number.isFinite(value)
     ? value
     : null
+}
+
+export const contentCounters = [
+  'shared_drive_content_verified_total', 'shared_drive_content_mismatch_total',
+  'shared_drive_content_denied_total', 'shared_drive_changes_malformed_total',
+] as const
+
+// The worst reader's unique observations, and how many readers reported.
+function readReaders(metrics: SummaryMetrics, name: string): { min: number, count: number } | null {
+  const values = metrics[name]?.values
+  const count = values?.count ?? 0
+  return count > 0 && typeof values?.min === 'number' ? { min: values.min, count } : null
 }
 
 function readCount(metrics: SummaryMetrics, name: string): number | null {
@@ -446,14 +497,18 @@ function judgeRates(
 
 function judgeDeliveries(
   ratios: Record<DeliveryKey, number | null>,
-  counts: Record<CountKey, number | null>,
+  readers: Record<ReadersKey, number | null>,
+  expected: Record<ReadersKey, number>,
   criteria: RampCriteria,
   verdicts: Verdicts,
 ): void {
-  for (const { countKey, key, label } of judgedDeliveries) {
+  for (const { key, label, readersKey } of judgedDeliveries) {
     const ratio = ratios[key]
-    if (counts[countKey] === null) {
+    const reported = readers[readersKey]
+    if (reported === null) {
       verdicts.missing.push(`${label} has no samples`)
+    } else if (reported < expected[readersKey]) {
+      verdicts.failures.push(`${label}: ${reported} of ${expected[readersKey]} readers reported`)
     } else if (ratio === null) {
       verdicts.missing.push(`${label} has no uploads to compare with`)
     } else if (ratio < criteria.minimumDeliveryRatio) {
@@ -484,6 +539,13 @@ function judgeTrends(
   }
 }
 
+function contentFailures({ content_denied: denied, content_mismatches: mismatches }: RampLevelResult): string[] {
+  return [
+    ...(mismatches ? [`${mismatches} uploads read back different content`] : []),
+    ...(denied ? [`${denied} reader downloads were denied`] : []),
+  ]
+}
+
 function evaluateLevel(
   metrics: SummaryMetrics,
   level: number,
@@ -509,19 +571,28 @@ function evaluateLevel(
       readCount(metrics, rampLevelMetricName(metric, level, tags)),
     ]),
   ) as Record<CountKey, number | null>
-  const ratios = Object.fromEntries(
-    judgedDeliveries.map(({ countKey, key, readersPerLevel }) => {
-      const count = counts[countKey]
-      const expected =
-        (uploads ?? 0) * level * readersPerLevel(plan.vusPerLevel)
-      return [key, count === null || expected === 0 ? null : count / expected]
-    }),
-  ) as Record<DeliveryKey, number | null>
+  const readings = Object.fromEntries(judgedDeliveries.map(({ readersKey, readersMetric }) =>
+    [readersKey, readReaders(metrics, rampLevelMetricName(readersMetric, level))]))
+  const readers = Object.fromEntries(judgedDeliveries.map(({ readersKey }) =>
+    [readersKey, readings[readersKey]?.count ?? null])) as Record<ReadersKey, number | null>
+  const expected = Object.fromEntries(judgedDeliveries.map(({ readersKey, readersPerLevel }) =>
+    [readersKey, level * readersPerLevel(plan.vusPerLevel)])) as Record<ReadersKey, number>
+  const ratios = Object.fromEntries(judgedDeliveries.map(({ key, readersKey }) => {
+    const worst = readings[readersKey]?.min
+    return [key, worst === undefined || !uploads ? null : worst / uploads]
+  })) as Record<DeliveryKey, number | null>
+  const [verified, mismatches, denied, malformed] = contentCounters.map(metric =>
+    readCount(metrics, rampLevelMetricName(metric, level)) ?? 0)
   const result: RampLevelResult = {
     ...counts,
     ...ratios,
+    ...readers,
     ...trends,
+    changes_malformed: malformed!,
     changes_success_rate: rates.changes_success_rate?.rate ?? null,
+    content_denied: denied!,
+    content_mismatches: mismatches!,
+    content_verified: verified!,
     hold_completed: (readCount(metrics, rampLevelMetricName('shared_drive_ramp_hold_completed', level)) ?? 0) > 0,
     level,
     reasons: [],
@@ -536,9 +607,9 @@ function evaluateLevel(
     return { ...result, status: 'not_run' }
   }
 
-  const verdicts: Verdicts = { failures: [], missing: [] }
+  const verdicts: Verdicts = { failures: [...contentFailures(result)], missing: [] }
   judgeRates(rates, criteria, verdicts)
-  judgeDeliveries(ratios, counts, criteria, verdicts)
+  judgeDeliveries(ratios, readers, expected, criteria, verdicts)
   judgeTrends(trends, criteria, verdicts)
 
   const { failures, missing } = verdicts
@@ -583,7 +654,10 @@ export function evaluateRampLevels(
 
   return {
     cleanup_success_rate: cleanupRate,
+    correctness_failures: levels.flatMap(level =>
+      contentFailures(level).map(reason => `level ${level.level}: ${reason}`)),
     criteria: {
+      content_checks_per_level: criteria.contentChecksPerLevel,
       minimum_delivery_ratio: criteria.minimumDeliveryRatio,
       minimum_success_rate: criteria.minimumSuccessRate,
       p95_limit_mode: criteria.p95LimitMs === null ? 'none' : 'absolute',

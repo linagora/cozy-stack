@@ -252,6 +252,7 @@ shared-drive-ramp-run: upload-binary observability-up
 		-e WRITER_BASE_URL="$(WRITER_BASE_URL)" \
 		-e READER_BASE_URL="$(READER_BASE_URL)" \
 		-e ACTOR_HOSTS="$(ACTOR_HOSTS)" \
+		-e CONTENT_CHECKS_PER_LEVEL="$(CONTENT_CHECKS_PER_LEVEL)" \
 		-e UPLOAD_TARGET=shared-drive \
 		-e SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" \
 		-e SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" \
