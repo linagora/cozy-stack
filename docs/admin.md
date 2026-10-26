@@ -498,23 +498,20 @@ Content-Type: application/json
 
 ### POST /instances/fixers/member-copies/:org_id
 
-Delete the members the organization directory copied into the member instances
-of an organization, once the `twake:contacts:common` feed has filled its
-organization instance. Run it after a republication of the organization is
-fully consumed. The organization instance must exist, its context must set
-`common_contacts`, and the feed must have written at least one contact (with a
-`carddavPath`) on it. Instances whose context does not set `common_contacts`
-are skipped. Personal contacts, contacts written for sharing and copies the
-feed took over (with a `carddavPath`) are kept. The contacts are deleted in
-bulk, so the `share-group` trigger does not revoke the members of the groups.
-It is safe to run twice.
+Delete directory copies after enabling `centralized_org_directory` and populating
+the organization instance from B2B events or the common-contacts service. The
+service is optional. Every candidate must match an existing organization contact
+before any copies are removed. Instances retaining replication are skipped.
+Personal contacts, contacts written for sharing, and feed-owned contacts with a
+`carddavPath` are kept. Deletion publishes no old document, so it does not revoke
+existing group sharings. It is safe to run twice.
 
 `removed` counts the deleted contacts by instance.
 
-It responds with `404 Not Found` when the organization has no instance or no
-organization instance, and with `412 Precondition Failed` when the context of
-the organization instance does not set `common_contacts` or the feed has not
-filled it yet.
+It responds with `404 Not Found` when the organization has no organization
+instance, and with `412 Precondition Failed` when centralization is disabled or
+a candidate has no counterpart in the organization directory. Run with `dry_run`
+first; enabling or disabling a flag does not backfill the directory.
 
 #### Query-String
 

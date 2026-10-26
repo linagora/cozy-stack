@@ -5,12 +5,11 @@ Remove the members copied into the instances of an organization
 ### Synopsis
 
 
-This fixer deletes the members the organization directory copied into each
-member instance, once the twake:contacts:common feed has filled the
-organization instance. Run it after a republication of the organization is
-fully consumed: it only refuses to run while the feed has written nothing.
-It skips the instances whose context does not set common_contacts, and keeps
-personal contacts and contacts written for sharing. It is safe to run twice.
+This fixer deletes directory copies once centralized_org_directory is enabled.
+Populate the organization directory first, from B2B events or the contacts service.
+Every candidate must have a matching organization contact before any deletion.
+Instances retaining replication are skipped. Personal contacts, contacts written
+for sharing and feed-owned contacts are kept. It is safe to run twice.
 
 
 ```

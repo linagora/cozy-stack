@@ -388,7 +388,7 @@ func memberCopiesFixer(c echo.Context) error {
 	switch {
 	case errors.Is(err, instance.ErrNotFound):
 		return jsonapi.NotFound(err)
-	case errors.Is(err, orgdirectory.ErrNoCommonContacts), errors.Is(err, orgdirectory.ErrOrgInstanceNotFilled):
+	case errors.Is(err, orgdirectory.ErrNoCentralizedOrgDirectory), errors.Is(err, orgdirectory.ErrOrgInstanceNotFilled):
 		return jsonapi.PreconditionFailed("org_id", err)
 	case err != nil:
 		return err

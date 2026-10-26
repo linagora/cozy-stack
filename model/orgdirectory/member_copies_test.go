@@ -14,6 +14,12 @@ import (
 )
 
 func TestRemoveMemberCopies(t *testing.T) {
+	for _, common := range []bool{false, true} {
+		t.Run(fmt.Sprintf("service=%t", common), func(t *testing.T) { testRemoveMemberCopies(t, common) })
+	}
+}
+
+func testRemoveMemberCopies(t *testing.T, common bool) {
 	config.UseTestFile(t)
 	needCouchDB(t)
 
@@ -21,8 +27,8 @@ func TestRemoveMemberCopies(t *testing.T) {
 	conf := config.GetConfig()
 	previous := conf.Contexts
 	conf.Contexts = map[string]interface{}{
-		onCtx:  map[string]interface{}{"common_contacts": true},
-		offCtx: map[string]interface{}{},
+		onCtx:  map[string]interface{}{"centralized_org_directory": true, "common_contacts": common},
+		offCtx: map[string]interface{}{"common_contacts": true},
 	}
 	t.Cleanup(func() { conf.Contexts = previous })
 
@@ -54,7 +60,9 @@ func TestRemoveMemberCopies(t *testing.T) {
 	alice := newInstance("alice-copies-"+suffix+".local", onCtx)
 	bob := newInstance("bob-copies-"+suffix+".local", offCtx)
 
-	orgMember := copyMember(org, "carol@acme.test")
+	orgMember := copyMember(org, "unrelated@acme.test")
+	orgMember.M[contact.CardDAVPathKey] = "addressbooks/org/common/unrelated.vcf"
+	require.NoError(t, couchdb.UpdateDoc(org, orgMember))
 	aliceCopy := copyMember(alice, "carol@acme.test")
 	bobCopy := copyMember(bob, "carol@acme.test")
 	takenOver := copyMember(alice, "dave@acme.test")
@@ -67,10 +75,15 @@ func TestRemoveMemberCopies(t *testing.T) {
 
 	_, err = RemoveMemberCopies(testCtx(t), orgID, false)
 	require.ErrorIs(t, err, ErrOrgInstanceNotFilled)
-	require.True(t, exists(alice, aliceCopy), "nothing is deleted before the feed fills the org instance")
+	require.True(t, exists(alice, aliceCopy), "an unrelated feed contact must not authorize deleting missing directory members")
 
-	orgMember.M[contact.CardDAVPathKey] = "addressbooks/org/common/carol.vcf"
-	require.NoError(t, couchdb.UpdateDoc(org, orgMember))
+	orgMember = copyMember(org, "carol@acme.test")
+	missing := copyMember(alice, "missing@acme.test")
+	_, err = RemoveMemberCopies(testCtx(t), orgID, false)
+	require.ErrorIs(t, err, ErrOrgInstanceNotFilled)
+	require.True(t, exists(alice, aliceCopy), "verify all candidates before deleting any copy")
+	require.True(t, exists(alice, missing))
+	require.NoError(t, couchdb.DeleteDoc(alice, missing))
 
 	report, err := RemoveMemberCopies(testCtx(t), orgID, true)
 	require.NoError(t, err)
@@ -93,17 +106,21 @@ func TestRemoveMemberCopies(t *testing.T) {
 	require.Empty(t, report.Removed)
 }
 
-func TestRemoveMemberCopiesNeedsTheOrgInstanceOnTheFeed(t *testing.T) {
+func TestRemoveMemberCopiesNeedsCentralization(t *testing.T) {
 	config.UseTestFile(t)
 	needCouchDB(t)
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	orgID := "nofeed" + suffix
+	orgID := "nocentral" + suffix
+	conf := config.GetConfig()
+	previous := conf.Contexts
+	conf.Contexts = map[string]interface{}{config.DefaultInstanceContext: map[string]interface{}{"common_contacts": true}}
+	t.Cleanup(func() { conf.Contexts = previous })
 	orgDomain := "nofeed-" + suffix + ".example"
 	createOrgDirectoryInstance(t, orgID+".local", orgDomain, orgID, "owner@acme.test", "Owner")
 
 	_, err := RemoveMemberCopies(testCtx(t), orgID, false)
-	require.ErrorIs(t, err, ErrNoCommonContacts)
+	require.ErrorIs(t, err, ErrNoCentralizedOrgDirectory)
 
 	_, err = RemoveMemberCopies(testCtx(t), "unknown"+suffix, false)
 	require.ErrorIs(t, err, instance.ErrNotFound)

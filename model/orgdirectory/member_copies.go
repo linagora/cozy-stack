@@ -9,16 +9,15 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 )
 
 var (
-	// ErrNoCommonContacts is returned when the context of the organization
-	// instance does not set common_contacts.
+	// ErrNoCommonContacts is returned when the contacts service is disabled.
 	ErrNoCommonContacts = errors.New("the organization instance does not read the common contacts")
-	// ErrOrgInstanceNotFilled is returned when the twake:contacts:common feed
-	// has written no contact on the organization instance yet.
-	ErrOrgInstanceNotFilled = errors.New("the twake:contacts:common feed has not filled the organization instance yet")
+	// ErrNoCentralizedOrgDirectory prevents cleanup while replication is retained.
+	ErrNoCentralizedOrgDirectory = errors.New("the organization directory is not centralized")
+	// ErrOrgInstanceNotFilled prevents deleting a copy absent from the org instance.
+	ErrOrgInstanceNotFilled = errors.New("the organization instance does not contain every member copy")
 )
 
 // MemberCopiesReport tells how many member copies were removed on each
@@ -29,8 +28,8 @@ type MemberCopiesReport struct {
 }
 
 // RemoveMemberCopies deletes the members copied by the organization directory
-// on the member instances of an organization, once the twake:contacts:common
-// feed has filled its organization instance. Personal contacts, contacts
+// on the member instances of an organization, once its directory is centralized
+// and populated. Personal contacts, contacts
 // written for sharing, and copies the feed took over are kept.
 func RemoveMemberCopies(ctx context.Context, organizationID string, dryRun bool) (*MemberCopiesReport, error) {
 	scope, err := ResolveOrganizationInstances(organizationID, "")
@@ -46,31 +45,18 @@ func RemoveMemberCopies(ctx context.Context, organizationID string, dryRun bool)
 	if orgInst == nil {
 		return nil, fmt.Errorf("organization %s has no organization instance: %w", organizationID, instance.ErrNotFound)
 	}
-	if !orgInst.HasCommonContacts() {
-		return nil, ErrNoCommonContacts
-	}
-	// Only the feed writes a carddavPath. One contact shows the feed has
-	// started, not that it is done.
-	var fed []couchdb.JSONDoc
-	err = couchdb.FindDocs(orgInst, consts.Contacts, &couchdb.FindRequest{
-		UseIndex: "by-carddav-path",
-		Selector: mango.Exists(contact.CardDAVPathKey),
-		Limit:    1,
-	}, &fed)
-	if err != nil {
-		return nil, err
-	}
-	if len(fed) == 0 {
-		return nil, ErrOrgInstanceNotFilled
+	if !orgInst.HasCentralizedOrgDirectory() {
+		return nil, ErrNoCentralizedOrgDirectory
 	}
 
 	report := &MemberCopiesReport{Removed: map[string]int{}}
+	candidates := make(map[*instance.Instance][]couchdb.Doc)
+	verified := make(map[[2]string]bool)
 	for _, inst := range scope.Instances {
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		// Without the feed, user.created still writes the copies back.
-		if inst == orgInst || !inst.HasCommonContacts() {
+		if inst == orgInst || !inst.HasCentralizedOrgDirectory() {
 			continue
 		}
 		docs, err := listManagedContacts(inst, scope.OrganizationID)
@@ -81,11 +67,35 @@ func RemoveMemberCopies(ctx context.Context, organizationID string, dryRun bool)
 		var copies []couchdb.Doc
 		for _, doc := range docs {
 			if _, ok := doc.M[contact.CardDAVPathKey]; !ok {
+				// Verify every destination before deleting any source, regardless
+				// of whether B2B events or the contacts service filled the org.
+				input := contactPatchFromContact(scope.OrganizationID, doc)
+				identity := [2]string{input.Email, input.CozyURL}
+				if !verified[identity] {
+					_, err := findManagedContact(orgInst, input)
+					if errors.Is(err, contact.ErrNotFound) {
+						return nil, fmt.Errorf("%w: %s on %s", ErrOrgInstanceNotFilled, doc.ID(), inst.Domain)
+					}
+					if err != nil {
+						return nil, fmt.Errorf("verify org contact for %s on %s: %w", doc.ID(), inst.Domain, err)
+					}
+					verified[identity] = true
+				}
 				copies = append(copies, doc)
 			}
 		}
 		if len(copies) == 0 {
 			continue
+		}
+		candidates[inst] = copies
+	}
+	for _, inst := range scope.Instances {
+		copies := candidates[inst]
+		if len(copies) == 0 {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return report, err
 		}
 		// BulkDeleteDocs publishes no old document, so the share-group
 		// trigger does not revoke the members of the groups.
