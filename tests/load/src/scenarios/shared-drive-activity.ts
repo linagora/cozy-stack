@@ -70,7 +70,13 @@ const rawWritersVus = parsePositiveIntegerEnv(__ENV, 'WRITER_VUS', 3)
 const rawWsReadersVus = parsePositiveIntegerEnv(__ENV, 'WS_READER_VUS', 5)
 const rawChangesReadersVus = parsePositiveIntegerEnv(__ENV, 'CHANGES_READER_VUS', 3)
 
+// Member actors (drive-actors.ts): k6 reaches their domains, which only the Stack serves, at its address.
+export const actorHosts: Record<string, string> = Object.fromEntries(
+  (__ENV.ACTOR_HOSTS || '').split(',').filter(Boolean).map((entry: string) => entry.split('=')),
+)
+
 export const options: Options = {
+  hosts: actorHosts,
   scenarios: {
     writers: {
       executor: 'constant-vus',
@@ -102,9 +108,16 @@ export const options: Options = {
   },
 }
 
-export interface SetupData {
+interface Credentials {
   accessToken: string
   baseUrl: string
+}
+
+// The owner creates and removes the test directory; with member actors, the writer recipient uploads
+// and the read-only recipient observes. Without them, the owner plays every role.
+export interface SetupData extends Credentials {
+  writer: Credentials
+  reader: Credentials
   driveId: string
   rampPlan: RampPlan | null
   rootDirectoryId: string
@@ -150,9 +163,20 @@ export function createSetupData(rampPlan: RampPlan | null): SetupData {
       ? rampPlan.transitionMs + rampPlan.holdMs
       : getWsSessionDurationMs(rawDuration, __ENV.WS_SESSION_DURATION)
 
+  const member = (role: string): Credentials => {
+    const token = __ENV[`${role}_ACCESS_TOKEN`]
+    const url = __ENV[`${role}_BASE_URL`]
+    if (Boolean(token) !== Boolean(url)) {
+      throw new Error(`${role}_ACCESS_TOKEN and ${role}_BASE_URL go together`)
+    }
+    return token && url ? { accessToken: token, baseUrl: url } : { accessToken, baseUrl }
+  }
+
   return {
     accessToken,
     baseUrl,
+    writer: member('WRITER'),
+    reader: member('READER'),
     driveId: uploadTarget.driveId,
     rampPlan,
     rootDirectoryId: uploadTarget.rootDirectoryId,
@@ -216,8 +240,8 @@ export function writerLoop(data: SetupData): void {
   }
 
   const res = fetchUploadResponse({
-    accessToken: data.accessToken,
-    baseUrl: data.baseUrl,
+    accessToken: data.writer.accessToken,
+    baseUrl: data.writer.baseUrl,
     body: uploadBody,
     contentMD5: expectedChecksum,
     directoryId: data.testDir.id,
@@ -252,7 +276,7 @@ export function wsReaderLoop(data: SetupData): void {
   }
 
   const sessionDurationMs = Math.min(data.wsSessionDurationMs, timeRemainingMs)
-  const wsUrl = getSharedDriveWsUrl(data.baseUrl, data.driveId)
+  const wsUrl = getSharedDriveWsUrl(data.reader.baseUrl, data.driveId)
   const params = {
     tags: { scenario: 'ws_readers' },
   }
@@ -261,7 +285,7 @@ export function wsReaderLoop(data: SetupData): void {
 
   const res = ws.connect(wsUrl, params, (socket) => {
     socket.on('open', () => {
-      socket.send(formatAuthMessage(data.accessToken))
+      socket.send(formatAuthMessage(data.reader.accessToken))
     })
 
     socket.on('message', (raw: string) => {
@@ -339,12 +363,12 @@ export function changesReaderLoop(data: SetupData): void {
   tagRampLevel(data, getElapsedMs())
 
   const headers = {
-    Authorization: `Bearer ${data.accessToken}`,
+    Authorization: `Bearer ${data.reader.accessToken}`,
     Accept: 'application/json',
   }
 
   const url = buildChangesFeedUrl({
-    baseUrl: data.baseUrl,
+    baseUrl: data.reader.baseUrl,
     sharingId: data.driveId,
     since: vuSince,
     limit: 100,

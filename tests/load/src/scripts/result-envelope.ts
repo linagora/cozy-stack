@@ -137,8 +137,8 @@ export function rampEnvelope(report: Record<string, any>, context: RunContext): 
   const k6Cleanup = report.cleanup_success_rate
   return envelope('shared-drive-ramp', report, context, report.failure_reason, {
     execution: context.interrupted ? 'interrupted' : report.status === 'completed' ? 'completed' : 'incomplete',
-    // Activity writers do not read their content back yet (#5061).
-    correctness: 'not_verified',
+    // Activity writers do not read their content back yet (#5061); member actors prove their access.
+    correctness: report.access_failure ? 'failed' : 'not_verified',
     performance: !count(lower) ? 'not_measured' : lower > 0 ? 'passed' : bracket ? 'failed' : 'not_measured',
     capacity: count(lower) && (lower > 0 || bracket) ? {
       kind: bracket ? 'bracket' : 'lower_bound', lower, upper_exclusive: bracket ? upper : null,

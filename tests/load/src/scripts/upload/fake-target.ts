@@ -17,7 +17,7 @@ const fakeDocker = `#!/usr/bin/env node
 const fs = require('fs'), http = require('http')
 const args = process.argv.slice(2)
 const log = line => fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify(line) + '\\n')
-log({ args, token: process.env.COZY_ACCESS_TOKEN || null })
+log({ args, token: process.env.COZY_ACCESS_TOKEN || null, writer: process.env.WRITER_ACCESS_TOKEN || null })
 if (args[0] === 'image') process.exit(1)
 if (args[0] === 'info') console.log(String(8 * 2 ** 30))
 // A hanging k6 is container c1, with its run's environment, until docker stop ends it.
@@ -29,6 +29,9 @@ if (fail && args[0] === fail.split('-')[0]) {
   process.exit(1)
 }
 const container = () => JSON.parse(fs.readFileSync(pidFile, 'utf8'))
+// The Stack container and its address, for member actors (drive-actors.ts).
+if (args[0] === 'compose' && args[1] === 'ps') { console.log('stack-1'); process.exit(0) }
+if (args[0] === 'inspect' && args[1] === '-f') { console.log('172.18.0.5 '); process.exit(0) }
 if (args[0] === 'ps') console.log(fs.existsSync(pidFile) ? 'c1' : '')
 if (args[0] === 'inspect') console.log(JSON.stringify(container().env))
 if (args[0] === 'stop') process.kill(container().pid, 'SIGUSR2')

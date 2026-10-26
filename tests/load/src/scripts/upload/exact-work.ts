@@ -234,6 +234,8 @@ export interface K6Work {
   deadline: number
   // This run's data: directories starting with prefix in dirs or the trash.
   cleanup: { prefix: string, dirs: readonly string[] }
+  // Credentials k6 needs besides the target's token, such as member actors' tokens.
+  env?: Record<string, string>
 }
 export interface K6Outcome {
   k6: { exit_code: number, timed_out: boolean }
@@ -266,7 +268,7 @@ export async function runK6Work(target: Target, work: K6Work): Promise<K6Outcome
         started = true
         k6 = await runK6(['-e', '-o', 'node_modules/.load-ready', work.makeTarget, `BASE_URL=${target.baseUrl}`,
           ...target.makeArgs, ...work.args, `EXECUTION_ID=${work.executionId}`,
-        ], token ? { ...process.env, COZY_ACCESS_TOKEN: token } : process.env, work.executionId, limitMs)
+        ], { ...process.env, ...work.env, ...(token ? { COZY_ACCESS_TOKEN: token } : {}) }, work.executionId, limitMs)
       }
     }
   } catch (error) {

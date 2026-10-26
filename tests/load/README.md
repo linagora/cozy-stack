@@ -312,6 +312,25 @@ Shared drives can be tested in two modes:
    upload at most once a second) and `MAX_RUNTIME`, all checked before any
    request. On DEV, the whole ramp must also fit in one 20-minute k6 run.
 
+   With `ACTORS_DOMAIN`, the ramp runs as members of an organization fixture
+   (`make seed-org SEED_USERS=2 SEED_CONTEXT_NAME=load-org-sharing`, read from
+   its [manifest](SEEDING.md#fixture-manifest)) on a local Stack, using the
+   seeder's `SEED_ADMIN_URL`, `SEED_ADMIN_PASSWORD` and `SEED_STACK_URL`. The
+   organization instance owns a fresh drive and creates the test directory;
+   its first member uploads through a group-only grant; its second member
+   observes through a read-only grant. Each uses its own URL and token. Before
+   the ramp, the runner checks every identity against the manifest and proves
+   both members reach the drive and the writer can write. After it, the runner
+   proves the reader cannot write, removes the writer's group and proves the
+   writer loses drive access while the reader keeps it, then removes the drive,
+   groups and contacts. A member allowed more than its grant, or a writer still
+   in after removal, exits 1. The report's `actors` records each actor's Stack
+   and whether recipients take the same-Stack path, with every access status.
+
+   ```console
+   $ make shared-drive-ramp ACTORS_DOMAIN='seed-<32-hex-id>.localhost:8080' RAMP_LEVELS=1,2
+   ```
+
    Level L runs L writers, 3L WebSocket readers, and 2L changes readers
    (`RAMP_WRITERS_PER_LEVEL`, `RAMP_WS_READERS_PER_LEVEL`,
    `RAMP_CHANGES_READERS_PER_LEVEL`). Each level gets a 10s transition and

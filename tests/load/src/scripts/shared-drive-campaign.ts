@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { getUploadDataSizeBytes, isUploadDataSize } from '../fixtures/upload-sizes.ts'
 import { getRampTotalDurationMs, parseRampCriteria, parseRampPlan } from '../lib/load-profile.ts'
 import { buildGrafanaLink, classifyRamp, K6_THRESHOLDS_FAILED } from './campaign-summary.ts'
+import { AccessFailure, prepareActors } from './drive-actors.ts'
 import { DEFAULT_DRIVE_NAME } from './prepare-shared-drive.ts'
 import { rampEnvelope, topologyOf } from './result-envelope.ts'
 import { getBytes, getDurationMs, getPositiveInteger } from './upload/campaign-config.ts'
@@ -68,14 +69,17 @@ async function main(): Promise<number> {
   const config = readConfig(env)
   const startedAt = new Date().toISOString()
   const deadline = Date.now() + config.deadlineMs
-  const target: Target = config.loadTarget === 'dev' ? await devTarget(env) : localTarget(env)
+  // Member actors play the drive's roles from an organization fixture (drive-actors.ts).
+  check(!env.ACTORS_DOMAIN || config.loadTarget === 'local', 'Shared-drive actors run on a local Stack only')
+  const actors = env.ACTORS_DOMAIN ? await prepareActors(env, config.executionId) : null
+  const target: Target = actors?.target ?? (config.loadTarget === 'dev' ? await devTarget(env) : localTarget(env))
   // One k6 run holds one token for the whole ramp.
   check(config.durationMs <= target.maxPointMs,
     `The ramp needs ${Math.ceil(config.durationMs / 60_000)} minutes, beyond one k6 run on this target`)
   const { stack } = await target.session()
   check(stack, `The shared-drive ramp needs a Stack it can reach with a token: ${target.baseUrl}`)
   check(Date.now() < deadline, 'MAX_RUNTIME expired during ramp setup')
-  const drive = await ensureDrive(stack, deadline)
+  const drive = actors?.drive ?? await ensureDrive(stack, deadline)
   const recovery = target.lockedUrls.length ? await recover(target, [drive.root]) : null
 
   const reportPath = `data/results/${config.executionId}-shared-drive-ramp.json`
@@ -88,12 +92,19 @@ async function main(): Promise<number> {
       `FILE_SIZE=${config.fileSize}`],
     deadline,
     cleanup: { prefix: `twake-load-sd-${config.executionId}-`, dirs: [drive.root] },
+    ...(actors ? { env: actors.env } : {}),
   })
+  let accessFailure = ''
+  let actorProblem = ''
+  try { await actors?.finish() } catch (error) {
+    if (error instanceof AccessFailure) accessFailure = error.message
+    else actorProblem = message(error)
+  }
   const endedAt = new Date().toISOString()
 
   let verdict: Record<string, any> | null = null
   try { verdict = JSON.parse(readFileSync(`${harness}${reportPath}`, 'utf8')) } catch {}
-  const problems = [run.timeout, ...run.problems, ...(verdict ? [] : ['k6 wrote no ramp report']),
+  const problems = [run.timeout, ...run.problems, actorProblem, ...(verdict ? [] : ['k6 wrote no ramp report']),
     ...([0, K6_THRESHOLDS_FAILED].includes(run.k6.exit_code) ? [] : [`k6 exited ${run.k6.exit_code}`])].filter(Boolean)
   // Anything unverified leaves k6's levels as evidence, never as a result.
   const report: Record<string, unknown> = {
@@ -106,12 +117,16 @@ async function main(): Promise<number> {
     file_size: config.fileSize,
     budgets: config.budgets,
     recovery,
+    ...(actors ? { actors: actors.report } : {}),
+    ...(accessFailure ? { access_failure: accessFailure } : {}),
     cleanup: run.cleanup,
     k6: run.k6,
     started_at: startedAt,
     ended_at: endedAt,
   }
-  const { code, reason } = classifyRamp(report)
+  // A proven access failure outweighs any measured level.
+  if (accessFailure) report.failure_reason = [accessFailure, report.failure_reason].filter(Boolean).join('; ')
+  const { code, reason } = accessFailure ? { code: 1, reason: accessFailure } : classifyRamp(report)
   report.outcome = code
   const versions = await readVersions(target)
   report.versions = versions

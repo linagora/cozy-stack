@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 import { classifyStep } from './campaign-summary.ts'
 import { validateEnvelope } from './result-envelope.ts'
+import { fakeActors, org, writer } from './upload/fake-actors.ts'
 import { fakeTarget, fqdn } from './upload/fake-target.ts'
 
 const script = fileURLToPath(new URL('./shared-drive-campaign.ts', import.meta.url))
@@ -118,6 +119,34 @@ test('a completed ramp report cannot hide an unexpected k6 exit', async t => {
       match(report.failure_reason, /k6 exited 108/)
     }
   })
+})
+
+test('member actors play the ramp roles, and a proven access failure outweighs the measured level', async t => {
+  const f = await fixture(t)
+  const actors = await fakeActors(t)
+  const env = { ...f.local, ...actors.env }
+  let { code, output } = await f.run(env)
+  equal(code, 0, output)
+  let report = f.report('shared-drive-ramp')
+  deepEqual(report.actors.placement.map((p: any) => p.path), ['owner', 'same-stack', 'same-stack'])
+  deepEqual(report.actors.revocation, { writer_read: 403, writer_write: 403, reader_read: 200 })
+  deepEqual(report.actors.cleanup.retained, [])
+  const run = f.docker().find(c => c.args?.[1] === 'run')
+  ok(run.args.includes(`BASE_URL=http://${org}`) && run.args.includes(`WRITER_BASE_URL=http://${writer}`))
+  ok(run.args.includes('SHARED_DRIVE_ID=sid') && run.args.some((a: string) => a.startsWith('ACTOR_HOSTS=seed-')))
+  deepEqual([run.token, run.writer], [`token-${org}`, `token-${writer}`])
+  ok(!JSON.stringify(report).includes('token-'))
+
+  actors.state.readOnlyWrites = true
+  actors.state.root = 'live'
+  ;({ code, output } = await f.run(env))
+  equal(code, 1, output)
+  report = f.report('shared-drive-ramp')
+  match(report.failure_reason, /read-only member could write/)
+  const envelope = validateEnvelope(report.result)
+  deepEqual([envelope?.outcome, envelope?.correctness, envelope?.capacity?.verified], [1, 'failed', false])
+  deepEqual(classifyStep({ name: 'ramp', kind: 'shared-drive-ramp', id: 'x', startedAt: '', endedAt: '', exitCode: 2,
+    producerExitCode: code }, report), { code: 1, reason: envelope?.reason })
 })
 
 test('a local ramp cleans only its own data in the drive and never stops other runs', async t => {

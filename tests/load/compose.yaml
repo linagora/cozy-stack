@@ -255,6 +255,8 @@ services:
     environment:
       BASE_URL: ${BASE_URL:-http://mock}
       COZY_ACCESS_TOKEN: ${COZY_ACCESS_TOKEN:-}
+      WRITER_ACCESS_TOKEN: ${WRITER_ACCESS_TOKEN:-}
+      READER_ACCESS_TOKEN: ${READER_ACCESS_TOKEN:-}
       FILE_SIZE: ${FILE_SIZE:-1K}
       UPLOAD_VUS: ${UPLOAD_VUS:-1}
       UPLOAD_MODE: ${UPLOAD_MODE:-iterations}

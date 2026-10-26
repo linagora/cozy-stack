@@ -4,7 +4,8 @@ SHELL := /bin/bash
 
 # Keep unset optional values unset so the Node CLI can apply its defaults.
 SEED_SETTINGS := SEED_ADMIN_URL SEED_STACK_URL SEED_ADMIN_USERNAME SEED_ADMIN_PASSWORD SEED_DOMAIN_SUFFIX \
-                 SEED_DOMAIN SEED_USERS SEED_FILES SEED_DRIVES SEED_CONTEXT_NAME SEED_REQUEST_TIMEOUT_MS
+                 SEED_DOMAIN SEED_USERS SEED_FILES SEED_DRIVES SEED_CONTEXT_NAME SEED_REQUEST_TIMEOUT_MS \
+                 SEED_MANIFEST ACTORS_DOMAIN
 $(foreach setting,$(SEED_SETTINGS),$(if $(filter undefined,$(origin $(setting))),,$(eval export $(setting))))
 
 FANOUT_SETTINGS := FANOUT_ORG_DOMAIN FANOUT_LEVELS FANOUT_TIMEOUT_MS FANOUT_POLL_MS \
@@ -248,6 +249,9 @@ shared-drive-ramp-run: upload-binary observability-up
 	@mkdir -p data/results
 	@$(RECORD_EXIT) $(COMPOSE) run --rm \
 		-e BASE_URL="$(BASE_URL)" \
+		-e WRITER_BASE_URL="$(WRITER_BASE_URL)" \
+		-e READER_BASE_URL="$(READER_BASE_URL)" \
+		-e ACTOR_HOSTS="$(ACTOR_HOSTS)" \
 		-e UPLOAD_TARGET=shared-drive \
 		-e SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" \
 		-e SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" \

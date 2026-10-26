@@ -9,7 +9,7 @@ import {
   parseRampPlan,
   type SummaryMetrics,
 } from '../lib/load-profile.ts'
-import { createSetupData, type SetupData } from './shared-drive-activity.ts'
+import { actorHosts, createSetupData, type SetupData } from './shared-drive-activity.ts'
 
 export {
   changesReaderLoop,
@@ -28,6 +28,7 @@ const rampCriteria = parseRampCriteria(__ENV)
 const executionId = __ENV.EXECUTION_ID || 'shared-drive-ramp'
 
 export const options: Options = {
+  hosts: actorHosts,
   scenarios: {
     writers: {
       executor: 'ramping-vus',
