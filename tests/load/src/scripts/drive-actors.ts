@@ -27,6 +27,8 @@ export interface ActorsReport {
   // Where each actor lives: recipients on the owner's Stack take the same-Stack sharing path.
   placement: Array<{ role: Role, domain: string, stack: string, path: 'owner' | 'same-stack' | 'cross-stack' }>
   access: Record<string, number>
+  // How long the members took to accept the drive: preparation, never part of the measured ramp.
+  accept_ms: number
   revocation?: Record<string, number>
   cleanup?: { cleaned: string[], retained: string[] }
 }
@@ -70,8 +72,9 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
   const members = manifest.instances.filter(i => i.role === 'member')
   check(manifest.status === 'complete' && manifest.organization, `${domain} is not a complete organization fixture`)
   check(members.length >= 2, 'The organization fixture needs two members: a writer and a reader')
-  // How long members may take to reach the drive, and to lose it once their grant is removed.
-  const settleMs = Number(env.ACTORS_SETTLE_MS || 60_000)
+  // How long members may take to reach the drive, and to lose it once their grant is removed. A Stack
+  // still working through an earlier run's jobs can take minutes to accept.
+  const settleMs = Number(env.ACTORS_SETTLE_MS || 300_000)
   const adminURL = new URL(setting(env, 'SEED_ADMIN_URL'))
   const stackOrigin = setting(env, 'SEED_STACK_URL')
   const auth = `Basic ${Buffer.from(`${env.SEED_ADMIN_USERNAME || 'admin'}:${setting(env, 'SEED_ADMIN_PASSWORD')}`)
@@ -132,11 +135,15 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
 
   // Members of the organization accept its drives on their own (ORG-DRIVE-FANOUT.md). A member asked
   // before its sharing arrived can stay refused for a while, so the owner's roster comes first.
+  const granted = Date.now()
+  let roster: string[] = []
   const ready = await poll(settleMs, async () => {
     const members = parse((await owner('GET', `/sharings/${drive.id}`)).body)?.data?.attributes?.members ?? []
-    return members.length === 3 && members.slice(1).every((m: { status?: string }) => m.status === 'ready')
+    roster = members.slice(1).map((m: { status?: string }) => String(m.status))
+    return roster.length === 2 && roster.every(status => status === 'ready')
   })
-  check(ready, 'The members did not accept the drive in time')
+  check(ready, `The members did not accept the drive in time: ${roster.join(', ') || 'no recipients'}`)
+  const acceptMs = Date.now() - granted
   const rootPath = `/sharings/drives/${drive.id}/${drive.root}`
   let statuses: number[] = []
   const accepted = await poll(settleMs, async () => {
@@ -153,7 +160,7 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
   check(access.writer_write === 201, `The writer could not write to the drive: HTTP ${access.writer_write}`)
 
   const report: ActorsReport = {
-    fixture: domain, drive: drive.id, access,
+    fixture: domain, drive: drive.id, access, accept_ms: acceptMs,
     placement: Object.values(actors).map(({ role, domain: d }) => ({ role, domain: d, stack: adminURL.host,
       path: role === 'owner' ? 'owner' : 'same-stack' })),
   }
