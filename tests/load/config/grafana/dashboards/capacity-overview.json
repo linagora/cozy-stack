@@ -4330,7 +4330,7 @@
                   "noValue": "No samples in this window",
                   "color": {
                     "mode": "fixed",
-                    "fixedColor": "text"
+                    "fixedColor": "#61c8ef"
                   },
                   "custom": {
                     "lineWidth": 2,
@@ -4405,7 +4405,7 @@
                   "noValue": "No samples in this window",
                   "color": {
                     "mode": "fixed",
-                    "fixedColor": "text"
+                    "fixedColor": "#b8a2ff"
                   },
                   "custom": {
                     "lineWidth": 2,
@@ -4558,8 +4558,7 @@
                   "unit": "s",
                   "noValue": "No samples in this window",
                   "color": {
-                    "mode": "fixed",
-                    "fixedColor": "text"
+                    "mode": "palette-classic"
                   },
                   "custom": {
                     "lineWidth": 2,
@@ -4580,7 +4579,53 @@
                     ]
                   }
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^p50(?:\\s|$)"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#527fe2"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^p95(?:\\s|$)"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#61c8ef"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^p99(?:\\s|$)"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#eeb06a"
+                        }
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -8587,7 +8632,7 @@
                   "noValue": "No samples in this window",
                   "color": {
                     "mode": "fixed",
-                    "fixedColor": "text"
+                    "fixedColor": "#61c8ef"
                   },
                   "custom": {
                     "lineWidth": 2,
@@ -8740,8 +8785,7 @@
                   "unit": "s",
                   "noValue": "No samples in this window",
                   "color": {
-                    "mode": "fixed",
-                    "fixedColor": "text"
+                    "mode": "palette-classic"
                   },
                   "custom": {
                     "lineWidth": 2,
@@ -8762,7 +8806,53 @@
                     ]
                   }
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^p50(?:\\s|$)"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#527fe2"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^p95(?:\\s|$)"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#61c8ef"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^p99(?:\\s|$)"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#eeb06a"
+                        }
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -9986,7 +10076,7 @@
                   "noValue": "No samples in this window",
                   "color": {
                     "mode": "fixed",
-                    "fixedColor": "text"
+                    "fixedColor": "#b8a2ff"
                   },
                   "custom": {
                     "lineWidth": 2,
@@ -10259,7 +10349,7 @@
                   "noValue": "No samples in this window",
                   "color": {
                     "mode": "fixed",
-                    "fixedColor": "text"
+                    "fixedColor": "#b8a2ff"
                   },
                   "custom": {
                     "lineWidth": 2,
