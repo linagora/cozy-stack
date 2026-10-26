@@ -124,6 +124,10 @@ export const options: Options = {
     shared_drive_changes_success_rate: ['rate>0.95'],
     shared_drive_ws_events_total: ['count>0'],
     shared_drive_changes_items_total: ['count>0'],
+    // Wrong content, a refused download or an unreadable changes reply fails the run.
+    shared_drive_content_mismatch_total: ['count==0'],
+    shared_drive_content_denied_total: ['count==0'],
+    shared_drive_changes_malformed_total: ['count==0'],
   },
 }
 

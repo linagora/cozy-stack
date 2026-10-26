@@ -537,6 +537,16 @@ describe('evaluateRampLevels', (): void => {
     equal(clean.criteria.content_checks_per_level, 2)
   })
 
+  it('wrong content outside every held level still fails the ramp', (): void => {
+    const metrics = makeMetrics({ 1: healthy })
+    // The level saw none; a writer's upload during a transition read back wrong.
+    metrics.shared_drive_content_mismatch_total = counter(1)
+    metrics.shared_drive_content_denied_total = counter(0)
+    const report = evaluateRampLevels(metrics, { ...plan, levels: [1] }, criteria)
+    deepEqual(report.correctness_failures, ['outside the held levels: 1 uploads read back different content'])
+    equal(report.levels[0]?.status, 'passed')
+  })
+
   it('a content check that read nothing, or no check at all, keeps the level from passing', (): void => {
     const levels = { ...plan, levels: [1] }
     const unread = evaluateRampLevels(makeMetrics({ 1: { ...healthy, content: { verified: 1, unverified: 1 } } }),

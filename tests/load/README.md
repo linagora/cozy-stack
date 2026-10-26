@@ -361,7 +361,11 @@ Shared drives can be tested in two modes:
      recorded as `content_unverified` and keeps the level from passing, as
      does a level with no verified content; the report records the checks
      made as `content_verified` and the scope as
-     `criteria.content_checks_per_level`.
+     `criteria.content_checks_per_level`. Wrong content outside any held
+     level, such as a writer's upload during a transition, fails the ramp too.
+     The constant-VU activity (`make cozy-shared-drive-load`) fails on wrong
+     content and unreadable changes replies; its file names carry no level,
+     so reader downloads run in the ramp only.
 
    Latency is judged only when `P95_LIMIT_MS` is set: the upload and
    changes p95 must then stay within it. Otherwise each level's p95 is

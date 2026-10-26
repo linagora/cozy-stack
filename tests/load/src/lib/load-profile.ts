@@ -541,6 +541,17 @@ function judgeTrends(
   }
 }
 
+function outsideLevels(metrics: SummaryMetrics, levels: RampLevelResult[]): string[] {
+  const extra = (metric: string, counted: (level: RampLevelResult) => number) =>
+    (readCount(metrics, metric) ?? 0) - levels.reduce((sum, level) => sum + counted(level), 0)
+  const mismatches = extra('shared_drive_content_mismatch_total', level => level.content_mismatches)
+  const denied = extra('shared_drive_content_denied_total', level => level.content_denied)
+  return [
+    ...(mismatches > 0 ? [`outside the held levels: ${mismatches} uploads read back different content`] : []),
+    ...(denied > 0 ? [`outside the held levels: ${denied} reader downloads were denied`] : []),
+  ]
+}
+
 function contentFailures({ content_denied: denied, content_mismatches: mismatches }: RampLevelResult): string[] {
   return [
     ...(mismatches ? [`${mismatches} uploads read back different content`] : []),
@@ -663,8 +674,11 @@ export function evaluateRampLevels(
 
   return {
     cleanup_success_rate: cleanupRate,
-    correctness_failures: levels.flatMap(level =>
-      contentFailures(level).map(reason => `level ${level.level}: ${reason}`)),
+    correctness_failures: [
+      ...levels.flatMap(level => contentFailures(level).map(reason => `level ${level.level}: ${reason}`)),
+      // A wrong upload during a transition belongs to no level, yet still proves wrong content.
+      ...outsideLevels(metrics, levels),
+    ],
     criteria: {
       content_checks_per_level: criteria.contentChecksPerLevel,
       minimum_delivery_ratio: criteria.minimumDeliveryRatio,
