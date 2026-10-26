@@ -20,6 +20,8 @@ import (
 const seenTTL = 7 * 24 * time.Hour
 
 var (
+	// ErrNoCommonContacts is returned when the contacts service is disabled.
+	ErrNoCommonContacts = errors.New("the organization instance does not read the common contacts")
 	// ErrSinceTooOld is returned when since is older than the seen markers.
 	ErrSinceTooOld = fmt.Errorf("since must be less than %s ago", seenTTL)
 	// ErrNothingSeen is returned when the feed sent no contact since then.

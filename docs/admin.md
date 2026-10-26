@@ -553,6 +553,8 @@ has completed without failures and the stack has read every message, with
 side service clocks may differ), at most 7 days ago. It refuses to run when no
 contact was sent since then. Contacts without a `carddavPath` are kept. The
 organization instance must exist and its context must set `common_contacts`.
+This service reconciliation is independent of `centralized_org_directory`: it
+also works while replication is retained, and never runs for B2B-only directories.
 
 `removed` lists the CardDAV paths of the deleted contacts, `kept` counts the
 contacts the feed sent again.

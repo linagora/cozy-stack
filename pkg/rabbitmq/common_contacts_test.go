@@ -28,7 +28,7 @@ func TestCommonContactsHandler(t *testing.T) {
 	const enabledCtx, disabledCtx = "common-contacts-on", "common-contacts-off"
 	config.GetConfig().Contexts = map[string]interface{}{
 		enabledCtx:  map[string]interface{}{"common_contacts": true},
-		disabledCtx: map[string]interface{}{},
+		disabledCtx: map[string]interface{}{"centralized_org_directory": true},
 	}
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())

@@ -13,13 +13,19 @@ import (
 )
 
 func TestReconcileOrganizationContacts(t *testing.T) {
+	for _, centralized := range []bool{false, true} {
+		t.Run(fmt.Sprintf("centralized=%t", centralized), func(t *testing.T) { testReconcileOrganizationContacts(t, centralized) })
+	}
+}
+
+func testReconcileOrganizationContacts(t *testing.T, centralized bool) {
 	config.UseTestFile(t)
 	needCouchDB(t)
 
 	const onCtx = "reconcile-on"
 	conf := config.GetConfig()
 	previous := conf.Contexts
-	conf.Contexts = map[string]interface{}{onCtx: map[string]interface{}{"common_contacts": true}}
+	conf.Contexts = map[string]interface{}{onCtx: map[string]interface{}{"common_contacts": true, "centralized_org_directory": centralized}}
 	t.Cleanup(func() { conf.Contexts = previous })
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -46,6 +52,10 @@ func TestReconcileOrganizationContacts(t *testing.T) {
 	}
 
 	since := time.Now().Add(-time.Second)
+	conf.Contexts[onCtx].(map[string]interface{})["common_contacts"] = false
+	_, err = ReconcileOrganizationContacts(testCtx(t), orgID, since, false)
+	require.ErrorIs(t, err, ErrNoCommonContacts, "centralization alone must not enable service reconciliation")
+	conf.Contexts[onCtx].(map[string]interface{})["common_contacts"] = true
 	sent := fromFeed("carol@acme.test")
 	gone := fromFeed("dave@acme.test")
 	notFromFeed, err := contact.Create(org, contact.CreateOptions{Email: "eve@acme.test", External: true})

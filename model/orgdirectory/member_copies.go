@@ -13,8 +13,6 @@ import (
 )
 
 var (
-	// ErrNoCommonContacts is returned when the contacts service is disabled.
-	ErrNoCommonContacts = errors.New("the organization instance does not read the common contacts")
 	// ErrNoCentralizedOrgDirectory prevents cleanup while replication is retained.
 	ErrNoCentralizedOrgDirectory = errors.New("the organization directory is not centralized")
 	// ErrOrgInstanceNotFilled prevents deleting contacts or memberships absent from the org instance.
