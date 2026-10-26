@@ -31,7 +31,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function getRevision(value: unknown): string {
-  return typeof value === 'string' && /^[A-Za-z0-9._+-]{1,96}$/.test(value) ? value : 'Not recorded'
+  return typeof value === 'string' && /^[A-Za-z0-9._+:~-]{1,96}$/.test(value) ? value : 'Not recorded'
 }
 
 function records(value: unknown): Record<string, unknown>[] {

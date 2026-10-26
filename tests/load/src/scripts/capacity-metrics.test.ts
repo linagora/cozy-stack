@@ -5,6 +5,12 @@ import { uploadEnvelope } from './result-envelope.ts'
 
 const counts = { valid: 1, invalid: 0, unsupported: 0 }
 
+test('run metadata preserves packaged Stack versions', () => {
+  const stack: string = '1:1.2~20261026~bookworm.build5-880035feabccc8e1e118dffbdfc49eb493c22956'
+  const output: string = renderMetrics([report('upload', { versions: { stack } })], counts)
+  assert.ok(samples(output, 'run_info')[0]!.includes(`stack_revision="${stack}"`))
+})
+
 test('activity profiles distinguish owner credentials from member identities', () => {
   const owner: string = renderMetrics([report('shared_drive', {})], counts)
   assert.match(samples(owner, 'run_info')[0]!, /profile="Writer \/ WebSocket \/ changes roles · one identity"/)
