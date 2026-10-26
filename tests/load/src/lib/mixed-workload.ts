@@ -34,7 +34,11 @@ export type MixedReport = {
     rate_per_s: number
     requests: number
   }>
-  correctness: { metadata_checks: number, metadata_mismatches: number, upload_checks: number, upload_mismatches: number }
+  // Every successful metadata read and upload must be checked; complete says they all were.
+  correctness: {
+    metadata_checks: number, metadata_mismatches: number, metadata_expected: number,
+    upload_checks: number, upload_mismatches: number, upload_expected: number, unvalidated: number, complete: boolean,
+  }
   observers: { events: number, sessions: number }
   // Wrong metadata or a wrongly recorded upload: proven, whatever the rates.
   correctness_failures: string[]
@@ -80,6 +84,16 @@ export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria
   })
   const metadata = checks('mixed_metadata_match')
   const upload = checks('mixed_upload_match')
+  // k6 counts a successful request as a false sample of http_req_failed.
+  const succeeded = (operation: MixedOperation) =>
+    value(metrics, operationMetric('http_req_failed', operation), 'fails') ?? 0
+  const expected = { metadata: succeeded('metadata'), upload: succeeded('upload') }
+  const incomplete = [
+    ...(metadata.passes + metadata.fails < expected.metadata
+      ? [`${metadata.passes + metadata.fails} of ${expected.metadata} successful metadata reads were checked`] : []),
+    ...(upload.passes + upload.fails < expected.upload
+      ? [`${upload.passes + upload.fails} of ${expected.upload} successful uploads were checked`] : []),
+  ]
   const correctnessFailures = [
     ...(metadata.fails ? [`${metadata.fails} metadata reads differed from the fixture`] : []),
     ...(upload.fails ? [`${upload.fails} uploads were recorded with another checksum or size`] : []),
@@ -104,6 +118,10 @@ export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria
   } else if (correctnessFailures.length || failures.length) {
     status = 'failed'
     if (dropped) reasons.push(`${dropped} workflows dropped`)
+  } else if (incomplete.length) {
+    // Unchecked responses verify nothing: the run cannot pass on them.
+    status = 'not_measured'
+    reasons.push(...incomplete)
   } else if (dropped) {
     status = 'generator_saturated'
     reasons.push(`${dropped} workflows dropped while every operation met its limits: the generator fell behind`)
@@ -120,7 +138,10 @@ export function evaluateMixed(metrics: SummaryMetrics, plan: MixedPlan, criteria
     operations,
     correctness: {
       metadata_checks: metadata.passes + metadata.fails, metadata_mismatches: metadata.fails,
-      upload_checks: upload.passes + upload.fails, upload_mismatches: upload.fails,
+      metadata_expected: expected.metadata,
+      upload_checks: upload.passes + upload.fails, upload_mismatches: upload.fails, upload_expected: expected.upload,
+      unvalidated: value(metrics, 'mixed_unvalidated_responses', 'count') ?? 0,
+      complete: !incomplete.length && expected.metadata > 0 && expected.upload > 0,
     },
     observers: {
       events: value(metrics, 'mixed_observer_events', 'count') ?? 0,

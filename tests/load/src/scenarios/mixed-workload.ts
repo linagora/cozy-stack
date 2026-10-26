@@ -36,6 +36,8 @@ const criteria = {
 
 export const metadataMatch = new Rate('mixed_metadata_match')
 export const uploadMatch = new Rate('mixed_upload_match')
+// Successful responses that could not be checked: never counted as verified.
+export const unvalidated = new Counter('mixed_unvalidated_responses')
 export const observerEvents = new Counter('mixed_observer_events')
 export const observerSessions = new Counter('mixed_observer_sessions')
 
@@ -90,9 +92,10 @@ export function workflow(uploads: TestDirectory): void {
   const read = http.get(`${baseUrl}/files/${file.id}`, {
     headers, tags: { name: 'GET /files/:file-id', operation: 'metadata' },
   })
-  const attributes = read.status === 200 ? json(read.body)?.data?.attributes : null
-  if (attributes) {
-    metadataMatch.add(attributes.md5sum === file.md5 && Number(attributes.size) === file.size)
+  if (read.status === 200) {
+    const attributes = json(read.body)?.data?.attributes
+    if (attributes) metadataMatch.add(attributes.md5sum === file.md5 && Number(attributes.size) === file.size)
+    else unvalidated.add(1, { operation: 'metadata' })
   }
 
   const marker = `${n}-${exec.vu.idInTest}-${Date.now()}-${Math.floor(Math.random() * 0xffffffff)}`
@@ -102,18 +105,28 @@ export function workflow(uploads: TestDirectory): void {
     headers: { ...headers, 'Content-MD5': checksum, 'Content-Type': 'application/octet-stream' },
     tags: { name: 'POST /files/:dir-id', operation: 'upload' },
   })
-  if (uploaded.status === 201 && json(uploaded.body)) {
-    const recorded = parseUploadedFile(String(uploaded.body))
-    uploadMatch.add(recorded.md5sum === checksum && recorded.size === body.byteLength)
+  if (uploaded.status === 201) {
+    let recorded = null
+    try {
+      recorded = parseUploadedFile(String(uploaded.body))
+    } catch {
+      unvalidated.add(1, { operation: 'upload' })
+    }
+    if (recorded) uploadMatch.add(recorded.md5sum === checksum && recorded.size === body.byteLength)
   }
 }
 
+// Each observer opens one session: a dropped one is recorded, never retried, so observer traffic stays
+// within its budget.
+let observed = false
+
 export function observe(): void {
   const remainingMs = durationMs - (Date.now() - exec.scenario.startTime)
-  if (remainingMs < 1000) {
+  if (observed || remainingMs < 1000) {
     sleep(1)
     return
   }
+  observed = true
   const res = ws.connect(`${baseUrl.replace(/^http/, 'ws')}/realtime/`, {}, (socket) => {
     socket.on('open', () => {
       observerSessions.add(1)

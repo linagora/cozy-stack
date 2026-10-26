@@ -548,12 +548,13 @@ and k6 metrics; use the k6 upload metrics for exact scenario attribution.
 Fixed-VU tests send less traffic when responses slow down. `make
 mixed-workload` instead starts a fixed number of workflows per second with
 k6's `constant-arrival-rate` executor, whatever the latency, against a
-verified tree fixture ([SEEDING.md, Profiles](SEEDING.md#profiles)) on a local
-Stack. Each workflow lists a fixture directory, reads a fixture file's
+verified single-instance tree fixture ([SEEDING.md, Profiles](SEEDING.md#profiles))
+on a local Stack. Each workflow lists a fixture directory, reads a fixture file's
 metadata and checks it against the manifest, and uploads a 1 KiB file into
 the run's own directory, checking the checksum and size the Stack recorded.
-`MIXED_OBSERVERS` WebSocket observers (default 1) stay connected to the
-instance's file events, apart from the arrival rate.
+`MIXED_OBSERVERS` WebSocket observers (default 1) each open one session on the
+instance's file events, apart from the arrival rate; a dropped session is
+recorded, never retried.
 
 ```console
 $ make seed-scale SEED_PROFILE=tree
@@ -563,8 +564,9 @@ $ make mixed-workload MIXED_DOMAIN='seed-<32-hex-id>.localhost:8080' MIXED_RATE=
 Start at a small fixed rate (`MIXED_RATE`, workflows per second, default 1)
 and validate it before any ramp or capacity search. `MIXED_MAX_VUS` (default
 10) bounds the VUs k6 may use to keep the rate. `MAX_VUS`, `MAX_REQUESTS`,
-`MAX_UPLOAD_BYTES` and `MAX_RUNTIME` are checked against what the arrivals can
-need before any request. The runner verifies the fixture before the run,
+`MAX_UPLOAD_BYTES` and `MAX_RUNTIME` are checked before any request against
+what the run can need: the arrivals, the observers, k6 setup, both fixture
+verifications and cleanup, counted from the fixture's manifest. The runner verifies the fixture before the run,
 removes the run's directory afterwards, and verifies the fixture again.
 
 `data/results/<EXECUTION_ID>-mixed-workload.json` records the offered and
@@ -572,7 +574,9 @@ achieved workflows per second, dropped iterations, each operation's request
 rate, p95 and error rate, the correctness checks, the observers' sessions and
 events, and the [result envelope](#result-envelope). Every operation must
 reach `MIN_SUCCESS_RATE` (default 0.99) and stay within `P95_LIMIT_MS`
-(default 2000). Dropped workflows while every operation met its limits mean
+(default 2000), and every successful metadata read and upload must have been
+checked: a response that cannot be checked keeps the run from passing.
+Dropped workflows while every operation met its limits mean
 the generator fell behind: inconclusive, exit 2. With a slow or failing
 target, they are part of that regression, exit 1. Wrong metadata or a
 wrongly recorded upload exits 1. Shared DEV has no tree fixture yet, so the

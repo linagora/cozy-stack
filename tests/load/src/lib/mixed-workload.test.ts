@@ -8,22 +8,24 @@ const plan = { durationS: 60, maxVus: 10, observers: 1, rate: 2 }
 const criteria = { minimumSuccessRate: 0.99, p95LimitMs: 1000 }
 
 type Sample = { iterations?: number, dropped?: number, p95?: number, errors?: number, metadataFails?: number,
-  uploadFails?: number }
+  uploadFails?: number, checked?: number }
 
-function metrics({ iterations = 120, dropped = 0, p95 = 100, errors = 0, metadataFails = 0, uploadFails = 0 }: Sample):
-  SummaryMetrics {
+function metrics({ iterations = 120, dropped = 0, p95 = 100, errors = 0, metadataFails = 0, uploadFails = 0,
+  checked = iterations }: Sample): SummaryMetrics {
+  const failed = Math.round(errors * iterations)
   const result: SummaryMetrics = {
     iterations: { values: { count: iterations } },
     dropped_iterations: { values: { count: dropped } },
-    mixed_metadata_match: { values: { passes: iterations - metadataFails, fails: metadataFails } },
-    mixed_upload_match: { values: { passes: iterations - uploadFails, fails: uploadFails } },
+    mixed_metadata_match: { values: { passes: checked - failed - metadataFails, fails: metadataFails } },
+    mixed_upload_match: { values: { passes: checked - failed - uploadFails, fails: uploadFails } },
     mixed_observer_events: { values: { count: iterations } },
     mixed_observer_sessions: { values: { count: 1 } },
   }
   for (const operation of MIXED_OPERATIONS) {
     result[operationMetric('http_reqs', operation)] = { values: { count: iterations } }
     result[operationMetric('http_req_duration', operation)] = { values: { count: iterations, 'p(95)': p95 } }
-    result[operationMetric('http_req_failed', operation)] = { values: { rate: errors } }
+    result[operationMetric('http_req_failed', operation)] = { values: { rate: errors, passes: failed,
+      fails: iterations - failed } }
   }
   return result
 }
@@ -53,6 +55,15 @@ describe('evaluateMixed', (): void => {
     deepEqual(report.correctness_failures, ['2 metadata reads differed from the fixture',
       '1 uploads were recorded with another checksum or size'])
     deepEqual([report.status, report.correctness.upload_mismatches], ['failed', 1])
+  })
+
+  it('responses left unchecked keep the run from passing and correctness from being complete', (): void => {
+    const report = evaluateMixed(metrics({ checked: 1 }), plan, criteria)
+    deepEqual([report.status, report.correctness.complete, report.correctness.metadata_expected],
+      ['not_measured', false, 120])
+    deepEqual(report.reasons,
+      ['1 of 120 successful metadata reads were checked', '1 of 120 successful uploads were checked'])
+    equal(evaluateMixed(metrics({}), plan, criteria).correctness.complete, true)
   })
 
   it('measures nothing when no workflow completed', (): void => {

@@ -19,7 +19,7 @@ import {
 
 type Env = Record<string, string | undefined>
 const ROOT = 'io.cozy.files.root-dir'
-// Each workflow lists, reads and uploads once; every observer opens at least one session.
+// Each workflow lists, reads and uploads once; each observer opens one session.
 const REQUESTS_PER_WORKFLOW = 3
 const UPLOAD_BYTES = 1024
 // k6 setup and teardown, the runner's verification and cleanup, on top of the arrivals.
@@ -33,6 +33,11 @@ export function readConfig(env: Env) {
   check((env.LOAD_TARGET || 'local') === 'local', 'The mixed workload runs on a local tree fixture only')
   const domain = env.MIXED_DOMAIN
   check(domain, 'MIXED_DOMAIN must name a tree fixture (make seed-scale SEED_PROFILE=tree)')
+  const manifest = readManifest(env.SEED_MANIFEST || manifestPath(domain), domain)
+  const entry = manifest.instances[0]!
+  // One instance: verifying and cleaning it then costs a known number of requests.
+  check(manifest.status === 'complete' && manifest.profile === 'tree' && !manifest.organization && entry.files.length,
+    `${domain} is not a complete single-instance tree fixture (make seed-scale SEED_PROFILE=tree)`)
   const rate = getPositiveInteger('MIXED_RATE', env.MIXED_RATE || '1')
   const durationMs = getDurationMs('MIXED_DURATION', env.MIXED_DURATION || '2m')
   const maxVus = getPositiveInteger('MIXED_MAX_VUS', env.MIXED_MAX_VUS || '10')
@@ -40,8 +45,18 @@ export function readConfig(env: Env) {
   const observers = Number(env.MIXED_OBSERVERS || '1')
   check(Number.isSafeInteger(observers) && observers >= 0, 'MIXED_OBSERVERS must be a non-negative integer')
   const workflows = rate * Math.ceil(durationMs / 1000)
-  const needs = { vus: maxVus + observers, requests: workflows * REQUESTS_PER_WORKFLOW + observers,
-    bytes: workflows * UPLOAD_BYTES, runtimeMs: durationMs + OVERHEAD_MS }
+  // A verification reads the instance, mints a token, then reads every directory, file and drive root and
+  // the root's entry count.
+  const verifyRequests = 3 + (entry.dirs?.length ?? 0) + entry.files.length + entry.drives.length
+  // Cleanup lists the root (100 entries a page) and the trash before and after deleting the run's
+  // directory, in two requests. shortcut: the trash is taken to fit one page, as on a fixture only these
+  // runs write to; count its pages too once fixtures are shared.
+  const cleanupRequests = 2 * (Math.ceil(((entry.root_entries ?? 0) + 1) / 100) + 1) + 2
+  // k6 setup creates the run's directory; the runner mints a token and reads the Stack version.
+  const needs = {
+    vus: maxVus + observers, bytes: workflows * UPLOAD_BYTES, runtimeMs: durationMs + OVERHEAD_MS,
+    requests: workflows * REQUESTS_PER_WORKFLOW + observers + 1 + 2 * verifyRequests + cleanupRequests + 2,
+  }
   const budgets = {
     max_vus: env.MAX_VUS ? getPositiveInteger('MAX_VUS', env.MAX_VUS) : null,
     max_requests: env.MAX_REQUESTS ? getPositiveInteger('MAX_REQUESTS', env.MAX_REQUESTS) : null,
@@ -58,7 +73,7 @@ export function readConfig(env: Env) {
   check(needs.runtimeMs <= runtimeMs,
     `The workload needs ${Math.ceil(needs.runtimeMs / 60_000)} minutes, beyond MAX_RUNTIME`)
   return {
-    executionId, domain, rate, durationMs, maxVus, observers, needs, budgets, deadlineMs: runtimeMs,
+    executionId, domain, manifest, entry, rate, durationMs, maxVus, observers, needs, budgets, deadlineMs: runtimeMs,
     minSuccessRate: env.MIN_SUCCESS_RATE || '0.99', p95LimitMs: env.P95_LIMIT_MS || '2000',
   }
 }
@@ -87,10 +102,7 @@ async function main(): Promise<number> {
   const config = readConfig(env)
   const startedAt = new Date().toISOString()
   const deadline = Date.now() + config.deadlineMs
-  const manifest = readManifest(env.SEED_MANIFEST || manifestPath(config.domain), config.domain)
-  const entry = manifest.instances.find(i => i.files.length)
-  check(manifest.status === 'complete' && manifest.profile === 'tree' && entry,
-    `${config.domain} is not a complete tree fixture`)
+  const { manifest, entry } = config
   const before = verify(config.domain)
   check(!before, `The fixture did not verify before the run: ${before}`)
 

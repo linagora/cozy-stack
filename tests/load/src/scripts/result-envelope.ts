@@ -185,7 +185,7 @@ export function mixedEnvelope(report: Record<string, any>, context: RunContext):
     execution: context.interrupted ? 'interrupted' : report.status && report.status !== 'not_measured' &&
       !report.problems?.length ? 'completed' : 'incomplete',
     correctness: report.correctness_failures?.length ? 'failed'
-      : checks.metadata_checks > 0 && checks.upload_checks > 0 ? 'verified' : 'not_verified',
+      : checks.complete === true ? 'verified' : 'not_verified',
     // A regression fails performance; a correctness failure alone says nothing about it.
     performance: report.status === 'failed' && report.reasons?.length > (report.correctness_failures?.length ?? 0)
       ? 'failed' : report.status === 'passed' ? 'passed' : 'not_measured',
