@@ -79,6 +79,8 @@ export const changesReaderUnique = new Trend('shared_drive_changes_reader_unique
 export const contentVerified = new Counter('shared_drive_content_verified_total')
 export const contentMismatch = new Counter('shared_drive_content_mismatch_total')
 export const contentDenied = new Counter('shared_drive_content_denied_total')
+// Attempted checks that proved nothing either way: a missing or unreadable file, a server error.
+export const contentUnverified = new Counter('shared_drive_content_unverified_total')
 
 // --- Configuration ---
 const rawDuration = __ENV.DURATION || '30s'
@@ -386,12 +388,17 @@ const contentChecks = new Map<string, number>()
 // with the bytes their writer derived from the name.
 function verifyContent(data: SetupData, id: string, name: unknown): void {
   const level = parseRampUploadLevel(name)
-  const marker = parseUploadMarker(name)
   const done = contentChecks.get(level) ?? 0
-  if (marker === null || done >= contentChecksPerLevel) {
+  if (done >= contentChecksPerLevel) {
     return
   }
   contentChecks.set(level, done + 1)
+  const tags = { level }
+  const marker = parseUploadMarker(name)
+  if (marker === null) {
+    contentUnverified.add(1, tags)
+    return
+  }
   const target: SharedDriveUploadTarget = {
     kind: 'shared-drive', driveId: data.driveId, rootDirectoryId: data.testDir.id,
   }
@@ -400,12 +407,13 @@ function verifyContent(data: SetupData, id: string, name: unknown): void {
     responseType: 'binary',
     tags: { name: 'GET /sharings/drives/:id/download/:file-id', scenario: 'changes_readers' },
   })
-  const tags = { level }
   if (res.status === 403) {
     contentDenied.add(1, tags)
   } else if (res.status === 200 && res.body instanceof ArrayBuffer) {
     const matches = md5(res.body, 'base64') === md5(randomizeUploadData(marker), 'base64')
     ;(matches ? contentVerified : contentMismatch).add(1, tags)
+  } else {
+    contentUnverified.add(1, tags)
   }
 }
 

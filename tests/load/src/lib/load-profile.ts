@@ -69,6 +69,7 @@ export type RampLevelResult = {
   changes_success_rate: number | null
   content_denied: number
   content_mismatches: number
+  content_unverified: number
   content_verified: number
   hold_completed: boolean
   level: number
@@ -458,6 +459,7 @@ function readP95(metrics: SummaryMetrics, name: string): number | null {
 export const contentCounters = [
   'shared_drive_content_verified_total', 'shared_drive_content_mismatch_total',
   'shared_drive_content_denied_total', 'shared_drive_changes_malformed_total',
+  'shared_drive_content_unverified_total',
 ] as const
 
 // The worst reader's unique observations, and how many readers reported.
@@ -581,7 +583,7 @@ function evaluateLevel(
     const worst = readings[readersKey]?.min
     return [key, worst === undefined || !uploads ? null : worst / uploads]
   })) as Record<DeliveryKey, number | null>
-  const [verified, mismatches, denied, malformed] = contentCounters.map(metric =>
+  const [verified, mismatches, denied, malformed, unverified] = contentCounters.map(metric =>
     readCount(metrics, rampLevelMetricName(metric, level)) ?? 0)
   const result: RampLevelResult = {
     ...counts,
@@ -592,6 +594,7 @@ function evaluateLevel(
     changes_success_rate: rates.changes_success_rate?.rate ?? null,
     content_denied: denied!,
     content_mismatches: mismatches!,
+    content_unverified: unverified!,
     content_verified: verified!,
     hold_completed: (readCount(metrics, rampLevelMetricName('shared_drive_ramp_hold_completed', level)) ?? 0) > 0,
     level,
@@ -607,7 +610,13 @@ function evaluateLevel(
     return { ...result, status: 'not_run' }
   }
 
-  const verdicts: Verdicts = { failures: [...contentFailures(result)], missing: [] }
+  // A check that read nothing, or no check at all, leaves the level's content unverified.
+  const contentMissing = [
+    ...(result.content_unverified ? [`${result.content_unverified} content checks could not read the file`] : []),
+    ...(criteria.contentChecksPerLevel && uploads && !result.content_verified
+      ? ['no upload content was verified'] : []),
+  ]
+  const verdicts: Verdicts = { failures: [...contentFailures(result)], missing: contentMissing }
   judgeRates(rates, criteria, verdicts)
   judgeDeliveries(ratios, readers, expected, criteria, verdicts)
   judgeTrends(trends, criteria, verdicts)

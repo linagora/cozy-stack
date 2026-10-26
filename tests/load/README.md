@@ -356,8 +356,11 @@ Shared drives can be tested in two modes:
      name. Each changes reader downloads up to `CONTENT_CHECKS_PER_LEVEL`
      (default 2) new files per level and compares them with the bytes their
      writer derived from the name. Wrong content or a refused download fails
-     the level and exits 1, whatever the other levels measured; the report
-     records the checks made as `content_verified` and the scope as
+     the level and exits 1, whatever the other levels measured. A check that
+     reads nothing (a missing file, a server error, a lost connection) is
+     recorded as `content_unverified` and keeps the level from passing, as
+     does a level with no verified content; the report records the checks
+     made as `content_verified` and the scope as
      `criteria.content_checks_per_level`.
 
    Latency is judged only when `P95_LIMIT_MS` is set: the upload and

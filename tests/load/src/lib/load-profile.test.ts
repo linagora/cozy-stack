@@ -40,7 +40,8 @@ const SAMPLES = 100
 type LevelSample = {
   changesDelivery?: number | undefined
   changesReaders?: number | undefined
-  content?: { verified?: number, mismatch?: number, denied?: number, malformed?: number } | undefined
+  content?: { verified?: number, mismatch?: number, denied?: number, malformed?: number, unverified?: number }
+    | undefined
   changesP95?: number | undefined
   changesSuccess?: number | undefined
   uploadP95?: number | undefined
@@ -104,16 +105,18 @@ function makeMetrics(samples: Record<number, LevelSample>): SummaryMetrics {
           plan.vusPerLevel.changesReaders,
       ),
     )
-    const readers = (ratio: number | undefined, count: number) => ({ values: { count, min: Math.round((ratio ?? 1) * uploads) } })
+    const readers = (ratio: number | undefined, count: number) =>
+      ({ values: { count, min: Math.round((ratio ?? 1) * uploads) } })
     metrics[name('shared_drive_ws_reader_unique')] = readers(sample.wsDelivery,
       sample.wsReaders ?? level * plan.vusPerLevel.wsReaders)
     metrics[name('shared_drive_changes_reader_unique')] = readers(sample.changesDelivery,
       sample.changesReaders ?? level * plan.vusPerLevel.changesReaders)
-    const { verified = 2, mismatch = 0, denied = 0, malformed = 0 } = sample.content ?? {}
+    const { verified = 2, mismatch = 0, denied = 0, malformed = 0, unverified = 0 } = sample.content ?? {}
     metrics[name('shared_drive_content_verified_total')] = counter(verified)
     metrics[name('shared_drive_content_mismatch_total')] = counter(mismatch)
     metrics[name('shared_drive_content_denied_total')] = counter(denied)
     metrics[name('shared_drive_changes_malformed_total')] = counter(malformed)
+    metrics[name('shared_drive_content_unverified_total')] = counter(unverified)
   }
 
   return metrics
@@ -294,6 +297,7 @@ describe('buildRampThresholds', (): void => {
       'shared_drive_changes_success_rate{level:1}',
       'shared_drive_content_denied_total{level:1}',
       'shared_drive_content_mismatch_total{level:1}',
+      'shared_drive_content_unverified_total{level:1}',
       'shared_drive_content_verified_total{level:1}',
       'shared_drive_ramp_hold_completed{level:1}',
       'shared_drive_upload_success_rate{level:1}',
@@ -531,6 +535,17 @@ describe('evaluateRampLevels', (): void => {
     deepEqual([clean.correctness_failures, clean.levels[0]?.content_verified, clean.levels[0]?.changes_malformed],
       [[], 2, 3])
     equal(clean.criteria.content_checks_per_level, 2)
+  })
+
+  it('a content check that read nothing, or no check at all, keeps the level from passing', (): void => {
+    const levels = { ...plan, levels: [1] }
+    const unread = evaluateRampLevels(makeMetrics({ 1: { ...healthy, content: { verified: 1, unverified: 1 } } }),
+      levels, criteria)
+    deepEqual([unread.levels[0]?.status, unread.levels[0]?.reasons, unread.correctness_failures],
+      ['not_measured', ['1 content checks could not read the file'], []])
+    const none = makeMetrics({ 1: { ...healthy, content: { verified: 0 } } })
+    deepEqual(evaluateRampLevels(none, levels, criteria).levels[0]?.reasons, ['no upload content was verified'])
+    equal(evaluateRampLevels(none, levels, { ...criteria, contentChecksPerLevel: 0 }).levels[0]?.status, 'passed')
   })
 
   it('marks levels the run never reached', (): void => {
