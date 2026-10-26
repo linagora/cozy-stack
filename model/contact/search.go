@@ -18,8 +18,8 @@ import (
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 )
 
-// ErrNoSearch is returned when the context of the instance has no
-// autocomplete API, or the instance has no email to search for.
+// ErrNoSearch is returned when the contacts service is disabled, the context
+// has no autocomplete API, or the instance has no email to search for.
 var ErrNoSearch = errors.New("no contacts search for this instance")
 
 // The share modal calls the search as the user types, so a slow answer is
@@ -36,7 +36,7 @@ type Person struct {
 // with an email that match q, in the address books of the owner of inst.
 func Search(inst *instance.Instance, q string, limit int) ([]Person, error) {
 	cfg, ok := config.GetContactsSearch(inst.ContextName)
-	if !ok || inst.Email == "" {
+	if !inst.HasCommonContacts() || !ok || inst.Email == "" {
 		return nil, ErrNoSearch
 	}
 	body, err := json.Marshal(map[string]interface{}{

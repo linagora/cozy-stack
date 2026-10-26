@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,10 @@ func TestSuggest(t *testing.T) {
 	}
 	config.UseTestFile(t)
 	testutils.NeedCouchdb(t)
+	conf := config.GetConfig()
+	previous := conf.Contexts
+	conf.Contexts = map[string]interface{}{"suggest": map[string]interface{}{"common_contacts": true}}
+	t.Cleanup(func() { conf.Contexts = previous })
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	orgID := "fe" + suffix
@@ -48,8 +53,10 @@ func TestSuggest(t *testing.T) {
 	create(alice, "Bob Durand", "bob@acme.example") // a member copy
 	carol := create(alice, "Carol Durand", "carol@friends.example")
 
+	var calls atomic.Int32
 	status := http.StatusOK
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(`[
 			{"names": [{"displayName": "Alice Durand"}], "emailAddresses": [{"value": "alice@acme.example"}]},
@@ -87,6 +94,21 @@ func TestSuggest(t *testing.T) {
 			{"", "", "Dave Durand", "dave@unknown.example"},
 		}, results(suggestions))
 	})
+
+	for _, centralized := range []bool{false, true} {
+		t.Run(fmt.Sprintf("LocalWithoutService/centralized=%t", centralized), func(t *testing.T) {
+			conf.Contexts["suggest"] = map[string]interface{}{"centralized_org_directory": centralized}
+			t.Cleanup(func() { conf.Contexts["suggest"] = map[string]interface{}{"common_contacts": true} })
+			before := calls.Load()
+			suggestions, err := Suggest(alice, "DURAN", 20)
+			require.NoError(t, err)
+			assert.Equal(t, []result{
+				{bob.ID(), SuggestionMember, "Bob Durand", "bob@acme.example"},
+				{carol.ID(), SuggestionContact, "Carol Durand", "carol@friends.example"},
+			}, results(suggestions))
+			assert.Equal(t, before, calls.Load(), "local lookup must not call the external service")
+		})
+	}
 
 	t.Run("FallsBackToTheLocalSearch", func(t *testing.T) {
 		status = http.StatusServiceUnavailable

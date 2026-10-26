@@ -108,6 +108,9 @@ func TestContacts(t *testing.T) {
 			]`))
 		}))
 		t.Cleanup(side.Close)
+		previous := config.GetConfig().Contexts
+		config.GetConfig().Contexts = map[string]interface{}{config.DefaultInstanceContext: map[string]interface{}{"common_contacts": true}}
+		t.Cleanup(func() { config.GetConfig().Contexts = previous })
 		config.GetConfig().ContactsSearch = map[string]config.ContactsSearch{
 			testInstance.ContextName: {URL: side.URL, Token: "s3cr3t"},
 		}
@@ -128,5 +131,8 @@ func TestContacts(t *testing.T) {
 		unknown.NotContainsKey("meta")
 		unknown.Path("$.attributes.fullname").Equal("Paul Dupont")
 		unknown.Path("$.attributes.email[0].address").Equal("paul@example.com")
+
+		config.GetConfig().Contexts[config.DefaultInstanceContext] = map[string]interface{}{"centralized_org_directory": true}
+		suggest("dupont").Length().Equal(1)
 	})
 }

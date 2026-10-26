@@ -2,8 +2,10 @@ package contact
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -17,8 +19,14 @@ import (
 
 func TestSearch(t *testing.T) {
 	config.UseTestFile(t)
+	conf := config.GetConfig()
+	previous := conf.Contexts
+	conf.Contexts = map[string]interface{}{"acme": map[string]interface{}{"common_contacts": true}}
+	t.Cleanup(func() { conf.Contexts = previous })
+	var calls atomic.Int32
 	status := http.StatusOK
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/api/people/search", r.URL.Path)
 		assert.Equal(t, "Bearer s3cr3t", r.Header.Get("Authorization"))
@@ -48,6 +56,15 @@ func TestSearch(t *testing.T) {
 	t.Cleanup(func() { config.GetConfig().ContactsSearch = nil })
 	inst := &instance.Instance{Domain: "jean.acme.example", ContextName: "acme", Email: "jean@acme.example"}
 
+	for _, centralized := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ServiceDisabled/centralized=%t", centralized), func(t *testing.T) {
+			conf.Contexts["acme"] = map[string]interface{}{"centralized_org_directory": centralized}
+			_, err := Search(inst, "dup", 20)
+			require.ErrorIs(t, err, ErrNoSearch)
+		})
+	}
+	require.Zero(t, calls.Load(), "configured search must not call the service while its flag is off")
+	conf.Contexts["acme"] = map[string]interface{}{"common_contacts": true}
 	people, err := Search(inst, "dup", 20)
 	require.NoError(t, err)
 	assert.Equal(t, []Person{

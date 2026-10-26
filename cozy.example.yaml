@@ -383,8 +383,9 @@ office:
 #     token: f95880b7fa9e8a51e103ac5383bc5956d849267e99b336f31df8bd86c2e9ec50
 
 # The autocomplete API of the calendar side service, used to suggest the
-# recipients of a sharing. The key is the context name, with no fallback on
-# default: a context without it searches its own contacts instead.
+# recipients of a sharing when common_contacts is enabled. The key is the context
+# name, with no fallback on default. Otherwise, suggestions search the local and
+# organization contacts in CouchDB, independently of centralized_org_directory.
 # contacts_search:
 #   my-context:
 #     url: https://calendar-side-service.example.org:81/api/people/search
@@ -512,8 +513,8 @@ contexts:
     # regardless of this setting (it must go through POST /settings/email or the
     # CLI).
     signup_url: https://signup.example.org
-    # Write the contacts from the twake:contacts:common exchange: members on the
-    # organization instance, personal contacts on their owner's instance.
+    # Enable the contacts service feed, collected contacts and external search.
+    # Local organization lookup remains available without the service.
     common_contacts: false
     # Keep directory copies until the sharing UI supports organization lookup.
     # Independent of common_contacts: B2B events can maintain the org directory.
