@@ -410,10 +410,15 @@ Group membership is stored on managed external contacts via
 `relationships.groups.data`; existing generated-ID external contacts are reused
 by matching email or Cozy URL.
 
-When the context sets `common_contacts`, groups are written on the
-organization instance only. A member contact the feed already wrote keeps its
-fields and only gets the group, and sharing with a group looks it up on the
-organization instance first.
+When the context sets `centralized_org_directory`, groups are written on the
+organization instance only, independently of `common_contacts`. A member contact
+the feed already wrote keeps its fields and only gets the group. Sharing looks
+up managed B2B groups on the organization instance even while replication is
+retained. Local fallback is allowed only while replication is retained.
+
+Keep `centralized_org_directory: false` for the initial backend rollout. The
+current sharing UI still queries local contacts/groups, and group changes on the
+organization instance do not yet propagate to sharings on member instances.
 
 Example payload for `user.phone.updated`:
 

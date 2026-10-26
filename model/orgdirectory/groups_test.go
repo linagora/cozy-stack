@@ -337,14 +337,14 @@ func needCouchDB(t *testing.T) {
 	}
 }
 
-func TestSyncGroupWithCommonContacts(t *testing.T) {
+func TestSyncGroupWithCentralizedDirectory(t *testing.T) {
 	config.UseTestFile(t)
 	needCouchDB(t)
 
 	const feedCtx = "groups-common-contacts"
 	conf := config.GetConfig()
 	previous := conf.Contexts
-	conf.Contexts = map[string]interface{}{feedCtx: map[string]interface{}{"common_contacts": true}}
+	conf.Contexts = map[string]interface{}{feedCtx: map[string]interface{}{"centralized_org_directory": true}}
 	t.Cleanup(func() { conf.Contexts = previous })
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -407,4 +407,69 @@ func TestSyncGroupWithCommonContacts(t *testing.T) {
 	stored, err = contact.Find(org, fromFeed.ID())
 	require.NoError(t, err)
 	require.NotContains(t, stored.GroupIDs(), groupID)
+}
+
+func TestGroupReplicationFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		centralized, common bool
+	}{
+		{name: "replicated without service"},
+		{name: "replicated with service", common: true},
+		{name: "centralized without service", centralized: true},
+		{name: "centralized with service", centralized: true, common: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config.UseTestFile(t)
+			needCouchDB(t)
+			conf := config.GetConfig()
+			previous := conf.Contexts
+			conf.Contexts = map[string]interface{}{config.DefaultInstanceContext: map[string]interface{}{
+				"centralized_org_directory": tc.centralized, "common_contacts": tc.common,
+			}}
+			t.Cleanup(func() { conf.Contexts = previous })
+			suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+			orgID := "groupflags" + suffix
+			orgDomain := orgID + ".example"
+			org := createOrgDirectoryInstance(t, orgID+".local", orgDomain, orgID, "", "Organization")
+			alice := createOrgDirectoryInstance(t, "alice-"+suffix+".local", orgDomain, orgID, "", "Alice")
+			members := []GroupMember{{Email: "bob@example.test", FirstName: "Bob"}}
+			require.NoError(t, SyncGroupCreated(testCtx(t), GroupCreatedMessage{OrganizationID: orgID, ID: "team", Name: "Team", Members: members}))
+			groupID := GroupDocID(orgID, "team")
+			name := "Renamed team"
+			require.NoError(t, SyncGroupUpdated(testCtx(t), GroupUpdatedMessage{OrganizationID: orgID, ID: "team", Name: &name}))
+			for _, inst := range []*instance.Instance{org, alice} {
+				group, err := contact.FindGroup(inst, groupID)
+				if inst == alice && tc.centralized {
+					require.True(t, couchdb.IsNotFoundError(err))
+					continue
+				}
+				require.NoError(t, err)
+				require.Equal(t, name, group.Name())
+				contacts, err := group.GetAllContacts(inst)
+				require.NoError(t, err)
+				require.Len(t, contacts, 1)
+			}
+			require.NoError(t, SyncGroupMembersRemoved(testCtx(t), GroupMembersMessage{OrganizationID: orgID, ID: "team", Members: members}))
+			for _, inst := range []*instance.Instance{org, alice} {
+				if inst == alice && tc.centralized {
+					continue
+				}
+				bob, err := contact.FindByEmail(inst, "bob@example.test")
+				require.NoError(t, err)
+				require.NotContains(t, bob.GroupIDs(), groupID)
+			}
+			require.NoError(t, SyncGroupMembersAdded(testCtx(t), GroupMembersMessage{OrganizationID: orgID, ID: "team", Members: members}))
+			require.NoError(t, SyncGroupDeleted(testCtx(t), GroupDeletedMessage{OrganizationID: orgID, ID: "team"}))
+			for _, inst := range []*instance.Instance{org, alice} {
+				_, err := contact.FindGroup(inst, groupID)
+				require.True(t, couchdb.IsNotFoundError(err))
+			}
+			if tc.centralized {
+				require.NoError(t, lifecycle.Destroy(org.Domain))
+				err := SyncGroupCreated(testCtx(t), GroupCreatedMessage{OrganizationID: orgID, ID: "team", Name: "Team"})
+				require.ErrorIs(t, err, instance.ErrNotFound)
+			}
+		})
+	}
 }

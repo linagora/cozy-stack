@@ -883,6 +883,20 @@ func TestRevokeDeletedGroupFromRecipient(t *testing.T) {
 }
 
 func TestAddGroupFromOrgInstance(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		centralized, common bool
+	}{
+		{name: "replicated without service"},
+		{name: "replicated with service", common: true},
+		{name: "centralized without service", centralized: true},
+		{name: "centralized with service", centralized: true, common: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testAddGroupFromOrgInstance(t, tc.centralized, tc.common) })
+	}
+}
+
+func testAddGroupFromOrgInstance(t *testing.T, centralized, common bool) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
@@ -891,7 +905,7 @@ func TestAddGroupFromOrgInstance(t *testing.T) {
 
 	conf := config.GetConfig()
 	previous := conf.Contexts
-	conf.Contexts = map[string]interface{}{"groups-on-org": map[string]interface{}{"common_contacts": true}}
+	conf.Contexts = map[string]interface{}{"groups-on-org": map[string]interface{}{"centralized_org_directory": centralized, "common_contacts": common}}
 	t.Cleanup(func() { conf.Contexts = previous })
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -957,8 +971,15 @@ func TestAddGroupFromOrgInstance(t *testing.T) {
 		assert.True(t, couchdb.IsNotFoundError(err), "%s: %v", id, err)
 	}
 
-	// Without the common contacts, the groups are read on the instance only.
-	outside := newInstance("outside-"+suffix+".ag.localhost", "", "")
+	// Another organization cannot read this directory.
+	outside := newInstance("outside-"+suffix+".ag.localhost", "groups-on-org", "")
+	outside.OrgID = "other-" + orgID
 	_, err = MembersFromContacts(outside, []string{team.ID()}, nil, false)
 	assert.True(t, couchdb.IsNotFoundError(err) || couchdb.IsNoDatabaseError(err), "%v", err)
+
+	if centralized {
+		require.NoError(t, couchdb.DeleteDoc(org, team))
+		_, err = MembersFromContacts(alice, []string{team.ID()}, nil, false)
+		assert.True(t, couchdb.IsNotFoundError(err), "do not resurrect deleted groups through stale local copies: %v", err)
+	}
 }

@@ -93,11 +93,11 @@ func groupMembers(inst *instance.Instance, groupID string, readOnly bool) (*cont
 	return group, members, nil
 }
 
-// findGroup looks a B2B group up on the org instance when the contacts are
-// common, then on the instance itself, and also returns the instance where
-// its contacts are. A member may not see the other groups of the org instance.
+// findGroup resolves B2B groups on the org instance even while replication is
+// retained. Only replicated directories may fall back to a local group copy.
+// A member may not see the other groups of the org instance.
 func findGroup(inst *instance.Instance, groupID string) (*contact.Group, *instance.Instance, error) {
-	if inst.HasCommonContacts() && orgdirectory.IsManagedDirectoryGroupID(groupID) {
+	if orgdirectory.IsManagedDirectoryGroupID(groupID) {
 		orgInst, err := findOrgInstance(inst)
 		if err != nil {
 			return nil, nil, err
@@ -110,6 +110,9 @@ func findGroup(inst *instance.Instance, groupID string) (*contact.Group, *instan
 			if err != nil && !couchdb.IsNotFoundError(err) && !couchdb.IsNoDatabaseError(err) {
 				return nil, nil, err
 			}
+		}
+		if inst.HasCentralizedOrgDirectory() {
+			return nil, nil, &couchdb.Error{StatusCode: http.StatusNotFound, Name: "not_found", Reason: "missing organization group"}
 		}
 	}
 	group, err := contact.FindGroup(inst, groupID)

@@ -88,7 +88,7 @@ func IsManagedDirectoryGroupID(id string) bool {
 
 // SyncGroupCreated replicates a B2B group and its initial members to every
 // instance in the organization, or to the organization instance only once it
-// reads the common contacts.
+// centralizes the organization directory.
 func SyncGroupCreated(ctx context.Context, msg GroupCreatedMessage) error {
 	if err := validateGroupIdentity("b2b.group.created", msg.OrganizationID, msg.ID); err != nil {
 		return err
@@ -285,17 +285,22 @@ func forEachOrgInstance(ctx context.Context, eventName, organizationID string, f
 		return fmt.Errorf("%s: %w", eventName, err)
 	}
 	var errs []error
+	visited := false
 	for _, inst := range scope.Instances {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// With the feed, the groups live on the organization instance only.
-		if inst.HasCommonContacts() && !inst.IsOrganizationInstance() {
+		// Service integration does not change where directory copies live.
+		if inst.HasCentralizedOrgDirectory() && !inst.IsOrganizationInstance() {
 			continue
 		}
+		visited = true
 		if err := fn(inst); err != nil {
 			errs = append(errs, fmt.Errorf("%s on %s: %w", eventName, inst.Domain, err))
 		}
+	}
+	if !visited {
+		return fmt.Errorf("%s: organization %s has no organization instance: %w", eventName, organizationID, instance.ErrNotFound)
 	}
 	return errors.Join(errs...)
 }
@@ -339,7 +344,7 @@ func upsertGroup(inst *instance.Instance, fields GroupPatch) error {
 func ensureGroupExists(inst *instance.Instance, organizationID, externalID string) error {
 	groupID := GroupDocID(organizationID, externalID)
 	group, err := contact.FindGroup(inst, groupID)
-	// A member onboarded under common_contacts got no copy of the groups.
+	// A member onboarded with a centralized directory got no group copies.
 	if couchdb.IsNotFoundError(err) {
 		return upsertGroup(inst, GroupPatch{
 			OrganizationID: strings.TrimSpace(organizationID),
