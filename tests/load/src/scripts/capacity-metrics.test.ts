@@ -5,6 +5,15 @@ import { uploadEnvelope } from './result-envelope.ts'
 
 const counts = { valid: 1, invalid: 0, unsupported: 0 }
 
+test('activity profiles distinguish owner credentials from member identities', () => {
+  const owner: string = renderMetrics([report('shared_drive', {})], counts)
+  assert.match(samples(owner, 'run_info')[0]!, /profile="Writer \/ WebSocket \/ changes roles · one identity"/)
+  const members: string = renderMetrics([report('shared_drive', {
+    actors: { placement: [{ role: 'owner' }, { role: 'writer' }, { role: 'reader' }] },
+  })], counts)
+  assert.match(samples(members, 'run_info')[0]!, /profile="Owner, writer and read-only member identities"/)
+})
+
 test('the same four verdicts describe both modes on either environment', () => {
   for (const load_target of ['local', 'dev']) {
     for (const mode of ['regression', 'capacity']) {

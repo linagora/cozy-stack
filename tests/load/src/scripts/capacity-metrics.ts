@@ -244,9 +244,11 @@ export function getReportSamples(
       : reasonCategory(declared?.reason ?? data.failure_reason ?? data.error, outcome === 0)
     const runtime = typeof budgets.max_runtime === 'string' && /^\d+(ms|s|m|h)$/.test(budgets.max_runtime)
       ? budgets.max_runtime : 'Not recorded'
+    const activityProfile: string = records(record(data.actors).placement).some(actor => actor.role === 'writer')
+      ? 'Owner, writer and read-only member identities' : 'Writer / WebSocket / changes roles · one identity'
     emit('run_info', { ...base, title: `${workload}${size === 'n/a' ? '' : ` · ${size}`} · ${recordedStart.slice(5, 19).replace('T', ' ')} UTC`,
       workload, profile: kind === 'upload' ? `${size} files · ${target}`
-        : kind === 'fanout' ? 'Distinct organization recipients' : 'Writer / WebSocket / changes roles · one identity',
+        : kind === 'fanout' ? 'Distinct organization recipients' : activityProfile,
       file_size: size, upload_target: target,
       reason: runReason,
       schema: declared === undefined ? 'legacy' : declared === null ? 'invalid' : declared.schema,
