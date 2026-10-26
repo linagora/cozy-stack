@@ -130,7 +130,13 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
   const writerGroup = await grant(actors.writer, 'recipients')
   await grant(actors.reader, 'read_only_recipients')
 
-  // Members of the organization accept its drives on their own (ORG-DRIVE-FANOUT.md).
+  // Members of the organization accept its drives on their own (ORG-DRIVE-FANOUT.md). A member asked
+  // before its sharing arrived can stay refused for a while, so the owner's roster comes first.
+  const ready = await poll(settleMs, async () => {
+    const members = parse((await owner('GET', `/sharings/${drive.id}`)).body)?.data?.attributes?.members ?? []
+    return members.length === 3 && members.slice(1).every((m: { status?: string }) => m.status === 'ready')
+  })
+  check(ready, 'The members did not accept the drive in time')
   const rootPath = `/sharings/drives/${drive.id}/${drive.root}`
   let statuses: number[] = []
   const accepted = await poll(settleMs, async () => {

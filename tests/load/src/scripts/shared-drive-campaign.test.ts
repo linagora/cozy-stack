@@ -137,8 +137,10 @@ test('member actors play the ramp roles, and a proven access failure outweighs t
   deepEqual([run.token, run.writer], [`token-${org}`, `token-${writer}`])
   ok(!JSON.stringify(report).includes('token-'))
 
+  // A fresh drive: the first run's groups and root are gone.
   actors.state.readOnlyWrites = true
   actors.state.root = 'live'
+  actors.state.groups.length = 0
   ;({ code, output } = await f.run(env))
   equal(code, 1, output)
   report = f.report('shared-drive-ramp')

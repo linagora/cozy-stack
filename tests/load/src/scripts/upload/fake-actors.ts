@@ -15,10 +15,10 @@ export async function fakeActors(t: TestContext) {
   const uuids = new Map([org, writer, reader].map(d => [d, randomUUID()]))
   const state = {
     uuids, replaced: '', readOnlyWrites: false, keepRevoked: false,
-    groups: [] as Array<{ id: string, readOnly: boolean, members: string[], revoked: boolean }>,
+    groups: [] as Array<{ id: string, readOnly: boolean, members: string[], revoked: boolean, granted?: boolean }>,
     contacts: new Map<string, string>(), docs: new Set<string>(), root: 'live', requests: [] as string[],
   }
-  const grant = (member: string) => state.groups.find(g => g.members.includes(member) && !g.revoked)
+  const grant = (member: string) => state.groups.find(g => g.members.includes(member) && g.granted && !g.revoked)
   const server = createServer(async (req, res) => {
     let body = ''
     for await (const chunk of req) body += chunk
@@ -55,12 +55,15 @@ export async function fakeActors(t: TestContext) {
     if (route === 'POST /sharings/sid/recipients') {
       const relationships = JSON.parse(body).data.relationships
       const [relation] = Object.keys(relationships)
-      state.groups.find(g => g.id === relationships[relation!].data[0].id)!.readOnly = relation === 'read_only_recipients'
+      const group = state.groups.find(g => g.id === relationships[relation!].data[0].id)!
+      Object.assign(group, { readOnly: relation === 'read_only_recipients', granted: true })
       return send(200, {})
     }
     if (route === 'GET /sharings/sid') {
+      const members = state.groups.filter(g => g.members.length && g.granted)
+        .map(g => ({ status: g.revoked ? 'revoked' : 'ready' }))
       return send(200, { data: { attributes: { groups: state.groups.map(g => ({ id: g.id, revoked: g.revoked })),
-        members: [{ status: 'owner' }] } } })
+        members: [{ status: 'owner' }, ...members] } } })
     }
     const index = url.pathname.match(/^\/sharings\/sid\/groups\/(\d+)$/)?.[1]
     if (req.method === 'DELETE' && index) {
