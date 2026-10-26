@@ -132,11 +132,12 @@ export async function prepareActors(env: Env, executionId: string): Promise<Driv
 
   // Members of the organization accept its drives on their own (ORG-DRIVE-FANOUT.md).
   const rootPath = `/sharings/drives/${drive.id}/${drive.root}`
+  let statuses: number[] = []
   const accepted = await poll(settleMs, async () => {
-    const statuses = await Promise.all([writer, reader].map(async api => (await api('GET', rootPath)).status))
+    statuses = await Promise.all([writer, reader].map(async api => (await api('GET', rootPath)).status))
     return statuses.every(status => status === 200)
   })
-  check(accepted, 'The members did not reach the drive in time')
+  check(accepted, `The members did not reach the drive in time: writer HTTP ${statuses[0]}, reader HTTP ${statuses[1]}`)
   const upload = (api: Api, role: Role) =>
     api('POST', `${rootPath}?Type=file&Name=${name}-${role}.txt`, role, 'text/plain')
   const access: Record<string, number> = {
