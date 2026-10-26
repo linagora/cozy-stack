@@ -33,6 +33,7 @@ var (
 	withMetadataFlag     bool
 	sinceFlag            string
 	expectedContactsFlag int
+	contactPathsFlag     string
 )
 
 var fixerCmdGroup = &cobra.Command{
@@ -598,16 +599,32 @@ republication of the domain address books has completed without failures and
 the stack has read every message, with --since set a few minutes before the
 start of the republication, as the stack and the side service clocks may
 differ. Pass the completed task's processedContactCount as --expected-contacts;
-the fixer refuses until that many distinct contacts have been observed.
+and the exact CardDAV paths as a JSON array in --paths-file. The fixer refuses
+until the observed paths match this completed snapshot.
 Contacts the feed did not write are kept.
 `,
-	Example: `$ cozy-stack fix org-contacts 6740b0e4e0c5c1001f2ef9d1 --since 2026-10-07T08:00:00Z --expected-contacts 100 --dry-run`,
+	Example: `$ cozy-stack fix org-contacts 6740b0e4e0c5c1001f2ef9d1 --since 2026-10-07T08:00:00Z --expected-contacts 100 --paths-file paths.json --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 1 || sinceFlag == "" {
 			return cmd.Usage()
 		}
 		if expectedContactsFlag < 0 {
 			return errors.New("expected-contacts must be the non-negative contact count of a completed republication")
+		}
+		data, err := os.ReadFile(contactPathsFlag)
+		if err != nil {
+			return fmt.Errorf("read paths-file: %w", err)
+		}
+		var paths []string
+		if err := json.Unmarshal(data, &paths); err != nil {
+			return fmt.Errorf("paths-file must contain a JSON array of CardDAV paths: %w", err)
+		}
+		if paths == nil {
+			return errors.New("paths-file must contain a JSON array, including [] for an empty snapshot")
+		}
+		body, err := json.Marshal(map[string]interface{}{"paths": paths})
+		if err != nil {
+			return err
 		}
 		if !dryRunFlag && !forceFlag {
 			if err := askForConfirmation("Remove the stale contacts of organization " + args[0] + "?"); err != nil {
@@ -623,6 +640,7 @@ Contacts the feed did not write are kept.
 			Method:  "POST",
 			Path:    "/instances/fixers/org-contacts/" + url.PathEscape(args[0]),
 			Queries: q,
+			Body:    bytes.NewReader(body),
 		})
 		if err != nil {
 			return err
@@ -654,6 +672,7 @@ func init() {
 	memberCopiesFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
 	orgContactsFixer.Flags().StringVar(&sinceFlag, "since", "", "A few minutes before the republication (RFC 3339)")
 	orgContactsFixer.Flags().IntVar(&expectedContactsFlag, "expected-contacts", -1, "processedContactCount of the completed domain republication (required)")
+	orgContactsFixer.Flags().StringVar(&contactPathsFlag, "paths-file", "", "JSON array of CardDAV paths from the completed republication (required)")
 	orgContactsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
 	orgContactsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
 

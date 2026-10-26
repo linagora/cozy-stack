@@ -551,11 +551,19 @@ address books (`POST /domains/<domain>/contacts?action=republish&scope=domain`)
 has completed without failures and the stack has read every message, with
 `since` a few minutes before the start of the republication (the stack and the
 side service clocks may differ), at most 7 days ago. Set the required
-`expected_contacts` to the completed task's `processedContactCount`. The number
-of distinct contacts observed since `since` must match exactly, otherwise the
-fixer refuses to delete anything. Use only a completed, failure-free task scoped
-to this domain's address books. An empty republication requires an explicit zero.
-Concurrent changes can cause a count mismatch; republish again in that case.
+`expected_contacts` to the completed task's `processedContactCount`. Supply the
+exact CardDAV paths exported from the source domain address books for that
+republication as `{"paths":["addressbooks/domain/alice.vcf"]}` in the JSON body
+(a JSON array in the CLI's required `--paths-file`). The path list must contain
+that many distinct, nonempty paths. Every path must have been observed since
+`since`, and no additional path may have been observed in that period, otherwise
+the fixer refuses to delete anything. A count alone cannot detect consumer lag
+hidden by an unrelated live update. Use only a completed, failure-free task
+scoped to this domain's address books and its corresponding source path list.
+The service's task result currently supplies the count, so export the path list
+from the source address books separately; missing input always prevents cleanup.
+An empty republication requires an explicit zero and an empty list. Concurrent
+changes can cause a snapshot mismatch; export and republish again in that case.
 Observations are stored on the contacts in CouchDB, so cache loss cannot make
 contacts appear stale. Republication updates this bookkeeping field and the
 contact revision even when the card is unchanged. Concurrent updates cause a
@@ -572,8 +580,8 @@ It responds with `400 Bad Request` when `since` is not a date, is in the future,
 or is more than 7 days ago, or when `expected_contacts` is missing or invalid;
 with `404 Not Found` when the organization has no instance or no
 organization instance, and with `412 Precondition Failed` when the context of
-the organization instance does not set `common_contacts` or the observed count
-does not match `expected_contacts`.
+the organization instance does not set `common_contacts` or the observed paths
+do not match the supplied snapshot.
 
 #### Query-String
 
@@ -586,7 +594,10 @@ does not match `expected_contacts`.
 #### Request
 
 ```http
-POST /instances/fixers/org-contacts/6740b0e4e0c5c1001f2ef9d1?since=2026-10-07T08:00:00Z&expected_contacts=100&dry_run=true HTTP/1.1
+POST /instances/fixers/org-contacts/6740b0e4e0c5c1001f2ef9d1?since=2026-10-07T08:00:00Z&expected_contacts=1&dry_run=true HTTP/1.1
+Content-Type: application/json
+
+{"paths":["addressbooks/domain/carol.vcf"]}
 ```
 
 #### Response

@@ -20,7 +20,7 @@ const commonContactsSeenAtKey = "twakeCommonContactsSeenAt"
 var (
 	// ErrNoCommonContacts is returned when the contacts service is disabled.
 	ErrNoCommonContacts = errors.New("the organization instance does not read the common contacts")
-	// ErrSinceTooOld is returned when since is older than the seen markers.
+	// ErrSinceTooOld rejects an outdated reconciliation window.
 	ErrSinceTooOld = fmt.Errorf("since must be less than %s ago", maxReconcileAge)
 	// ErrSinceInFuture prevents interpreting every contact as stale.
 	ErrSinceInFuture = errors.New("since cannot be in the future")
@@ -45,15 +45,23 @@ type ReconcileReport struct {
 // ReconcileOrganizationContacts deletes the contacts the feed wrote on the
 // organization instance and did not send again since the given time, to catch
 // the DELETE messages the stack missed.
-func ReconcileOrganizationContacts(ctx context.Context, organizationID string, since time.Time, expectedContacts int, dryRun bool) (*ReconcileReport, error) {
+// The paths and count must describe the same completed source republication.
+func ReconcileOrganizationContacts(ctx context.Context, organizationID string, since time.Time, expectedContacts int, paths []string, dryRun bool) (*ReconcileReport, error) {
 	if time.Since(since) > maxReconcileAge {
 		return nil, ErrSinceTooOld
 	}
 	if since.After(time.Now()) {
 		return nil, ErrSinceInFuture
 	}
-	if expectedContacts < 0 {
+	if expectedContacts < 0 || len(paths) != expectedContacts {
 		return nil, ErrIncompleteRepublication
+	}
+	expectedPaths := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		if path == "" || expectedPaths[path] {
+			return nil, ErrIncompleteRepublication
+		}
+		expectedPaths[path] = true
 	}
 	orgInst, err := FindOrganizationInstance(ctx, organizationID, "")
 	if err != nil {
@@ -74,8 +82,10 @@ func ReconcileOrganizationContacts(ctx context.Context, organizationID string, s
 		return nil, err
 	}
 	report := &ReconcileReport{Domain: orgInst.Domain, Removed: []string{}}
+	observedPaths := make(map[string]bool, len(paths))
 	var stale []*contact.Contact
 	for _, doc := range docs {
+		path, _ := doc.Get(contact.CardDAVPathKey).(string)
 		var at time.Time
 		if value, exists := doc.M[commonContactsSeenAtKey]; exists {
 			text, _ := value.(string)
@@ -85,12 +95,19 @@ func ReconcileOrganizationContacts(ctx context.Context, organizationID string, s
 			}
 		}
 		if !at.Before(since) {
+			if !expectedPaths[path] || observedPaths[path] {
+				return nil, fmt.Errorf("%w: unexpected or repeated path %s", ErrIncompleteRepublication, path)
+			}
+			observedPaths[path] = true
 			report.Kept++
 		} else {
+			if expectedPaths[path] {
+				return nil, fmt.Errorf("%w: path %s has not been observed", ErrIncompleteRepublication, path)
+			}
 			stale = append(stale, doc)
 		}
 	}
-	if report.Kept != expectedContacts {
+	if len(observedPaths) != expectedContacts {
 		return nil, fmt.Errorf("%w: got %d, expected %d; refusing to remove %d contacts", ErrIncompleteRepublication, report.Kept, expectedContacts, len(stale))
 	}
 

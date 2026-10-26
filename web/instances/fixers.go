@@ -407,8 +407,14 @@ func orgContactsFixer(c echo.Context) error {
 	if err != nil || expected < 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "expected_contacts must be the non-negative contact count of a completed republication")
 	}
+	var snapshot struct {
+		Paths *[]string `json:"paths"`
+	}
+	if err := json.NewDecoder(c.Request().Body).Decode(&snapshot); err != nil || snapshot.Paths == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "a JSON object with the completed republication's paths is required")
+	}
 	dryRun := c.QueryParam("dry_run") == "true"
-	report, err := orgdirectory.ReconcileOrganizationContacts(c.Request().Context(), c.Param("org_id"), since, expected, dryRun)
+	report, err := orgdirectory.ReconcileOrganizationContacts(c.Request().Context(), c.Param("org_id"), since, expected, *snapshot.Paths, dryRun)
 	switch {
 	case errors.Is(err, orgdirectory.ErrSinceTooOld), errors.Is(err, orgdirectory.ErrSinceInFuture):
 		return jsonapi.BadRequest(err)

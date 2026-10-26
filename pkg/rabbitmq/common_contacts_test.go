@@ -132,7 +132,7 @@ func TestCommonContactsHandler(t *testing.T) {
 			since := time.Now()
 			handle(t, message("ADD", domainAudience, path, card("Carol Doe", "carol@acme.example", "+33123", "carol.cc.localhost")))
 			c = byPath(t, org, path)[0]
-			report, err := orgdirectory.ReconcileOrganizationContacts(context.Background(), orgID, since, 1, true)
+			report, err := orgdirectory.ReconcileOrganizationContacts(context.Background(), orgID, since, 1, []string{path}, true)
 			require.NoError(t, err)
 			require.NotContains(t, report.Removed, path)
 			require.Equal(t, 1, report.Kept)
