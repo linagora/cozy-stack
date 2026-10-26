@@ -959,11 +959,20 @@ func (i *Instance) HasPremiumLinksEnabled() bool {
 	return false
 }
 
-// HasCommonContacts reports whether the contacts of this instance come from
-// the twake:contacts:common feed.
+// HasCommonContacts reports whether this instance uses the common contacts service.
 func (i *Instance) HasCommonContacts() bool {
 	if ctxSettings, ok := i.SettingsContext(); ok {
 		enabled, _ := ctxSettings["common_contacts"].(bool)
+		return enabled
+	}
+	return false
+}
+
+// HasCentralizedOrgDirectory reports whether the organization directory is
+// stored on the organization instance instead of copied to each member.
+func (i *Instance) HasCentralizedOrgDirectory() bool {
+	if ctxSettings, ok := i.SettingsContext(); ok {
+		enabled, _ := ctxSettings["centralized_org_directory"].(bool)
 		return enabled
 	}
 	return false

@@ -259,6 +259,9 @@ func TestIsTrustedMember(t *testing.T) {
 		setContext(false, true)
 		require.False(t, IsTrustedMember(inst, member), "common contacts are off")
 
+		cfg.Contexts[config.DefaultInstanceContext].(map[string]interface{})["centralized_org_directory"] = true
+		require.True(t, IsTrustedMember(inst, member), "centralized directory works without the service")
+
 		setContext(true, true)
 		inst.OrgID = "org-two"
 		require.False(t, IsTrustedMember(inst, member), "other organization")

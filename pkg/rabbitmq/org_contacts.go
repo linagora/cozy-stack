@@ -30,6 +30,19 @@ func syncCreatedOrgContact(ctx context.Context, target *instance.Instance, msg U
 	if scope.OrganizationID == "" {
 		return fmt.Errorf("user.created: missing organizationId")
 	}
+	if target.HasCentralizedOrgDirectory() {
+		var orgInst *instance.Instance
+		for _, inst := range scope.Instances {
+			if inst.IsOrganizationInstance() {
+				orgInst = inst
+				break
+			}
+		}
+		if orgInst == nil {
+			return fmt.Errorf("user.created: organization %s has no organization instance: %w", scope.OrganizationID, instance.ErrNotFound)
+		}
+		scope.Instances = []*instance.Instance{orgInst}
+	}
 
 	name, err := target.SettingsPublicName()
 	if err != nil {
@@ -48,6 +61,9 @@ func syncCreatedOrgContact(ctx context.Context, target *instance.Instance, msg U
 			return err
 		}
 		if inst.HasDomain(workplaceFQDN) {
+			if target.HasCentralizedOrgDirectory() {
+				continue
+			}
 			log.Debugf("user.created: creating contacts for own instance %s for organization contact %s", inst.Domain, targetURL)
 			if err := syncExistingOrgContactsToCreatedUser(ctx, target, scope.Instances, workplaceFQDN, scope.OrganizationID); err != nil {
 				log.Errorf("%v", err)
@@ -113,7 +129,7 @@ func SyncDeletedOrgContact(ctx context.Context, msg UserDeletedMessage) error {
 			continue
 		}
 		// The feed deletes the contacts it wrote.
-		if _, ok := existing.M[contact.CardDAVPathKey]; ok {
+		if _, ok := existing.M[contact.CardDAVPathKey]; ok && inst.HasCommonContacts() {
 			continue
 		}
 		if err := couchdb.DeleteDoc(inst, existing); err != nil {

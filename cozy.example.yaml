@@ -507,6 +507,9 @@ contexts:
     # Write the contacts from the twake:contacts:common exchange: members on the
     # organization instance, personal contacts on their owner's instance.
     common_contacts: false
+    # Keep directory copies until the sharing UI supports organization lookup.
+    # Independent of common_contacts: B2B events can maintain the org directory.
+    centralized_org_directory: false
     # How long the Stack counts the file changes of an organization drive
     # before publishing them on the activity exchange (ADR 010).
     drive_activity:

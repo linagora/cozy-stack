@@ -319,9 +319,9 @@ queue at once.
 Queue names are mapped to handlers in the stack. For example:
 
 - `user.password.updated` → updates an instance passphrase when a `user.password.updated` routing key is received.
-- `user.created` → validates and processes user creation events. Copies no organization contact or group when the context sets `common_contacts`.
+- `user.created` → validates and processes user creation events. Writes organization contacts only on the org instance and copies no directory to new members when `centralized_org_directory` is set.
 - `user.phone.updated` → updates the phone number stored in user settings.
-- `domain.user.deleted` on the `b2b` exchange → removes externally managed organization contacts, except the ones written by the `twake:contacts:common` feed.
+- `domain.user.deleted` on the `b2b` exchange → removes externally managed organization contacts, except feed-owned contacts while `common_contacts` is enabled.
 - `banner.materialize` and `banner.clear` on the `platform` exchange → materializes or clears a platform banner, see [Banners](banners.md).
 - every message of the `twake:contacts:common` fanout exchange → writes a contact, see below.
 - `drive.org_drive.ensure` on the `drive` exchange → creates or updates a shared drive on an organization instance, see below.
@@ -680,3 +680,17 @@ ch.PublishWithContext(ctx,
     },
 )
 ```
+
+### Independent contacts rollout flags
+
+Both context settings default to false and must be consistent across an organization:
+
+- `common_contacts` enables the common-contacts service (feed and collected contacts).
+- `centralized_org_directory` stops copying the directory to member instances.
+  B2B lifecycle events still maintain the organization instance when the service is off.
+
+Ship organization lookup with `centralized_org_directory: false` first. This keeps
+replication for clients that query local contacts and groups. Enable centralization
+only after clients support organization lookup and group changes propagate to their
+sharings. Enabling the service alone must not stop replication. Changing either
+setting does not backfill missing contacts or restore previously deleted copies.

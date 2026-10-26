@@ -70,7 +70,7 @@ func IsTrustedMember(inst *instance.Instance, member *Member) bool {
 // isSameOrganizationMember compares the OrgID of the sender's instance on this
 // stack. A spoofed URL gains nothing: the answer is sent to that URL.
 func isSameOrganizationMember(inst *instance.Instance, member *Member) bool {
-	if inst == nil || member == nil || inst.OrgID == "" || !inst.HasCommonContacts() {
+	if inst == nil || member == nil || inst.OrgID == "" || (!inst.HasCommonContacts() && !inst.HasCentralizedOrgDirectory()) {
 		return false
 	}
 	host := utils.NormalizeDomain(member.InstanceHost())

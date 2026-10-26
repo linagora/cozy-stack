@@ -248,11 +248,6 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 		return fmt.Errorf("user.created: update settings: %w", err)
 	}
 
-	// The feed writes the members.
-	if inst.HasCommonContacts() {
-		return nil
-	}
-
 	if strings.TrimSpace(msg.OrganizationID) != "" || strings.TrimSpace(msg.OrganizationDomain) != "" {
 		scope, err := orgdirectory.ResolveOrganizationInstances(msg.OrganizationID, msg.OrganizationDomain)
 		if err != nil {
@@ -264,7 +259,7 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 			log.Errorf("user.created: failed to sync organization contacts for %s: %v", msg.WorkplaceFqdn, err)
 			return err
 		}
-		if scope.OrganizationID != "" {
+		if scope.OrganizationID != "" && !inst.HasCentralizedOrgDirectory() {
 			if err := orgdirectory.CopyOrgDirectoryFromOrgInstance(ctx, inst, scope.OrganizationID); err != nil {
 				log.Errorf("user.created: failed to copy organization directory for %s: %v", msg.WorkplaceFqdn, err)
 				return err

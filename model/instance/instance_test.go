@@ -263,3 +263,28 @@ func TestInstance(t *testing.T) {
 		assert.False(t, (&instance.Instance{ContextName: "no-such-context"}).BannerSettings().Enabled)
 	})
 }
+
+func TestDirectoryFeatureFlags(t *testing.T) {
+	config.UseTestFile(t)
+	conf := config.GetConfig()
+	previous := conf.Contexts
+	t.Cleanup(func() { conf.Contexts = previous })
+	for _, tc := range []struct {
+		name                string
+		settings            map[string]interface{}
+		common, centralized bool
+	}{
+		{name: "defaults", settings: map[string]interface{}{}},
+		{name: "service only", settings: map[string]interface{}{"common_contacts": true}, common: true},
+		{name: "storage only", settings: map[string]interface{}{"centralized_org_directory": true}, centralized: true},
+		{name: "both", settings: map[string]interface{}{"common_contacts": true, "centralized_org_directory": true}, common: true, centralized: true},
+		{name: "invalid types", settings: map[string]interface{}{"common_contacts": "true", "centralized_org_directory": "true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conf.Contexts = map[string]interface{}{"flags": tc.settings}
+			inst := &instance.Instance{ContextName: "flags"}
+			assert.Equal(t, tc.common, inst.HasCommonContacts())
+			assert.Equal(t, tc.centralized, inst.HasCentralizedOrgDirectory())
+		})
+	}
+}

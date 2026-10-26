@@ -743,7 +743,7 @@ A member is considered trusted if **any** of these holds:
 
 The contact's `trustedForSharing` field is set to `true` when a sharing is accepted.
 
-Organization trust needs the `common_contacts` context setting, and the
+Organization trust needs `common_contacts` or `centralized_org_directory`, and the
 sender's instance on the same stack. Accepting a sharing from a member of the
 same organization writes no contact.
 

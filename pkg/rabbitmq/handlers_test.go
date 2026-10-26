@@ -13,6 +13,7 @@ import (
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/model/settings/common"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -212,79 +213,117 @@ func TestUserCreatedHandlerPatchesEmailAndMatrixIDTogether(t *testing.T) {
 	}
 }
 
-func TestCommonContactsStopsMemberCopies(t *testing.T) {
-	config.UseTestFile(t)
-	testutils.NeedCouchdb(t)
+func TestOrganizationDirectoryFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		centralized, common bool
+	}{
+		{name: "replicated without service"},
+		{name: "replicated with service", common: true},
+		{name: "centralized without service", centralized: true},
+		{name: "centralized with service", centralized: true, common: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config.UseTestFile(t)
+			testutils.NeedCouchdb(t)
+			conf := config.GetConfig()
+			previous := conf.Contexts
+			conf.Contexts = map[string]interface{}{"directory-flags": map[string]interface{}{
+				"common_contacts": tc.common, "centralized_org_directory": tc.centralized,
+			}}
+			t.Cleanup(func() { conf.Contexts = previous })
+			suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+			orgID := "flags" + suffix
+			newInstance := func(domain, email, name string) *instance.Instance {
+				inst, err := lifecycle.Create(&lifecycle.Options{
+					Domain: domain, OrgDomain: orgID + ".example", OrgID: orgID,
+					Email: email, PublicName: name, ContextName: "directory-flags",
+				})
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
+				return inst
+			}
+			org := newInstance(orgID+".local", "org-"+suffix+"@acme.example", "Organization")
+			bobEmail := "bob-" + suffix + "@acme.example"
+			bob := newInstance("bob-"+suffix+".local", bobEmail, "Bob")
+			require.NoError(t, orgdirectory.SyncGroupCreated(testCtx(t), orgdirectory.GroupCreatedMessage{
+				OrganizationID: orgID, ID: "team", Name: "Team",
+				Members: []orgdirectory.GroupMember{{Email: bobEmail, FirstName: "Bob", WorkplaceFQDN: bob.Domain}},
+			}))
+			aliceEmail := "alice-" + suffix + "@acme.example"
+			alice := newInstance("alice-"+suffix+".local", "before-"+aliceEmail, "Alice")
+			body, err := json.Marshal(rabbitmq.UserCreatedMessage{
+				TwakeID: "alice", WorkplaceFqdn: alice.Domain, InternalEmail: aliceEmail,
+				MatrixID: "@alice:acme.example", OrganizationID: orgID,
+			})
+			require.NoError(t, err)
+			require.NoError(t, rabbitmq.NewUserCreatedHandler().Handle(context.Background(), amqp.Delivery{Body: body}))
+			settings, err := alice.SettingsDocument()
+			require.NoError(t, err)
+			assert.Equal(t, aliceEmail, settings.M["email"])
+			assert.Equal(t, "@alice:acme.example", settings.M["matrix_id"])
+			orgContact, err := contact.FindByEmail(org, aliceEmail)
+			require.NoError(t, err, "B2B events populate the org without the contacts service")
+			assert.Equal(t, alice.PageURL("", nil), orgContact.PrimaryCozyURL())
+			_, err = contact.FindByEmail(bob, aliceEmail)
+			if tc.centralized {
+				require.ErrorIs(t, err, contact.ErrNotFound)
+			} else {
+				require.NoError(t, err)
+			}
+			_, err = contact.FindByEmail(alice, bobEmail)
+			if tc.centralized {
+				require.ErrorIs(t, err, contact.ErrNotFound)
+			} else {
+				require.NoError(t, err)
+			}
+			_, err = contact.FindGroup(alice, orgdirectory.GroupDocID(orgID, "team"))
+			if tc.centralized {
+				require.True(t, couchdb.IsNotFoundError(err))
+			} else {
+				require.NoError(t, err)
+			}
 
-	const contextName = "common-contacts-members"
-	conf := config.GetConfig()
-	previous := conf.Contexts
-	conf.Contexts = map[string]interface{}{contextName: map[string]interface{}{"common_contacts": true}}
-	t.Cleanup(func() { conf.Contexts = previous })
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	orgID := "org-members-" + suffix
-	orgDomain := "members-" + suffix + ".example"
-	newMember := func(name, email string) *instance.Instance {
-		inst, err := lifecycle.Create(&lifecycle.Options{
-			Domain:      name + "-" + suffix + ".local",
-			OrgDomain:   orgDomain,
-			OrgID:       orgID,
-			Email:       email,
-			PublicName:  name,
-			ContextName: contextName,
+			require.NoError(t, rabbitmq.SyncDeletedOrgContact(testCtx(t), rabbitmq.UserDeletedMessage{
+				WorkplaceFqdn: alice.Domain, InternalEmail: aliceEmail, OrganizationID: orgID,
+			}))
+			_, err = contact.FindByEmail(org, aliceEmail)
+			require.ErrorIs(t, err, contact.ErrNotFound)
+			if tc.centralized {
+				require.NoError(t, lifecycle.Destroy(org.Domain))
+				err = rabbitmq.NewUserCreatedHandler().Handle(context.Background(), amqp.Delivery{Body: body})
+				require.ErrorIs(t, err, instance.ErrNotFound, "do not acknowledge events without an org destination")
+			}
 		})
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = lifecycle.Destroy(inst.Domain) })
-		return inst
 	}
-	aliceEmail := "alice-" + suffix + "@acme.example"
-	bobEmail := "bob-" + suffix + "@acme.example"
-	alice := newMember("alice", "before-"+aliceEmail)
-	bob := newMember("bob", bobEmail)
-	carol := newMember("carol", "carol-"+suffix+"@acme.example")
+}
 
-	t.Run("user.created copies no contact", func(t *testing.T) {
-		body, err := json.Marshal(rabbitmq.UserCreatedMessage{
-			TwakeID:        "alice",
-			WorkplaceFqdn:  alice.Domain,
-			InternalEmail:  aliceEmail,
-			MatrixID:       "@alice:acme.example",
-			OrganizationID: orgID,
+func TestDeletedFeedContactWithoutService(t *testing.T) {
+	for _, common := range []bool{false, true} {
+		t.Run(fmt.Sprintf("service=%t", common), func(t *testing.T) {
+			config.UseTestFile(t)
+			testutils.NeedCouchdb(t)
+			conf := config.GetConfig()
+			previous := conf.Contexts
+			conf.Contexts = map[string]interface{}{config.DefaultInstanceContext: map[string]interface{}{"common_contacts": common}}
+			t.Cleanup(func() { conf.Contexts = previous })
+			suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+			orgID := "delete-flags" + suffix
+			inst := createInstanceInOrg(t, orgID+".local", orgID+".example", orgID, "", "Organization")
+			c := createContact(t, inst, "alice@acme.example", "https://alice.example", true, "Alice")
+			c.M[contact.CardDAVPathKey] = "addressbooks/org/alice.vcf"
+			require.NoError(t, couchdb.UpdateDoc(inst, c))
+			require.NoError(t, rabbitmq.SyncDeletedOrgContact(testCtx(t), rabbitmq.UserDeletedMessage{
+				WorkplaceFqdn: "alice.example", InternalEmail: "alice@acme.example", OrganizationID: orgID,
+			}))
+			_, err := contact.Find(inst, c.ID())
+			if common {
+				require.NoError(t, err)
+			} else {
+				require.True(t, couchdb.IsNotFoundError(err))
+			}
 		})
-		require.NoError(t, err)
-		require.NoError(t, rabbitmq.NewUserCreatedHandler().
-			Handle(context.Background(), amqp.Delivery{Body: body}))
-
-		settings, err := alice.SettingsDocument()
-		require.NoError(t, err)
-		assert.Equal(t, aliceEmail, settings.M["email"])
-		assert.Equal(t, "@alice:acme.example", settings.M["matrix_id"])
-		_, err = contact.FindAllByEmail(bob, aliceEmail)
-		assert.ErrorIs(t, err, contact.ErrNotFound)
-		_, err = contact.FindAllByEmail(alice, bobEmail)
-		assert.ErrorIs(t, err, contact.ErrNotFound)
-	})
-
-	t.Run("user.deleted leaves the contacts of the feed alone", func(t *testing.T) {
-		createContact(t, bob, aliceEmail, alice.PageURL("", nil), true, "Alice")
-		fromFeed := createContact(t, carol, aliceEmail, alice.PageURL("", nil), true, "Alice")
-		fromFeed.M[contact.CardDAVPathKey] = "addressbooks/carol/collected/alice.vcf"
-		require.NoError(t, couchdb.UpdateDoc(carol, fromFeed))
-
-		require.NoError(t, rabbitmq.SyncDeletedOrgContact(context.Background(), rabbitmq.UserDeletedMessage{
-			WorkplaceFqdn:  alice.Domain,
-			InternalEmail:  aliceEmail,
-			OrganizationID: orgID,
-		}))
-
-		_, err := contact.FindAllByEmail(bob, aliceEmail)
-		assert.ErrorIs(t, err, contact.ErrNotFound)
-		found, err := contact.FindAllByEmail(carol, aliceEmail)
-		require.NoError(t, err)
-		require.Len(t, found, 1)
-		assert.Equal(t, fromFeed.ID(), found[0].ID())
-	})
+	}
 }
 
 func TestBannerCommandHandler(t *testing.T) {
