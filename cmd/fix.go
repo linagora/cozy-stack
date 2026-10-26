@@ -535,7 +535,8 @@ var memberCopiesFixer = &cobra.Command{
 	Long: `
 This fixer deletes directory copies once centralized_org_directory is enabled.
 Populate the organization directory first, from B2B events or the contacts service.
-Every candidate must have a matching organization contact before any deletion.
+Every candidate must have an active organization contact with the same group
+memberships, and those groups must exist centrally, before any deletion.
 Instances retaining replication are skipped. Personal contacts, contacts written
 for sharing and feed-owned contacts are kept. It is safe to run twice.
 `,

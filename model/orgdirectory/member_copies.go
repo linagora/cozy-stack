@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
@@ -16,7 +17,7 @@ var (
 	ErrNoCommonContacts = errors.New("the organization instance does not read the common contacts")
 	// ErrNoCentralizedOrgDirectory prevents cleanup while replication is retained.
 	ErrNoCentralizedOrgDirectory = errors.New("the organization directory is not centralized")
-	// ErrOrgInstanceNotFilled prevents deleting a copy absent from the org instance.
+	// ErrOrgInstanceNotFilled prevents deleting contacts or memberships absent from the org instance.
 	ErrOrgInstanceNotFilled = errors.New("the organization instance does not contain every member copy")
 )
 
@@ -48,10 +49,18 @@ func RemoveMemberCopies(ctx context.Context, organizationID string, dryRun bool)
 	if !orgInst.HasCentralizedOrgDirectory() {
 		return nil, ErrNoCentralizedOrgDirectory
 	}
+	groups, err := listManagedGroups(orgInst, scope.OrganizationID)
+	if err != nil {
+		return nil, err
+	}
+	groupIDs := make(map[string]bool, len(groups))
+	for _, group := range groups {
+		groupIDs[group.ID()] = true
+	}
 
 	report := &MemberCopiesReport{Removed: map[string]int{}}
 	candidates := make(map[*instance.Instance][]couchdb.Doc)
-	verified := make(map[[2]string]bool)
+	verified := make(map[[2]string]*contact.Contact)
 	for _, inst := range scope.Instances {
 		if err := ctx.Err(); err != nil {
 			return report, err
@@ -71,15 +80,24 @@ func RemoveMemberCopies(ctx context.Context, organizationID string, dryRun bool)
 				// of whether B2B events or the contacts service filled the org.
 				input := contactPatchFromContact(scope.OrganizationID, doc)
 				identity := [2]string{input.Email, input.CozyURL}
-				if !verified[identity] {
-					_, err := findManagedContact(orgInst, input)
+				orgContact := verified[identity]
+				if orgContact == nil {
+					orgContact, err = findManagedContact(orgInst, input)
 					if errors.Is(err, contact.ErrNotFound) {
 						return nil, fmt.Errorf("%w: %s on %s", ErrOrgInstanceNotFilled, doc.ID(), inst.Domain)
 					}
 					if err != nil {
 						return nil, fmt.Errorf("verify org contact for %s on %s: %w", doc.ID(), inst.Domain, err)
 					}
-					verified[identity] = true
+					verified[identity] = orgContact
+				}
+				if orgContact.Get("trashed") == true {
+					return nil, fmt.Errorf("%w: contact %s is trashed on the organization instance", ErrOrgInstanceNotFilled, doc.ID())
+				}
+				for _, groupID := range doc.GroupIDs() {
+					if !groupIDs[groupID] || !slices.Contains(orgContact.GroupIDs(), groupID) {
+						return nil, fmt.Errorf("%w: group membership %s for %s on %s", ErrOrgInstanceNotFilled, groupID, doc.ID(), inst.Domain)
+					}
 				}
 				copies = append(copies, doc)
 			}

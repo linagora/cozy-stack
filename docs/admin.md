@@ -500,7 +500,8 @@ Content-Type: application/json
 
 Delete directory copies after enabling `centralized_org_directory` and populating
 the organization instance from B2B events or the common-contacts service. The
-service is optional. Every candidate must match an existing organization contact
+service is optional. Every candidate must match an active organization contact,
+all its group memberships must exist there, and those groups must exist centrally
 before any copies are removed. Instances retaining replication are skipped.
 Personal contacts, contacts written for sharing, and feed-owned contacts with a
 `carddavPath` are kept. Deletion publishes no old document, so it does not revoke
