@@ -815,16 +815,29 @@ func TestFindContactByEmail(t *testing.T) {
 	org := newInstance(orgID + ".fe.localhost")
 	alice := newInstance("alice-" + suffix + ".fe.localhost")
 
-	bob, err := contact.Create(org, contact.CreateOptions{Email: "bob@acme.example", CozyURL: "https://bob.acme.example"})
+	bob, err := contact.Create(org, contact.CreateOptions{Email: "Bob@Acme.example", CozyURL: "https://bob.acme.example"})
 	require.NoError(t, err)
 	carol, err := contact.Create(alice, contact.CreateOptions{Email: "carol@friends.example"})
 	require.NoError(t, err)
+
+	legacyView := *couchdb.ContactByEmail
+	legacyView.Map = `function(doc) {
+		if (isArray(doc.email)) {
+			for (var i = 0; i < doc.email.length; i++) emit(doc.email[i].address, doc._id);
+		}
+	}`
+	require.NoError(t, couchdb.DefineView(org, &legacyView))
+	org.IndexViewsVersion = couchdb.IndexViewsVersion - 1
+	require.NoError(t, instance.Update(org))
 
 	c, created, err := FindContactByEmail(alice, "bob@acme.example")
 	require.NoError(t, err)
 	assert.False(t, created)
 	assert.Equal(t, bob.ID(), c.ID())
 	assert.Equal(t, "https://bob.acme.example", c.PrimaryCozyURL())
+	var legacyResult couchdb.ViewResponse
+	require.NoError(t, couchdb.ExecView(org, couchdb.ContactByEmail, &couchdb.ViewRequest{Key: "Bob@Acme.example"}, &legacyResult))
+	require.Len(t, legacyResult.Rows, 1, "older stacks can still query the original address during rollout")
 	_, err = contact.FindByEmail(alice, "bob@acme.example")
 	assert.ErrorIs(t, err, contact.ErrNotFound)
 

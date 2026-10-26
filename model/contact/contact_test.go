@@ -25,7 +25,8 @@ func TestFindAllByEmail(t *testing.T) {
 	external := New()
 	external.M["fullname"] = "Alice"
 	external.M["email"] = []map[string]interface{}{
-		{"address": "alice@example.com", "primary": true},
+		{"address": "Alice@Example.com", "primary": true},
+		{"address": "alice@example.com"},
 	}
 	external.M["metadata"] = map[string]interface{}{"external": true}
 	require.NoError(t, couchdb.CreateDoc(instPrefix, external))
@@ -37,7 +38,7 @@ func TestFindAllByEmail(t *testing.T) {
 	}
 	require.NoError(t, couchdb.CreateDoc(instPrefix, other))
 
-	docs, err := FindAllByEmail(instPrefix, "alice@example.com")
+	docs, err := FindAllByEmail(instPrefix, " aLIce@EXAMPLE.com ")
 	require.NoError(t, err)
 	require.Len(t, docs, 2)
 	ids := []string{docs[0].ID(), docs[1].ID()}

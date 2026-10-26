@@ -92,20 +92,17 @@ func Search(inst *instance.Instance, q string, limit int) ([]Person, error) {
 }
 
 // FindByEmails returns the contacts with the given email addresses, by
-// lowercased address, in a single request. The view emits the addresses as
-// stored, so each one is also looked up in lowercase. When several contacts
-// share an address, the first one wins. Trashed contacts are left out.
+// lowercased address, in a single request. The view indexes normalized addresses.
+// When several contacts share an address, the first one wins. Trashed contacts
+// are left out.
 func FindByEmails(db prefixer.Prefixer, emails []string) (map[string]*Contact, error) {
 	found := make(map[string]*Contact)
 	if len(emails) == 0 {
 		return found, nil
 	}
-	keys := make([]interface{}, 0, 2*len(emails))
+	keys := make([]interface{}, 0, len(emails))
 	for _, email := range emails {
-		keys = append(keys, email)
-		if lower := strings.ToLower(email); lower != email {
-			keys = append(keys, lower)
-		}
+		keys = append(keys, strings.ToLower(strings.TrimSpace(email)))
 	}
 	var res couchdb.ViewResponse
 	err := couchdb.ExecView(db, couchdb.ContactByEmail, &couchdb.ViewRequest{

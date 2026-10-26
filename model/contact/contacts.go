@@ -239,7 +239,7 @@ func Find(db prefixer.Prefixer, contactID string) (*Contact, error) {
 
 // FindAllByEmail returns all contacts with the given email address, when possible.
 func FindAllByEmail(db prefixer.Prefixer, email string) ([]*Contact, error) {
-	email = strings.TrimSpace(email)
+	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
 		return nil, ErrNotFound
 	}

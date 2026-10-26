@@ -106,6 +106,7 @@ func TestFindByEmailsAndText(t *testing.T) {
 		return c
 	}
 	jean := create("Jean Dupont", "jean@acme.example")
+	bob := create("Bob", "Bob@Acme.example")
 	marie := create("Marie", "m.dupont@acme.example", "marie@home.example")
 	create("Pierre Dupuis")
 	create("Paul", "paul@acme.example")
@@ -115,9 +116,10 @@ func TestFindByEmailsAndText(t *testing.T) {
 	trashed.M["trashed"] = true
 	require.NoError(t, couchdb.UpdateDoc(db, trashed))
 
-	found, err := FindByEmails(db, []string{"Jean@Acme.example", "marie@home.example", "nobody@acme.example", "old@acme.example"})
+	found, err := FindByEmails(db, []string{"Jean@Acme.example", "marie@home.example", "nobody@acme.example", "old@acme.example", "bob@acme.example"})
 	require.NoError(t, err)
-	assert.Len(t, found, 2)
+	assert.Len(t, found, 3)
+	assert.Equal(t, bob.ID(), found["bob@acme.example"].ID(), "mixed-case stored addresses resolve from normalized search results")
 	assert.Equal(t, jean.ID(), found["jean@acme.example"].ID(), "by lowercased address")
 	assert.Equal(t, marie.ID(), found["marie@home.example"].ID())
 

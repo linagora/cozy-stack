@@ -14,7 +14,7 @@ import (
 
 // IndexViewsVersion is the version of current definition of views & indexes.
 // This number should be incremented when this file changes.
-const IndexViewsVersion int = 41
+const IndexViewsVersion int = 42
 
 // Indexes is the index list required by an instance to run properly.
 var Indexes = []*mango.Index{
@@ -292,8 +292,18 @@ var ContactByEmail = &View{
 	Map: `
 function(doc) {
 	if (isArray(doc.email)) {
+		var seen = {};
 		for (var i = 0; i < doc.email.length; i++) {
-			emit(doc.email[i].address, doc._id);
+			var address = doc.email[i].address;
+			if (typeof address !== "string") continue;
+			// Keep the original key for older stacks during a rolling upgrade.
+			var keys = [address, address.trim().toLowerCase()];
+			for (var j = 0; j < keys.length; j++) {
+				if (seen[keys[j]] !== true) {
+					emit(keys[j], doc._id);
+					seen[keys[j]] = true;
+				}
+			}
 		}
 	}
 }
