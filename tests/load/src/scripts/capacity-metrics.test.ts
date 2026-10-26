@@ -94,7 +94,7 @@ test('fanout capacity projects producer passed lower bounds and failed brackets 
 test('metadata is allowlisted and identities are escaped in Prometheus text', () => {
   const input = report('upload', {
     status: 'completed', result_bound: 'exact', maximum_concurrent_uploads: 2,
-    file_size: '1M', upload_target: 'shared-drive', result: 'secret-token', reason: 'private-error',
+    file_size: '1M', upload_target: 'shared-drive', verdict: 'secret-token', reason: 'private-error',
     domain: 'private.example', token: 'secret-token',
   })
   input.campaign = 'line\n"quoted"\\campaign'

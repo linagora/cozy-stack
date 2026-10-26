@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import type { UploadDataSize } from '../fixtures/upload-sizes.ts'
 import type { UploadTargetKind } from '../lib/upload-target.ts'
 import { buildGrafanaLink } from './campaign-summary.ts'
+import { topologyOf, uploadEnvelope, type ResultEnvelope } from './result-envelope.ts'
 import {
   searchCapacity,
   type CapacityPhase,
@@ -27,6 +28,7 @@ import {
 } from './upload/campaign-config.ts'
 import {
   harness as harnessDirectory,
+  interruption,
   message,
   readVersions,
   recover,
@@ -105,6 +107,7 @@ type CapacityReport = {
   outcome?: Outcome
   versions?: Record<string, string>
   monitoring?: Record<string, string | null>
+  result?: ResultEnvelope
   baseline_p95_ms?: number
   p95_limit_ms?: number | null
   maximum_concurrent_uploads?: number
@@ -315,6 +318,10 @@ async function finishReport(
       ? { dev: process.env.DEV_MONITORING_URL || 'unknown' }
       : {}),
   }
+  report.result = uploadEnvelope(report, {
+    interrupted: interruption() !== null, versions: report.versions, topology: topologyOf(report.load_target),
+    start: report.started_at, end: report.ended_at,
+  })
   saveJsonFile(state.temporaryReportPath, report)
   renameSync(state.temporaryReportPath, state.reportPath)
 

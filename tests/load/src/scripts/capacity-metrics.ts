@@ -1,3 +1,5 @@
+import { validateEnvelope } from './result-envelope.ts'
+
 export type ReportFile = {
   campaign: string
   run: string
@@ -131,9 +133,19 @@ export function renderMetrics(
         evidence = { lower: capacity.lower, upper: bracket ? capacity.upper_exclusive as number : undefined, exact: false }
       }
     }
+    // The producer's envelope replaces every reading above; an invalid one claims nothing.
+    const declared = data.result === undefined ? undefined : validateEnvelope(data.result)
+    if (declared !== undefined) {
+      const c = declared?.capacity
+      lower = upper = evidence = undefined
+      bound = 'inconclusive'
+      if (c?.verified) [lower, upper, bound] = [c.lower, c.upper_exclusive ?? undefined, c.kind]
+      else if (c) evidence = { lower: c.lower, upper: c.upper_exclusive ?? undefined, exact: c.kind === 'exact' }
+    }
     const describe = (low: number, high: number | undefined, exact: boolean) =>
       high !== undefined ? `[${low}, ${high})` : exact ? `= ${low}` : `>= ${low}`
-    const verdict = regression ? regressionVerdicts[String(data.status)] : undefined
+    const verdict = !regression ? undefined : declared === undefined ? regressionVerdicts[String(data.status)]
+      : (['passed', 'failed', 'inconclusive'] as const)[declared?.outcome ?? 2]
     emit('result_info', {
       ...base,
       scope: kind === 'fanout' ? 'recipients' : kind === 'shared_drive' ? 'activity_mix' : 'upload_workers',
@@ -148,7 +160,8 @@ export function renderMetrics(
       // Recorded by the producer: legacy reports show an unknown environment and outcome.
       load_target: allowed(data.load_target, ['local', 'dev'], 'unknown'),
       mode: allowed(data.mode, ['capacity', 'regression'], 'capacity'),
-      outcome: [0, 1, 2].includes(data.outcome as number) ? String(data.outcome) : 'unknown',
+      outcome: declared !== undefined ? String(declared?.outcome ?? 2)
+        : [0, 1, 2].includes(data.outcome as number) ? String(data.outcome) : 'unknown',
       evidence: evidence === undefined ? 'none' : describe(evidence.lower, evidence.upper, evidence.exact),
     }, 1)
     emit('result_timestamp_seconds', base, timestamp)

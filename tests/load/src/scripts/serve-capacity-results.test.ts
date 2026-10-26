@@ -6,7 +6,7 @@ import {
 } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
@@ -185,6 +185,21 @@ test('unreadable result root returns a bounded failure, never internal paths', a
   const reply = await fetch(`http://127.0.0.1:${address.port}/metrics`)
   assert.equal(reply.status, 503)
   assert.equal(await reply.text(), 'results_unavailable\n')
+})
+
+test('the results container mounts every module the exporter loads at runtime', () => {
+  const compose = readFileSync(new URL('../../compose.yaml', import.meta.url), 'utf8')
+  const modules = new Set<string>()
+  const queue = ['serve-capacity-results.ts']
+  for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
+    if (modules.has(file)) continue
+    modules.add(file)
+    // Type-only imports are erased by --experimental-strip-types.
+    for (const [, path] of readFileSync(new URL(file, import.meta.url), 'utf8')
+      .matchAll(/^import (?!type )[^'"]*from '(\.[^']+)'/gm)) queue.push(join(dirname(file), path!))
+  }
+  assert.ok(modules.has('result-envelope.ts'))
+  for (const file of modules) assert.ok(compose.includes(`./src/scripts/${file}:/scripts/${file}:ro`), file)
 })
 
 test('entrypoint starts with native strip-types, without npm or tsx at runtime', { timeout: 5000 }, async t => {

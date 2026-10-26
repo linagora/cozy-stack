@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { classifyStep } from './campaign-summary.ts'
+import { validateEnvelope } from './result-envelope.ts'
 import { fakeTarget, fqdn } from './upload/fake-target.ts'
 
 const script = fileURLToPath(new URL('./shared-drive-campaign.ts', import.meta.url))
@@ -59,6 +61,11 @@ test('creates the test drive once, recovers earlier data and keeps the ramp verd
   deepEqual(report.cleanup, { cleaned: [], remaining: [] })
   equal(report.versions.stack, '1.6.test')
   equal(report.monitoring.dev, 'unknown')
+  const envelope = validateEnvelope(report.result)
+  deepEqual([envelope?.producer, envelope?.outcome, envelope?.correctness, envelope?.capacity], ['shared-drive-ramp', 0,
+    'not_verified', { kind: 'lower_bound', lower: 16, upper_exclusive: null, unit: 'activity level', verified: true }])
+  deepEqual(classifyStep({ name: 'ramp', kind: 'shared-drive-ramp', id: 'x', startedAt: '', endedAt: '', exitCode: 0,
+    producerExitCode: code }, report), { code: 0, reason: '' })
   const run = f.docker().find(c => c.args?.[1] === 'run')
   ok(run.args.includes('SHARED_DRIVE_ID=drive-1') && run.args.includes('SHARED_DRIVE_ROOT_ID=drive-root-1'))
   ok(run.args.includes(`BASE_URL=https://${fqdn}`))

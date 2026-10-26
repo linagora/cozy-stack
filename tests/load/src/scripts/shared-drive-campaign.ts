@@ -9,9 +9,10 @@ import { getUploadDataSizeBytes, isUploadDataSize } from '../fixtures/upload-siz
 import { getRampTotalDurationMs, parseRampCriteria, parseRampPlan } from '../lib/load-profile.ts'
 import { buildGrafanaLink, classifyRamp, K6_THRESHOLDS_FAILED } from './campaign-summary.ts'
 import { DEFAULT_DRIVE_NAME } from './prepare-shared-drive.ts'
+import { rampEnvelope, topologyOf } from './result-envelope.ts'
 import { getBytes, getDurationMs, getPositiveInteger } from './upload/campaign-config.ts'
 import {
-  check, harness, message, readVersions, recover, runK6Work, trapInterrupts, type Stack, type Target,
+  check, harness, interruption, message, readVersions, recover, runK6Work, trapInterrupts, type Stack, type Target,
 } from './upload/exact-work.ts'
 import { devTarget, localTarget } from './upload/targets.ts'
 
@@ -112,7 +113,8 @@ async function main(): Promise<number> {
   }
   const { code, reason } = classifyRamp(report)
   report.outcome = code
-  report.versions = await readVersions(target)
+  const versions = await readVersions(target)
+  report.versions = versions
   report.monitoring = {
     k6: buildGrafanaLink(env.GRAFANA_URL || 'http://localhost:3000', {
       name: 'shared-drive-ramp', kind: 'shared-drive-ramp', id: config.executionId, startedAt, endedAt,
@@ -120,6 +122,9 @@ async function main(): Promise<number> {
     }),
     ...(target.kind === 'dev' ? { dev: env.DEV_MONITORING_URL || 'unknown' } : {}),
   }
+  report.result = rampEnvelope(report, {
+    interrupted: interruption() !== null, versions, topology: topologyOf(target.kind), start: startedAt, end: endedAt,
+  })
   writeFileSync(`${harness}${reportPath}`, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
   console.log(`Shared-drive ramp outcome ${code}${reason ? ` (${reason})` : ''}: ${reportPath}`)
   return code

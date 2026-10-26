@@ -560,6 +560,28 @@ summary with outcome 2; `make campaign` itself then ends with the signal's
 status. Treat any exit other than 0 and 1, or a run directory without
 `summary.md`, as inconclusive: that also covers a campaign killed outright.
 
+### Result envelope
+
+Each producer report (upload capacity or regression, shared-drive ramp, group
+fan-out) also carries `result`, a versioned envelope (`cozy-load-result/1`,
+`src/scripts/result-envelope.ts`) written once by the producer. It keeps apart:
+
+- `outcome` and `reason`: the producer's verdict, with the exit codes above;
+- `execution` (`completed`, `interrupted`, `incomplete`), `correctness` and
+  `cleanup` (`verified`, `failed`, `not_verified`), and `performance`
+  (`passed`, `failed`, `not_measured`);
+- `capacity`: `exact`, `lower_bound` or `bracket` with its unit, and `verified`
+  false when a measurement the run could not verify stays evidence only;
+- `versions` (harness and Stack apart), `workload`, `dataset`, `load_target`,
+  `topology`, `criteria`, `parameters` and the `time` range.
+
+The campaign summary and the results exporter take the verdict from a valid
+envelope and never recompute or upgrade it. An envelope that is invalid or
+contradicts itself (a pass that was interrupted, unverified, or left failed
+cleanup, for instance) counts as inconclusive. Older reports without one keep
+their earlier, conservative classification. The ramp's verdict comes from its
+k6 `handleSummary()`; the upload search and the fan-out decide theirs in Node.
+
 ### Topology and resource limits
 
 k6 runs on the same host as the stack unless a separate load generator is

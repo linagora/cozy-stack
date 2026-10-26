@@ -160,6 +160,8 @@ services:
       - ./data/results:/results:ro
       - ./src/scripts/capacity-metrics.ts:/scripts/capacity-metrics.ts:ro
       - ./src/scripts/capacity/k6-summary.ts:/scripts/capacity/k6-summary.ts:ro
+      - ./src/scripts/capacity/upload-point.ts:/scripts/capacity/upload-point.ts:ro
+      - ./src/scripts/result-envelope.ts:/scripts/result-envelope.ts:ro
       - ./src/scripts/serve-capacity-results.ts:/scripts/serve-capacity-results.ts:ro
     expose:
       - "9465"

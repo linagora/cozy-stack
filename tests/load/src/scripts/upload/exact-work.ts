@@ -329,10 +329,12 @@ export async function runExactWork(target: Target, work: Work): Promise<Point> {
   }
 }
 
+const output = (command: string, args: string[]): string =>
+  spawnSync(command, args, { cwd: harness, encoding: 'utf8' }).stdout?.trim() || 'unknown'
+export const harnessVersions = () => ({ harness: output('git', ['describe', '--always', '--dirty']), node: process.version })
+
 // Versions a report records; unknown metadata stays explicit.
 export async function readVersions(target: Target): Promise<Record<string, string>> {
-  const output = (command: string, args: string[]): string =>
-    spawnSync(command, args, { cwd: harness, encoding: 'utf8' }).stdout?.trim() || 'unknown'
   const image = readFileSync(`${harness}compose.yaml`, 'utf8').match(/image: (grafana\/k6:\S+)/)?.[1]
   let stack = 'unknown'
   try {
@@ -341,8 +343,7 @@ export async function readVersions(target: Target): Promise<Record<string, strin
   } catch {}
   return {
     stack,
-    harness: output('git', ['describe', '--always', '--dirty']),
-    node: process.version,
+    ...harnessVersions(),
     k6_image: image ? output('docker', ['image', 'inspect', '--format', '{{index .RepoDigests 0}}', image]) : 'unknown',
   }
 }

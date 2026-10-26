@@ -8,6 +8,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { test, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { classifyStep } from './campaign-summary.ts'
+import { validateEnvelope } from './result-envelope.ts'
+
 const script = fileURLToPath(new URL('./org-drive-fanout.ts', import.meta.url))
 const root = `seed-${'a'.repeat(32)}.localhost:8080`
 const orgID = root.split('.')[0]!
@@ -72,6 +75,7 @@ async function fixture(t: TestContext, override?: Override) {
         const item = instances.find(i => path === `/instances/${i.attributes.domain}`)
         return send(item ? 200 : 404, { data: item })
       }
+      if (path === '/version') return send(200, { version: '1.6.test' })
       if (path === '/settings/context') return send(200, { data: { id: 'context', attributes: {
         common_contacts: true, max_members_per_sharing: 1001,
         sharing: { auto_accept_trusted: true, auto_accept_trusted_contacts: true },
@@ -211,6 +215,12 @@ test('real child ramps group fanout, proves every recipient access and one-opera
   equal(result.report.outcome, 0)
   equal(result.report.status, 'passed')
   deepEqual(result.report.capacity, { kind: 'lower_bound', lower: 2, upper_exclusive: null, max: null })
+  // The local organization is retained by design, so the envelope claims no cleanup.
+  const envelope = validateEnvelope(result.report.result)
+  deepEqual([envelope?.outcome, envelope?.capacity, envelope?.cleanup, envelope?.versions.stack], [0,
+    { kind: 'lower_bound', lower: 2, upper_exclusive: null, unit: 'recipients', verified: true }, 'not_verified', '1.6.test'])
+  deepEqual(classifyStep({ name: 'fanout', kind: 'org-drive-fanout', id: 'run', startedAt: '', endedAt: '', exitCode: 0,
+    producerExitCode: result.code }, result.report), { code: 0, reason: '' })
   deepEqual(result.report.points.map((p: any) => p.n), [1, 2])
   for (const p of result.report.points) {
     equal(p.status, 'passed')

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 import { isJsonRecord, type JsonRecord } from './capacity/k6-summary.ts'
 import { CONTENT_MISMATCH_REASON, hasContentMismatch } from './capacity/upload-point.ts'
+import { declaredOutcome } from './result-envelope.ts'
 
 // Summarizes one campaign directory written by campaigns/run-campaign.sh:
 // one line per step with its result, its outcome and a Grafana link for its
@@ -218,8 +219,9 @@ export function classifyStep(step: CampaignStep, result: JsonRecord | null): Ste
   const exit = step.producerExitCode ?? step.exitCode
   if (result === null) return { code: 2, reason: `no result file (exit ${exit})` }
 
-  const outcome = step.kind === 'upload-capacity' ? classifyUploadCapacity(result)
-    : step.kind === 'shared-drive-ramp' ? classifyRamp(result) : classifyFanout(result)
+  // The producer's envelope is the verdict; only legacy reports are classified here.
+  const outcome = declaredOutcome(result) ?? (step.kind === 'upload-capacity' ? classifyUploadCapacity(result)
+    : step.kind === 'shared-drive-ramp' ? classifyRamp(result) : classifyFanout(result))
   // A completed report does not explain an unexpected producer failure.
   const explainedExit = exit === 0 || (step.kind === 'shared-drive-ramp' && exit === K6_THRESHOLDS_FAILED)
   if (outcome.code === 0 && !explainedExit) {

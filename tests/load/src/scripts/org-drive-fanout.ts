@@ -9,6 +9,8 @@ import { FixtureDeadline, FixtureError, request, type Reply } from './fixture-ht
 import {
   FanoutSetupError, leftoverDrives, OWNED, readFixture, removeDoc, removeDrive, TOKEN_REFRESH_MS,
 } from './org-drive-fanout-dev.ts'
+import { fanoutEnvelope, topologyOf, type ResultEnvelope } from './result-envelope.ts'
+import { harnessVersions } from './upload/exact-work.ts'
 
 class FanoutError extends Error {}
 class Deadline extends Error {}
@@ -126,13 +128,16 @@ async function main(): Promise<void> {
   const report: { status: string, organization_domain?: string, mode?: string, settings?: object,
     points: Point[], capacity: { kind: string, lower: number | null, upper_exclusive: number | null, max: null },
     retained: boolean, warning: string, error?: string, content_mismatch: boolean, budget_reached?: string,
-    load_target?: 'local' | 'dev', outcome?: number,
+    load_target: 'local' | 'dev', outcome?: number, result?: ResultEnvelope,
     recovery?: { cleaned: string[] }, cleanup?: { cleaned: string[], retained: string[] } } = {
     status: 'inconclusive', points: [], content_mismatch: false,
+    load_target: process.env.LOAD_TARGET === 'dev' ? 'dev' : 'local',
     capacity: { kind: 'inconclusive', lower: null, upper_exclusive: null, max: null },
     retained: true, warning: 'No automatic cleanup. Client completion/timeout does not prove server writes ended.',
   }
   let reportFD: number | undefined
+  const startedAt = new Date().toISOString()
+  let stackVersion = 'unknown'
   // Shared DEV removes the run's own fixtures before the report is written.
   let cleanupRun: (() => Promise<void>) | undefined
   let workDeadline = Infinity
@@ -162,8 +167,7 @@ async function main(): Promise<void> {
     const concurrency = integer('FANOUT_POLL_CONCURRENCY', '8', 1000)
     const stable = integer('FANOUT_STABLE_MS', '3000')
     check(stable < timeout, 'FANOUT_STABLE_MS must be less than FANOUT_TIMEOUT_MS')
-    const dev = process.env.LOAD_TARGET === 'dev'
-    report.load_target = dev ? 'dev' : 'local'
+    const dev = report.load_target === 'dev'
     // A level starts only when both of its phases can still end within MAX_RUNTIME.
     const levelBudget = 2 * timeout + stable + 60_000
     const runtime = process.env.MAX_RUNTIME
@@ -389,6 +393,11 @@ async function main(): Promise<void> {
       ...report.settings, effective_member_cap: memberCap, context: contextName,
       common_contacts: true, auto_accept_trusted: true,
     }
+    // The Stack's own version for the result envelope; it stays unknown when the Stack does not say.
+    try {
+      const { version } = decode<{ version?: unknown }>(await api(owner, 'GET', '/version'))
+      if (typeof version === 'string' && version) stackVersion = version
+    } catch {}
     const asOwner = (deadline: number) => (method: string, path: string) => api(owner, method, path, '', deadline)
     if (fixture) {
       // Under the shared DEV lock, drives an earlier run left are this run's to remove first.
@@ -711,6 +720,11 @@ async function main(): Promise<void> {
     process.exitCode = report.status === 'inconclusive' ? 2
       : report.capacity.kind !== 'inconclusive' ? 0 : report.status === 'failed' ? 1 : 2
     report.outcome = process.exitCode
+    const context = {
+      interrupted: interrupted !== null, versions: { ...harnessVersions(), stack: stackVersion },
+      topology: topologyOf(report.load_target), start: startedAt, end: new Date().toISOString(),
+    }
+    report.result = fanoutEnvelope(report, context)
     let output = render()
     if (reportFD !== undefined) {
       try {
@@ -721,6 +735,7 @@ async function main(): Promise<void> {
         report.error = 'Private report write failed'
         process.exitCode = 2
         report.outcome = 2
+        report.result = fanoutEnvelope(report, context)
         output = render()
       } finally {
         closeSync(reportFD)

@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { classifyStep } from './campaign-summary.ts'
+import { validateEnvelope } from './result-envelope.ts'
 import { getBudgetResult } from './upload-campaign.ts'
 import { cwd, fakeTarget, fqdn } from './upload/fake-target.ts'
 
@@ -56,6 +58,12 @@ test('reconciles earlier data, runs only the k6 upload and records the run', asy
   equal(report.versions.k6_image, 'unknown')
   equal(report.monitoring.dev, 'unknown')
   match(report.monitoring.k6, /var-campaignid=load-runner-test-/)
+  const envelope = validateEnvelope(report.result)
+  deepEqual([envelope?.producer, envelope?.outcome, envelope?.performance, envelope?.capacity, envelope?.cleanup,
+    envelope?.topology, envelope?.versions], ['upload-regression', 0, 'passed', null, 'verified', 'shared-dev',
+    report.versions])
+  deepEqual(classifyStep({ name: 'upload', kind: 'upload-capacity', id: report.campaign_id, startedAt: '', endedAt: '',
+    exitCode: 0, producerExitCode: code }, report), { code: 0, reason: '' })
 
   // No local Stack: Compose only starts the observability services and runs k6.
   const calls = f.docker()
