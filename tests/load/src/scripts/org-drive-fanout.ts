@@ -152,8 +152,9 @@ async function main(): Promise<void> {
     for (const secret of secrets) text = text.replaceAll(secret, '[redacted]')
     return text
   }
-  const render = () => JSON.stringify(report, (_key, value: unknown) =>
-    typeof value === 'string' ? redact(value) : value, 2) + '\n'
+  // The envelope's identity is the harness's own constant: a common-word password must not rewrite it.
+  const render = () => JSON.stringify(report, (key, value: unknown) =>
+    typeof value === 'string' && !['schema', 'producer', 'workload'].includes(key) ? redact(value) : value, 2) + '\n'
   try {
     check(process.argv.length === 2, 'Configuration belongs in environment variables, not arguments')
     const levelsRaw = process.env.FANOUT_LEVELS ?? '1,2,4,8,16'

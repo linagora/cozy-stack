@@ -325,6 +325,13 @@ test('recipient canonical scheme mismatch is inconclusive, not a ready cohort', 
   equal(f.calls.filter(r => r.method === 'DELETE').length, 0)
 })
 
+test('an admin password that is a common word, as on the bundled Stack, leaves the envelope valid', async t => {
+  const f = await fixture(t)
+  const result = await f.run({ SEED_ADMIN_PASSWORD: 'cozy' })
+  equal(result.code, 0, result.stderr)
+  ok(validateEnvelope(result.report.result), JSON.stringify(result.report.result))
+})
+
 test('unrecognized roster fields cannot leak an upstream secret into the report', async t => {
   const f = await fixture(t, r => {
     if (r.headers.host === domain(1) && r.url.pathname === '/sharings/drive-1') r.transform = value => {
