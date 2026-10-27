@@ -34,8 +34,8 @@ separate future scenarios.
   first build; `capacity` runs the full ladders ([Campaigns](#campaigns)).
 - Locally, the campaign first builds and starts the bundled Stack from this
   checkout (`make cozy-prepare`), then seeds one organization for the ramp's
-  members and the group fan-out, and removes it at the end. The
-  [mixed workload](#mixed-workload) still runs by hand, until the campaign covers it.
+  members and the group fan-out and a tree fixture for the
+  [mixed workload](#mixed-workload), and removes both after their steps.
 - Shared DEV needs `SEED_CLOUDERY_TOKEN_FILE`, `SEED_CLOUDERY_MANIFEST` and
   `DEV_INSTANCE`, holds the shared DEV lock and uses the budgets agreed with the
   DEV owner, in `campaigns/capacity.sh` ([Shared DEV](#shared-dev)).
@@ -569,6 +569,26 @@ target, they are part of that regression, exit 1. Wrong metadata or a
 wrongly recorded upload exits 1. Shared DEV has no tree fixture yet, so the
 workload runs locally only.
 
+### Capacity
+
+`make mixed-capacity` finds the highest rate the fixture sustains: it runs the
+same workload at each of `MIXED_RATES` (default `1,2,4,8` workflows per
+second), for `MIXED_DURATION` each (default 1m), one k6 run per rate, and
+stops at the first rate that does not pass. Each rate gets at least eight VUs
+per workflow per second, so arrivals drop only once a workflow takes longer
+than eight seconds. The budgets cover every rate.
+
+```console
+$ make mixed-capacity MIXED_DOMAIN='seed-<32-hex-id>.localhost:8080' MIXED_RATES=1,2,4,8,16
+```
+
+`data/results/<EXECUTION_ID>-mixed-capacity.json` keeps every rate's verdict,
+the highest passing rate and the first failing one. Every rate passing gives a
+lower bound, and a later rate failing a bracket: both exit 0. The first rate
+failing exits 1, as does wrong content at any rate. A rate the generator could
+not keep, or that did not run cleanly, ends the search inconclusive, exit 2.
+The fixture is verified before the first rate and after the last.
+
 ### Soak
 
 `make mixed-soak` keeps the same workload up for longer, to catch memory,
@@ -621,13 +641,15 @@ $ make campaign CAMPAIGN=capacity LOAD_TARGET=dev   # shared DEV, from the load 
 ```
 
 The steps are the 100 KiB upload capacity on the personal drive, the
-shared-drive ramp and the group fan-out. Locally, one organization fixture,
-seeded before the ramp and removed after the fan-out, gives the ramp its writer
-and reader members and the fan-out its recipients; `run.log` names it, for
-`make seed-org-cleanup SEED_DOMAIN=...` after an interrupted run. Locally, the
-steps keep going after a failure.
+shared-drive ramp, the group fan-out and, locally, the mixed workload's
+capacity search. Locally, one organization fixture, seeded before the ramp and
+removed after the fan-out, gives the ramp its writer and reader members and the
+fan-out its recipients, and a tree fixture is seeded for the mixed search and
+removed after it; `run.log` names both, for `make seed-org-cleanup` or
+`make seed-scale-cleanup SEED_DOMAIN=...` after an interrupted run. Locally,
+the steps keep going after a failure.
 A definition is a `campaign()` function calling `upload_capacity`,
-`shared_drive_ramp`, `org_drive_fanout`, or `run_step`.
+`shared_drive_ramp`, `org_drive_fanout`, `mixed_capacity`, or `run_step`.
 
 Each run writes `data/results/campaigns/<run id>-<name>/`:
 

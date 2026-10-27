@@ -12,7 +12,7 @@ import { TREE_VERSION, treeFiles } from './dataset-profile.ts'
 import { stackAddress } from './drive-actors.ts'
 import { request } from './fixture-http.ts'
 import { manifestPath, readManifest } from './fixture-manifest.ts'
-import { mixedEnvelope, topologyOf } from './result-envelope.ts'
+import { mixedCapacityEnvelope, mixedEnvelope, topologyOf } from './result-envelope.ts'
 import { getBytes, getDurationMs, getPositiveInteger } from './upload/campaign-config.ts'
 import {
   check, harness, interruption, message, readVersions, runK6Work, stackClient, trapInterrupts, type Target,
@@ -27,6 +27,11 @@ const UPLOAD_BYTES = 1024
 const OVERHEAD_MS = 180_000
 // A soak longer than this needs a passed shorter trial at its rate first.
 const TRIAL_MAX_MS = 10 * 60_000
+// A capacity search gives each rate at least this many VUs per workflow/s, so a workflow may take this
+// many seconds before arrivals drop.
+const VUS_PER_RATE = 8
+// Starting and stopping k6 again, and cleaning up, for each further rate of a capacity search.
+const LEVEL_OVERHEAD_MS = 60_000
 
 // Every setting and budget is checked here, before the first request.
 export function readConfig(env: Env) {
@@ -44,10 +49,15 @@ export function readConfig(env: Env) {
   `${domain} is not a complete single-instance tree fixture, version ${TREE_VERSION} ` +
     '(make seed-scale SEED_PROFILE=tree)')
   const profile = env.MIXED_PROFILE || 'fixed'
-  check(profile === 'fixed' || profile === 'soak', 'MIXED_PROFILE must be fixed or soak')
+  check(['fixed', 'soak', 'capacity'].includes(profile), 'MIXED_PROFILE must be fixed, soak or capacity')
   const soak = profile === 'soak'
-  const rate = getPositiveInteger('MIXED_RATE', env.MIXED_RATE || '1')
-  const durationMs = getDurationMs('MIXED_DURATION', env.MIXED_DURATION || (soak ? '10m' : '2m'))
+  const capacity = profile === 'capacity'
+  // A capacity search steps through increasing rates, one k6 run each; fixed and soak runs keep one rate.
+  const rates = capacity ? (env.MIXED_RATES || '1,2,4,8').split(',').map(r => getPositiveInteger('MIXED_RATES', r))
+    : [getPositiveInteger('MIXED_RATE', env.MIXED_RATE || '1')]
+  check(rates.every((r, i) => i === 0 || r > rates[i - 1]!), 'MIXED_RATES must be increasing workflows per second')
+  const rate = rates[0]!
+  const durationMs = getDurationMs('MIXED_DURATION', env.MIXED_DURATION || (soak ? '10m' : capacity ? '1m' : '2m'))
   const warmupMs = getDurationMs('MIXED_WARMUP', env.MIXED_WARMUP || (soak ? '1m' : '0s'))
   const drainMs = getDurationMs('MIXED_DRAIN', env.MIXED_DRAIN || (soak ? '1m' : '0s'))
   const maxVus = getPositiveInteger('MIXED_MAX_VUS', env.MIXED_MAX_VUS || '10')
@@ -55,9 +65,11 @@ export function readConfig(env: Env) {
   const observers = Number(env.MIXED_OBSERVERS || '1')
   check(Number.isSafeInteger(observers) && observers >= 0, 'MIXED_OBSERVERS must be a non-negative integer')
   const graceMs = warmupMs ? WARMUP_GRACE_MS : 0
+  const levels = rates.map(r => ({ rate: r, maxVus: capacity ? Math.max(maxVus, VUS_PER_RATE * r) : maxVus }))
   // The caps cover the warm-up, the observers, both fixture verifications and cleanup too. k6 starts one
   // more arrival at the very start of each arrival scenario than rate × seconds.
-  const workflows = rate * Math.ceil((warmupMs + durationMs) / 1000) + (warmupMs ? 2 : 1)
+  const workflows = rates.reduce((sum, r) =>
+    sum + r * Math.ceil((warmupMs + durationMs) / 1000) + (warmupMs ? 2 : 1), 0)
   // A verification reads the instance, mints a token, then reads every directory, file and drive root and
   // the root's entry count.
   const verifyRequests = 3 + (entry.dirs?.length ?? 0) + entry.files.length + entry.drives.length
@@ -65,13 +77,14 @@ export function readConfig(env: Env) {
   // directory, in two requests. shortcut: the trash is taken to fit one page, as on a fixture only these
   // runs write to; count its pages too once fixtures are shared.
   const cleanupRequests = 2 * (Math.ceil(((entry.root_entries ?? 0) + 1) / 100) + 1) + 2
-  // k6 setup creates the run's directory; the runner mints a token, reads the Stack version and, in a
-  // soak, samples the Stack's metrics before and after.
+  // Each k6 run's setup creates its directory, which cleanup removes; the runner mints a token, reads the
+  // Stack version and, in a soak, samples the Stack's metrics before and after.
   const needs = {
-    vus: maxVus + observers, bytes: workflows * UPLOAD_BYTES,
-    runtimeMs: warmupMs + graceMs + durationMs + drainMs + OVERHEAD_MS,
-    requests: workflows * REQUESTS_PER_WORKFLOW + observers + 1 + 2 * verifyRequests + cleanupRequests + 2 +
-      (soak ? 2 : 0),
+    vus: Math.max(...levels.map(l => l.maxVus)) + observers, bytes: workflows * UPLOAD_BYTES,
+    runtimeMs: rates.length * (warmupMs + graceMs + durationMs) + (rates.length - 1) * LEVEL_OVERHEAD_MS + drainMs +
+      OVERHEAD_MS,
+    requests: workflows * REQUESTS_PER_WORKFLOW + rates.length * (observers + 1 + cleanupRequests) +
+      2 * verifyRequests + 2 + (soak ? 2 : 0),
   }
   const budgets = {
     max_vus: env.MAX_VUS ? getPositiveInteger('MAX_VUS', env.MAX_VUS) : null,
@@ -95,8 +108,8 @@ export function readConfig(env: Env) {
   }
   check(Object.values(recovery).every(v => Number.isFinite(v) && v >= 1), 'Recovery growth limits must be at least 1')
   return {
-    executionId, domain, manifest, entry, profile, soak, rate, durationMs, warmupMs, graceMs, drainMs, maxVus,
-    observers, needs, budgets, recovery, deadlineMs: runtimeMs, ...criteria(env),
+    executionId, domain, manifest, entry, profile, soak, capacity, rate, levels, durationMs, warmupMs, graceMs,
+    drainMs, maxVus, observers, needs, budgets, recovery, deadlineMs: runtimeMs, ...criteria(env),
   }
 }
 
@@ -190,6 +203,43 @@ export function classifyMixed(report: Record<string, any>): { code: 0 | 1 | 2, r
   return { code: 0, reason: '' }
 }
 
+// The highest rate that passed, and the first that failed. The search stops at the first rate that did
+// not pass, so the rates that passed come first.
+export function judgeCapacity(levels: Record<string, any>[], planned: number, problems: string[]) {
+  const passed = levels.filter(l => l.status === 'passed' && !l.problems.length)
+  const last = levels.at(-1)
+  const failed = last?.status === 'failed' && !last.problems.length ? last : undefined
+  const allProblems = [...levels.flatMap(l => l.problems.map((p: string) => `${l.rate} workflows/s: ${p}`)),
+    ...problems]
+  const correctnessFailures = levels.flatMap(l => (l.correctness_failures ?? [])
+    .map((f: string) => `${l.rate} workflows/s: ${f}`))
+  const resultBound = failed ? 'bracket' : passed.length === planned ? 'lower_bound' : 'inconclusive'
+  return {
+    max_sustained_rate: passed.at(-1)?.rate ?? 0,
+    first_failed_rate: failed?.rate ?? null,
+    result_bound: resultBound,
+    status: correctnessFailures.length ? 'correctness_failure'
+      : allProblems.length || resultBound === 'inconclusive' ? 'inconclusive' : 'completed',
+    correctness_failures: correctnessFailures,
+    problems: allProblems,
+    reasons: last && last.status !== 'passed'
+      ? (last.reasons ?? []).map((r: string) => `${last.rate} workflows/s: ${r}`) : [],
+  }
+}
+
+// As the shared-drive ramp: a failure at the first rate is a proven regression, at a later one a bracket.
+export function classifyMixedCapacity(report: Record<string, any>): { code: 0 | 1 | 2, reason: string } {
+  if (report.correctness_failures.length) return { code: 1, reason: report.correctness_failures.join('; ') }
+  if (report.problems.length) return { code: 2, reason: report.problems.join('; ') }
+  if (report.result_bound === 'bracket' && report.max_sustained_rate === 0) {
+    return { code: 1, reason: `the first rate failed: ${report.reasons.join('; ')}` }
+  }
+  if (report.result_bound === 'inconclusive') {
+    return { code: 2, reason: report.reasons.join('; ') || 'the search measured no rate' }
+  }
+  return { code: 0, reason: '' }
+}
+
 async function main(): Promise<number> {
   trapInterrupts()
   const env: Env = process.env
@@ -228,9 +278,7 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
   const resourcesBefore = config.soak ? await resources() : null
   const files = treeFiles(manifest.generation_seed!)
     .map((f, index) => ({ id: entry.files[index]!, md5: f.md5, size: f.size }))
-  const fixturePath = `data/results/${config.executionId}-mixed-fixture.json`
-  writeFileSync(`${harness}${fixturePath}`, JSON.stringify({ dirs: [ROOT, ...entry.dirs ?? []], files }),
-    { mode: 0o600 })
+  const fixture = JSON.stringify({ dirs: [ROOT, ...entry.dirs ?? []], files })
   const scheme = new URL(stackOrigin).protocol
   const target: Target = {
     kind: 'local', baseUrl: `${scheme}//${entry.domain}`, lockedUrls: [], maxPointMs: Infinity,
@@ -238,20 +286,72 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
     session: async () => ({ token, stack: stackClient(stackOrigin, entry.domain, token) }),
   }
 
-  const reportPath = `data/results/${config.executionId}-mixed-workload.json`
-  rmSync(`${harness}${reportPath}`, { force: true })
-  const workStartedAt = new Date().toISOString()
-  // An interruption stops k6; the run's directory, including writes still landing, is removed after it.
-  const run = await runK6Work(target, {
-    executionId: config.executionId,
-    makeTarget: 'mixed-run',
-    args: [`MIXED_RATE=${config.rate}`, `MIXED_DURATION=${config.durationMs}ms`, `MIXED_MAX_VUS=${config.maxVus}`,
-      `MIXED_WARMUP=${config.warmupMs}ms`, `MIXED_OBSERVERS=${config.observers}`,
-      `MIN_SUCCESS_RATE=${config.minSuccessRate}`, `P95_LIMIT_MS=${config.p95LimitMs}`],
-    deadline,
-    cleanup: { prefix: `twake-load-mixed-${config.executionId}-`, dirs: [ROOT] },
+  // One k6 run at one rate, under its own ID. An interruption stops k6; the run's directory, including
+  // writes still landing, is removed after it.
+  const runRate = async (rate: number, maxVus: number, id: string) => {
+    const fixturePath = `${harness}data/results/${id}-mixed-fixture.json`
+    writeFileSync(fixturePath, fixture, { mode: 0o600 })
+    const reportPath = `${harness}data/results/${id}-mixed-workload.json`
+    rmSync(reportPath, { force: true })
+    const work = await runK6Work(target, {
+      executionId: id,
+      makeTarget: 'mixed-run',
+      args: [`MIXED_RATE=${rate}`, `MIXED_DURATION=${config.durationMs}ms`, `MIXED_MAX_VUS=${maxVus}`,
+        `MIXED_WARMUP=${config.warmupMs}ms`, `MIXED_OBSERVERS=${config.observers}`,
+        `MIN_SUCCESS_RATE=${config.minSuccessRate}`, `P95_LIMIT_MS=${config.p95LimitMs}`],
+      deadline,
+      cleanup: { prefix: `twake-load-mixed-${id}-`, dirs: [ROOT] },
+    })
+    rmSync(fixturePath, { force: true })
+    let verdict: Record<string, any> | null = null
+    try { verdict = JSON.parse(readFileSync(reportPath, 'utf8')) } catch {}
+    const problems = [work.timeout, ...work.problems, ...(verdict ? [] : ['k6 wrote no mixed workload report']),
+      ...(work.k6.exit_code === 0 ? [] : [`k6 exited ${work.k6.exit_code}`])].filter(Boolean)
+    return { work, verdict, problems, reportPath }
+  }
+  const context = (versions: Record<string, string>, endedAt: string) => ({
+    interrupted: interruption() !== null, versions, topology: topologyOf('local'), start: startedAt, end: endedAt,
   })
-  rmSync(`${harness}${fixturePath}`, { force: true })
+
+  if (config.capacity) {
+    const levels: Record<string, any>[] = []
+    for (const { rate, maxVus } of config.levels) {
+      const id = `${config.executionId}-r${rate}`
+      const levelStartedAt = new Date().toISOString()
+      const { work, verdict, problems, reportPath } = await runRate(rate, maxVus, id)
+      // The search's report keeps every rate's verdict.
+      rmSync(reportPath, { force: true })
+      levels.push({ ...verdict, rate, max_vus: maxVus, execution_id: id, started_at: levelStartedAt,
+        ended_at: new Date().toISOString(), problems, cleanup: work.cleanup, k6: work.k6 })
+      if (problems.length || verdict?.status !== 'passed' || interruption() !== null) break
+    }
+    // Every run's own directory is gone by now, so the fixture must verify as seeded.
+    const after = verify(config.domain)
+    const endedAt = new Date().toISOString()
+    const report: Record<string, any> = {
+      mode: 'capacity', unit: 'workflows/s', load_target: 'local', fixture: config.domain,
+      dataset: { profile: 'tree', version: TREE_VERSION }, budgets: config.budgets, needs: config.needs,
+      plan: { rates: config.levels.map(l => l.rate), duration_s: config.durationMs / 1000,
+        observers: config.observers },
+      criteria: { minimum_success_rate: config.minSuccessRate, p95_limit_ms: config.p95LimitMs },
+      levels, ...judgeCapacity(levels, config.levels.length,
+        after ? [`the fixture did not verify after the run: ${after}`] : []),
+      started_at: startedAt, ended_at: endedAt,
+    }
+    const { code, reason } = classifyMixedCapacity(report)
+    report.outcome = code
+    report.failure_reason = reason || null
+    report.versions = await readVersions(target)
+    report.result = mixedCapacityEnvelope(report, context(report.versions, endedAt))
+    const reportPath = `data/results/${config.executionId}-mixed-capacity.json`
+    writeFileSync(`${harness}${reportPath}`, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
+    console.log(`Mixed capacity outcome ${code}${reason ? ` (${reason})` : ''}: ${reportPath}`)
+    return code
+  }
+
+  const workStartedAt = new Date().toISOString()
+  const { work, verdict, problems: workProblems, reportPath } = await runRate(config.rate, config.maxVus,
+    config.executionId)
   const workEndedAt = new Date().toISOString()
   // The Stack settles before the final state is read; an interrupted run does not wait.
   if (interruption() === null) await new Promise(resolve => setTimeout(resolve, config.drainMs))
@@ -263,14 +363,11 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
   try { resourcesAfter = resourcesBefore && await resources() } catch (error) { resourceProblem = message(error) }
   const endedAt = new Date().toISOString()
 
-  let verdict: Record<string, any> | null = null
-  try { verdict = JSON.parse(readFileSync(`${harness}${reportPath}`, 'utf8')) } catch {}
-  const problems = [run.timeout, ...run.problems, ...(verdict ? [] : ['k6 wrote no mixed workload report']),
-    ...(after ? [`the fixture did not verify after the run: ${after}`] : []), resourceProblem,
-    ...(run.k6.exit_code === 0 ? [] : [`k6 exited ${run.k6.exit_code}`])].filter(Boolean)
+  const problems = [...workProblems, ...(after ? [`the fixture did not verify after the run: ${after}`] : []),
+    resourceProblem].filter(Boolean)
   const report: Record<string, any> = {
     ...verdict, problems, load_target: 'local', fixture: config.domain, budgets: config.budgets,
-    needs: config.needs, cleanup: run.cleanup, k6: run.k6, started_at: startedAt, ended_at: endedAt,
+    needs: config.needs, cleanup: work.cleanup, k6: work.k6, started_at: startedAt, ended_at: endedAt,
     profile: config.profile,
     // Warm-up and steady activity run in one k6 run; the drain and the final verification follow it.
     phases: {
@@ -292,12 +389,9 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
   report.outcome = code
   report.failure_reason = reason || null
   report.versions = await readVersions(target)
-  report.result = mixedEnvelope(report, {
-    interrupted: interruption() !== null, versions: report.versions, topology: topologyOf('local'),
-    start: startedAt, end: endedAt,
-  })
-  writeFileSync(`${harness}${reportPath}`, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
-  console.log(`Mixed workload outcome ${code}${reason ? ` (${reason})` : ''}: ${reportPath}`)
+  report.result = mixedEnvelope(report, context(report.versions, endedAt))
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
+  console.log(`Mixed workload outcome ${code}${reason ? ` (${reason})` : ''}: ${reportPath.slice(harness.length)}`)
   return code
 }
 

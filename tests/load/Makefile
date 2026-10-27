@@ -112,6 +112,7 @@ help:
 	@echo "make upload UPLOAD_TARGET=shared-drive SHARED_DRIVE_ID=... SHARED_DRIVE_ROOT_ID=..."
 	@echo "make upload-capacity BASE_URL=https://... FILE_SIZE=10M"
 	@echo "make upload-regression BASE_URL=https://... VUS=2 ITERATIONS_PER_VU=5"
+	@echo "make mixed-capacity MIXED_DOMAIN=... MIXED_RATES=1,2,4,8  The highest workflow rate a tree fixture sustains"
 	@echo "make status | make logs | make down"
 
 doctor:
@@ -265,11 +266,12 @@ mixed-run: upload-binary observability-up
 		/scripts/mixed-workload.ts
 
 # A fixed arrival rate of workflows against a tree fixture (README, Mixed workload); mixed-soak keeps it
-# up for longer between a warm-up and a drain.
-.PHONY: mixed-workload mixed-soak
+# up for longer between a warm-up and a drain, and mixed-capacity steps through MIXED_RATES.
+.PHONY: mixed-workload mixed-soak mixed-capacity
 mixed-soak: MIXED_PROFILE := soak
-mixed-workload mixed-soak: $(NODE_MODULES_MARKER)
-	@MIXED_PROFILE="$(MIXED_PROFILE)" MIXED_WARMUP="$(MIXED_WARMUP)" MIXED_DRAIN="$(MIXED_DRAIN)" SOAK_TRIAL="$(SOAK_TRIAL)" SOAK_MAX_GOROUTINE_GROWTH="$(SOAK_MAX_GOROUTINE_GROWTH)" SOAK_MAX_HEAP_GROWTH="$(SOAK_MAX_HEAP_GROWTH)" MIXED_DOMAIN="$(MIXED_DOMAIN)" MIXED_RATE="$(MIXED_RATE)" MIXED_DURATION="$(MIXED_DURATION)" MIXED_MAX_VUS="$(MIXED_MAX_VUS)" MIXED_OBSERVERS="$(MIXED_OBSERVERS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MAX_VUS="$(MAX_VUS)" MAX_REQUESTS="$(MAX_REQUESTS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" \
+mixed-capacity: MIXED_PROFILE := capacity
+mixed-workload mixed-soak mixed-capacity: $(NODE_MODULES_MARKER)
+	@MIXED_PROFILE="$(MIXED_PROFILE)" MIXED_RATES="$(MIXED_RATES)" MIXED_WARMUP="$(MIXED_WARMUP)" MIXED_DRAIN="$(MIXED_DRAIN)" SOAK_TRIAL="$(SOAK_TRIAL)" SOAK_MAX_GOROUTINE_GROWTH="$(SOAK_MAX_GOROUTINE_GROWTH)" SOAK_MAX_HEAP_GROWTH="$(SOAK_MAX_HEAP_GROWTH)" MIXED_DOMAIN="$(MIXED_DOMAIN)" MIXED_RATE="$(MIXED_RATE)" MIXED_DURATION="$(MIXED_DURATION)" MIXED_MAX_VUS="$(MIXED_MAX_VUS)" MIXED_OBSERVERS="$(MIXED_OBSERVERS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MAX_VUS="$(MAX_VUS)" MAX_REQUESTS="$(MAX_REQUESTS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" \
 		$(RECORD_EXIT) node --import tsx src/scripts/mixed-campaign.ts
 
 # The shared-drive ramp through the campaign runner: LOAD_TARGET=dev holds the shared DEV lock, as for

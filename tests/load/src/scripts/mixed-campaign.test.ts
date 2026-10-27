@@ -5,9 +5,10 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import {
-  classifyMixed, holdLock, judgeRecovery, parseResources, readConfig, runningMixedWorkloads,
+  classifyMixed, classifyMixedCapacity, holdLock, judgeCapacity, judgeRecovery, parseResources, readConfig,
+  runningMixedWorkloads,
 } from './mixed-campaign.ts'
-import { mixedEnvelope, validateEnvelope, type RunContext } from './result-envelope.ts'
+import { mixedCapacityEnvelope, mixedEnvelope, validateEnvelope, type RunContext } from './result-envelope.ts'
 
 // A seeded single-instance tree fixture: 5 directories, 7 files, 1 drive and 6 root entries.
 function manifest(organization: string | null = null): string {
@@ -81,6 +82,70 @@ test('the envelope keeps the rate verdict, its correctness and cleanup apart, an
     equal(envelope.capacity, null)
     ok(validateEnvelope(envelope), JSON.stringify(report))
   }
+})
+
+// One rate of a capacity search, as the runner records it.
+const level = (rate: number, status = 'passed', extra: Record<string, unknown> = {}) => ({
+  rate, status, problems: [], correctness_failures: [], correctness: { complete: true },
+  reasons: status === 'passed' ? [] : ['upload p95 3000 ms exceeds 2000 ms'],
+  cleanup: { cleaned: ['d'], remaining: [] },
+  ...extra,
+})
+const search = (levels: Record<string, any>[], planned = levels.length, problems: string[] = []) => {
+  const judged = judgeCapacity(levels, planned, problems)
+  const { code, reason } = classifyMixedCapacity(judged)
+  return { ...judged, levels, load_target: 'local', dataset: { profile: 'tree', version: 1 }, outcome: code,
+    failure_reason: reason || null, code, reason }
+}
+
+test('a capacity search steps through increasing rates, each with VUs for its rate, within one budget', () => {
+  const capacity = { ...env, MIXED_PROFILE: 'capacity', MIXED_RATES: '1,2,4', MIXED_DURATION: '30s' }
+  const config = readConfig(capacity)
+  deepEqual(config.levels, [{ rate: 1, maxVus: 8 }, { rate: 2, maxVus: 16 }, { rate: 4, maxVus: 32 }])
+  // 213 workflows over the three runs; each run has its own observer, k6 setup and cleanup, and k6 starts
+  // and stops again between rates.
+  deepEqual(config.needs, { vus: 33, requests: 697, bytes: 218_112, runtimeMs: 390_000 })
+  throws(() => readConfig({ ...capacity, MIXED_RATES: '2,1' }), /increasing/)
+  throws(() => readConfig({ ...capacity, MIXED_RATES: '1,x' }), /MIXED_RATES must be a positive integer/)
+  deepEqual(readConfig({ ...env, MIXED_PROFILE: 'capacity' }).levels.map(l => l.rate), [1, 2, 4, 8])
+})
+
+test('the search keeps the highest passing rate: a later failure brackets it, a first one is a regression', () => {
+  const all = search([level(1), level(2), level(4)])
+  deepEqual([all.result_bound, all.max_sustained_rate, all.code], ['lower_bound', 4, 0])
+  const bracket = search([level(1), level(2), level(4, 'failed')], 4)
+  deepEqual([bracket.result_bound, bracket.max_sustained_rate, bracket.first_failed_rate, bracket.code],
+    ['bracket', 2, 4, 0])
+  deepEqual([search([level(1, 'failed')], 4).code, search([level(1, 'failed')], 4).reason],
+    [1, 'the first rate failed: 1 workflows/s: upload p95 3000 ms exceeds 2000 ms'])
+  const saturated = search([level(1), level(2, 'generator_saturated')], 4)
+  deepEqual([saturated.result_bound, saturated.max_sustained_rate, saturated.code], ['inconclusive', 1, 2])
+  const broken = search([level(1), level(2, 'passed', { problems: ['k6 exited 107'] })], 4)
+  deepEqual([broken.code, broken.reason], [2, '2 workflows/s: k6 exited 107'])
+  const wrong = search([level(1, 'failed', { correctness_failures: ['1 uploads were recorded wrong'] })], 4)
+  deepEqual([wrong.status, wrong.code, wrong.reason],
+    ['correctness_failure', 1, '1 workflows/s: 1 uploads were recorded wrong'])
+  // Rates that passed on a fixture that no longer verifies prove nothing.
+  equal(search([level(1)], 1, ['the fixture did not verify after the run: missing']).code, 2)
+})
+
+test('the capacity envelope claims the rate it measured, in workflows/s on the tree dataset', () => {
+  for (const [levels, expected] of [
+    [[level(1), level(2)], ['lower_bound', 2, null, 0]],
+    [[level(1), level(2, 'failed')], ['bracket', 1, 2, 0]],
+    [[level(1, 'failed')], ['bracket', 0, 1, 1]],
+    [[level(1), level(2, 'generator_saturated')], ['lower_bound', 1, null, 2]],
+  ] as const) {
+    const envelope = validateEnvelope(mixedCapacityEnvelope(search([...levels], 2), context))
+    ok(envelope, JSON.stringify(levels))
+    deepEqual([envelope.capacity?.kind, envelope.capacity?.lower, envelope.capacity?.upper_exclusive, envelope.outcome],
+      expected)
+    deepEqual([envelope.capacity?.unit, envelope.capacity?.verified, envelope.dataset],
+      ['workflows/s', expected[3] === 0, { profile: 'tree', version: 1 }])
+  }
+  // A rate whose successful responses were not all checked verifies nothing.
+  const unchecked = mixedCapacityEnvelope(search([level(1, 'passed', { correctness: { complete: false } })]), context)
+  equal(unchecked.correctness, 'not_verified')
 })
 
 test('a soak warms up and drains within its caps, and runs long only after a passed trial', t => {

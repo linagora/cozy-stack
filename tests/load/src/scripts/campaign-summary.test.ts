@@ -172,6 +172,31 @@ describe('fanout campaign results', (): void => {
   })
 })
 
+describe('mixed capacity campaign results', (): void => {
+  const step = { ...uploadStep, kind: 'mixed-capacity' }
+  const failed = { rate: 4, status: 'failed', reasons: ['upload p95 3000 ms exceeds 2000 ms'] }
+
+  it('reports the highest sustained rate, the bracket a failed rate gives, or why the search stopped', (): void => {
+    deepEqual([
+      describeStepResult(step, { result_bound: 'lower_bound', max_sustained_rate: 8,
+        levels: [{ rate: 8, status: 'passed' }] }),
+      describeStepResult(step, { result_bound: 'bracket', max_sustained_rate: 2, first_failed_rate: 4,
+        levels: [failed] }),
+      describeStepResult(step, { result_bound: 'inconclusive', max_sustained_rate: 2,
+        failure_reason: '4 workflows/s: k6 exited 107', levels: [{ rate: 4, problems: ['k6 exited 107'] }] }),
+    ], [
+      'maximum sustained rate ≥ 8 workflows/s (every rate passed)',
+      'sustained rate bracket [2, 4) workflows/s; 4 workflows/s failed: upload p95 3000 ms exceeds 2000 ms',
+      'inconclusive; highest passing rate 2 workflows/s; 4 workflows/s not measured: 4 workflows/s: k6 exited 107',
+    ])
+  })
+
+  it('reads no verdict from a report without an envelope', (): void => {
+    deepEqual(classifyStep({ ...step, producerExitCode: 0 }, { result_bound: 'lower_bound', max_sustained_rate: 8 }),
+      { code: 2, reason: 'no result envelope' })
+  })
+})
+
 describe('buildGrafanaLink', (): void => {
   it('opens the matching dashboard on the step campaign and time range', (): void => {
     equal(

@@ -10,7 +10,8 @@ import { declaredOutcome } from './result-envelope.ts'
 // one line per step with its result, its outcome and a Grafana link for its
 // time range. The exit status is the campaign outcome (README, Campaigns).
 
-export type CampaignStepKind = 'upload-capacity' | 'shared-drive-ramp' | 'org-drive-fanout' | 'prepare'
+export type CampaignStepKind = 'upload-capacity' | 'shared-drive-ramp' | 'org-drive-fanout' | 'mixed-capacity' |
+  'prepare'
 
 export type CampaignStep = {
   endedAt: string
@@ -115,6 +116,22 @@ function describeRamp(result: JsonRecord): string {
     : `inconclusive; highest completed passing level ${maximum}${detail}`
 }
 
+function describeMixedCapacity(result: JsonRecord): string {
+  const levels = Array.isArray(result.levels) ? result.levels.filter(isJsonRecord) : []
+  const last = levels.at(-1)
+  const detail = last === undefined || last.status === 'passed' ? ''
+    : `; ${String(last.rate)} workflows/s ${String(last.status ?? 'not measured')}: ` +
+      `${Array.isArray(last.reasons) ? last.reasons.join('; ') : String(result.failure_reason ?? '')}`
+  const maximum = String(result.max_sustained_rate ?? 0)
+  if (result.result_bound === 'lower_bound') {
+    return `maximum sustained rate ≥ ${maximum} workflows/s (every rate passed)`
+  }
+  if (result.result_bound === 'bracket') {
+    return `sustained rate bracket [${maximum}, ${String(result.first_failed_rate)}) workflows/s${detail}`
+  }
+  return `inconclusive; highest passing rate ${maximum} workflows/s${detail}`
+}
+
 type FanoutBound = { kind: 'lower_bound', lower: number } |
   { kind: 'bracket', lower: number, upper: number }
 
@@ -159,6 +176,7 @@ export function describeStepResult(step: CampaignStep, result: JsonRecord | null
   }
 
   if (step.kind === 'org-drive-fanout') return describeFanout(result)
+  if (step.kind === 'mixed-capacity') return describeMixedCapacity(result)
   return step.kind === 'shared-drive-ramp' ? describeRamp(result) : describeUploadCapacity(result)
 }
 
@@ -211,7 +229,7 @@ function classifyFanout(result: JsonRecord): StepOutcome {
 }
 
 export function classifyStep(step: CampaignStep, result: JsonRecord | null): StepOutcome {
-  const producers = ['upload-capacity', 'shared-drive-ramp', 'org-drive-fanout']
+  const producers = ['upload-capacity', 'shared-drive-ramp', 'org-drive-fanout', 'mixed-capacity']
   if (!producers.includes(step.kind) || step.id === '') {
     return step.exitCode === 0 ? completed : { code: 2, reason: `step failed (exit ${step.exitCode})` }
   }
@@ -220,7 +238,8 @@ export function classifyStep(step: CampaignStep, result: JsonRecord | null): Ste
 
   // The producer's envelope is the verdict; only legacy reports are classified here.
   const outcome = declaredOutcome(result) ?? (step.kind === 'upload-capacity' ? classifyUploadCapacity(result)
-    : step.kind === 'shared-drive-ramp' ? classifyRamp(result) : classifyFanout(result))
+    : step.kind === 'shared-drive-ramp' ? classifyRamp(result)
+    : step.kind === 'org-drive-fanout' ? classifyFanout(result) : { code: 2, reason: 'no result envelope' })
   // A completed report does not explain an unexpected producer failure.
   const explainedExit = exit === 0 || (step.kind === 'shared-drive-ramp' && exit === K6_THRESHOLDS_FAILED)
   if (outcome.code === 0 && !explainedExit) {
@@ -314,8 +333,9 @@ function resultPath(step: CampaignStep, results: string): string | null {
   if (step.kind === 'shared-drive-ramp') {
     return join(results, `${step.id}-shared-drive-ramp.json`)
   }
-  if (step.kind === 'org-drive-fanout' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(step.id)) {
-    return join(results, `${step.id}-org-drive-fanout.json`)
+  const named = step.kind === 'org-drive-fanout' || step.kind === 'mixed-capacity'
+  if (named && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(step.id)) {
+    return join(results, `${step.id}-${step.kind}.json`)
   }
   return null
 }

@@ -8,6 +8,8 @@ import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { mixedCapacityEnvelope } from './result-envelope.ts'
+
 const harness = fileURLToPath(new URL('../../', import.meta.url))
 
 // Plays one step from $FAKE_STEPS/<step>.*: setup failure before the producer,
@@ -23,7 +25,7 @@ for arg in "$@"; do
   esac
 done
 case $target in
-  upload-capacity | shared-drive-ramp | org-drive-fanout) suffix=$target ;;
+  upload-capacity | shared-drive-ramp | org-drive-fanout | mixed-capacity) suffix=$target ;;
   *) suffix= ;;
 esac
 echo "$target" >> "$FAKE_STEPS/targets"
@@ -135,6 +137,13 @@ const upload = { attempts: [{ cleanup_rate: 1, consistency_rate: 1 }], maximum_c
 const ramp = (bound: 'bracket' | 'lower_bound') => ({ levels: [], max_sustained_level: 8,
   result_bound: bound, status: 'completed' })
 const fanout = { capacity: { kind: 'bracket', lower: 2, max: null, upper_exclusive: 4 }, points: [], status: 'failed' }
+// The mixed search has no legacy classification: only its envelope gives a verdict.
+const mixedSearch = { levels: [{ rate: 2, status: 'passed', correctness: { complete: true },
+  cleanup: { cleaned: [], remaining: [] } }], max_sustained_rate: 2, first_failed_rate: null,
+result_bound: 'lower_bound', status: 'completed', correctness_failures: [], outcome: 0, load_target: 'local' }
+const mixed = { ...mixedSearch, result: mixedCapacityEnvelope(mixedSearch, { interrupted: false,
+  versions: { harness: 'test', stack: 'test' }, topology: 'single-host', start: '2026-10-27T10:00:00Z',
+  end: '2026-10-27T10:01:00Z' }) }
 const producers = `upload_capacity upload FILE_SIZE=1M
 shared_drive_ramp ramp RAMP_LEVELS=8,16
 org_drive_fanout fanout FANOUT_LEVELS=2,4`
@@ -260,14 +269,15 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     'upload-capacity': { exit: 0, report: upload },
     'shared-drive-ramp': { exit: 0, report: ramp('lower_bound') },
     'org-drive-fanout': { exit: 0, report: { ...fanout, capacity: { kind: 'lower_bound', lower: 4 }, status: 'passed' } },
+    'mixed-capacity': { exit: 0, report: mixed },
   }
-  for (const [campaign, vus, levels, members] of [['smoke', '2', '1,2', '2'],
-    ['capacity', undefined, '1,2,4,8,16', '16']] as const) {
+  for (const [campaign, vus, levels, members, rates] of [['smoke', '2', '1,2', '2', '1,2'],
+    ['capacity', undefined, '1,2,4,8,16', '16', '1,2,4,8,16,32']] as const) {
     const run = await runCampaign(t, '', plays, undefined, { campaign })
     equal(run.code, 0, run.log)
     // Locally, the bundled Stack is prepared before any runner, and the organization removed after the last.
     deepEqual(run.targets, ['cozy-prepare', 'upload-capacity', 'seed-org', 'shared-drive-ramp', 'org-drive-fanout',
-      'seed-org-cleanup'])
+      'seed-org-cleanup', 'seed-scale', 'mixed-capacity', 'seed-scale-cleanup'])
     deepEqual([setting(run.commands[1], 'LOAD_TARGET'), setting(run.commands[1], 'FILE_SIZE'),
       setting(run.commands[1], 'MAX_VUS'), setting(run.commands[3], 'RAMP_LEVELS'),
       setting(run.commands[2], 'SEED_USERS'), setting(run.commands[4], 'FANOUT_LEVELS')],
@@ -276,6 +286,12 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     match(org, /^seed-[a-f0-9]{32}\./)
     deepEqual([setting(run.commands[3], 'ACTORS_DOMAIN'), setting(run.commands[4], 'FANOUT_ORG_DOMAIN'),
       setting(run.commands[5], 'SEED_DOMAIN')], [org, org, org])
+    // The mixed search gets its own tree fixture, removed after it.
+    const tree = setting(run.commands[6], 'SEED_DOMAIN')!
+    match(tree, /^seed-[a-f0-9]{32}\./)
+    ok(tree !== org)
+    deepEqual([setting(run.commands[6], 'SEED_PROFILE'), setting(run.commands[7], 'MIXED_DOMAIN'),
+      setting(run.commands[7], 'MIXED_RATES'), setting(run.commands[8], 'SEED_DOMAIN')], ['tree', tree, rates, tree])
     if (!hasFlock()) continue
     // On shared DEV, the agreed budgets apply and a smoke ladder stays below them.
     const dev = await runCampaign(t, '', plays, undefined, { campaign, env: {

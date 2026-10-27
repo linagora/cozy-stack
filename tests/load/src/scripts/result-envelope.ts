@@ -6,7 +6,7 @@ import { hasContentMismatch } from './capacity/upload-point.ts'
 
 export const RESULT_SCHEMA = 'cozy-load-result/1'
 const PRODUCERS = [
-  'upload-capacity', 'upload-regression', 'shared-drive-ramp', 'org-drive-fanout', 'mixed-workload',
+  'upload-capacity', 'upload-regression', 'shared-drive-ramp', 'org-drive-fanout', 'mixed-workload', 'mixed-capacity',
 ] as const
 // Fixed-load producers judge a rate, never a capacity.
 const FIXED_LOAD: readonly string[] = ['upload-regression', 'mixed-workload']
@@ -33,7 +33,7 @@ export interface ResultEnvelope {
   cleanup: Verification
   versions: Record<string, string>
   workload: string
-  // The seeded dataset a workload ran on; none of the current workloads uses one.
+  // The seeded dataset a workload ran on: only the mixed capacity search records its tree fixture.
   dataset: { profile: string, version: number } | null
   load_target: 'local' | 'dev'
   topology: string
@@ -195,4 +195,31 @@ export function mixedEnvelope(report: Record<string, any>, context: RunContext):
     criteria: report.criteria ?? {},
     parameters: { plan: report.plan ?? null, budgets: report.budgets ?? null, fixture: report.fixture ?? null },
   })
+}
+
+export function mixedCapacityEnvelope(report: Record<string, any>, context: RunContext): ResultEnvelope {
+  const levels: Record<string, any>[] = report.levels ?? []
+  const lower = report.max_sustained_rate
+  const upper = report.first_failed_rate
+  const bracket = report.result_bound === 'bracket' && count(lower) && count(upper) && upper > lower
+  // Rates that ran to a verdict; every one must have checked all its successful responses.
+  const judged = levels.filter(l => l.status === 'passed' || l.status === 'failed')
+  return {
+    ...envelope('mixed-capacity', report, context, report.failure_reason, {
+      execution: context.interrupted ? 'interrupted'
+        : oneOf(report.status, ['completed', 'correctness_failure']) ? 'completed' : 'incomplete',
+      correctness: report.correctness_failures?.length ? 'failed'
+        : judged.length && judged.every(l => l.correctness?.complete === true) ? 'verified' : 'not_verified',
+      performance: !count(lower) ? 'not_measured' : lower > 0 ? 'passed' : bracket ? 'failed' : 'not_measured',
+      capacity: count(lower) && (lower > 0 || bracket) ? {
+        kind: bracket ? 'bracket' : 'lower_bound', lower, upper_exclusive: bracket ? upper : null,
+        unit: 'workflows/s', verified: report.outcome === 0,
+      } : null,
+      cleanup: cleanupOf(levels.map(l => l.cleanup)),
+      workload: 'mixed-capacity',
+      criteria: report.criteria ?? {},
+      parameters: { plan: report.plan ?? null, budgets: report.budgets ?? null, fixture: report.fixture ?? null },
+    }),
+    dataset: report.dataset ?? null,
+  }
 }

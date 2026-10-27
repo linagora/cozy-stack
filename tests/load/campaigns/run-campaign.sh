@@ -155,6 +155,12 @@ org_drive_fanout() {
   run_step "$name" org-drive-fanout "$RUN_ID-$name" org-drive-fanout EXECUTION_ID="$RUN_ID-$name" "$@"
 }
 
+mixed_capacity() {
+  local name=$1
+  shift
+  run_step "$name" mixed-capacity "$RUN_ID-$name" mixed-capacity EXECUTION_ID="$RUN_ID-$name" "$@"
+}
+
 echo "Campaign $CAMPAIGN, run $RUN_ID, directory $RUN_DIR"
 # shellcheck source=/dev/null
 source "$DEFINITION"
