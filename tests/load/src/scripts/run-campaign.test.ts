@@ -271,8 +271,11 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     'org-drive-fanout': { exit: 0, report: { ...fanout, capacity: { kind: 'lower_bound', lower: 4 }, status: 'passed' } },
     'mixed-capacity': { exit: 0, report: mixed },
   }
-  for (const [campaign, vus, levels, members, rates] of [['smoke', '2', '1,2', '2', '1,2'],
-    ['capacity', undefined, '1,2,4,8,16', '16', '1,2,4,8,16,32']] as const) {
+  // Locally the capacity ladders go past the VM's limits; shared DEV keeps them within its budgets.
+  for (const [campaign, vus, levels, batches, members, rates, devLevels] of [
+    ['smoke', '2', '1,2', '1,2', '2', '1,2', '1,2'],
+    ['capacity', undefined, '1,2,4,8,16,32,64', '1,2,4,8,16,32,64,128', '128', '1,2,4,8,16,32', '1,2,4,8,16'],
+  ] as const) {
     const run = await runCampaign(t, '', plays, undefined, { campaign })
     equal(run.code, 0, run.log)
     // Locally, the bundled Stack is prepared before any runner, and the organization removed after the last.
@@ -281,7 +284,7 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     deepEqual([setting(run.commands[1], 'LOAD_TARGET'), setting(run.commands[1], 'FILE_SIZE'),
       setting(run.commands[1], 'MAX_VUS'), setting(run.commands[3], 'RAMP_LEVELS'),
       setting(run.commands[2], 'SEED_USERS'), setting(run.commands[4], 'FANOUT_LEVELS')],
-    ['local', '100K', vus, levels, members, levels])
+    ['local', '100K', vus, levels, members, batches])
     const org = setting(run.commands[2], 'SEED_DOMAIN')!
     match(org, /^seed-[a-f0-9]{32}\./)
     deepEqual([setting(run.commands[3], 'ACTORS_DOMAIN'), setting(run.commands[4], 'FANOUT_ORG_DOMAIN'),
@@ -300,7 +303,8 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     deepEqual(dev.targets, ['upload-capacity', 'shared-drive-ramp', 'org-drive-fanout'])
     deepEqual(dev.commands.map(command => setting(command, 'LOAD_TARGET')), ['dev', 'dev', 'dev'])
     deepEqual([setting(dev.commands[0], 'MAX_VUS'), setting(dev.commands[0], 'MAX_UPLOAD_BYTES'),
-      setting(dev.commands[2], 'FANOUT_LEVELS')], [vus ?? '128', '2560M', levels])
+      setting(dev.commands[1], 'RAMP_LEVELS'), setting(dev.commands[2], 'FANOUT_LEVELS')],
+    [vus ?? '128', '2560M', devLevels, devLevels])
   }
 })
 
