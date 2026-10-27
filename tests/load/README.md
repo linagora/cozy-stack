@@ -11,8 +11,8 @@ correctness and result contracts, and the planned bounded shared DEV rollout.
 For classified workload limits, tested bounds and fanout readiness evidence, see
 [Load test results](CAPACITY-OVERVIEW.md). Workload and infrastructure diagnostics remain available.
 
-The harness includes authenticated exact-work and fixed-duration file-upload
-workloads for personal drives, shared-drive activity and upload workloads, and an
+The harness includes authenticated exact-work file-upload workloads for
+personal drives, shared-drive activity and upload workloads, and an
 adaptive search for the maximum upload concurrency of one Cozy instance.
 See [CAPACITY.md](./CAPACITY.md) for the operational capacity model and pass criteria.
 See [SEEDING.md](./SEEDING.md) for API-only fixtures and
@@ -20,6 +20,31 @@ See [SEEDING.md](./SEEDING.md) for API-only fixtures and
 See [ORG-DRIVE-FANOUT.md](./ORG-DRIVE-FANOUT.md) for native group attach/remove
 convergence. Upstream B2B membership events and broader file workloads remain
 separate future scenarios.
+
+## Quick start
+
+| To | Where | Run |
+| --- | --- | --- |
+| Check the code: tests and types | Anywhere | `make node-checks` |
+| Check that every runner, report and metric still works | Locally or on the load VM | `make campaign CAMPAIGN=smoke` |
+| Measure every runner's capacity on the bundled Stack | The load VM | `make campaign CAMPAIGN=capacity` |
+| Check, then measure, shared DEV | The load VM only | `make campaign CAMPAIGN=smoke LOAD_TARGET=dev`, then `CAMPAIGN=capacity` |
+
+- `smoke` runs every step on its shortest ladder, in about ten minutes after the
+  first build; `capacity` runs the full ladders ([Campaigns](#campaigns)).
+- Locally, the campaign first builds and starts the bundled Stack from this
+  checkout (`make cozy-prepare`). The group fan-out runs on shared DEV only, and
+  the [mixed workload](#mixed-workload) by hand, until the campaign covers them.
+- Shared DEV needs `SEED_CLOUDERY_TOKEN_FILE`, `SEED_CLOUDERY_MANIFEST` and
+  `DEV_INSTANCE`, holds the shared DEV lock and uses the budgets agreed with the
+  DEV owner, in `campaigns/capacity.sh` ([Shared DEV](#shared-dev)).
+- Each run writes `data/results/campaigns/<run id>-<name>/summary.md`, with a
+  Grafana link per step, and exits 0 when completed, 1 on a proven correctness
+  failure and 2 when inconclusive.
+- One runner alone: `make cozy-prepare`, then `make upload-capacity`,
+  `upload-regression` or `shared-drive-ramp`; `make org-drive-fanout` also needs
+  an organization fixture ([ORG-DRIVE-FANOUT.md](ORG-DRIVE-FANOUT.md)). Add
+  `LOAD_TARGET=dev` for shared DEV.
 
 ## How it is built
 
