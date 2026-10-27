@@ -388,7 +388,7 @@
               "refId": "report_at"
             }
           },
-          "regex": "/([0-9]+(?:\\.[0-9]+)?)$/",
+          "regex": "/ ([0-9]+(?:\\.[0-9]+)?) [0-9]+$/",
           "sort": "alphabeticalAsc",
           "definition": "query_result(max(timestamp(cozy_load_run_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\"})))",
           "options": [],

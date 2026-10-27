@@ -114,6 +114,9 @@ test('telemetry uses recorded attempt bounds pinned independently of the chart w
   const reportTime = dashboard.spec.variables.find(v => v.spec.name === 'report_at')!
   assert.match(reportTime.spec.query!.spec.query, /max\(timestamp\(cozy_load_run_info/)
   assert.equal(reportTime.spec.refresh, 'onTimeRangeChanged')
+  // Grafana renders a query_result as '{} <value> <evaluation time in ms>'; @ takes the value in seconds.
+  const reportRegex = new RegExp(reportTime.spec.regex!.slice(1, -1))
+  assert.equal('{} 1793107927.232 1793108054978'.match(reportRegex)?.[1], '1793107927.232')
   for (const query of queries(named('Upload latency')).filter(q => q.datasource.name === 'prometheus')) {
     assert.match(query.spec.expr!, /and on\(\) \(count\(/)
     assert.match(query.spec.expr!, /== 1\)$/)
