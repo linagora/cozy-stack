@@ -1,7 +1,8 @@
+import { sleep } from 'k6'
 import http from 'k6/http'
 
 import type { JSONObject, JSONValue } from 'k6'
-import type { RefinedResponse, RequestBody, Response } from 'k6/http'
+import type { Params, RefinedResponse, RequestBody, Response } from 'k6/http'
 
 import {
   makeUploadTargetDownloadUrl,
@@ -169,6 +170,23 @@ export function fetchDownloadRangeResponse({
   })
 }
 
+// The Stack answers 503 with Retry-After when it could not take the instance's lock, before doing
+// anything, as for a while after a large directory is trashed: a cleanup delete waits that out for up to
+// this long. Teardowns that use it allow for it (TEARDOWN_TIMEOUT).
+const BUSY_WAIT_MS = 240_000
+export const TEARDOWN_TIMEOUT = '5m'
+
+function deleteWaitingOutBusy(url: string, params: Params): Response {
+  const until = Date.now() + BUSY_WAIT_MS
+  for (;;) {
+    const res = http.del(url, null, params)
+    const retryAfter = String(res.headers['Retry-After'] ?? '')
+    const waitS = res.status === 503 && /^\d+$/.test(retryAfter) ? Math.min(Number(retryAfter), 30) : null
+    if (waitS === null || Date.now() + waitS * 1000 >= until) return res
+    sleep(waitS)
+  }
+}
+
 export function fetchTrashResponse({
   accessToken,
   baseUrl,
@@ -177,7 +195,7 @@ export function fetchTrashResponse({
   target,
   timeout,
 }: DirectoryRequest): Response {
-  return http.del(makeUploadTargetFileUrl(baseUrl, directoryId, target), null, {
+  return deleteWaitingOutBusy(makeUploadTargetFileUrl(baseUrl, directoryId, target), {
     headers: makeJsonApiHeaders(accessToken, 'application/json'),
     tags: {
       ...tags,
@@ -196,9 +214,8 @@ export function fetchDestroyResponse({
   target,
   timeout,
 }: DirectoryRequest): Response {
-  return http.del(
+  return deleteWaitingOutBusy(
     makeUploadTargetTrashUrl(baseUrl, directoryId, target),
-    null,
     {
       headers: makeJsonApiHeaders(accessToken, 'application/json'),
       tags: {

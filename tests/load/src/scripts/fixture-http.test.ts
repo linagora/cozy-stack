@@ -107,3 +107,28 @@ test('redirects are returned without following or retrying requests', async (t) 
     { status: 302, body: 'redirect reply' })
   equal(calls, 1)
 })
+
+test('waits out a busy instance for reads and deletes only, within the request timeout', async (t) => {
+  const calls: string[] = []
+  let busy = 0
+  let retryAfter: string | undefined = '0'
+  const url = await fixture(t, (req, res) => {
+    calls.push(req.method!)
+    if (busy-- > 0) res.writeHead(503, retryAfter === undefined ? {} : { 'Retry-After': retryAfter }).end('busy')
+    else res.writeHead(204).end()
+  })
+  const run = async (method: string, times: number) => {
+    busy = times
+    calls.length = 0
+    return [(await request(url, method, {}, 1000)).status, calls.length]
+  }
+  deepEqual(await run('DELETE', 2), [204, 3])
+  deepEqual(await run('GET', 1), [204, 2])
+  // A create may still have committed: it is never retried.
+  deepEqual(await run('POST', 1), [503, 1])
+  // A wait past the timeout, or a 503 the Stack did not ask to retry, comes back as is.
+  retryAfter = '5'
+  deepEqual(await run('DELETE', 1), [503, 1])
+  retryAfter = undefined
+  deepEqual(await run('DELETE', 1), [503, 1])
+})

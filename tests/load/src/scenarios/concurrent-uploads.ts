@@ -12,6 +12,7 @@ import {
   fetchDestroyResponse,
   fetchTrashResponse,
   fetchUploadResponse,
+  TEARDOWN_TIMEOUT,
   type RunTags,
   type TestDirectory,
 } from '../lib/cozy-files.ts'
@@ -95,6 +96,7 @@ const thresholds: NonNullable<Options['thresholds']> = {
 
 export const options: Options = {
   discardResponseBodies: true,
+  teardownTimeout: TEARDOWN_TIMEOUT,
   scenarios: {
     concurrent_uploads: {
       executor: 'per-vu-iterations',

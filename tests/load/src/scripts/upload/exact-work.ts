@@ -78,7 +78,8 @@ export async function call(url: URL, method: string, ok: number[], headers: Reco
 // origin is where to connect; host stays the instance the Stack routes to.
 export function stackClient(origin: string, host: string, token: string): Stack {
   return (method, path, ok, deadline = Infinity, body?) => {
-    const left = Math.min(REQUEST_MS, deadline - Date.now())
+    // A delete may wait out a busy instance (fixture-http.ts) for the rest of the cleanup budget.
+    const left = Math.min(method === 'DELETE' ? CLEANUP_MS : REQUEST_MS, deadline - Date.now())
     check(left > 0, `cleanup exceeded its ${CLEANUP_MS / 60_000} minute budget`)
     const headers = { Host: host, Authorization: `Bearer ${token}`,
       ...(body === undefined ? {} : { 'Content-Type': 'application/vnd.api+json' }) }

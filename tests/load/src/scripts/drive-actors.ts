@@ -18,6 +18,8 @@ export class AccessFailure extends Error {}
 const OWNER_SCOPE = 'io.cozy.files io.cozy.sharings io.cozy.contacts io.cozy.contacts.groups'
 const MEMBER_SCOPE = 'io.cozy.files io.cozy.sharings'
 const REQUEST_MS = 60_000
+// A delete may wait out a busy instance (fixture-http.ts), as after the ramp trashes its uploads.
+const DELETE_MS = 300_000
 const POLL_MS = 500
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -106,7 +108,7 @@ export async function prepareActors(env: Env, executionId: string, deadline = In
     request(new URL(path, stackOrigin), method, {
       Host: domain, Authorization: `Bearer ${token}`, Accept: 'application/json',
       ...(body ? { 'Content-Type': type } : {}),
-    }, REQUEST_MS, body)
+    }, method === 'DELETE' ? DELETE_MS : REQUEST_MS, body)
   const [owner, writer, reader] = [as(actors.owner), as(actors.writer), as(actors.reader)]
   const json = async (reply: Promise<Reply>, status: number, what: string) => {
     const { status: got, body } = await reply

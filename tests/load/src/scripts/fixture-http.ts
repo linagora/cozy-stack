@@ -7,13 +7,31 @@ export class FixtureError extends Error {}
 export class FixtureDeadline extends FixtureError {}
 export type Reply = { status: number, body: string }
 
-// No redirects or retries: a failed request can still have committed upstream writes.
-export function request(
+// The Stack answers 503 with Retry-After when it could not take an instance lock, before doing anything.
+// Reads and deletes wait that out within the request's own timeout. Nothing else is retried, and nothing
+// is redirected: another failed request can still have committed upstream writes.
+const RETRIED = ['GET', 'HEAD', 'DELETE']
+const MAX_RETRY_AFTER_MS = 30_000
+
+export async function request(
   url: URL, method: string, headers: Record<string, string>, timeout: number, body: string | Buffer = '',
   responseLimit = 65_536,
 ): Promise<Reply> {
+  // Monotonic, as every deadline: wall-clock changes neither shorten nor extend it.
+  const end = performance.now() + timeout
+  for (;;) {
+    const { retryAfterMs, ...reply } = await attempt(url, method, headers, end - performance.now(), body, responseLimit)
+    if (retryAfterMs === null || !RETRIED.includes(method) || performance.now() + retryAfterMs >= end) return reply
+    await new Promise(resolve => setTimeout(resolve, retryAfterMs))
+  }
+}
+
+function attempt(
+  url: URL, method: string, headers: Record<string, string>, timeout: number, body: string | Buffer,
+  responseLimit: number,
+): Promise<Reply & { retryAfterMs: number | null }> {
   let deadline: NodeJS.Timeout | undefined
-  return new Promise<Reply>((resolve, reject) => {
+  return new Promise<Reply & { retryAfterMs: number | null }>((resolve, reject) => {
     let response: http.IncomingMessage | undefined
     const transport = url.protocol === 'https:' ? https : http
     const hostname = url.hostname.replace(/^\[|\]$/g, '')
@@ -35,7 +53,12 @@ export function request(
           req.destroy()
         } else chunks.push(chunk)
       })
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))
+      const retryAfter = String(res.headers['retry-after'] ?? '')
+      const retryAfterMs = res.statusCode === 503 && /^\d+$/.test(retryAfter)
+        ? Math.min(Number(retryAfter) * 1000, MAX_RETRY_AFTER_MS) : null
+      res.on('end', () => resolve({
+        status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8'), retryAfterMs,
+      }))
       res.on('aborted', () => reject(new FixtureError('API response incomplete')))
       res.on('error', () => reject(new FixtureError('API response failed')))
     })

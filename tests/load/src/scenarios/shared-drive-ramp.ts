@@ -1,5 +1,6 @@
 import type { Options } from 'k6/options'
 
+import { TEARDOWN_TIMEOUT } from '../lib/cozy-files.ts'
 import {
   buildRampThresholds,
   buildRampingVuStages,
@@ -29,6 +30,7 @@ const executionId = __ENV.EXECUTION_ID || 'shared-drive-ramp'
 
 export const options: Options = {
   hosts: actorHosts,
+  teardownTimeout: TEARDOWN_TIMEOUT,
   scenarios: {
     writers: {
       executor: 'ramping-vus',
