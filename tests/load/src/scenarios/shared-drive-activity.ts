@@ -3,7 +3,6 @@ import { md5 } from 'k6/crypto'
 import exec from 'k6/execution'
 import http from 'k6/http'
 import { Counter, Rate, Trend } from 'k6/metrics'
-import type { Options } from 'k6/options'
 import ws from 'k6/ws'
 
 import { randomizeUploadData } from '../fixtures/upload-data.ts'
@@ -25,15 +24,10 @@ import {
   parseRealtimeMessage,
   type RealtimeEventPayload,
 } from '../lib/cozy-realtime.ts'
-import {
-  getWsSessionDurationMs,
-  parseDurationToMs,
-} from '../lib/duration.ts'
-import { parseHosts, parsePositiveIntegerEnv } from '../lib/env.ts'
+import { parseHosts } from '../lib/env.ts'
 import {
   getCompletedRampLevels,
   getRampPhaseAt,
-  getRampTotalDurationMs,
   getRampUploadPrefix,
   getServedRampPhase,
   parseRampCriteria,
@@ -83,51 +77,10 @@ export const contentDenied = new Counter('shared_drive_content_denied_total')
 export const contentUnverified = new Counter('shared_drive_content_unverified_total')
 
 // --- Configuration ---
-const rawDuration = __ENV.DURATION || '30s'
-const rawWritersVus = parsePositiveIntegerEnv(__ENV, 'WRITER_VUS', 3)
-const rawWsReadersVus = parsePositiveIntegerEnv(__ENV, 'WS_READER_VUS', 5)
-const rawChangesReadersVus = parsePositiveIntegerEnv(__ENV, 'CHANGES_READER_VUS', 3)
 const { contentChecksPerLevel } = parseRampCriteria(__ENV)
 
 // Member actors (drive-actors.ts): k6 reaches their domains, which only the Stack serves, at its address.
 export const actorHosts = parseHosts(__ENV.ACTOR_HOSTS)
-
-export const options: Options = {
-  hosts: actorHosts,
-  scenarios: {
-    writers: {
-      executor: 'constant-vus',
-      vus: rawWritersVus,
-      duration: rawDuration,
-      exec: 'writerLoop',
-    },
-    ws_readers: {
-      executor: 'constant-vus',
-      vus: rawWsReadersVus,
-      duration: rawDuration,
-      exec: 'wsReaderLoop',
-    },
-    changes_readers: {
-      executor: 'constant-vus',
-      vus: rawChangesReadersVus,
-      duration: rawDuration,
-      exec: 'changesReaderLoop',
-    },
-  },
-  thresholds: {
-    cleanup_success: ['rate==1'],
-    shared_drive_upload_success_rate: ['rate>0.95'],
-    shared_drive_ws_handshake_rate: ['rate>0.95'],
-    shared_drive_ws_auth_rate: ['rate>0.95'],
-    shared_drive_changes_success_rate: ['rate>0.95'],
-    shared_drive_ws_events_total: ['count>0'],
-    shared_drive_changes_items_total: ['count>0'],
-    // Wrong content, a refused download or an unreadable changes reply fails the run.
-    shared_drive_content_mismatch_total: ['count==0'],
-    shared_drive_content_denied_total: ['count==0'],
-    shared_drive_changes_malformed_total: ['count==0'],
-  },
-}
 
 interface Credentials {
   accessToken: string
@@ -140,16 +93,14 @@ export interface SetupData extends Credentials {
   writer: Credentials
   reader: Credentials
   driveId: string
-  rampPlan: RampPlan | null
+  rampPlan: RampPlan
   rootDirectoryId: string
   testDir: TestDirectory
-  testDurationMs: number
   wsSessionDurationMs: number
 }
 
-// shared-drive-ramp.ts reuses these loops and passes its plan here; a null
-// plan keeps the constant-VU behaviour of this entry point.
-export function createSetupData(rampPlan: RampPlan | null): SetupData {
+// shared-drive-ramp.ts runs these loops level by level and passes its plan here.
+export function createSetupData(rampPlan: RampPlan): SetupData {
   const accessToken = __ENV.COZY_ACCESS_TOKEN
   if (!accessToken) {
     throw new Error('COZY_ACCESS_TOKEN environment variable is required')
@@ -173,16 +124,8 @@ export function createSetupData(rampPlan: RampPlan | null): SetupData {
     timeout: '30s',
   })
 
-  const testDurationMs =
-    rampPlan === null
-      ? parseDurationToMs(rawDuration)
-      : getRampTotalDurationMs(rampPlan)
-  // Ramp sessions end with the phase they started in, so by default they
-  // may last a whole transition plus hold.
-  const wsSessionDurationMs =
-    rampPlan !== null && !__ENV.WS_SESSION_DURATION
-      ? rampPlan.transitionMs + rampPlan.holdMs
-      : getWsSessionDurationMs(rawDuration, __ENV.WS_SESSION_DURATION)
+  // Sessions end with the phase they started in, so they may last a whole transition plus hold.
+  const wsSessionDurationMs = rampPlan.transitionMs + rampPlan.holdMs
 
   const member = (role: string): Credentials => {
     const token = __ENV[`${role}_ACCESS_TOKEN`]
@@ -202,27 +145,18 @@ export function createSetupData(rampPlan: RampPlan | null): SetupData {
     rampPlan,
     rootDirectoryId: uploadTarget.rootDirectoryId,
     testDir,
-    testDurationMs,
     wsSessionDurationMs,
   }
 }
 
-export function setup(): SetupData {
-  return createSetupData(null)
-}
-
-// In ramp mode every sample carries the level being held, so the summary can
-// judge each level on its own. Samples taken during a transition are tagged
-// apart and never judged.
+// Every sample carries the level being held, so the summary can judge each
+// level on its own. Samples taken during a transition are tagged apart and
+// never judged.
 function tagRampLevel(
   data: SetupData,
   elapsedMs: number,
   resolvePhase: (plan: RampPlan, elapsedMs: number) => RampPhase = getRampPhaseAt,
-): RampPhase | null {
-  if (data.rampPlan === null) {
-    return null
-  }
-
+): RampPhase {
   // Only a newly scheduled iteration may confirm a hold. Never infer this in
   // teardown/handleSummary: setup, teardown and an interrupted request can all
   // outlast a partial hold. Changes readers already drain past the final hold.
@@ -249,8 +183,7 @@ export function writerLoop(data: SetupData): void {
   const vu = exec.vu.idInTest
   const iter = exec.vu.iterationInInstance
   const marker = [iter, vu, Date.now(), Math.floor(Math.random() * 0xffffffff)].join('-')
-  const prefix = phase === null ? 'sd-' : getRampUploadPrefix(phase)
-  const filename = `${prefix}vu${vu}-iter${iter}-${marker}.bin`
+  const filename = `${getRampUploadPrefix(phase)}vu${vu}-iter${iter}-${marker}.bin`
   const uploadBody = randomizeUploadData(marker)
   const expectedChecksum = md5(uploadBody, 'base64')
 
@@ -294,13 +227,10 @@ export function writerLoop(data: SetupData): void {
 // --- Scenario 2: WebSocket Readers ---
 export function wsReaderLoop(data: SetupData): void {
   const elapsedMs = getElapsedMs()
-  // A ramp session serves one level: started during a transition, it stays
+  // A session serves one level: started during a transition, it stays
   // connected until the upcoming hold ends, so no event of the hold is missed.
   const phase = tagRampLevel(data, elapsedMs, getServedRampPhase)
-  const sessionEndsAtMs =
-    phase === null
-      ? data.testDurationMs
-      : phase.endsAtMs + (phase.level === null ? 0 : RAMP_EVENT_GRACE_MS)
+  const sessionEndsAtMs = phase.endsAtMs + (phase.level === null ? 0 : RAMP_EVENT_GRACE_MS)
   const timeRemainingMs = sessionEndsAtMs - elapsedMs
   if (timeRemainingMs < 1000) {
     sleep(1)
@@ -334,13 +264,8 @@ export function wsReaderLoop(data: SetupData): void {
         } else if (parsed.event === 'CREATED' || parsed.event === 'UPDATED') {
           const payload = parsed.payload as RealtimeEventPayload | undefined
           observations.record(payload?.doc?.name)
-          // Ramp events count toward the level of the upload that caused them.
-          wsEventsReceived.add(
-            1,
-            data.rampPlan === null
-              ? { event: parsed.event }
-              : { event: parsed.event, level: parseRampUploadLevel(payload?.doc?.name) },
-          )
+          // Events count toward the level of the upload that caused them.
+          wsEventsReceived.add(1, { event: parsed.event, level: parseRampUploadLevel(payload?.doc?.name) })
           check(parsed, {
             'ws received valid file event': (p) =>
               Boolean(p.payload && p.payload.type === 'io.cozy.files' && p.payload.id),
@@ -369,9 +294,8 @@ export function wsReaderLoop(data: SetupData): void {
     'ws session completed without auth error': (err) => !err,
   })
   // A session that was connected through the whole hold reports what it saw.
-  const level = phase?.level ?? null
-  if (data.rampPlan !== null && level !== null && handshakeOk && !hadAuthError &&
-      observedWholeHold(data.rampPlan, level, openedAtMs)) {
+  const level = phase.level
+  if (level !== null && handshakeOk && !hadAuthError && observedWholeHold(data.rampPlan, level, openedAtMs)) {
     wsReaderUnique.add(observations.unique(level), { level: String(level) })
   }
 
@@ -422,9 +346,6 @@ function verifyContent(data: SetupData, id: string, name: unknown): void {
 // Once a level's hold and drain are over, a reader ready before its hold
 // reports the unique uploads it saw.
 function reportCompletedLevels(data: SetupData): void {
-  if (data.rampPlan === null) {
-    return
-  }
   for (const level of getCompletedRampLevels(data.rampPlan, getElapsedMs() - RAMP_EVENT_GRACE_MS)) {
     if (reportedLevels.has(level)) continue
     reportedLevels.add(level)
@@ -434,16 +355,9 @@ function reportCompletedLevels(data: SetupData): void {
   }
 }
 
-// Ramp changes count toward the level of the upload that caused them, even
-// when they are polled after that level's hold.
-function addChangesItems(data: SetupData, results: ChangesFeedItem[]): void {
-  if (data.rampPlan === null) {
-    if (results.length > 0) {
-      changesItemsReceived.add(results.length)
-    }
-    return
-  }
-
+// Changes count toward the level of the upload that caused them, even when
+// they are polled after that level's hold.
+function addChangesItems(results: ChangesFeedItem[]): void {
   const countsByLevel: Record<string, number> = {}
   for (const item of results) {
     const level = parseRampUploadLevel(item.doc?.name)
@@ -496,7 +410,7 @@ export function changesReaderLoop(data: SetupData): void {
   if (parsed !== null) {
     changesReadyAtMs ??= getElapsedMs()
     vuSince = parsed.last_seq
-    addChangesItems(data, parsed.results)
+    addChangesItems(parsed.results)
     for (const item of parsed.results) {
       if (!item.deleted && changesObservations.record(item.doc?.name)) {
         verifyContent(data, item.id, item.doc?.name)

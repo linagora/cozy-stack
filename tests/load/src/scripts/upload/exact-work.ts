@@ -300,7 +300,7 @@ export async function runExactWork(target: Target, work: Work): Promise<Point> {
   const run = await runK6Work(target, {
     executionId: work.executionId,
     makeTarget: 'upload',
-    args: ['UPLOAD_MODE=iterations', `VUS=${work.vus}`, `ITERATIONS_PER_VU=${work.iterationsPerVu}`,
+    args: [`VUS=${work.vus}`, `ITERATIONS_PER_VU=${work.iterationsPerVu}`,
       `FILE_SIZE=${work.fileSize}`, `CONSISTENCY_CHUNK_SIZE_BYTES=${work.consistencyChunkSizeBytes}`,
       `MIN_SUCCESS_RATE=${work.minimumSuccessRate}`, `P95_LIMIT_MS=${work.p95LimitMs ?? ''}`,
       `CAPACITY_RUN_ID=${work.campaignId}`, `CAPACITY_PHASE=${work.phase}`],

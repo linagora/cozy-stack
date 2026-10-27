@@ -39,24 +39,3 @@ export function parseDurationToMs(duration: string): number {
   return Math.round(totalMs)
 }
 
-/**
- * Calculates the WebSocket reader session duration.
- * If an explicit WS_SESSION_DURATION is provided, parses and validates that it is at least 1s (1000ms).
- * Otherwise defaults to 90% of the total scenario duration (minimum 1s).
- */
-export function getWsSessionDurationMs(
-  rawDuration: string,
-  rawWsSessionDuration?: string,
-): number {
-  if (rawWsSessionDuration && rawWsSessionDuration.trim() !== '') {
-    const explicitMs = parseDurationToMs(rawWsSessionDuration)
-    if (explicitMs < 1000) {
-      throw new Error(
-        `WS_SESSION_DURATION must be at least 1s (1000ms), got "${rawWsSessionDuration}"`,
-      )
-    }
-    return explicitMs
-  }
-  const totalMs = parseDurationToMs(rawDuration)
-  return Math.max(1000, Math.round(totalMs * 0.9))
-}

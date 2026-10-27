@@ -3,7 +3,7 @@ import { createHash, md5 } from 'k6/crypto'
 import exec from 'k6/execution'
 import { Rate } from 'k6/metrics'
 
-import type { Options, Scenario } from 'k6/options'
+import type { Options } from 'k6/options'
 
 import { randomizeUploadData, uploadDataSize } from '../fixtures/upload-data.ts'
 import {
@@ -66,18 +66,6 @@ function getRequiredEnvironmentValue(environmentName: string): string {
   return value
 }
 
-type UploadMode = 'iterations' | 'soak'
-
-function getUploadMode(): UploadMode {
-  const value = __ENV.UPLOAD_MODE || 'iterations'
-
-  if (value !== 'iterations' && value !== 'soak') {
-    throw new Error('UPLOAD_MODE must be iterations or soak')
-  }
-
-  return value
-}
-
 const uploadVirtualUsers = getPositiveInteger('UPLOAD_VUS', 1)
 const consistencyChunkSize = getPositiveInteger(
   'CONSISTENCY_CHUNK_SIZE_BYTES',
@@ -91,7 +79,6 @@ const cleanupSuccess = new Rate('cleanup_success')
 // Recorded before a consistency abort, so the capacity search can tell a
 // content mismatch from an interrupted run.
 const uploadConsistency = new Rate('upload_consistency')
-const uploadMode = getUploadMode()
 const executionId = __ENV.EXECUTION_ID || 'upload'
 
 const uploadThresholdTags = '{operation:file-upload}'
@@ -106,28 +93,15 @@ const thresholds: NonNullable<Options['thresholds']> = {
   [`upload_success${uploadThresholdTags}`]: [`rate>=${uploadSuccessRate}`],
 }
 
-function getUploadScenario(): Scenario {
-  if (uploadMode === 'soak') {
-    return {
-      duration: __ENV.DURATION || '10m',
-      executor: 'constant-vus',
-      gracefulStop: __ENV.GRACEFUL_STOP || '30m',
-      vus: uploadVirtualUsers,
-    }
-  }
-
-  return {
-    executor: 'per-vu-iterations',
-    iterations: getPositiveInteger('ITERATIONS_PER_VU', 1),
-    maxDuration: __ENV.MAX_DURATION || '30m',
-    vus: uploadVirtualUsers,
-  }
-}
-
 export const options: Options = {
   discardResponseBodies: true,
   scenarios: {
-    concurrent_uploads: getUploadScenario(),
+    concurrent_uploads: {
+      executor: 'per-vu-iterations',
+      iterations: getPositiveInteger('ITERATIONS_PER_VU', 1),
+      maxDuration: __ENV.MAX_DURATION || '30m',
+      vus: uploadVirtualUsers,
+    },
   },
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
   thresholds,

@@ -76,9 +76,7 @@ unverified bound into a passing run.
   revocation separate. Intentional local fixture retention is not cleanup.
 
 The reader currently accepts upload regression/capacity, shared-drive ramp and
-organization fan-out reports. Standalone soak and fixed activity do not yet
-publish the common result contract. They must not appear as completed runs
-without that evidence. Fan-out access/revocation curves from the mockup remain
+organization fan-out reports. Fan-out access/revocation curves from the mockup remain
 unavailable until its producer records timed observations; scalar proofs remain
 visible. Synthetic mock values are not production measurements.
 

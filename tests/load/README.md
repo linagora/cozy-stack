@@ -257,18 +257,15 @@ slower uploads, as they would in an immediate read-after-write check.
 
 ### Shared-drive load testing
 
-> [!WARNING]
-> **Owner-only workload**: The `shared-drive-activity.ts` scenario runs against the drive owner's instance and credentials. It does not exercise recipient/member sync paths, cross-instance replication, or multi-member permission propagation. Testing multi-instance recipient workflows remains a separate future scenario.
+> [!NOTE]
+> Without `ACTORS_DOMAIN`, the drive owner's instance and credentials play every role; with it, organization members on the same Stack write and read (below). Cross-Stack recipients remain a separate scenario.
 
 Shared drives can be tested in two modes:
 
-1. **Combined activity scenario (`shared-drive-activity.ts`)**: exercises concurrent collaborative activity combining:
+1. **Activity ramp (`shared-drive-ramp.ts`)**: finds the highest activity level one instance sustains, in a single k6 run, with concurrent collaborative activity combining:
    - **File writers**: concurrent uploads into the shared drive.
    - **WebSocket readers**: persistent connections to `/sharings/drives/:id/realtime` listening for real-time `CREATED`/`UPDATED` events.
    - **Changes feed readers**: periodic polling of `/sharings/drives/:id/_changes`.
-
-   To find the highest activity level one instance sustains, run the mix as
-   a ramp in a single k6 run:
 
    ```console
    $ make shared-drive-ramp RAMP_LEVELS=1,2,4,8,16 RAMP_STEP_DURATION=1m
