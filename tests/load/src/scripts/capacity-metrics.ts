@@ -82,6 +82,11 @@ function checks(kind: ReportFile['kind'], data: Record<string, unknown>): { corr
         recipients.every(recipient => record(recipient.add).converged === true &&
           record(recipient.add).marker_matches === true && record(recipient.remove).converged === true)
     }) ? 'Verified' : 'Partial'
+  } else if (kind === 'shared_drive' && points.length) {
+    // Readers download a sample of each level's uploads back, as the producer judges a level.
+    correctness = points.some(point => point.content_mismatches || point.content_denied) ? 'Failed'
+      : points.every(point => integer(point.content_verified) && point.content_verified > 0 && !point.content_unverified)
+        ? 'Verified' : 'Partial'
   }
   let cleanup = 'Not recorded'
   const cleared = (point: Record<string, unknown>): boolean => {
@@ -364,8 +369,10 @@ export function getReportSamples(
         readback: checks(kind, data).correctness === 'Verified' ? `${count(completed)} matched` : 'Readback coverage incomplete',
       }, 1)
     } else if (kind === 'shared_drive' && attempts.length > 0) {
+      const ran = attempts.filter(level => finite(level.uploads) && level.uploads > 0)
+      const matched = ran.reduce((sum, level) => sum + (finite(level.content_verified) ? level.content_verified : 0), 0)
       emit('work_info', { ...base, completed: `${attempts.length} recorded levels`,
-        readback: 'Content not verified',
+        readback: checks(kind, { points: ran }).correctness === 'Verified' ? `${matched} content checks matched` : 'Content not verified',
       }, 1)
     } else if (kind === 'fanout' && attempts.length > 0) {
       emit('work_info', { ...base, completed: `${attempts.length} recorded recipient batches`,
@@ -398,7 +405,9 @@ export function getReportSamples(
       const phaseTitle = phase.charAt(0).toUpperCase() + phase.slice(1)
       const planned = kind === 'upload' && integer(point.iterations_per_vu) ? load * point.iterations_per_vu : null
       const complete = kind === 'upload' && integer(point.completed_iterations) ? point.completed_iterations : null
-      const pointChecks = kind === 'upload' ? checks(kind, { attempts: [point] }) : checks(kind, { points: [point] })
+      // The ramp cleans every level's uploads once, after the last level.
+      const pointChecks = kind === 'upload' ? checks(kind, { attempts: [point] }) : checks(kind, { points: [point],
+        ...kind === 'shared_drive' ? { cleanup: data.cleanup, cleanup_success_rate: data.cleanup_success_rate } : {} })
       const safeReason = reasonCategory(point.reason ?? point.error ?? (Array.isArray(point.reasons) ? point.reasons.join('; ') : ''), status === 'passed')
       const fanout = kind === 'fanout' ? fanoutValues(point) : {}
       emit('point_evidence_info', { ...dimensions, execution_id: executionId,

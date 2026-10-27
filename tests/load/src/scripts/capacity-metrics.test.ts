@@ -451,6 +451,19 @@ test('timeline bounds carry the actual execution identity and activity counts co
   assert.deepEqual(uploads.map(row => [row.labels.index, row.value]), [['1', 0]])
 })
 
+test('activity levels show the content their readers verified, and the run cleanup covers each level', () => {
+  const level = { level: 1, status: 'passed', uploads: 4, content_verified: 2, content_unverified: 0,
+    content_mismatches: 0, content_denied: 0 }
+  const evidence = (levels: object[]) => renderMetrics([report('shared_drive', { cleanup: { remaining: [] }, levels })], counts)
+  const mixed = evidence([level, { ...level, level: 2, content_mismatches: 1 }, { ...level, level: 4, content_verified: 0 }])
+  assert.deepEqual(samples(mixed, 'point_evidence_info').map(line => /evidence="(\w+)"/.exec(line)?.[1]),
+    ['Verified', 'Failed', 'Unverified'])
+  assert.match(samples(mixed, 'work_info')[0]!, /readback="Content not verified"/)
+  // A level the ramp never reached has nothing to verify.
+  assert.match(samples(evidence([level, { level: 2, status: 'not_run' }]), 'work_info')[0]!,
+    /readback="2 content checks matched"/)
+})
+
 test('recipient revocation counts require recipient observations even when the owner reports success', () => {
   const points = [
     { n: 2, status: 'passed', owner: { remove: { revoked_recipients: 2 } } },
