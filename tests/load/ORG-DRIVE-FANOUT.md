@@ -84,7 +84,7 @@ admin API. Run it only from the designated load VM, under the shared DEV lock:
 ```sh
 export SEED_CLOUDERY_TOKEN_FILE=~/private/cloudery-token.json
 export SEED_CLOUDERY_MANIFEST=~/private/<prefix>-cloudery-fixture.json
-make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m
+make org-drive-fanout LOAD_TARGET=dev FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m
 ```
 
 - Before any write, each instance must match its manifest UUID on the Stack, and

@@ -14,23 +14,22 @@ const harness = fileURLToPath(new URL('../../', import.meta.url))
 // a delay, a graceful stop that logs each SIGTERM, the report it leaves and the
 // producer's own exit, which make turns into 2.
 const fakeMake = `#!/usr/bin/env bash
-target=$1 id= record=
+target=$1 id= record= load_target=
 for arg in "$@"; do
   case $arg in
     CAPACITY_RUN_ID=* | EXECUTION_ID=*) id=\${arg#*=} ;;
     RECORD_EXIT=*) record=\${arg#*=} ;;
+    LOAD_TARGET=*) load_target=\${arg#*=} ;;
   esac
 done
 case $target in
-  cozy-capacity | dev-capacity) suffix=upload-capacity ;;
-  cozy-shared-drive-ramp | dev-shared-drive-ramp) suffix=shared-drive-ramp ;;
-  org-drive-fanout | dev-org-drive-fanout) suffix=org-drive-fanout ;;
+  upload-capacity | shared-drive-ramp | org-drive-fanout) suffix=$target ;;
   *) suffix= ;;
 esac
 echo "$target" >> "$FAKE_STEPS/targets"
 echo "$*" >> "$FAKE_STEPS/commands"
-# DEV targets take the shared DEV lock, as the Makefile does.
-case $target in dev-*) bash campaigns/lib/shared-dev-lock.sh "$DEV_LOCK_FILE" true || exit 2 ;; esac
+# Runners take the shared DEV lock on DEV, as the Makefile does.
+[ -z "$suffix" ] || [ "$load_target" != dev ] || bash campaigns/lib/shared-dev-lock.sh "$DEV_LOCK_FILE" true || exit 2
 step=\${id#*-}
 play=$FAKE_STEPS/\${step:-$target}
 [ ! -e "$play.setup-fails" ] || exit 2
@@ -247,7 +246,7 @@ test('a shared DEV campaign stops after a failed or inconclusive step', async t 
       equal(run.code, exit, run.log)
       match(run.log, new RegExp(`SKIP .*: ${step} did not complete on shared DEV`))
       deepEqual(run.targets, step === 'upload-capacity'
-        ? ['dev-capacity'] : ['dev-capacity', 'dev-shared-drive-ramp'])
+        ? ['upload-capacity'] : ['upload-capacity', 'shared-drive-ramp'])
     })
   }
 })
@@ -265,15 +264,17 @@ test('smoke and capacity run every runner on their own ladders, the fan-out only
   for (const [campaign, vus, levels] of [['smoke', '2', '1,2'], ['capacity', undefined, '1,2,4,8,16']] as const) {
     const run = await runCampaign(t, '', plays, undefined, { campaign })
     equal(run.code, 0, run.log)
-    deepEqual(run.targets, ['cozy-capacity', 'cozy-shared-drive-ramp'])
-    deepEqual([setting(run.commands[0], 'FILE_SIZE'), setting(run.commands[0], 'MAX_VUS'),
-      setting(run.commands[1], 'RAMP_LEVELS')], ['100K', vus, levels])
+    // Locally, the bundled Stack is prepared before any runner.
+    deepEqual(run.targets, ['cozy-prepare', 'upload-capacity', 'shared-drive-ramp'])
+    deepEqual([setting(run.commands[1], 'LOAD_TARGET'), setting(run.commands[1], 'FILE_SIZE'),
+      setting(run.commands[1], 'MAX_VUS'), setting(run.commands[2], 'RAMP_LEVELS')], ['local', '100K', vus, levels])
     if (!hasFlock()) continue
     // On shared DEV, the agreed budgets apply and a smoke ladder stays below them.
     const dev = await runCampaign(t, '', plays, undefined, { campaign, env: {
       LOAD_TARGET: 'dev', DEV_LOCK_FILE: join(mkdtempSync(join(tmpdir(), 'dev-campaign-')), 'shared-dev.lock') } })
     equal(dev.code, 0, dev.log)
-    deepEqual(dev.targets, ['dev-capacity', 'dev-shared-drive-ramp', 'dev-org-drive-fanout'])
+    deepEqual(dev.targets, ['upload-capacity', 'shared-drive-ramp', 'org-drive-fanout'])
+    deepEqual(dev.commands.map(command => setting(command, 'LOAD_TARGET')), ['dev', 'dev', 'dev'])
     deepEqual([setting(dev.commands[0], 'MAX_VUS'), setting(dev.commands[0], 'MAX_UPLOAD_BYTES'),
       setting(dev.commands[2], 'FANOUT_LEVELS')], [vus ?? '128', '2560M', levels])
   }
@@ -296,7 +297,7 @@ test('a shared DEV campaign holds the lock once, through steps that reuse it', a
   })
   equal(run.code, 0, run.log)
   equal(outside, 2)
-  deepEqual(run.targets, ['dev-capacity', 'dev-shared-drive-ramp', 'dev-org-drive-fanout'])
+  deepEqual(run.targets, ['upload-capacity', 'shared-drive-ramp', 'org-drive-fanout'])
   match(run.summary, /- Outcome: 0 \(completed\)\n- Topology: shared-dev\n.*\n- Limits: not measured on shared DEV/)
 })
 

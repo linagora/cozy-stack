@@ -112,7 +112,8 @@ run_step() {
   # Its own process group lets an interruption reach the whole step; no step
   # reads the terminal from the background.
   set -m
-  make "$@" RECORD_EXIT="bash campaigns/lib/record-exit.sh $exit_file" < /dev/null &
+  # On the command line, the campaign's target outranks any LOAD_TARGET in .env.
+  make "$@" LOAD_TARGET="$LOAD_TARGET" RECORD_EXIT="bash campaigns/lib/record-exit.sh $exit_file" < /dev/null &
   pid=$!
   set +m
   # wait also returns when a trapped signal arrives.
@@ -136,29 +137,22 @@ run_step() {
   return "$status"
 }
 
-# LOAD_TARGET=dev runs the same steps on the DEV targets.
-target() {
-  if [ "${SHARED_DEV:-}" = 1 ]; then echo "$2"; else echo "$1"; fi
-}
-
 upload_capacity() {
   local name=$1
   shift
-  run_step "$name" upload-capacity "$RUN_ID-$name" "$(target cozy-capacity dev-capacity)" CAPACITY_RUN_ID="$RUN_ID-$name" "$@"
+  run_step "$name" upload-capacity "$RUN_ID-$name" upload-capacity CAPACITY_RUN_ID="$RUN_ID-$name" "$@"
 }
 
 shared_drive_ramp() {
   local name=$1
   shift
-  run_step "$name" shared-drive-ramp "$RUN_ID-$name" "$(target cozy-shared-drive-ramp dev-shared-drive-ramp)" \
-    EXECUTION_ID="$RUN_ID-$name" "$@"
+  run_step "$name" shared-drive-ramp "$RUN_ID-$name" shared-drive-ramp EXECUTION_ID="$RUN_ID-$name" "$@"
 }
 
 org_drive_fanout() {
   local name=$1
   shift
-  run_step "$name" org-drive-fanout "$RUN_ID-$name" "$(target org-drive-fanout dev-org-drive-fanout)" \
-    EXECUTION_ID="$RUN_ID-$name" "$@"
+  run_step "$name" org-drive-fanout "$RUN_ID-$name" org-drive-fanout EXECUTION_ID="$RUN_ID-$name" "$@"
 }
 
 echo "Campaign $CAMPAIGN, run $RUN_ID, directory $RUN_DIR"

@@ -41,8 +41,9 @@ export SEED_CLOUDERY_TOKEN_FILE=~/private/cloudery-token.json
 export SEED_CLOUDERY_MANIFEST=~/private/<prefix>-cloudery-fixture.json
 export DEV_INSTANCE=<prefix>01.<domain> MIN_SUCCESS_RATE=1 UPLOAD_TIMEOUT=60s
 curl -s -o /dev/null -w '%{http_code} %{time_total}\n' "https://$DEV_INSTANCE/version"
-make dev-upload MAX_VUS=1 MAX_UPLOAD_BYTES=1K MAX_RUNTIME=5m
-make dev-upload VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m
+export LOAD_TARGET=dev
+make upload-regression MAX_VUS=1 MAX_UPLOAD_BYTES=1K MAX_RUNTIME=5m
+make upload-regression VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m
 ```
 
 4. Keep the check log, each run's output, report

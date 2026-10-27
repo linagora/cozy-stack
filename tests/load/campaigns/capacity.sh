@@ -19,7 +19,10 @@ if [ "${SHARED_DEV:-}" = 1 ]; then
 fi
 
 campaign() {
-  # Locally, the upload step also starts the Stack and its instance, which the ramp then uses.
+  # Locally, every step uses the bundled Stack and the instance and token this writes to .env.
+  if [ "${SHARED_DEV:-}" != 1 ]; then
+    run_step cozy-prepare prepare '' cozy-prepare || return
+  fi
   upload_capacity upload-capacity FILE_SIZE=100K "${upload[@]}"
   shared_drive_ramp shared-drive-ramp "${ramp[@]}"
   # The fan-out needs an organization: shared DEV has the Cloudery one, the local Stack none yet.

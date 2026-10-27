@@ -118,10 +118,11 @@ target URL, published port, retention size, or restart policy. Do not commit
 ## Run against the bundled Cozy stack
 
 Build the current cozy-stack checkout, start its local dependencies, provision
-an instance and OAuth client, and run one real upload lifecycle:
+an instance and OAuth client, then run one real upload lifecycle against it:
 
 ```console
-$ make cozy-upload FILE_SIZE=1K VUS=1
+$ make cozy-prepare
+$ make upload-regression FILE_SIZE=1K VUS=1
 ```
 
 The opt-in `cozy` Compose profile starts these services on the same private
@@ -140,13 +141,14 @@ stays private to the Compose network, where Prometheus scrapes it directly.
 
 `make cozy-prepare` creates `load.localhost:8080` when needed, reuses its
 OAuth client, and generates a fresh 24-hour `io.cozy.files` token. It writes the
-target and token to the ignored local `.env` without printing the token.
+target (`BASE_URL`) and token to the ignored local `.env` without printing the
+token, so every runner then targets the bundled stack.
 
 After the lifecycle check passes, run a bounded capacity search against the
 real stack:
 
 ```console
-$ make cozy-capacity FILE_SIZE=1K MAX_VUS=8
+$ make upload-capacity FILE_SIZE=1K MAX_VUS=8
 ```
 
 Inspect the services with `make cozy-status` or `make cozy-logs`. Stop only the
@@ -269,15 +271,15 @@ Shared drives can be tested in two modes:
    a ramp in a single k6 run:
 
    ```console
-   $ make cozy-shared-drive-ramp RAMP_LEVELS=1,2,4,8,16 RAMP_STEP_DURATION=1m
+   $ make shared-drive-ramp RAMP_LEVELS=1,2,4,8,16 RAMP_STEP_DURATION=1m
    ```
 
    The ramp goes through the campaign runner ([Upload campaigns](#upload-campaigns)).
    It creates or reuses the instance's `Load-Test Shared Drive`, stops k6 at
    its deadline or on Ctrl-C, deletes the run's own
    `twake-load-sd-<EXECUTION_ID>-*` directory in the drive, and adds what it
-   verified to the report. `make shared-drive-ramp` targets any `BASE_URL`;
-   `make dev-shared-drive-ramp` targets shared DEV, which requires `MAX_VUS`
+   verified to the report. It targets `BASE_URL`; with `LOAD_TARGET=dev` it
+   targets shared DEV, which requires `MAX_VUS`
    (workers and readers at the highest level), `MAX_UPLOAD_BYTES` (writers
    upload at most once a second) and `MAX_RUNTIME`, all checked before any
    request. On DEV, the whole ramp must also fit in one 20-minute k6 run.
@@ -686,8 +688,8 @@ run, and classifies the result the same way on every target. Two modes:
 
 | Mode | Command | Result |
 | --- | --- | --- |
-| Regression | `make upload-regression`, `make dev-upload` | One fixed `VUS` x `ITERATIONS_PER_VU` workload: 0 passed, 1 correctness or criteria failure, 2 inconclusive |
-| Capacity | `make upload-capacity`, `make dev-capacity` | The [search](#find-upload-capacity): an exact bracket, a lower bound at a budget, or inconclusive |
+| Regression | `make upload-regression` | One fixed `VUS` x `ITERATIONS_PER_VU` workload: 0 passed, 1 correctness or criteria failure, 2 inconclusive |
+| Capacity | `make upload-capacity` | The [search](#find-upload-capacity): an exact bracket, a lower bound at a budget, or inconclusive |
 
 Budgets are campaign settings, recorded in the report:
 
@@ -719,7 +721,8 @@ Targets differ only in preparation, credentials and coordination:
 | Coordination | None | The shared DEV lock, with recovery of killed runs |
 
 Locally, `STACK_URL` is where the host reaches the Stack when k6 uses a Compose
-name; `make cozy-capacity` sets it. Runs against the mock or a shared drive
+name; it defaults to the bundled stack's host port when `BASE_URL` is that
+stack. Runs against the mock or a shared drive
 leave cleanup to k6's own teardown check.
 
 ### Shared DEV
@@ -731,14 +734,14 @@ conditions, runbook and baseline:
 ```sh
 export SEED_CLOUDERY_TOKEN_FILE=~/private/cloudery-token.json
 export SEED_CLOUDERY_MANIFEST=~/private/<prefix>-cloudery-fixture.json
-export DEV_INSTANCE=<prefix>01.<domain> MIN_SUCCESS_RATE=1 UPLOAD_TIMEOUT=60s
-make dev-upload MAX_VUS=1 MAX_UPLOAD_BYTES=1K MAX_RUNTIME=5m                   # 1 x 1 x 1 KiB
-make dev-upload VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m
-make dev-capacity FILE_SIZE=1M MAX_VUS=8 MAX_UPLOAD_BYTES=160M MAX_RUNTIME=30m \
+export DEV_INSTANCE=<prefix>01.<domain> MIN_SUCCESS_RATE=1 UPLOAD_TIMEOUT=60s LOAD_TARGET=dev
+make upload-regression MAX_VUS=1 MAX_UPLOAD_BYTES=1K MAX_RUNTIME=5m                   # 1 x 1 x 1 KiB
+make upload-regression VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m
+make upload-capacity FILE_SIZE=1M MAX_VUS=8 MAX_UPLOAD_BYTES=160M MAX_RUNTIME=30m \
   BASELINE_ITERATIONS=10 CONFIRMATION_ITERATIONS=20
-make dev-shared-drive-ramp MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m
-make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m   # ORG-DRIVE-FANOUT.md
-make campaign CAMPAIGN=capacity LOAD_TARGET=dev   # all three, with the budgets in campaigns/capacity.sh
+make shared-drive-ramp MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m
+make org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m   # ORG-DRIVE-FANOUT.md
+make campaign CAMPAIGN=capacity   # all three, with the budgets in campaigns/capacity.sh
 ```
 
 The [load test dashboard](CAPACITY-OVERVIEW.md) uses **Environment → Mode → Run**
@@ -833,7 +836,7 @@ without making one scenario change everything at once.
 | Node helper code | `npm test` and `make typecheck` |
 | Compose settings | `make config` and `make doctor` |
 | k6 scenario or request code | `make typecheck` and the matching mock smoke test |
-| Cozy API flow | `make cozy-upload FILE_SIZE=1K VUS=1` |
+| Cozy API flow | `make cozy-prepare` then `make upload-regression FILE_SIZE=1K VUS=1` |
 | Load model or limits | A small trial, then the dedicated load environment |
 
 `make node-checks` runs `npm ci`, the tests and the type checks in the Node
@@ -876,10 +879,10 @@ $ make upload-binaries
 $ make upload-smoke
 $ make cozy-up
 $ make cozy-prepare
-$ make cozy-upload FILE_SIZE=1K VUS=1
-$ make cozy-capacity FILE_SIZE=1K MAX_VUS=8
+$ make upload-regression FILE_SIZE=1K VUS=1
+$ make upload-capacity FILE_SIZE=1K MAX_VUS=8
 $ make cozy-shared-drive-prepare
-$ make cozy-shared-drive-ramp
+$ make shared-drive-ramp
 $ make campaign CAMPAIGN=smoke
 $ make cozy-status
 $ make cozy-logs

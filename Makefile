@@ -84,9 +84,10 @@ load-test:
 	@$(MAKE) -C tests/load upload-smoke
 .PHONY: load-test
 
-## load-test-cozy: provision and run an upload against the local Docker stack
+## load-test-cozy: provision the local Docker stack and run an upload regression against it
 load-test-cozy:
-	@$(MAKE) -C tests/load cozy-upload
+	@$(MAKE) -C tests/load cozy-prepare
+	@$(MAKE) -C tests/load upload-regression
 .PHONY: load-test-cozy
 
 ## clean: clean the generated files and directories

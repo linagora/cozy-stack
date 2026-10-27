@@ -38,7 +38,7 @@ fails at the next step", not an exact number.
 | Capacity | Unit | Command | Pass criteria |
 | --- | --- | --- | --- |
 | Concurrent uploads, per file size | upload-and-readback workers | `make upload-capacity FILE_SIZE=…` | Success rate ≥ `MIN_SUCCESS_RATE` (0.99); no dropped uploads; every successful upload reads back with the same checksum; cleanup succeeds |
-| Sustained shared-drive activity | level L = L writers, 3L WebSocket readers, 2L changes readers | `make cozy-shared-drive-ramp` | Upload, changes, WebSocket handshake, and WebSocket auth success rates ≥ `MIN_SUCCESS_RATE`; WebSocket events and changes received ≥ `MIN_DELIVERY_RATIO` (0.9) × uploads × readers |
+| Sustained shared-drive activity | level L = L writers, 3L WebSocket readers, 2L changes readers | `make shared-drive-ramp` | Upload, changes, WebSocket handshake, and WebSocket auth success rates ≥ `MIN_SUCCESS_RATE`; WebSocket events and changes received ≥ `MIN_DELIVERY_RATIO` (0.9) × uploads × readers |
 | Organization-drive group fan-out | recipients in one group attach/remove | `make org-drive-fanout` | Owner readiness, every recipient's access, and denial after removal within the configured convergence budget |
 
 Upload tests verify bytes. Activity tests currently check upload status and

@@ -270,7 +270,7 @@ test('a mock run leaves cleanup to k6', async t => {
   deepEqual(f.state.requests, [])
 })
 
-test('make dev-upload refuses a second run while the shared DEV lock is held', async t => {
+test('runners on shared DEV refuse a second run while the shared DEV lock is held', async t => {
   if (spawnSync('sh', ['-c', 'command -v flock']).status !== 0) return t.skip('flock is not installed')
   const dir = mkdtempSync(join(tmpdir(), 'dev-lock-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -290,8 +290,8 @@ test('make dev-upload refuses a second run while the shared DEV lock is held', a
   equal(elsewhere.status, 2)
   writeFileSync(join(dir, 'node'), `#!/bin/sh\ntouch ${join(dir, 'ran')}\n`)
   chmodSync(join(dir, 'node'), 0o700)
-  for (const target of ['dev-upload', 'dev-capacity', 'dev-shared-drive-ramp', 'dev-org-drive-fanout']) {
-    const result = spawnSync('make', ['-s', '-o', 'node_modules/.load-ready', `DEV_LOCK_FILE=${lock}`, target],
+  for (const target of ['upload-regression', 'upload-capacity', 'shared-drive-ramp', 'org-drive-fanout']) {
+    const result = spawnSync('make', ['-s', '-o', 'node_modules/.load-ready', `DEV_LOCK_FILE=${lock}`, 'LOAD_TARGET=dev', target],
       { cwd, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } })
     equal(result.status, 2, result.stderr)
     match(result.stderr, /Shared DEV is busy/)
@@ -305,7 +305,7 @@ test('the process holding the shared DEV lock is the runner itself', async t => 
   const f = await fixture(t)
   const lock = join(mkdtempSync(join(tmpdir(), 'dev-lock-')), 'shared-dev.lock')
   const dir = f.dockerDir
-  const make = spawn('make', ['-s', '-o', 'node_modules/.load-ready', `DEV_LOCK_FILE=${lock}`, 'dev-upload'],
+  const make = spawn('make', ['-s', '-o', 'node_modules/.load-ready', `DEV_LOCK_FILE=${lock}`, 'LOAD_TARGET=dev', 'upload-regression'],
     { cwd, env: { ...f.env, FAKE_K6: 'hang' }, stdio: 'ignore' })
   t.after(() => {
     make.kill('SIGKILL')

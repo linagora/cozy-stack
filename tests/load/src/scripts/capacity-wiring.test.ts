@@ -55,22 +55,24 @@ test('campaign steps record each producer exit that make itself reports as 2', a
   chmodSync(producer, 0o700)
   writeFileSync(join(bin, 'node'), '#!/bin/sh\nexit "$FAKE_EXIT"\n')
   chmodSync(join(bin, 'node'), 0o700)
-  // cozy-capacity reaches upload-capacity through a nested make, as campaigns do.
-  const nested = join(bin, 'nested.mk')
-  writeFileSync(nested, 'nested-upload-capacity:\n\t@$(MAKE) --no-print-directory -s -o node_modules/.load-ready upload-capacity\n')
-  const steps: [string, string[], number][] = [
-    ['upload-capacity', ['-f', 'Makefile', '-f', nested, 'nested-upload-capacity'], 1],
-    ['shared-drive-ramp', ['-o', 'node_modules/.load-ready', 'cozy-shared-drive-ramp'], 1],
-    ['org-drive-fanout', ['-o', 'node_modules/.load-ready', 'org-drive-fanout'], 2],
-  ]
-  for (const [name, args, code] of steps) await t.test(name, () => {
+  const steps: [string, number][] = [['upload-capacity', 1], ['shared-drive-ramp', 1], ['org-drive-fanout', 2]]
+  for (const [name, code] of steps) await t.test(name, () => {
     const file = join(bin, `${name}.exit`)
     const result = spawnSync('make', ['--no-print-directory', '-s', `NODE_BIN=${bin}`, 'EXECUTION_ID=wiring',
-      `RECORD_EXIT=bash campaigns/lib/record-exit.sh ${file}`, ...args],
+      `RECORD_EXIT=bash campaigns/lib/record-exit.sh ${file}`, '-o', 'node_modules/.load-ready', name],
     { cwd, env: { ...fanoutFreeEnv(), PATH: `${bin}:${process.env.PATH}`, FAKE_EXIT: String(code) }, encoding: 'utf8' })
     equal(result.status, 2, result.stderr)
     equal(readFileSync(file, 'utf8'), `${code}\n`)
   })
+})
+
+test('runners reach the bundled Stack through its host port, and any other Stack at BASE_URL', () => {
+  const stackUrl = (baseUrl: string): string | undefined => spawnSync('make', ['-n', '-o', 'node_modules/.load-ready',
+    `BASE_URL=${baseUrl}`, 'COZY_INSTANCE_DOMAIN=load.localhost:8080', 'COZY_STACK_PORT=8080', 'upload-capacity'],
+  { cwd, env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(STACK_URL|COZY_)/.test(key))),
+    encoding: 'utf8' })
+    .stdout.match(/STACK_URL="([^"]*)"/)?.[1]
+  deepEqual([stackUrl('http://load.localhost:8080'), stackUrl('https://stack.example')], ['http://127.0.0.1:8080', ''])
 })
 
 test('Compose adds an internal read-only Node results service without exposing private reports', () => {

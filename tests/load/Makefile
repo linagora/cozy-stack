@@ -49,11 +49,12 @@ FORCE_CAPACITY_RUN ?= 0
 MAX_UPLOAD_BYTES ?=
 MAX_RUNTIME ?=
 LOAD_TARGET ?= local
-# Where the host reaches the Stack when k6 uses a Compose-internal BASE_URL.
-STACK_URL ?=
 COZY_INSTANCE_DOMAIN ?= load.localhost:8080
 COZY_BASE_URL ?= http://$(COZY_INSTANCE_DOMAIN)
 COZY_STACK_URL ?= http://$(or $(COZY_STACK_BIND_ADDRESS),127.0.0.1):$(or $(COZY_STACK_PORT),8080)
+# Where the host reaches the Stack when k6 uses a Compose-internal BASE_URL: the bundled Stack's port
+# when BASE_URL is that Stack, as make cozy-prepare writes it to .env.
+STACK_URL ?= $(if $(filter $(COZY_BASE_URL),$(BASE_URL)),$(COZY_STACK_URL))
 COZY_CLIENT_SOFTWARE_ID ?= twake-drive-load-local
 COZY_TOKEN_EXPIRATION ?= 24h
 HOST_UID ?= $(shell id -u)
@@ -73,7 +74,7 @@ export HOST_GID
 export COZY_STACK_CPUS COZY_STACK_MEMORY COUCHDB_CPUS COUCHDB_MEMORY
 export LOAD_TOPOLOGY GRAFANA_URL
 
-.PHONY: help doctor install typecheck node-checks config pull observability-up up cozy-up cozy-prepare cozy-shared-drive-prepare cozy-shared-drive-ramp shared-drive-ramp shared-drive-ramp-run dev-shared-drive-ramp campaign cozy-upload cozy-capacity cozy-status cozy-logs cozy-down upload-binaries upload-binary upload-smoke upload upload-capacity upload-regression dev-upload dev-capacity status logs down dashboard-url
+.PHONY: help doctor install typecheck node-checks config pull observability-up up cozy-up cozy-prepare cozy-shared-drive-prepare shared-drive-ramp shared-drive-ramp-run campaign cozy-status cozy-logs cozy-down upload-binaries upload-binary upload-smoke upload upload-capacity upload-regression status logs down dashboard-url
 
 help:
 	@echo "make install                                 Install the load-harness Node tools"
@@ -85,10 +86,8 @@ help:
 	@echo "make seed-org-cleanup SEED_DOMAIN=...          Delete the organization fixture and its users"
 	@echo "make seed-verify SEED_DOMAIN=...               Check a seeded fixture against its manifest"
 	@echo "make org-drive-fanout FANOUT_LEVELS=10,50,100   Check group auto-accept and revoke convergence"
-	@echo "make dev-upload DEV_INSTANCE=... MAX_VUS=2 MAX_UPLOAD_BYTES=10M MAX_RUNTIME=10m  Regression on shared DEV"
-	@echo "make dev-capacity DEV_INSTANCE=... MAX_VUS=8 MAX_UPLOAD_BYTES=200M MAX_RUNTIME=30m  Capacity on shared DEV"
-	@echo "make dev-shared-drive-ramp DEV_INSTANCE=... MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m  Shared-drive ramp on shared DEV"
-	@echo "make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m  Group fan-out on shared DEV"
+	@echo "Runners target BASE_URL (make cozy-prepare sets the bundled Stack), or shared DEV with LOAD_TARGET=dev,"
+	@echo "DEV_INSTANCE and the MAX_VUS, MAX_UPLOAD_BYTES and MAX_RUNTIME budgets agreed with the DEV owner."
 	@echo "make fixture-up FIXTURE_PROJECT=load-fixture-seed"
 	@echo "make fixture-snapshot FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
 	@echo "make fixture-restore FIXTURE_PROJECT=... FIXTURE_SNAPSHOT=/private/baseline"
@@ -100,10 +99,8 @@ help:
 	@echo "make cozy-up                                 Build and start the local Cozy services"
 	@echo "make cozy-prepare                            Prepare the local Cozy test instance"
 	@echo "make cozy-shared-drive-prepare               Prepare a local shared drive for load testing"
-	@echo "make cozy-shared-drive-ramp                  Find the highest sustained shared drive level"
+	@echo "make shared-drive-ramp                       Find the highest sustained shared drive level"
 	@echo "make campaign CAMPAIGN=smoke|capacity        Run every runner on short or full ladders (LOAD_TARGET=dev for shared DEV)"
-	@echo "make cozy-upload FILE_SIZE=1K VUS=1          Prepare and test the local Cozy stack"
-	@echo "make cozy-capacity FILE_SIZE=1K MAX_VUS=8    Measure the local Cozy stack"
 	@echo "make upload BASE_URL=https://... FILE_SIZE=1M VUS=10"
 	@echo "make upload UPLOAD_TARGET=shared-drive SHARED_DRIVE_ID=... SHARED_DRIVE_ROOT_ID=..."
 	@echo "make upload-capacity BASE_URL=https://... FILE_SIZE=10M"
@@ -148,18 +145,15 @@ else
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts cleanup-org "$$SEED_DOMAIN"
 endif
 
-.PHONY: org-drive-fanout dev-org-drive-fanout
+.PHONY: org-drive-fanout
 # Defaulted here only: a global default would also be exported by `make campaign`, under the
 # campaign's EXECUTION_ID, and every fanout step would write to that one path.
 org-drive-fanout: export FANOUT_REPORT ?= data/results/$(EXECUTION_ID)-org-drive-fanout.json
+# LOAD_TARGET=dev: actors from the Cloudery fixture, under the shared DEV lock (ORG-DRIVE-FANOUT.md).
 org-drive-fanout: $(NODE_MODULES_MARKER)
-	@$(RECORD_EXIT) $(NODE_BIN)/tsx src/scripts/org-drive-fanout.ts
-
-# Shared DEV: actors from the Cloudery fixture, under the shared DEV lock (ORG-DRIVE-FANOUT.md).
-dev-org-drive-fanout: export FANOUT_REPORT ?= data/results/$(EXECUTION_ID)-org-drive-fanout.json
-dev-org-drive-fanout: $(NODE_MODULES_MARKER)
-	@LOAD_TARGET=dev EXECUTION_ID="$(EXECUTION_ID)" MAX_RUNTIME="$(MAX_RUNTIME)" \
-		$(RECORD_EXIT) bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)" node --import tsx src/scripts/org-drive-fanout.ts
+	@LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" MAX_RUNTIME="$(MAX_RUNTIME)" $(RECORD_EXIT) \
+		$(if $(filter dev,$(LOAD_TARGET)),bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)" node --import tsx,$(NODE_BIN)/tsx) \
+		src/scripts/org-drive-fanout.ts
 
 .PHONY: fixture-up fixture-snapshot fixture-restore fixture-discard
 fixture-up fixture-discard: $(NODE_MODULES_MARKER)
@@ -199,9 +193,6 @@ cozy-up:
 
 cozy-prepare: $(NODE_MODULES_MARKER) cozy-up
 	@COZY_INSTANCE_DOMAIN="$(COZY_INSTANCE_DOMAIN)" COZY_BASE_URL="$(COZY_BASE_URL)" COZY_CLIENT_SOFTWARE_ID="$(COZY_CLIENT_SOFTWARE_ID)" COZY_TOKEN_EXPIRATION="$(COZY_TOKEN_EXPIRATION)" $(NODE_BIN)/tsx src/scripts/prepare-local-cozy-instance.ts
-
-cozy-upload: cozy-prepare
-	@$(MAKE) upload BASE_URL="$(COZY_BASE_URL)" FILE_SIZE="$(FILE_SIZE)" VUS="$(VUS)" ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" EXECUTION_ID="$(EXECUTION_ID)"
 
 RAMP_LEVELS ?= 1,2,4,8,16
 RAMP_STEP_DURATION ?= 1m
@@ -278,15 +269,9 @@ mixed-workload mixed-soak: $(NODE_MODULES_MARKER)
 # uploads. The runner creates or reuses the test drive itself.
 SHARED_DRIVE_CAMPAIGN = LOAD_TARGET="$(LOAD_TARGET)" BASE_URL="$(BASE_URL)" STACK_URL="$(STACK_URL)" FILE_SIZE="$(FILE_SIZE)" RAMP_LEVELS="$(RAMP_LEVELS)" RAMP_STEP_DURATION="$(RAMP_STEP_DURATION)" RAMP_WRITERS_PER_LEVEL="$(RAMP_WRITERS_PER_LEVEL)" RAMP_WS_READERS_PER_LEVEL="$(RAMP_WS_READERS_PER_LEVEL)" RAMP_CHANGES_READERS_PER_LEVEL="$(RAMP_CHANGES_READERS_PER_LEVEL)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_DELIVERY_RATIO="$(MIN_DELIVERY_RATIO)" MAX_VUS="$(MAX_VUS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" EXECUTION_ID="$(EXECUTION_ID)" \
 	$(RECORD_EXIT) $(if $(filter dev,$(LOAD_TARGET)),bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)") node --import tsx src/scripts/shared-drive-campaign.ts
-cozy-shared-drive-ramp: BASE_URL = $(COZY_BASE_URL)
-cozy-shared-drive-ramp: STACK_URL = $(COZY_STACK_URL)
-dev-shared-drive-ramp: LOAD_TARGET := dev
-shared-drive-ramp cozy-shared-drive-ramp dev-shared-drive-ramp: export COZY_ACCESS_TOKEN := $(COZY_ACCESS_TOKEN)
-shared-drive-ramp cozy-shared-drive-ramp dev-shared-drive-ramp: $(NODE_MODULES_MARKER)
+shared-drive-ramp: export COZY_ACCESS_TOKEN := $(COZY_ACCESS_TOKEN)
+shared-drive-ramp: $(NODE_MODULES_MARKER)
 	@$(SHARED_DRIVE_CAMPAIGN)
-
-cozy-capacity: cozy-prepare
-	@$(MAKE) upload-capacity BASE_URL="$(COZY_BASE_URL)" STACK_URL="$(COZY_STACK_URL)" FILE_SIZE="$(FILE_SIZE)" MAX_VUS="$(MAX_VUS)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" BASELINE_ITERATIONS="$(BASELINE_ITERATIONS)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)"
 
 campaign: $(NODE_MODULES_MARKER)
 	@LOAD_TARGET="$(LOAD_TARGET)" bash campaigns/run-campaign.sh "$(CAMPAIGN)"
@@ -328,13 +313,11 @@ UPLOAD_CAMPAIGN = LOAD_TARGET="$(LOAD_TARGET)" BASE_URL="$(BASE_URL)" STACK_URL=
 	$(RECORD_EXIT) $(if $(filter dev,$(LOAD_TARGET)),bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)") node --import tsx src/scripts/upload-campaign.ts
 
 # The runner reads the local token from its environment, never from a command line.
-upload-capacity upload-regression dev-capacity dev-upload: export COZY_ACCESS_TOKEN := $(COZY_ACCESS_TOKEN)
-# Shared DEV aliases.
-dev-capacity dev-upload: LOAD_TARGET := dev
-upload-capacity dev-capacity: $(NODE_MODULES_MARKER)
+upload-capacity upload-regression: export COZY_ACCESS_TOKEN := $(COZY_ACCESS_TOKEN)
+upload-capacity: $(NODE_MODULES_MARKER)
 	@MODE=capacity $(UPLOAD_CAMPAIGN)
 
-upload-regression dev-upload: $(NODE_MODULES_MARKER)
+upload-regression: $(NODE_MODULES_MARKER)
 	@MODE=regression $(UPLOAD_CAMPAIGN)
 
 status:
