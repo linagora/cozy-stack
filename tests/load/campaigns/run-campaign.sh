@@ -6,7 +6,7 @@
 # Exits 0 when every step completed in its declared mode, 1 on a proven
 # correctness failure, 2 when the run is inconclusive (README, Campaigns).
 #
-# Usage: make campaign CAMPAIGN=quick
+# Usage: make campaign CAMPAIGN=smoke|capacity [LOAD_TARGET=dev]
 set -uo pipefail
 
 HARNESS_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -17,6 +17,11 @@ if [ ! -f "$DEFINITION" ] || [ "$CAMPAIGN" = run-campaign ]; then
   echo "Unknown campaign '$CAMPAIGN'. Available: $(cd "$HARNESS_DIR/campaigns" && ls *.sh | grep -v '^run-campaign' | sed 's/\.sh$//' | tr '\n' ' ')" >&2
   exit 2
 fi
+case ${LOAD_TARGET:=local} in
+  local) SHARED_DEV= ;;
+  dev) SHARED_DEV=1 ;;
+  *) echo "LOAD_TARGET must be local or dev" >&2; exit 2 ;;
+esac
 
 cd "$HARNESS_DIR"
 RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
@@ -85,14 +90,20 @@ trap 'INTERRUPTED=TERM' TERM
   echo "configured_limits=COZY_STACK_CPUS=${COZY_STACK_CPUS:-} COZY_STACK_MEMORY=${COZY_STACK_MEMORY:-} COUCHDB_CPUS=${COUCHDB_CPUS:-} COUCHDB_MEMORY=${COUCHDB_MEMORY:-}"
 } > "$RUN_DIR/environment.txt"
 
-# Steps keep going after a failure; the definition decides what depends on
-# what. Each step is recorded in steps.tsv for the summary, with make's exit
-# and the producer's own exit (empty when the producer never ran).
+# Local steps keep going after a failure. On shared DEV, a step that did not
+# complete skips the rest, so a failing target takes no more load. Each step is
+# recorded in steps.tsv for the summary, with make's exit and the producer's
+# own exit (empty when the producer never ran).
+STOPPED_BY=
 run_step() {
   local name=$1 kind=$2 id=$3 started pid status= code signalled= producer exit_file
   shift 3
   if [ -n "$INTERRUPTED" ]; then
     echo "=== $(now) SKIP $name: campaign interrupted"
+    return 2
+  fi
+  if [ -n "$STOPPED_BY" ]; then
+    echo "=== $(now) SKIP $name: $STOPPED_BY did not complete on shared DEV"
     return 2
   fi
   exit_file="$RUN_DIR/$name.exit"
@@ -121,10 +132,11 @@ run_step() {
   rm -f "$exit_file"
   echo "=== $(now) END $name exit=$status${producer:+ producer_exit=$producer}"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$kind" "$id" "$started" "$(now)" "$status" "$producer" >> "$RUN_DIR/steps.tsv"
+  [ "${producer:-$status}" = 0 ] || [ "${SHARED_DEV:-}" != 1 ] || STOPPED_BY=$name
   return "$status"
 }
 
-# A shared DEV campaign (SHARED_DEV=1 in its definition) runs the same steps on the DEV targets.
+# LOAD_TARGET=dev runs the same steps on the DEV targets.
 target() {
   if [ "${SHARED_DEV:-}" = 1 ]; then echo "$2"; else echo "$1"; fi
 }
@@ -133,12 +145,6 @@ upload_capacity() {
   local name=$1
   shift
   run_step "$name" upload-capacity "$RUN_ID-$name" "$(target cozy-capacity dev-capacity)" CAPACITY_RUN_ID="$RUN_ID-$name" "$@"
-}
-
-shared_drive_prepare() {
-  # The DEV ramp creates or reuses its own drive.
-  [ "${SHARED_DEV:-}" != 1 ] || return 0
-  run_step shared-drive-prepare prepare '' cozy-shared-drive-prepare "$@"
 }
 
 shared_drive_ramp() {

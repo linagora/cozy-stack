@@ -149,12 +149,6 @@ real stack:
 $ make cozy-capacity FILE_SIZE=1K MAX_VUS=8
 ```
 
-Or keep a known concurrency active for a fixed time:
-
-```console
-$ make cozy-upload-soak FILE_SIZE=1M VUS=8 DURATION=10m
-```
-
 Inspect the services with `make cozy-status` or `make cozy-logs`. Stop only the
 bundled Cozy services with `make cozy-down`; their named volumes and the
 Grafana and Prometheus services are preserved.
@@ -221,25 +215,7 @@ predictable. For example, this runs 50 uploads with up to 10 active workflows:
 $ make upload BASE_URL=http://cozy.localhost:8080 FILE_SIZE=100K VUS=10 ITERATIONS_PER_VU=5
 ```
 
-Use a soak run to find out whether a concurrency level stays healthy over
-time. This keeps 10 workflows active for 30 minutes and runs as many complete
-upload-and-check iterations as they can finish:
-
-```console
-$ make upload-soak BASE_URL=http://cozy.localhost:8080 FILE_SIZE=1M VUS=10 DURATION=30m
-```
-
-The soak run uses k6's `constant-vus` executor. When `DURATION` ends, it stops
-starting iterations and gives active upload-and-check workflows up to
-`GRACEFUL_STOP` to finish; the default is 30 minutes so large uploads are not
-cut off during validation. The regular `upload` target continues to use
-`per-vu-iterations`. Its `MAX_DURATION` is only a safety deadline, not a way to
-hold load for a fixed time.
-
-Uploaded files stay in the execution's temporary directory until teardown.
-Before a long soak, use a short run to estimate upload throughput and check
-that the target has enough free storage for `throughput × file size ×
-duration`. A normal teardown deletes the complete temporary directory.
+`MAX_DURATION` is only a safety deadline, not a way to hold load for a fixed time.
 
 Each workflow also includes the consistency download, so `VUS=10` means ten
 active client workflows, not that ten upload bodies are always in flight.
@@ -289,14 +265,8 @@ Shared drives can be tested in two modes:
    - **WebSocket readers**: persistent connections to `/sharings/drives/:id/realtime` listening for real-time `CREATED`/`UPDATED` events.
    - **Changes feed readers**: periodic polling of `/sharings/drives/:id/_changes`.
 
-   To prepare the shared drive on a local Cozy instance and run the activity scenario:
-   ```console
-   $ make cozy-shared-drive-prepare
-   $ make cozy-shared-drive-load DURATION=1m WRITER_VUS=3 WS_READER_VUS=5 CHANGES_READER_VUS=3
-   ```
-
-   To find the highest activity level one instance sustains, run the same
-   mix as a ramp in a single k6 run:
+   To find the highest activity level one instance sustains, run the mix as
+   a ramp in a single k6 run:
 
    ```console
    $ make cozy-shared-drive-ramp RAMP_LEVELS=1,2,4,8,16 RAMP_STEP_DURATION=1m
@@ -363,9 +333,6 @@ Shared drives can be tested in two modes:
      made as `content_verified` and the scope as
      `criteria.content_checks_per_level`. Wrong content outside any held
      level, such as a writer's upload during a transition, fails the ramp too.
-     The constant-VU activity (`make cozy-shared-drive-load`) fails on wrong
-     content and unreadable changes replies; its file names carry no level,
-     so reader downloads run in the ramp only.
 
    Latency is judged only when `P95_LIMIT_MS` is set: the upload and
    changes p95 must then stay within it. Otherwise each level's p95 is
@@ -433,12 +400,6 @@ Run the adaptive search for one file size:
 
 ```console
 $ make upload-capacity FILE_SIZE=10M
-```
-
-Or run all six sizes sequentially:
-
-```console
-$ make upload-capacity-all
 ```
 
 For each size, the coordinator:
@@ -512,7 +473,7 @@ Grafana selects a recorded run through Environment, Mode and Run. Inspecting a
 point derives its execution ID, concurrency and phase. A campaign groups every
 capacity-search point. An
 execution ID identifies one k6 process at one concurrency and attempt; for a
-standalone upload or soak run, the campaign and execution ID are the same.
+standalone upload run, the campaign and execution ID are the same.
 Make generates a UTC execution ID by default. Pass `EXECUTION_ID=name` for a
 standalone run or `CAPACITY_RUN_ID=name` for a capacity campaign when you want
 a stable name in Grafana.
@@ -621,21 +582,23 @@ run on shared DEV; process kills and dependency outages stay isolated work.
 
 ## Campaigns
 
-A campaign runs several measurements in a row and keeps everything about the
-run together:
+A campaign runs every runner in a row and keeps everything about the run
+together. `campaigns/capacity.sh` defines the steps once, with two presets:
+`smoke` runs each step on its shortest ladder, in about ten minutes, to check
+that every step, report and metric still works; `capacity` runs the full
+ladders to find each runner's capacity:
 
 ```console
-$ make campaign CAMPAIGN=quick
-$ make campaign CAMPAIGN=breaking-point
-$ make campaign CAMPAIGN=dev-capacity   # shared DEV, from the load VM (Shared DEV below)
+$ make campaign CAMPAIGN=smoke
+$ make campaign CAMPAIGN=capacity
+$ make campaign CAMPAIGN=capacity LOAD_TARGET=dev   # shared DEV, from the load VM (Shared DEV below)
 ```
 
-`campaigns/quick.sh` measures 1 MiB upload capacity on a personal drive and a
-shared drive, then runs the shared-drive ramp to level 16, in about 30 to 60
-minutes. `campaigns/breaking-point.sh` pushes every suite until errors, lost
-data, or missing events, with uploads slower than 5 minutes counted as errors;
-it takes several hours. A definition is a `campaign()` function calling
-`upload_capacity`, `shared_drive_prepare`, `shared_drive_ramp`, or `run_step`.
+The steps are the 100 KiB upload capacity on the personal drive, the
+shared-drive ramp and, on shared DEV, the group fan-out: the local Stack has no
+organization fixture for it yet. Locally, the steps keep going after a failure.
+A definition is a `campaign()` function calling `upload_capacity`,
+`shared_drive_ramp`, `org_drive_fanout`, or `run_step`.
 
 Each run writes `data/results/campaigns/<run id>-<name>/`:
 
@@ -775,7 +738,7 @@ make dev-capacity FILE_SIZE=1M MAX_VUS=8 MAX_UPLOAD_BYTES=160M MAX_RUNTIME=30m \
   BASELINE_ITERATIONS=10 CONFIRMATION_ITERATIONS=20
 make dev-shared-drive-ramp MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m
 make dev-org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m   # ORG-DRIVE-FANOUT.md
-make campaign CAMPAIGN=dev-capacity   # all three, with the budgets in campaigns/dev-capacity.sh
+make campaign CAMPAIGN=capacity LOAD_TARGET=dev   # all three, with the budgets in campaigns/capacity.sh
 ```
 
 The [load test dashboard](CAPACITY-OVERVIEW.md) uses **Environment → Mode → Run**
@@ -791,12 +754,12 @@ shared host metrics, not isolated organization usage. Without that datasource,
 the tab reports DEV infrastructure unavailable. Set `DEV_MONITORING_URL` if an
 additional platform monitoring link is useful in reports and summaries.
 
-A shared DEV campaign (`SHARED_DEV=1` in its definition) takes the lock once and
-holds it through every step and its cleanup; its steps run on the DEV targets and
-reuse that lock, and the summary classifies them like local steps. With
+A shared DEV campaign (`LOAD_TARGET=dev`) takes the lock once and holds it
+through every step and its cleanup; its steps run on the DEV targets and reuse
+that lock, and the summary classifies them like local steps. With
 `DEV_MONITORING_URL` set, the summary also links the DEV dashboard over each
-step's time range. `dev-capacity` stops at the first non-zero step result; completed
-capacity brackets and lower bounds continue to the next scenario.
+step's time range. A step whose producer exits non-zero skips the remaining
+steps; completed capacity brackets and lower bounds continue to the next one.
 
 Each k6 run gets a fresh 30-minute instance token and is stopped after 20
 minutes. No local Stack is started.
@@ -914,19 +877,15 @@ $ make upload-smoke
 $ make cozy-up
 $ make cozy-prepare
 $ make cozy-upload FILE_SIZE=1K VUS=1
-$ make cozy-upload-soak FILE_SIZE=1M VUS=8 DURATION=10m
 $ make cozy-capacity FILE_SIZE=1K MAX_VUS=8
 $ make cozy-shared-drive-prepare
-$ make cozy-shared-drive-load DURATION=1m
 $ make cozy-shared-drive-ramp
-$ make campaign CAMPAIGN=quick
+$ make campaign CAMPAIGN=smoke
 $ make cozy-status
 $ make cozy-logs
 $ make cozy-down
 $ make upload BASE_URL=https://target.example FILE_SIZE=1M VUS=10
-$ make upload-soak BASE_URL=https://target.example FILE_SIZE=1M VUS=10 DURATION=30m
 $ make upload-capacity BASE_URL=https://target.example FILE_SIZE=10M
-$ make upload-capacity-all BASE_URL=https://target.example
 $ make status
 $ make logs
 $ make down

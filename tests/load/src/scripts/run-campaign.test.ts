@@ -28,6 +28,7 @@ case $target in
   *) suffix= ;;
 esac
 echo "$target" >> "$FAKE_STEPS/targets"
+echo "$*" >> "$FAKE_STEPS/commands"
 # DEV targets take the shared DEV lock, as the Makefile does.
 case $target in dev-*) bash campaigns/lib/shared-dev-lock.sh "$DEV_LOCK_FILE" true || exit 2 ;; esac
 step=\${id#*-}
@@ -49,11 +50,12 @@ code=$(cat "$play.exit" 2>/dev/null || echo 0)
 
 type Play = { exit?: number, graceful?: boolean, report?: object, setupFails?: boolean, sleep?: number }
 type Run = {
-  code: number | null, log: string, signals: (step: string) => number, steps: string[][], summary: string, targets: string[]
+  code: number | null, commands: string[], log: string, signals: (step: string) => number, steps: string[][], summary: string,
+  targets: string[],
 }
 type Interrupt = { after: string, delayMs: number }
-// prelude goes before campaign(); during runs once the named step has started.
-type Options = { file?: string, prelude?: string, env?: Record<string, string>, during?: { after: string, run: () => void } }
+// campaign runs a real definition instead; during runs once the named step has started.
+type Options = { campaign?: string, env?: Record<string, string>, during?: { after: string, run: () => void } }
 
 async function runCampaign(
   t: TestContext, definition: string, plays: Record<string, Play>, interrupt?: Interrupt, options: Options = {},
@@ -65,15 +67,13 @@ async function runCampaign(
   mkdirSync(join(dir, 'data', 'results'), { recursive: true })
   mkdirSync(bin)
   mkdirSync(steps)
-  for (const file of ['run-campaign.sh', 'lib/record-exit.sh', 'lib/shared-dev-lock.sh']) {
+  for (const file of ['run-campaign.sh', 'lib/record-exit.sh', 'lib/shared-dev-lock.sh', 'capacity.sh', 'smoke.sh']) {
     copyFileSync(join(harness, 'campaigns', file), join(dir, 'campaigns', file))
   }
   // A copy, not a link: the summary only runs when invoked by its real path.
   cpSync(join(harness, 'src'), join(dir, 'src'), { recursive: true })
   symlinkSync(join(harness, 'node_modules'), join(dir, 'node_modules'))
-  writeFileSync(join(dir, 'campaigns', 'scenario.sh'), options.file
-    ? readFileSync(join(harness, 'campaigns', options.file))
-    : `${options.prelude ?? ''}\ncampaign() {\n${definition}\n}\n`)
+  writeFileSync(join(dir, 'campaigns', 'scenario.sh'), `campaign() {\n${definition}\n}\n`)
   for (const [name, body] of [['make', fakeMake], ['docker', '#!/bin/sh\nexit 0\n']]) {
     writeFileSync(join(bin, name!), body!)
     chmodSync(join(bin, name!), 0o700)
@@ -86,7 +86,7 @@ async function runCampaign(
     if (play.graceful) writeFileSync(join(steps, `${step}.graceful`), '')
   }
 
-  const child = spawn('bash', ['campaigns/run-campaign.sh', 'scenario'], {
+  const child = spawn('bash', ['campaigns/run-campaign.sh', options.campaign ?? 'scenario'], {
     cwd: dir, env: { ...process.env, FAKE_STEPS: steps, PATH: `${bin}:${process.env.PATH}`, ...options.env },
   })
   let log = ''
@@ -111,8 +111,12 @@ async function runCampaign(
   const read = (name: string): string => {
     try { return readFileSync(join(runs, run, name), 'utf8') } catch { return '' }
   }
+  const lines = (name: string): string[] => {
+    try { return readFileSync(join(steps, name), 'utf8').split('\n').filter(Boolean) } catch { return [] }
+  }
   return {
     code,
+    commands: lines('commands'),
     log,
     signals: (step: string): number => {
       try {
@@ -123,7 +127,7 @@ async function runCampaign(
     },
     steps: read('steps.tsv').trim().split('\n').filter(Boolean).map(line => line.split('\t')),
     summary: read('summary.md'),
-    targets: (() => { try { return readFileSync(join(steps, 'targets'), 'utf8').split('\n').filter(Boolean) } catch { return [] } })(),
+    targets: lines('targets'),
   }
 }
 
@@ -226,24 +230,52 @@ test('an interruption stops the running step once, skips the rest and still summ
 const lockScript = join(harness, 'campaigns', 'lib', 'shared-dev-lock.sh')
 const hasFlock = () => spawnSync('sh', ['-c', 'command -v flock']).status === 0
 
-test('the DEV capacity definition stops after a failed or inconclusive step', async t => {
+test('a shared DEV campaign stops after a failed or inconclusive step', async t => {
   if (!hasFlock()) return t.skip('flock is not installed')
-  for (const step of ['upload-capacity-1M', 'shared-drive-ramp']) {
+  for (const step of ['upload-capacity', 'shared-drive-ramp']) {
     for (const exit of [1, 2]) await t.test(`${step} exits ${exit}`, async t => {
       const dir = mkdtempSync(join(tmpdir(), 'dev-campaign-stop-'))
       t.after(() => rmSync(dir, { recursive: true, force: true }))
       const run = await runCampaign(t, '', {
-        'upload-capacity-1M': { exit: 0, report: upload },
+        'upload-capacity': { exit: 0, report: upload },
         [step]: { exit, report: exit === 1
-          ? (step === 'upload-capacity-1M'
+          ? (step === 'upload-capacity'
             ? { ...upload, attempts: [{ cleanup_rate: 1, consistency_rate: 0 }] }
             : { ...ramp('bracket'), max_sustained_level: 0 })
           : { status: 'infrastructure_failure', failure_reason: 'cleanup unverified' } },
-      }, undefined, { file: 'dev-capacity.sh', env: { DEV_LOCK_FILE: join(dir, 'shared-dev.lock') } })
+      }, undefined, { campaign: 'capacity', env: { LOAD_TARGET: 'dev', DEV_LOCK_FILE: join(dir, 'shared-dev.lock') } })
       equal(run.code, exit, run.log)
-      deepEqual(run.targets, step === 'upload-capacity-1M'
+      match(run.log, new RegExp(`SKIP .*: ${step} did not complete on shared DEV`))
+      deepEqual(run.targets, step === 'upload-capacity'
         ? ['dev-capacity'] : ['dev-capacity', 'dev-shared-drive-ramp'])
     })
+  }
+})
+
+// The value make uses: the last assignment on its command line.
+const setting = (command: string | undefined, name: string): string | undefined =>
+  command?.split(' ').filter(arg => arg.startsWith(`${name}=`)).at(-1)?.slice(name.length + 1)
+
+test('smoke and capacity run every runner on their own ladders, the fan-out only on shared DEV', async t => {
+  const plays = {
+    'upload-capacity': { exit: 0, report: upload },
+    'shared-drive-ramp': { exit: 0, report: ramp('lower_bound') },
+    'org-drive-fanout': { exit: 0, report: { ...fanout, capacity: { kind: 'lower_bound', lower: 4 }, status: 'passed' } },
+  }
+  for (const [campaign, vus, levels] of [['smoke', '2', '1,2'], ['capacity', undefined, '1,2,4,8,16']] as const) {
+    const run = await runCampaign(t, '', plays, undefined, { campaign })
+    equal(run.code, 0, run.log)
+    deepEqual(run.targets, ['cozy-capacity', 'cozy-shared-drive-ramp'])
+    deepEqual([setting(run.commands[0], 'FILE_SIZE'), setting(run.commands[0], 'MAX_VUS'),
+      setting(run.commands[1], 'RAMP_LEVELS')], ['100K', vus, levels])
+    if (!hasFlock()) continue
+    // On shared DEV, the agreed budgets apply and a smoke ladder stays below them.
+    const dev = await runCampaign(t, '', plays, undefined, { campaign, env: {
+      LOAD_TARGET: 'dev', DEV_LOCK_FILE: join(mkdtempSync(join(tmpdir(), 'dev-campaign-')), 'shared-dev.lock') } })
+    equal(dev.code, 0, dev.log)
+    deepEqual(dev.targets, ['dev-capacity', 'dev-shared-drive-ramp', 'dev-org-drive-fanout'])
+    deepEqual([setting(dev.commands[0], 'MAX_VUS'), setting(dev.commands[0], 'MAX_UPLOAD_BYTES'),
+      setting(dev.commands[2], 'FANOUT_LEVELS')], [vus ?? '128', '2560M', levels])
   }
 })
 
@@ -256,7 +288,7 @@ test('a shared DEV campaign holds the lock once, through steps that reuse it', a
     ramp: { exit: 0, report: ramp('lower_bound') },
     upload: { exit: 0, report: upload, sleep: 1 },
   }, undefined, {
-    prelude: 'SHARED_DEV=1', env: { DEV_LOCK_FILE: lock },
+    env: { LOAD_TARGET: 'dev', DEV_LOCK_FILE: lock },
     // Another run, even with the variable set, cannot borrow the campaign's lock.
     during: { after: 'upload', run: () => {
       outside = spawnSync('bash', [lockScript, lock, 'true'], { env: { ...process.env, DEV_LOCK_HELD: lock } }).status
@@ -274,7 +306,7 @@ test('a shared DEV campaign does not start while another run holds the lock', as
   const holder = spawn('bash', [lockScript, lock, 'sh', '-c', 'echo held; sleep 30'])
   t.after(() => holder.kill())
   await new Promise(resolve => holder.stdout.once('data', resolve))
-  const run = await runCampaign(t, producers, {}, undefined, { prelude: 'SHARED_DEV=1', env: { DEV_LOCK_FILE: lock } })
+  const run = await runCampaign(t, producers, {}, undefined, { env: { LOAD_TARGET: 'dev', DEV_LOCK_FILE: lock } })
   equal(run.code, 2, run.log)
   match(run.log, /Shared DEV is busy/)
   deepEqual(run.targets, [])

@@ -62,7 +62,7 @@ HOST_GID ?= $(shell id -g)
 # share one host unless a separate load generator is used.
 LOAD_TOPOLOGY ?= single-host
 GRAFANA_URL ?= http://localhost:$(or $(GRAFANA_PORT),3000)
-CAMPAIGN ?= quick
+CAMPAIGN ?= smoke
 # Campaign steps set a command prefix that records a producer's own exit status:
 # make reports every failed recipe as 2.
 RECORD_EXIT ?=
@@ -73,7 +73,7 @@ export HOST_GID
 export COZY_STACK_CPUS COZY_STACK_MEMORY COUCHDB_CPUS COUCHDB_MEMORY
 export LOAD_TOPOLOGY GRAFANA_URL
 
-.PHONY: help doctor install typecheck node-checks config pull observability-up up cozy-up cozy-prepare cozy-shared-drive-prepare cozy-shared-drive-load cozy-shared-drive-ramp shared-drive-ramp shared-drive-ramp-run dev-shared-drive-ramp campaign cozy-upload cozy-upload-soak cozy-capacity cozy-capacity-all cozy-status cozy-logs cozy-down upload-binaries upload-binary upload-smoke upload upload-soak upload-capacity upload-capacity-all upload-regression dev-upload dev-capacity status logs down dashboard-url
+.PHONY: help doctor install typecheck node-checks config pull observability-up up cozy-up cozy-prepare cozy-shared-drive-prepare cozy-shared-drive-ramp shared-drive-ramp shared-drive-ramp-run dev-shared-drive-ramp campaign cozy-upload cozy-capacity cozy-status cozy-logs cozy-down upload-binaries upload-binary upload-smoke upload upload-capacity upload-regression dev-upload dev-capacity status logs down dashboard-url
 
 help:
 	@echo "make install                                 Install the load-harness Node tools"
@@ -100,17 +100,13 @@ help:
 	@echo "make cozy-up                                 Build and start the local Cozy services"
 	@echo "make cozy-prepare                            Prepare the local Cozy test instance"
 	@echo "make cozy-shared-drive-prepare               Prepare a local shared drive for load testing"
-	@echo "make cozy-shared-drive-load                  Run the multi-scenario shared drive load test"
 	@echo "make cozy-shared-drive-ramp                  Find the highest sustained shared drive level"
-	@echo "make campaign CAMPAIGN=quick                 Run campaigns/<name>.sh and summarize it"
+	@echo "make campaign CAMPAIGN=smoke|capacity        Run every runner on short or full ladders (LOAD_TARGET=dev for shared DEV)"
 	@echo "make cozy-upload FILE_SIZE=1K VUS=1          Prepare and test the local Cozy stack"
-	@echo "make cozy-upload-soak FILE_SIZE=1M VUS=10 DURATION=10m"
 	@echo "make cozy-capacity FILE_SIZE=1K MAX_VUS=8    Measure the local Cozy stack"
 	@echo "make upload BASE_URL=https://... FILE_SIZE=1M VUS=10"
-	@echo "make upload-soak BASE_URL=https://... FILE_SIZE=1M VUS=10 DURATION=10m"
 	@echo "make upload UPLOAD_TARGET=shared-drive SHARED_DRIVE_ID=... SHARED_DRIVE_ROOT_ID=..."
 	@echo "make upload-capacity BASE_URL=https://... FILE_SIZE=10M"
-	@echo "make upload-capacity-all BASE_URL=https://..."
 	@echo "make upload-regression BASE_URL=https://... VUS=2 ITERATIONS_PER_VU=5"
 	@echo "make status | make logs | make down"
 
@@ -207,12 +203,6 @@ cozy-prepare: $(NODE_MODULES_MARKER) cozy-up
 cozy-upload: cozy-prepare
 	@$(MAKE) upload BASE_URL="$(COZY_BASE_URL)" FILE_SIZE="$(FILE_SIZE)" VUS="$(VUS)" ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" EXECUTION_ID="$(EXECUTION_ID)"
 
-cozy-upload-soak: cozy-prepare
-	@$(MAKE) upload-soak BASE_URL="$(COZY_BASE_URL)" FILE_SIZE="$(FILE_SIZE)" VUS="$(VUS)" DURATION="$(DURATION)" GRACEFUL_STOP="$(GRACEFUL_STOP)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" EXECUTION_ID="$(EXECUTION_ID)"
-
-WRITER_VUS ?= 3
-WS_READER_VUS ?= 5
-CHANGES_READER_VUS ?= 3
 RAMP_LEVELS ?= 1,2,4,8,16
 RAMP_STEP_DURATION ?= 1m
 RAMP_WRITERS_PER_LEVEL ?= 1
@@ -221,28 +211,6 @@ RAMP_CHANGES_READERS_PER_LEVEL ?= 2
 
 cozy-shared-drive-prepare: cozy-prepare
 	@COZY_INSTANCE_DOMAIN="$(COZY_INSTANCE_DOMAIN)" COZY_BASE_URL="$(COZY_BASE_URL)" $(NODE_BIN)/tsx src/scripts/prepare-shared-drive.ts
-
-cozy-shared-drive-load: upload-binary observability-up
-	@mkdir -p data/results
-	@$(COMPOSE) run --rm \
-		-e BASE_URL="$(COZY_BASE_URL)" \
-		-e COZY_ACCESS_TOKEN="$(COZY_ACCESS_TOKEN)" \
-		-e UPLOAD_TARGET=shared-drive \
-		-e SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" \
-		-e SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" \
-		-e FILE_SIZE="$(FILE_SIZE)" \
-		-e DURATION="$(DURATION)" \
-		-e WRITER_VUS="$(WRITER_VUS)" \
-		-e WS_READER_VUS="$(WS_READER_VUS)" \
-		-e CHANGES_READER_VUS="$(CHANGES_READER_VUS)" \
-		-e EXECUTION_ID="$(EXECUTION_ID)" \
-		k6 run -o experimental-prometheus-rw \
-		--tag campaignid="$(EXECUTION_ID)" \
-		--tag topology="$(LOAD_TOPOLOGY)" \
-		--tag filesize="$(FILE_SIZE)" \
-		--summary-export="/results/$(EXECUTION_ID)-shared-drive-summary.json" \
-		/scripts/shared-drive-activity.ts
-	@echo "Shared drive activity result: data/results/$(EXECUTION_ID)-shared-drive-summary.json"
 
 # k6 alone; shared-drive-ramp runs it with the target's token in the environment and the drive.
 shared-drive-ramp-run: upload-binary observability-up
@@ -320,11 +288,8 @@ shared-drive-ramp cozy-shared-drive-ramp dev-shared-drive-ramp: $(NODE_MODULES_M
 cozy-capacity: cozy-prepare
 	@$(MAKE) upload-capacity BASE_URL="$(COZY_BASE_URL)" STACK_URL="$(COZY_STACK_URL)" FILE_SIZE="$(FILE_SIZE)" MAX_VUS="$(MAX_VUS)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" BASELINE_ITERATIONS="$(BASELINE_ITERATIONS)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)"
 
-cozy-capacity-all: cozy-prepare
-	@$(MAKE) upload-capacity-all BASE_URL="$(COZY_BASE_URL)" STACK_URL="$(COZY_STACK_URL)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" BASELINE_ITERATIONS="$(BASELINE_ITERATIONS)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)"
-
 campaign: $(NODE_MODULES_MARKER)
-	@bash campaigns/run-campaign.sh "$(CAMPAIGN)"
+	@LOAD_TARGET="$(LOAD_TARGET)" bash campaigns/run-campaign.sh "$(CAMPAIGN)"
 
 cozy-status:
 	@$(COZY_COMPOSE) ps
@@ -354,9 +319,6 @@ upload: upload-binary observability-up
 	@$(RECORD_EXIT) $(COMPOSE) run --rm -e BASE_URL="$(BASE_URL)" $(if $(filter http://mock,$(BASE_URL)),-e COZY_ACCESS_TOKEN=mock-token,) -e FILE_SIZE="$(FILE_SIZE)" -e UPLOAD_VUS="$(VUS)" -e UPLOAD_MODE="$(UPLOAD_MODE)" -e ITERATIONS_PER_VU="$(ITERATIONS_PER_VU)" -e DURATION="$(DURATION)" -e GRACEFUL_STOP="$(GRACEFUL_STOP)" -e CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" -e UPLOAD_TARGET="$(UPLOAD_TARGET)" -e SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" -e SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" -e CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" -e CAPACITY_PHASE="$(CAPACITY_PHASE)" -e MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" -e P95_LIMIT_MS="$(P95_LIMIT_MS)" -e MAX_DURATION="$(MAX_DURATION)" -e UPLOAD_TIMEOUT="$(UPLOAD_TIMEOUT)" -e EXECUTION_ID="$(EXECUTION_ID)" k6 run -o experimental-prometheus-rw --tag campaignid="$(or $(CAPACITY_RUN_ID),$(EXECUTION_ID))" --tag topology="$(LOAD_TOPOLOGY)" --tag load_target="$(LOAD_TARGET)" $(if $(MODE),--tag mode="$(MODE)") --tag concurrency="$(VUS)" --tag executionid="$(EXECUTION_ID)" --tag filesize="$(FILE_SIZE)" --tag phase="$(CAPACITY_PHASE)" --summary-export="/results/$(EXECUTION_ID)-summary.json" /scripts/concurrent-uploads.ts
 	@echo "Upload result: data/results/$(EXECUTION_ID)-summary.json"
 
-upload-soak:
-	@$(MAKE) upload UPLOAD_MODE=soak CAPACITY_PHASE=soak
-
 # One runner for every upload campaign: MODE picks the fixed regression workload or the capacity
 # search. LOAD_TARGET=dev holds the shared DEV lock, which every checkout, user and container on the
 # runner uses. node --import tsx keeps the runner in the process holding that lock; the tsx CLI would
@@ -374,11 +336,6 @@ upload-capacity dev-capacity: $(NODE_MODULES_MARKER)
 
 upload-regression dev-upload: $(NODE_MODULES_MARKER)
 	@MODE=regression $(UPLOAD_CAMPAIGN)
-
-upload-capacity-all:
-	@for size in 1K 100K 1M 10M 100M 1G; do \
-		$(MAKE) upload-capacity BASE_URL="$(BASE_URL)" STACK_URL="$(STACK_URL)" FILE_SIZE="$$size" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" BASELINE_ITERATIONS="$(BASELINE_ITERATIONS)" CONFIRMATION_ITERATIONS="$(CONFIRMATION_ITERATIONS)" CONSISTENCY_CHUNK_SIZE_BYTES="$(CONSISTENCY_CHUNK_SIZE_BYTES)" UPLOAD_TARGET="$(UPLOAD_TARGET)" SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" FORCE_CAPACITY_RUN="$(FORCE_CAPACITY_RUN)" || exit $$?; \
-	done
 
 status:
 	@$(COMPOSE) ps
