@@ -130,8 +130,9 @@ interface K6Run { code: number, timedOut: boolean, unverified: string | null }
 function runK6(args: string[], env: NodeJS.ProcessEnv, executionId: string, limitMs: number): Promise<K6Run> {
   return new Promise(resolve => {
     const exitFile = `data/results/.k6-exit-${randomUUID()}`
+    // Under -e, make 3.81 (macOS) lets a campaign step's RECORD_EXIT, inherited in MAKEFLAGS, beat this one.
     const child = spawn('make', [...args, `RECORD_EXIT=bash campaigns/lib/record-exit.sh ${exitFile}`],
-      { cwd: harness, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      { cwd: harness, env: { ...env, MAKEFLAGS: undefined }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     child.stdout.pipe(process.stdout)
     child.stderr.pipe(process.stderr)
     const signal = (name: NodeJS.Signals) => { try { process.kill(-child.pid!, name) } catch {} }
