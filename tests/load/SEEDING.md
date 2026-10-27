@@ -65,6 +65,10 @@ make seed-scale SEED_FILES=1000 SEED_DRIVES=10
 # Seed instance: seed-<32-hex-id>.load.example.test:8443
 ```
 
+On the bundled Stack (`LOAD_TARGET=local`, no Cloudery token), Make defaults
+these settings to its loopback admin port (`COZY_ADMIN_PORT`, 16060), its host
+port, the `load-org-sharing` context and the local admin passphrase.
+
 `SEED_ADMIN_URL` and `SEED_STACK_URL` are explicit HTTP(S) connection origins,
 without credentials, paths, queries or fragments. Public requests connect to
 `SEED_STACK_URL` while sending the generated instance domain as the exact `Host`

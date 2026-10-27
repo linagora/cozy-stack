@@ -37,3 +37,13 @@ rabbitmq:
     default:
       enabled: true
       url: amqp://cozy:cozy@rabbitmq:5672/
+
+# Organization fixtures (ORG-DRIVE-FANOUT.md): members auto-accept their organization's drives.
+contexts:
+  load-org-sharing:
+    common_contacts: true
+    max_members_per_sharing: 1001.0
+    sharing:
+      auto_accept_trusted: true
+      auto_accept_trusted_contacts: false
+      trusted_domains: []

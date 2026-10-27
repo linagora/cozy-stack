@@ -255,19 +255,27 @@ test('a shared DEV campaign stops after a failed or inconclusive step', async t 
 const setting = (command: string | undefined, name: string): string | undefined =>
   command?.split(' ').filter(arg => arg.startsWith(`${name}=`)).at(-1)?.slice(name.length + 1)
 
-test('smoke and capacity run every runner on their own ladders, the fan-out only on shared DEV', async t => {
+test('smoke and capacity run every runner on their own ladders, locally on one organization fixture', async t => {
   const plays = {
     'upload-capacity': { exit: 0, report: upload },
     'shared-drive-ramp': { exit: 0, report: ramp('lower_bound') },
     'org-drive-fanout': { exit: 0, report: { ...fanout, capacity: { kind: 'lower_bound', lower: 4 }, status: 'passed' } },
   }
-  for (const [campaign, vus, levels] of [['smoke', '2', '1,2'], ['capacity', undefined, '1,2,4,8,16']] as const) {
+  for (const [campaign, vus, levels, members] of [['smoke', '2', '1,2', '2'],
+    ['capacity', undefined, '1,2,4,8,16', '16']] as const) {
     const run = await runCampaign(t, '', plays, undefined, { campaign })
     equal(run.code, 0, run.log)
-    // Locally, the bundled Stack is prepared before any runner.
-    deepEqual(run.targets, ['cozy-prepare', 'upload-capacity', 'shared-drive-ramp'])
+    // Locally, the bundled Stack is prepared before any runner, and the organization removed after the last.
+    deepEqual(run.targets, ['cozy-prepare', 'upload-capacity', 'seed-org', 'shared-drive-ramp', 'org-drive-fanout',
+      'seed-org-cleanup'])
     deepEqual([setting(run.commands[1], 'LOAD_TARGET'), setting(run.commands[1], 'FILE_SIZE'),
-      setting(run.commands[1], 'MAX_VUS'), setting(run.commands[2], 'RAMP_LEVELS')], ['local', '100K', vus, levels])
+      setting(run.commands[1], 'MAX_VUS'), setting(run.commands[3], 'RAMP_LEVELS'),
+      setting(run.commands[2], 'SEED_USERS'), setting(run.commands[4], 'FANOUT_LEVELS')],
+    ['local', '100K', vus, levels, members, levels])
+    const org = setting(run.commands[2], 'SEED_DOMAIN')!
+    match(org, /^seed-[a-f0-9]{32}\./)
+    deepEqual([setting(run.commands[3], 'ACTORS_DOMAIN'), setting(run.commands[4], 'FANOUT_ORG_DOMAIN'),
+      setting(run.commands[5], 'SEED_DOMAIN')], [org, org, org])
     if (!hasFlock()) continue
     // On shared DEV, the agreed budgets apply and a smoke ladder stays below them.
     const dev = await runCampaign(t, '', plays, undefined, { campaign, env: {

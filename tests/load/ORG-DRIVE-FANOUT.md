@@ -11,8 +11,10 @@ metadata is fabricated.
 
 ## Server prerequisites
 
-Use a disposable Stack deployment. Configure a dedicated context before creating
-the fixture, for example:
+Use a disposable Stack deployment. The bundled Stack (`make cozy-prepare`) has
+the context below and its admin API on 127.0.0.1:16060, and Make points the
+seeder at it ([SEEDING.md](SEEDING.md)). Elsewhere, configure a dedicated
+context before creating the fixture, for example:
 
 ```yaml
 contexts:

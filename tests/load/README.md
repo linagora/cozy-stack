@@ -33,8 +33,9 @@ separate future scenarios.
 - `smoke` runs every step on its shortest ladder, in about ten minutes after the
   first build; `capacity` runs the full ladders ([Campaigns](#campaigns)).
 - Locally, the campaign first builds and starts the bundled Stack from this
-  checkout (`make cozy-prepare`). The group fan-out runs on shared DEV only, and
-  the [mixed workload](#mixed-workload) by hand, until the campaign covers them.
+  checkout (`make cozy-prepare`), then seeds one organization for the ramp's
+  members and the group fan-out, and removes it at the end. The
+  [mixed workload](#mixed-workload) still runs by hand, until the campaign covers it.
 - Shared DEV needs `SEED_CLOUDERY_TOKEN_FILE`, `SEED_CLOUDERY_MANIFEST` and
   `DEV_INSTANCE`, holds the shared DEV lock and uses the budgets agreed with the
   DEV owner, in `campaigns/capacity.sh` ([Shared DEV](#shared-dev)).
@@ -42,8 +43,8 @@ separate future scenarios.
   Grafana link per step, and exits 0 when completed, 1 on a proven correctness
   failure and 2 when inconclusive.
 - One runner alone: `make cozy-prepare`, then `make upload-capacity`,
-  `upload-regression` or `shared-drive-ramp`; `make org-drive-fanout` also needs
-  an organization fixture ([ORG-DRIVE-FANOUT.md](ORG-DRIVE-FANOUT.md)). Add
+  `upload-regression`, `shared-drive-ramp` or `org-drive-fanout` (which seeds
+  its own organization, [ORG-DRIVE-FANOUT.md](ORG-DRIVE-FANOUT.md)). Add
   `LOAD_TARGET=dev` for shared DEV.
 
 ## How it is built
@@ -309,7 +310,8 @@ Shared drives can be tested in two modes:
    With `ACTORS_DOMAIN`, the ramp runs as members of an organization fixture
    (`make seed-org SEED_USERS=2 SEED_CONTEXT_NAME=load-org-sharing`, read from
    its [manifest](SEEDING.md#fixture-manifest)) on a local Stack, using the
-   seeder's `SEED_ADMIN_URL`, `SEED_ADMIN_PASSWORD` and `SEED_STACK_URL`. The
+   seeder's `SEED_ADMIN_URL`, `SEED_ADMIN_PASSWORD` and `SEED_STACK_URL`
+   (the bundled Stack's by default). The
    organization instance owns a fresh drive and creates the test directory;
    its first member uploads through a group-only grant; its second member
    observes through a read-only grant. Each uses its own URL and token. Before
@@ -619,8 +621,11 @@ $ make campaign CAMPAIGN=capacity LOAD_TARGET=dev   # shared DEV, from the load 
 ```
 
 The steps are the 100 KiB upload capacity on the personal drive, the
-shared-drive ramp and, on shared DEV, the group fan-out: the local Stack has no
-organization fixture for it yet. Locally, the steps keep going after a failure.
+shared-drive ramp and the group fan-out. Locally, one organization fixture,
+seeded before the ramp and removed after the fan-out, gives the ramp its writer
+and reader members and the fan-out its recipients; `run.log` names it, for
+`make seed-org-cleanup SEED_DOMAIN=...` after an interrupted run. Locally, the
+steps keep going after a failure.
 A definition is a `campaign()` function calling `upload_capacity`,
 `shared_drive_ramp`, `org_drive_fanout`, or `run_step`.
 

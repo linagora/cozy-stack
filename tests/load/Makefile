@@ -52,6 +52,16 @@ COZY_STACK_URL ?= http://$(or $(COZY_STACK_BIND_ADDRESS),127.0.0.1):$(or $(COZY_
 # Where the host reaches the Stack when k6 uses a Compose-internal BASE_URL: the bundled Stack's port
 # when BASE_URL is that Stack, as make cozy-prepare writes it to .env.
 STACK_URL ?= $(if $(filter $(COZY_BASE_URL),$(BASE_URL)),$(COZY_STACK_URL))
+# Organization fixtures seed the bundled Stack through its loopback admin port, in the load-org-sharing
+# context (compose.yaml, config/cozy/cozy.yaml). Shared DEV seeds through the Cloudery (SEEDING.md).
+ifeq ($(LOAD_TARGET)$(SEED_CLOUDERY_TOKEN_FILE),local)
+SEED_ADMIN_URL ?= http://127.0.0.1:$(or $(COZY_ADMIN_PORT),16060)
+SEED_STACK_URL ?= $(COZY_STACK_URL)
+SEED_ADMIN_PASSWORD ?= cozy
+SEED_DOMAIN_SUFFIX ?= localhost:8080
+SEED_CONTEXT_NAME ?= load-org-sharing
+export SEED_ADMIN_URL SEED_STACK_URL SEED_ADMIN_PASSWORD SEED_DOMAIN_SUFFIX SEED_CONTEXT_NAME
+endif
 COZY_CLIENT_SOFTWARE_ID ?= twake-drive-load-local
 COZY_TOKEN_EXPIRATION ?= 24h
 HOST_UID ?= $(shell id -u)

@@ -1,13 +1,17 @@
 # Every runner's capacity, the highest level it sustains, on the local Stack or on shared DEV
 # (make campaign CAMPAIGN=capacity LOAD_TARGET=dev). smoke.sh runs the same steps on short ladders.
+# Locally, members is the organization fixture's size: the largest fan-out batch, and at least the
+# ramp's writer and reader.
 if [ "$CAMPAIGN" = smoke ]; then
   upload=(MAX_VUS=2 BASELINE_ITERATIONS=4 CONFIRMATION_ITERATIONS=2)
   ramp=(RAMP_LEVELS=1,2 RAMP_STEP_DURATION=30s)
   fanout=(FANOUT_LEVELS=1,2)
+  members=2
 else
   upload=(BASELINE_ITERATIONS=50 CONFIRMATION_ITERATIONS=20)
   ramp=(RAMP_LEVELS=1,2,4,8,16)
   fanout=(FANOUT_LEVELS=1,2,4,8,16)
+  members=16
 fi
 # Shared DEV budgets, agreed with the DEV owner: raise them only with that agreement. The ladders come
 # last, so a smoke ladder stays below them. DEV needs DEV_INSTANCE and the Cloudery token and manifest
@@ -19,14 +23,21 @@ if [ "${SHARED_DEV:-}" = 1 ]; then
 fi
 
 campaign() {
-  # Locally, every step uses the bundled Stack and the instance and token this writes to .env.
-  if [ "${SHARED_DEV:-}" != 1 ]; then
-    run_step cozy-prepare prepare '' cozy-prepare || return
-  fi
-  upload_capacity upload-capacity FILE_SIZE=100K "${upload[@]}"
-  shared_drive_ramp shared-drive-ramp "${ramp[@]}"
-  # The fan-out needs an organization: shared DEV has the Cloudery one, the local Stack none yet.
   if [ "${SHARED_DEV:-}" = 1 ]; then
+    upload_capacity upload-capacity FILE_SIZE=100K "${upload[@]}"
+    shared_drive_ramp shared-drive-ramp "${ramp[@]}"
     org_drive_fanout org-drive-fanout "${fanout[@]}"
+    return
   fi
+  # Locally, every step uses the bundled Stack and the instance and token this writes to .env.
+  run_step cozy-prepare prepare '' cozy-prepare || return
+  upload_capacity upload-capacity FILE_SIZE=100K "${upload[@]}"
+  # One organization fixture: the ramp's writer and reader members, and the fan-out's recipients.
+  local org
+  org=seed-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n').${SEED_DOMAIN_SUFFIX:-localhost:8080}
+  echo "Organization fixture: $org (make seed-org-cleanup SEED_DOMAIN=$org removes it)"
+  run_step seed-org prepare '' seed-org SEED_DOMAIN="$org" SEED_USERS="$members"
+  shared_drive_ramp shared-drive-ramp ACTORS_DOMAIN="$org" "${ramp[@]}"
+  org_drive_fanout org-drive-fanout FANOUT_ORG_DOMAIN="$org" "${fanout[@]}"
+  run_step seed-org-cleanup cleanup '' seed-org-cleanup SEED_DOMAIN="$org"
 }
