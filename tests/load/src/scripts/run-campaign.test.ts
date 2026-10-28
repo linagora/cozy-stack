@@ -300,11 +300,12 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     const dev = await runCampaign(t, '', plays, undefined, { campaign, env: {
       LOAD_TARGET: 'dev', DEV_LOCK_FILE: join(mkdtempSync(join(tmpdir(), 'dev-campaign-')), 'shared-dev.lock') } })
     equal(dev.code, 0, dev.log)
-    deepEqual(dev.targets, ['upload-capacity', 'shared-drive-ramp', 'org-drive-fanout'])
-    deepEqual(dev.commands.map(command => setting(command, 'LOAD_TARGET')), ['dev', 'dev', 'dev'])
+    deepEqual(dev.targets, ['upload-capacity', 'shared-drive-ramp', 'org-drive-fanout', 'mixed-capacity'])
+    deepEqual(dev.commands.map(command => setting(command, 'LOAD_TARGET')), ['dev', 'dev', 'dev', 'dev'])
     deepEqual([setting(dev.commands[0], 'MAX_VUS'), setting(dev.commands[0], 'MAX_UPLOAD_BYTES'),
-      setting(dev.commands[1], 'RAMP_LEVELS'), setting(dev.commands[2], 'FANOUT_LEVELS')],
-    [vus ?? '128', '2560M', devLevels, devLevels])
+      setting(dev.commands[1], 'RAMP_LEVELS'), setting(dev.commands[2], 'FANOUT_LEVELS'),
+      setting(dev.commands[3], 'MIXED_RATES'), setting(dev.commands[3], 'MAX_VUS')],
+    [vus ?? '128', '2560M', devLevels, devLevels, devLevels, '129'])
   }
 })
 

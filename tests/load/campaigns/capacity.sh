@@ -12,6 +12,7 @@ elif [ "${SHARED_DEV:-}" = 1 ]; then
   upload=(BASELINE_ITERATIONS=50 CONFIRMATION_ITERATIONS=20)
   ramp=(RAMP_LEVELS=1,2,4,8,16)
   fanout=(FANOUT_LEVELS=1,2,4,8,16)
+  mixed=(MIXED_RATES=1,2,4,8,16)
 else
   # Past the limits seen on the load VM, so each search ends on a failing level.
   upload=(BASELINE_ITERATIONS=50 CONFIRMATION_ITERATIONS=20)
@@ -21,12 +22,14 @@ else
   mixed=(MIXED_RATES=1,2,4,8,16,32)
 fi
 # Shared DEV budgets, agreed with the DEV owner: raise them only with that agreement. The ladders come
-# last, so a smoke ladder stays below them. DEV needs DEV_INSTANCE and the Cloudery token and manifest
-# (README, Shared DEV).
+# last, so a smoke ladder stays below them. DEV needs DEV_INSTANCE and the Cloudery token and manifest,
+# and MIXED_DOMAIN and SEED_MANIFEST for the tree fixture (README, Shared DEV).
 if [ "${SHARED_DEV:-}" = 1 ]; then
   upload=(MAX_VUS=128 MAX_UPLOAD_BYTES=2560M MAX_RUNTIME=90m UPLOAD_TIMEOUT=60s "${upload[@]}")
   ramp=(MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m "${ramp[@]}")
   fanout=(MAX_RUNTIME=30m "${fanout[@]}")
+  # 8 VUs per workflow/s at 16/s, and the observer.
+  mixed=(MAX_VUS=129 MAX_REQUESTS=8000 MAX_UPLOAD_BYTES=4M MAX_RUNTIME=20m "${mixed[@]}")
 fi
 
 # A fresh seeded fixture's domain on the bundled Stack.
@@ -39,6 +42,7 @@ campaign() {
     upload_capacity upload-capacity FILE_SIZE=100K "${upload[@]}"
     shared_drive_ramp shared-drive-ramp "${ramp[@]}"
     org_drive_fanout org-drive-fanout "${fanout[@]}"
+    mixed_capacity mixed-capacity "${mixed[@]}"
     return
   fi
   # Locally, every step uses the bundled Stack and the instance and token this writes to .env.
@@ -52,7 +56,7 @@ campaign() {
   shared_drive_ramp shared-drive-ramp ACTORS_DOMAIN="$org" "${ramp[@]}"
   org_drive_fanout org-drive-fanout FANOUT_ORG_DOMAIN="$org" "${fanout[@]}"
   run_step seed-org-cleanup cleanup '' seed-org-cleanup SEED_DOMAIN="$org"
-  # The mixed workload reads and writes its own tree fixture; shared DEV has no tree fixture yet.
+  # The mixed workload reads and writes its own tree fixture; shared DEV keeps a seeded one.
   tree=$(fixture_domain)
   echo "Tree fixture: $tree (make seed-scale-cleanup SEED_DOMAIN=$tree removes it)"
   run_step seed-tree prepare '' seed-scale SEED_PROFILE=tree SEED_DOMAIN="$tree"

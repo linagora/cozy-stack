@@ -48,6 +48,19 @@ and `sharing.auto_accept_trusted`, or the seed fails. The seed ends with a
 tokens. Offers default to `b2b_org_default` and `b2b_twake_default`
 (`SEED_CLOUDERY_ORG_OFFER`, `SEED_CLOUDERY_MEMBER_OFFER`).
 
+With the token file, `seed-scale` seeds the [tree profile](#profiles) instead,
+in one new `twake_default` instance named `<prefix>.<domain>`, outside any
+organization. It refuses an existing instance. `seed-verify` checks the
+instance's UUID and every recorded object, and the mixed workload runs it
+before and after each DEV run. `seed-scale-cleanup` deletes the instance and
+releases its name. The [fixture manifest](#fixture-manifest) goes to
+`SEED_MANIFEST` (default `data/results/<prefix>-fixture.json`):
+
+```sh
+export SEED_CLOUDERY_PREFIX=<tree prefix> SEED_MANIFEST=~/private/<tree prefix>-fixture.json
+make seed-scale && make seed-verify   # make seed-scale-cleanup removes it
+```
+
 ## Build once
 
 Use Node 22 or newer and run `npm ci` in `tests/load`. The target must be a

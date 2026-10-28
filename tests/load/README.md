@@ -36,8 +36,9 @@ separate future scenarios.
   checkout (`make cozy-prepare`), then seeds one organization for the ramp's
   members and the group fan-out and a tree fixture for the
   [mixed workload](#mixed-workload), and removes both after their steps.
-- Shared DEV needs `SEED_CLOUDERY_TOKEN_FILE`, `SEED_CLOUDERY_MANIFEST` and
-  `DEV_INSTANCE`, holds the shared DEV lock and uses the budgets agreed with the
+- Shared DEV needs `SEED_CLOUDERY_TOKEN_FILE`, `SEED_CLOUDERY_MANIFEST`,
+  `DEV_INSTANCE`, and `MIXED_DOMAIN` with `SEED_MANIFEST` for its seeded tree
+  fixture. It holds the shared DEV lock and uses the budgets agreed with the
   DEV owner, in `campaigns/capacity.sh` ([Shared DEV](#shared-dev)).
 - Each run writes `data/results/campaigns/<run id>-<name>/summary.md`, with a
   Grafana link per step, and exits 0 when completed, 1 on a proven correctness
@@ -566,8 +567,12 @@ checked: a response that cannot be checked keeps the run from passing.
 Dropped workflows while every operation met its limits mean
 the generator fell behind: inconclusive, exit 2. With a slow or failing
 target, they are part of that regression, exit 1. Wrong metadata or a
-wrongly recorded upload exits 1. Shared DEV has no tree fixture yet, so the
-workload runs locally only.
+wrongly recorded upload exits 1. On shared DEV (`LOAD_TARGET=dev`), the
+workload runs against a tree fixture seeded through the Cloudery
+([SEEDING.md](SEEDING.md#shared-dev-through-the-cloudery)), under the shared DEV
+lock and with all four budgets. It first removes what an interrupted earlier
+run left in the fixture. A soak needs the Stack admin metrics, so it runs locally
+only.
 
 ### Capacity
 
@@ -791,7 +796,9 @@ make upload-capacity FILE_SIZE=1M MAX_VUS=8 MAX_UPLOAD_BYTES=160M MAX_RUNTIME=30
   BASELINE_ITERATIONS=10 CONFIRMATION_ITERATIONS=20
 make shared-drive-ramp MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m
 make org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m   # ORG-DRIVE-FANOUT.md
-make campaign CAMPAIGN=capacity   # all three, with the budgets in campaigns/capacity.sh
+export MIXED_DOMAIN=<tree prefix>.<domain> SEED_MANIFEST=~/private/<tree prefix>-fixture.json
+make mixed-capacity MIXED_RATES=1,2,4,8,16 MAX_VUS=129 MAX_REQUESTS=8000 MAX_UPLOAD_BYTES=4M MAX_RUNTIME=20m
+make campaign CAMPAIGN=capacity   # all four, with the budgets in campaigns/capacity.sh
 ```
 
 The [load test dashboard](CAPACITY-OVERVIEW.md) uses **Environment → Mode → Run**

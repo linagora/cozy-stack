@@ -1,5 +1,5 @@
 // Runs the mixed arrival-rate workload (README, Mixed workload) against a verified tree fixture
-// (SEEDING.md, Profiles) on a local Stack, through the exact-work runner (upload/exact-work.ts).
+// (SEEDING.md, Profiles) on a local Stack or shared DEV, through the exact-work runner (upload/exact-work.ts).
 // Budgets are checked before any request, the fixture is verified before and after the run, and the
 // run's own uploads are removed. k6 judges the rates; this runner adds what it verified.
 import { spawnSync } from 'node:child_process'
@@ -15,8 +15,9 @@ import { manifestPath, readManifest } from './fixture-manifest.ts'
 import { mixedCapacityEnvelope, mixedEnvelope, topologyOf } from './result-envelope.ts'
 import { getBytes, getDurationMs, getPositiveInteger } from './upload/campaign-config.ts'
 import {
-  check, harness, interruption, message, readVersions, runK6Work, stackClient, trapInterrupts, type Target,
+  check, harness, interruption, message, readVersions, recover, runK6Work, stackClient, trapInterrupts, type Target,
 } from './upload/exact-work.ts'
+import { devTarget } from './upload/targets.ts'
 
 type Env = Record<string, string | undefined>
 const ROOT = 'io.cozy.files.root-dir'
@@ -37,11 +38,15 @@ const LEVEL_OVERHEAD_MS = 60_000
 export function readConfig(env: Env) {
   const executionId = env.EXECUTION_ID || ''
   check(/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(executionId), 'EXECUTION_ID must be a file-name-safe ID')
-  // shortcut: the Cloudery seeder has no tree profile yet, so shared DEV has no fixture to run against.
-  check((env.LOAD_TARGET || 'local') === 'local', 'The mixed workload runs on a local tree fixture only')
+  const loadTarget = env.LOAD_TARGET || 'local'
+  check(loadTarget === 'local' || loadTarget === 'dev', 'LOAD_TARGET must be local or dev')
+  const dev = loadTarget === 'dev'
+  check(!dev || (env.MAX_VUS && env.MAX_REQUESTS && env.MAX_UPLOAD_BYTES && env.MAX_RUNTIME),
+    'Shared DEV needs MAX_VUS, MAX_REQUESTS, MAX_UPLOAD_BYTES and MAX_RUNTIME agreed with the DEV owner')
   const domain = env.MIXED_DOMAIN
   check(domain, 'MIXED_DOMAIN must name a tree fixture (make seed-scale SEED_PROFILE=tree)')
-  const manifest = readManifest(env.SEED_MANIFEST || manifestPath(domain), domain)
+  const manifestFile = env.SEED_MANIFEST || manifestPath(domain)
+  const manifest = readManifest(manifestFile, domain)
   const entry = manifest.instances[0]!
   // One instance: verifying and cleaning it then costs a known number of requests.
   check(manifest.status === 'complete' && manifest.profile === 'tree' && manifest.profile_version === TREE_VERSION &&
@@ -52,6 +57,7 @@ export function readConfig(env: Env) {
   check(['fixed', 'soak', 'capacity'].includes(profile), 'MIXED_PROFILE must be fixed, soak or capacity')
   const soak = profile === 'soak'
   const capacity = profile === 'capacity'
+  check(!dev || !soak, 'A soak samples the Stack admin metrics, which shared DEV does not expose')
   // A capacity search steps through increasing rates, one k6 run each; fixed and soak runs keep one rate.
   const rates = capacity ? (env.MIXED_RATES || '1,2,4,8').split(',').map(r => getPositiveInteger('MIXED_RATES', r))
     : [getPositiveInteger('MIXED_RATE', env.MIXED_RATE || '1')]
@@ -78,13 +84,14 @@ export function readConfig(env: Env) {
   // runs write to; count its pages too once fixtures are shared.
   const cleanupRequests = 2 * (Math.ceil(((entry.root_entries ?? 0) + 1) / 100) + 1) + 2
   // Each k6 run's setup creates its directory, which cleanup removes; the runner mints a token, reads the
-  // Stack version and, in a soak, samples the Stack's metrics before and after.
+  // Stack version and, in a soak, samples the Stack's metrics before and after. On shared DEV, the
+  // runner also reads the instance and lists the root and the trash for an earlier run's leftovers.
   const needs = {
     vus: Math.max(...levels.map(l => l.maxVus)) + observers, bytes: workflows * UPLOAD_BYTES,
     runtimeMs: rates.length * (warmupMs + graceMs + durationMs) + (rates.length - 1) * LEVEL_OVERHEAD_MS + drainMs +
       OVERHEAD_MS,
     requests: workflows * REQUESTS_PER_WORKFLOW + rates.length * (observers + 1 + cleanupRequests) +
-      2 * verifyRequests + 2 + (soak ? 2 : 0),
+      2 * verifyRequests + 2 + (soak ? 2 : 0) + (dev ? 3 : 0),
   }
   const budgets = {
     max_vus: env.MAX_VUS ? getPositiveInteger('MAX_VUS', env.MAX_VUS) : null,
@@ -108,8 +115,8 @@ export function readConfig(env: Env) {
   }
   check(Object.values(recovery).every(v => Number.isFinite(v) && v >= 1), 'Recovery growth limits must be at least 1')
   return {
-    executionId, domain, manifest, entry, profile, soak, capacity, rate, levels, durationMs, warmupMs, graceMs,
-    drainMs, maxVus, observers, needs, budgets, recovery, deadlineMs: runtimeMs, ...criteria(env),
+    executionId, loadTarget, domain, manifestFile, manifest, entry, profile, soak, capacity, rate, levels, durationMs,
+    warmupMs, graceMs, drainMs, maxVus, observers, needs, budgets, recovery, deadlineMs: runtimeMs, ...criteria(env),
   }
 }
 
@@ -185,10 +192,16 @@ function criteria(env: Env) {
   return { minSuccessRate, p95LimitMs }
 }
 
-// The fixture as seeded, or the reason it is not.
-function verify(domain: string): string {
-  const seeder = fileURLToPath(new URL('./seed-scale-data.ts', import.meta.url))
-  const run = spawnSync(process.execPath, ['--import', 'tsx', seeder, 'verify', domain], { encoding: 'utf8' })
+// The fixture as seeded, or the reason it is not: through the Stack admin API locally, through the
+// Cloudery on shared DEV.
+function verify({ loadTarget, domain }: { loadTarget: string, domain: string }): string {
+  const dev = loadTarget === 'dev'
+  const seeder = fileURLToPath(new URL(dev ? './seed-cloudery.ts' : './seed-scale-data.ts', import.meta.url))
+  const [prefix, ...suffix] = domain.split('.')
+  const run = spawnSync(process.execPath, ['--import', 'tsx', seeder, ...(dev ? ['verify-tree'] : ['verify', domain])], {
+    encoding: 'utf8',
+    env: dev ? { ...process.env, SEED_CLOUDERY_PREFIX: prefix, SEED_CLOUDERY_DOMAIN: suffix.join('.') } : process.env,
+  })
   return run.status === 0 ? '' : (run.stderr || run.stdout).trim().split('\n').at(-1) || `verify exited ${run.status}`
 }
 
@@ -256,35 +269,46 @@ async function main(): Promise<number> {
   }
 }
 
-async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<number> {
-  const startedAt = new Date().toISOString()
-  const deadline = Date.now() + config.deadlineMs
-  const { manifest, entry } = config
-  const before = verify(config.domain)
-  check(!before, `The fixture did not verify before the run: ${before}`)
-
+// The bundled Stack, with a token and metrics from its admin API.
+async function localTarget(env: Env, domain: string) {
   const stackOrigin = env.SEED_STACK_URL
   const adminURL = env.SEED_ADMIN_URL
   check(stackOrigin && adminURL && env.SEED_ADMIN_PASSWORD,
     'SEED_ADMIN_URL, SEED_ADMIN_PASSWORD and SEED_STACK_URL are required')
   const credentials = `${env.SEED_ADMIN_USERNAME || 'admin'}:${env.SEED_ADMIN_PASSWORD}`
-  const query = new URLSearchParams({ Domain: entry.domain, Audience: 'cli', Scope: 'io.cozy.files' })
+  const query = new URLSearchParams({ Domain: domain, Audience: 'cli', Scope: 'io.cozy.files' })
   const minted = await request(new URL(`/instances/token?${query}`, adminURL), 'POST',
     { Authorization: `Basic ${Buffer.from(credentials).toString('base64')}` }, 60_000)
   check(minted.status === 200 && minted.body && !/[\s\x00-\x1f\x7f]/.test(minted.body), 'Invalid instance token')
   const token = minted.body
+  const scheme = new URL(stackOrigin).protocol
+  const target: Target = {
+    kind: 'local', baseUrl: `${scheme}//${domain}`, lockedUrls: [], maxPointMs: Infinity,
+    makeArgs: [`ACTOR_HOSTS=${new URL(`${scheme}//${domain}`).hostname}=${stackAddress()}`],
+    session: async () => ({ token, stack: stackClient(stackOrigin, domain, token) }),
+  }
   const resources = async () => parseResources((await request(new URL('/metrics', adminURL), 'GET',
     { Authorization: `Basic ${Buffer.from(credentials).toString('base64')}` }, 60_000)).body)
-  const resourcesBefore = config.soak ? await resources() : null
+  return { target, resources }
+}
+
+async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<number> {
+  const startedAt = new Date().toISOString()
+  const deadline = Date.now() + config.deadlineMs
+  const { manifest, entry } = config
+  const { target, resources } = config.loadTarget === 'dev'
+    // The Cloudery mints each rate's token for the fixture instance alone; k6 reaches DEV by name.
+    ? { target: { ...await devTarget({ ...env, DEV_INSTANCE: entry.domain, SEED_CLOUDERY_MANIFEST: config.manifestFile }),
+      makeArgs: [] }, resources: null }
+    : await localTarget(env, entry.domain)
+  // The DEV fixture outlives runs: what an interrupted earlier run left in it goes first, under the DEV lock.
+  if (config.loadTarget === 'dev') await recover(target)
+  const before = verify(config)
+  check(!before, `The fixture did not verify before the run: ${before}`)
+  const resourcesBefore = config.soak ? await resources!() : null
   const files = treeFiles(manifest.generation_seed!)
     .map((f, index) => ({ id: entry.files[index]!, md5: f.md5, size: f.size }))
   const fixture = JSON.stringify({ dirs: [ROOT, ...entry.dirs ?? []], files })
-  const scheme = new URL(stackOrigin).protocol
-  const target: Target = {
-    kind: 'local', baseUrl: `${scheme}//${entry.domain}`, lockedUrls: [], maxPointMs: Infinity,
-    makeArgs: [`ACTOR_HOSTS=${new URL(`${scheme}//${entry.domain}`).hostname}=${stackAddress()}`],
-    session: async () => ({ token, stack: stackClient(stackOrigin, entry.domain, token) }),
-  }
 
   // One k6 run at one rate, under its own ID. An interruption stops k6; the run's directory, including
   // writes still landing, is removed after it.
@@ -312,7 +336,8 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
     return { work, verdict, problems, reportPath }
   }
   const context = (versions: Record<string, string>, endedAt: string) => ({
-    interrupted: interruption() !== null, versions, topology: topologyOf('local'), start: startedAt, end: endedAt,
+    interrupted: interruption() !== null, versions, topology: topologyOf(config.loadTarget), start: startedAt,
+    end: endedAt,
   })
 
   if (config.capacity) {
@@ -328,10 +353,10 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
       if (problems.length || verdict?.status !== 'passed' || interruption() !== null) break
     }
     // Every run's own directory is gone by now, so the fixture must verify as seeded.
-    const after = verify(config.domain)
+    const after = verify(config)
     const endedAt = new Date().toISOString()
     const report: Record<string, any> = {
-      mode: 'capacity', unit: 'workflows/s', load_target: 'local', fixture: config.domain,
+      mode: 'capacity', unit: 'workflows/s', load_target: config.loadTarget, fixture: config.domain,
       dataset: { profile: 'tree', version: TREE_VERSION }, budgets: config.budgets, needs: config.needs,
       plan: { rates: config.levels.map(l => l.rate), duration_s: config.durationMs / 1000,
         observers: config.observers },
@@ -359,16 +384,16 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
   if (interruption() === null) await new Promise(resolve => setTimeout(resolve, config.drainMs))
   const drainEndedAt = new Date().toISOString()
   // The run's own directory is gone by now, so the fixture must verify as seeded.
-  const after = verify(config.domain)
+  const after = verify(config)
   let resourcesAfter: Record<string, number> | null = null
   let resourceProblem = ''
-  try { resourcesAfter = resourcesBefore && await resources() } catch (error) { resourceProblem = message(error) }
+  try { resourcesAfter = resourcesBefore && await resources!() } catch (error) { resourceProblem = message(error) }
   const endedAt = new Date().toISOString()
 
   const problems = [...workProblems, ...(after ? [`the fixture did not verify after the run: ${after}`] : []),
     resourceProblem].filter(Boolean)
   const report: Record<string, any> = {
-    ...verdict, problems, load_target: 'local', fixture: config.domain, budgets: config.budgets,
+    ...verdict, problems, load_target: config.loadTarget, fixture: config.domain, budgets: config.budgets,
     needs: config.needs, cleanup: work.cleanup, k6: work.k6, started_at: startedAt, ended_at: endedAt,
     profile: config.profile,
     // Warm-up and steady activity run in one k6 run; the drain and the final verification follow it.

@@ -1,13 +1,13 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
-import {
-  nameOf, parentOf, TREE, TREE_DRIVE, TREE_VERSION, treeContent, treeDigest, treeFiles, type TreeFile,
-} from './dataset-profile.ts'
-import { FixtureError as CliError, request, type Reply } from './fixture-http.ts'
+import { TREE_VERSION, treeDigest, treeFiles, type TreeFile } from './dataset-profile.ts'
+import { FixtureError as CliError, request } from './fixture-http.ts'
 import {
   manifestPath, readManifest, removeManifest, writeManifest, type FixtureManifest, type ManifestInstance,
 } from './fixture-manifest.ts'
-import { createSharedDrive } from './prepare-shared-drive.ts'
+import {
+  addDrive, checkDriveRoot, expectStatus, resource, rootEntries, verifyTree, writeTree, type PublicAPI, type Resource,
+} from './tree-fixture.ts'
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new CliError(message)
@@ -43,29 +43,6 @@ function origin(name: string): URL {
   }
 }
 
-function expectStatus(reply: Reply, status: number): Reply {
-  check(reply.status === status, `Unexpected API status: HTTP ${reply.status}`)
-  return reply
-}
-
-interface Resource {
-  id: string
-  type?: string
-  attributes?: {
-    domain?: string, uuid?: string, type?: string, org_id?: string, org_domain?: string, context?: string,
-    md5sum?: string, size?: string, dir_id?: string, name?: string
-  }
-  relationships?: {
-    referenced_by?: { data?: Array<{ type?: string, id?: string }> }, contents?: { meta?: { count?: number } }
-  }
-}
-function resource(reply: Reply): Resource {
-  let data: Resource | undefined
-  try { data = JSON.parse(reply.body)?.data } catch { throw new CliError('Invalid API JSON') }
-  check(data && typeof data.id === 'string' && data.id.trim(), 'Invalid API resource')
-  return data
-}
-
 // Instances created without a UUID (e.g. `cozy-stack instances add`) are ordinary
 // registry entries; only fixture instances must carry one.
 function identity(item: Resource, requireUUID = true): boolean {
@@ -75,25 +52,6 @@ function identity(item: Resource, requireUUID = true): boolean {
 }
 
 const ROOT = 'io.cozy.files.root-dir'
-
-type PublicAPI = (method: string, path: string, body?: string | Buffer, headers?: Record<string, string>) =>
-  Promise<Reply>
-
-async function checkDriveRoot(api: PublicAPI, root: string, sharing: string): Promise<void> {
-  const dir = resource(expectStatus(await api('GET', `/files/${encodeURIComponent(root)}`), 200))
-  const refs = dir.relationships?.referenced_by?.data
-  const backlink = Array.isArray(refs) && refs.some((ref) => ref?.type === 'io.cozy.sharings' && ref.id === sharing)
-  check(dir.id === root && dir.type === 'io.cozy.files' && dir.attributes?.type === 'directory' && backlink,
-    'Shared-drive root or backlink mismatch')
-}
-
-// The Stack counts root entries without the trash.
-async function rootEntries(api: PublicAPI): Promise<number> {
-  const root = resource(expectStatus(await api('GET', '/files/io.cozy.files.root-dir?page[limit]=1'), 200))
-  const entries = root.relationships?.contents?.meta?.count
-  check(Number.isSafeInteger(entries) && entries! >= 0, 'Invalid root directory count')
-  return entries!
-}
 
 function partial(error: unknown, domain: string): CliError {
   const message = error instanceof CliError ? error.message : 'Seed API operation failed'
@@ -138,7 +96,7 @@ async function main(): Promise<void> {
       request(new URL(path, stackURL), method, {
         ...headers, Host: name, Authorization: `Bearer ${accessToken}`,
       }, timeout, body)
-    return { accessToken, api }
+    return { api }
   }
   if (command === 'cleanup') {
     // Only recorded identities are deleted: a planned UUID also proves a creation whose reply was lost.
@@ -270,33 +228,14 @@ async function main(): Promise<void> {
         entry.drives.length === (populated ? parameters.drives : 0), `${entry.domain} lacks recorded objects`)
       if (!populated || (!parameters.files && !parameters.drives)) continue
       const { api } = await session(stackURL, entry.domain)
-      const read = async (id: string) =>
-        resource(expectStatus(await api('GET', `/files/${encodeURIComponent(id)}`), 200))
       if (manifest.profile === 'tree') {
-        // Every directory and file sits under its profile parent, with its name, size and bytes.
-        const tree = treeFiles(manifest.generation_seed!)
-        const dirs = entry.dirs ?? []
-        check(dirs.length === TREE.dirs.length, `${entry.domain} lacks recorded directories`)
-        const parents = new Map<string, string>([['.', ROOT], [TREE_DRIVE, entry.drives[0]!.root]])
-        TREE.dirs.forEach((path, index) => parents.set(path, dirs[index]!))
-        for (const [index, path] of TREE.dirs.entries()) {
-          const dir = await read(dirs[index]!)
-          check(dir.attributes?.type === 'directory' && dir.attributes.name === nameOf(path) &&
-            dir.attributes.dir_id === parents.get(parentOf(path)), `${entry.domain}: directory ${path} changed`)
-        }
-        for (const [index, expected] of tree.entries()) {
-          const file = await read(entry.files[index]!)
-          const parent = parents.get(parentOf(expected.path))
-          check(file.attributes?.md5sum === expected.md5 && Number(file.attributes.size) === expected.size &&
-            file.attributes.name === nameOf(expected.path) && file.attributes.dir_id === parent,
-          `${entry.domain}: file ${expected.path} changed`)
-        }
-      } else {
-        for (const id of entry.files) {
-          const file = await read(id)
-          check(file.id === id && file.attributes?.md5sum === content.md5 && Number(file.attributes.size) ===
-            content.bytes && file.attributes.dir_id === ROOT, `${entry.domain}: file ${id} changed`)
-        }
+        await verifyTree(api, manifest.generation_seed!, entry)
+        continue
+      }
+      for (const id of entry.files) {
+        const file = resource(expectStatus(await api('GET', `/files/${encodeURIComponent(id)}`), 200))
+        check(file.id === id && file.attributes?.md5sum === content.md5 && Number(file.attributes.size) ===
+          content.bytes && file.attributes.dir_id === ROOT, `${entry.domain}: file ${id} changed`)
       }
       for (const drive of entry.drives) await checkDriveRoot(api, drive.root, drive.sharing)
       const entries = await rootEntries(api)
@@ -364,41 +303,9 @@ async function main(): Promise<void> {
   const populate = async (entry: ManifestInstance): Promise<void> => {
     if (!files && !drives) return
     if (organization) console.log(`Seed owner: ${entry.domain}; files=${files}; drives=${drives}`)
-    const { accessToken, api: publicAPI } = await session(stackURL, entry.domain)
-    const createDrive = async (driveName: string) => {
-      const drive = await createSharedDrive({
-        baseUrl: stackURL!.origin, accessToken, driveName,
-        fetcher: async (input, init) => {
-          const headers = Object.fromEntries(new Headers(init?.headers))
-          const path = new URL(String(input)).pathname
-          const reply = expectStatus(await publicAPI(init?.method ?? 'GET', path,
-            String(init?.body ?? ''), headers), 201)
-          return new Response(reply.body, { status: reply.status })
-        },
-      })
-      check(typeof drive.sharingId === 'string' && drive.sharingId.trim() &&
-        typeof drive.rootDirectoryId === 'string' && drive.rootDirectoryId.trim(), 'Invalid shared-drive identity')
-      await checkDriveRoot(publicAPI, drive.rootDirectoryId, drive.sharingId)
-      entry.drives.push({ sharing: drive.sharingId, root: drive.rootDirectoryId })
-      return drive.rootDirectoryId
-    }
-    const add = async (parent: string, query: Record<string, string>, content: Buffer | '' = '') => resource(
-      expectStatus(await publicAPI('POST', `/files/${encodeURIComponent(parent)}?${new URLSearchParams(query)}`,
-        content, content ? { 'Content-Type': 'application/octet-stream',
-          'Content-MD5': createHash('md5').update(content).digest('base64') } : {}), 201)).id
+    const { api: publicAPI } = await session(stackURL, entry.domain)
     if (tree) {
-      const parents = new Map<string, string>([['.', ROOT], [TREE_DRIVE, await createDrive('Seed tree drive')]])
-      for (const path of TREE.dirs) {
-        const id = await add(parents.get(parentOf(path))!, { Type: 'directory', Name: nameOf(path) })
-        parents.set(path, id)
-        entry.dirs!.push(id)
-      }
-      for (const { path, size } of tree) {
-        const content = treeContent(generationSeed, path, size)
-        entry.files.push(await add(parents.get(parentOf(path))!, { Type: 'file', Name: nameOf(path) }, content))
-        uploaded += size
-      }
-      entry.root_entries = await rootEntries(publicAPI)
+      uploaded += await writeTree(publicAPI, generationSeed, entry)
       return
     }
     for (let index = 1; index <= files; index++) {
@@ -409,7 +316,7 @@ async function main(): Promise<void> {
       entry.files.push(file.id)
       uploaded += body.length
     }
-    for (let index = 1; index <= drives; index++) await createDrive(`Seed shared drive ${index}`)
+    for (let index = 1; index <= drives; index++) await addDrive(publicAPI, entry, `Seed shared drive ${index}`)
     entry.root_entries = await rootEntries(publicAPI)
   }
   let recording = false

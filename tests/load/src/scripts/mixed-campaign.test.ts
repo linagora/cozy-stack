@@ -42,7 +42,14 @@ test('budgets are checked against what the arrivals can need, before any request
     ['MAX_UPLOAD_BYTES', '100K', /bytes/], ['MAX_RUNTIME', '3m', /minutes/]] as const) {
     throws(() => readConfig({ ...env, [name]: value }), reason)
   }
-  throws(() => readConfig({ ...env, LOAD_TARGET: 'dev' }), /local tree fixture/)
+  // Shared DEV runs only within budgets its owner agreed, and never a soak: that needs the admin API.
+  throws(() => readConfig({ ...env, LOAD_TARGET: 'dev' }), /agreed with the DEV owner/)
+  const dev = { ...env, LOAD_TARGET: 'dev', MAX_VUS: '9', MAX_REQUESTS: '408', MAX_UPLOAD_BYTES: '121K',
+    MAX_RUNTIME: '4m' }
+  deepEqual([readConfig(dev).loadTarget, readConfig(dev).needs.requests], ['dev', 408])
+  throws(() => readConfig({ ...dev, MAX_REQUESTS: '407' }), /requests/)
+  throws(() => readConfig({ ...dev, MIXED_PROFILE: 'soak' }), /shared DEV/)
+  throws(() => readConfig({ ...env, LOAD_TARGET: 'prod' }), /LOAD_TARGET/)
   throws(() => readConfig({ ...env, MIXED_DOMAIN: '' }), /MIXED_DOMAIN/)
   throws(() => readConfig({ ...env, MIXED_OBSERVERS: '-1' }), /MIXED_OBSERVERS/)
   // Unreadable criteria would pass every comparison in k6.

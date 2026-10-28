@@ -44,7 +44,9 @@ export async function devTarget(env: Env): Promise<Target> {
   check((env.UPLOAD_TARGET || 'personal') === 'personal', 'Shared DEV uploads to the personal drive only')
   const fqdn = setting(env, 'DEV_INSTANCE')
   const fixture = parse(readFileSync(setting(env, 'SEED_CLOUDERY_MANIFEST'), 'utf8'))
-  const entry = fixture.instances?.find((i: { fqdn: string }) => i.fqdn === fqdn)
+  // An organization manifest names its instances fqdn, a tree fixture manifest (fixture-manifest.ts) domain.
+  const name = (i: { fqdn?: string, domain?: string }) => i.fqdn ?? i.domain
+  const entry = fixture.instances?.find((i: { fqdn?: string }) => name(i) === fqdn)
   check(entry?.uuid, `${fqdn} is not in the fixture manifest`)
   const secrets = parse(readFileSync(setting(env, 'SEED_CLOUDERY_TOKEN_FILE'), 'utf8'))
   check(secrets.public && secrets.manager_url, 'The token file needs public and manager_url')
@@ -65,7 +67,7 @@ export async function devTarget(env: Env): Promise<Target> {
     baseUrl: `https://${fqdn}`,
     makeArgs: ['UPLOAD_TARGET=personal'],
     // One lock covers the whole shared DEV fixture.
-    lockedUrls: (fixture.instances as Array<{ fqdn: string }>).map(i => `https://${i.fqdn}`),
+    lockedUrls: (fixture.instances as Array<{ fqdn?: string }>).map(i => `https://${name(i)}`),
     maxPointMs: 20 * 60_000,
     session,
   }

@@ -46,6 +46,11 @@ test('A Cloudery token file switches organization seeding and cleanup to the Clo
     ['src/scripts/seed-cloudery.ts', 'seed'])
   deepEqual(run(t, 'seed-org-cleanup', { SEED_CLOUDERY_TOKEN_FILE: 'token.json' }).args,
     ['src/scripts/seed-cloudery.ts', 'teardown'])
+  // The Cloudery seeds the tree profile only.
+  for (const [target, command] of [['seed-scale', 'seed-tree'], ['seed-verify', 'verify-tree'],
+    ['seed-scale-cleanup', 'teardown-tree']] as const) {
+    deepEqual(run(t, target, { SEED_CLOUDERY_TOKEN_FILE: 'token.json' }).args, ['src/scripts/seed-cloudery.ts', command])
+  }
 })
 
 test('Make keeps an explicit organization cleanup domain in one argument', t => {

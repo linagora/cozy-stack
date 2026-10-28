@@ -128,14 +128,28 @@ $(NODE_MODULES_MARKER): package.json package-lock.json
 install: $(NODE_MODULES_MARKER)
 
 .PHONY: seed-scale seed-scale-cleanup seed-verify
+# A Cloudery token file seeds, verifies and removes one tree profile instance through the Cloudery
+# instead (SEEDING.md).
 seed-scale: $(NODE_MODULES_MARKER)
+ifdef SEED_CLOUDERY_TOKEN_FILE
+	@$(NODE_BIN)/tsx src/scripts/seed-cloudery.ts seed-tree
+else
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts seed $${SEED_DOMAIN:+"$$SEED_DOMAIN"}
+endif
 
 seed-scale-cleanup: $(NODE_MODULES_MARKER)
+ifdef SEED_CLOUDERY_TOKEN_FILE
+	@$(NODE_BIN)/tsx src/scripts/seed-cloudery.ts teardown-tree
+else
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts cleanup "$$SEED_DOMAIN"
+endif
 
 seed-verify: $(NODE_MODULES_MARKER)
+ifdef SEED_CLOUDERY_TOKEN_FILE
+	@$(NODE_BIN)/tsx src/scripts/seed-cloudery.ts verify-tree
+else
 	@$(NODE_BIN)/tsx src/scripts/seed-scale-data.ts verify "$$SEED_DOMAIN"
+endif
 
 .PHONY: seed-org seed-org-cleanup
 # A Cloudery token file seeds through the Cloudery partner API instead (SEEDING.md).
@@ -267,13 +281,14 @@ mixed-run: upload-binary observability-up
 		/scripts/mixed-workload.ts
 
 # A fixed arrival rate of workflows against a tree fixture (README, Mixed workload); mixed-soak keeps it
-# up for longer between a warm-up and a drain, and mixed-capacity steps through MIXED_RATES.
+# up for longer between a warm-up and a drain, and mixed-capacity steps through MIXED_RATES. LOAD_TARGET=dev
+# runs against the Cloudery tree fixture under the shared DEV lock.
 .PHONY: mixed-workload mixed-soak mixed-capacity
 mixed-soak: MIXED_PROFILE := soak
 mixed-capacity: MIXED_PROFILE := capacity
 mixed-workload mixed-soak mixed-capacity: $(NODE_MODULES_MARKER)
 	@MIXED_PROFILE="$(MIXED_PROFILE)" MIXED_RATES="$(MIXED_RATES)" MIXED_WARMUP="$(MIXED_WARMUP)" MIXED_DRAIN="$(MIXED_DRAIN)" SOAK_TRIAL="$(SOAK_TRIAL)" SOAK_MAX_GOROUTINE_GROWTH="$(SOAK_MAX_GOROUTINE_GROWTH)" SOAK_MAX_HEAP_GROWTH="$(SOAK_MAX_HEAP_GROWTH)" MIXED_DOMAIN="$(MIXED_DOMAIN)" MIXED_RATE="$(MIXED_RATE)" MIXED_DURATION="$(MIXED_DURATION)" MIXED_MAX_VUS="$(MIXED_MAX_VUS)" MIXED_OBSERVERS="$(MIXED_OBSERVERS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MAX_VUS="$(MAX_VUS)" MAX_REQUESTS="$(MAX_REQUESTS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" \
-		$(RECORD_EXIT) node --import tsx src/scripts/mixed-campaign.ts
+		$(RECORD_EXIT) $(if $(filter dev,$(LOAD_TARGET)),bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)") node --import tsx src/scripts/mixed-campaign.ts
 
 # The shared-drive ramp through the campaign runner: LOAD_TARGET=dev holds the shared DEV lock, as for
 # uploads. The runner creates or reuses the test drive itself.

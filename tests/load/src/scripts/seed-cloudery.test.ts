@@ -1,6 +1,6 @@
 import { deepEqual, equal, match, ok } from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -13,6 +13,7 @@ const domain = 'dev.example.test'
 const org = `seedtest.${domain}`
 const member = (i: number) => `seedtest${String(i).padStart(2, '0')}.${domain}`
 const unrelated = [`other01.${domain}`, `seedtestx01.${domain}`, `seedtestorg.${domain}`, 'seedtest01.other.test']
+const tree = `seedtree.${domain}`
 
 // One server plays the Cloudery (/api/...) and every Stack instance (by Host).
 async function fixture(t: TestContext) {
@@ -25,12 +26,15 @@ async function fixture(t: TestContext) {
   }
   const workflows = new Map<string, { polls: number, fqdn: string, done: () => void }>()
   const tokens = new Map<string, string>()
-  const files = new Map<string, string>()
+  // Every instance's files and directories, by ID.
+  const files = new Map<string, { body: Buffer, type: string, name: string, dir_id: string, refs?: object[] }>()
 
   const server = createServer(async (req, res) => {
-    let body = ''
-    for await (const chunk of req) body += chunk
-    const { pathname } = new URL(req.url!, 'http://x')
+    const chunks: Buffer[] = []
+    for await (const chunk of req) chunks.push(chunk)
+    const raw = Buffer.concat(chunks)
+    const body = raw.toString()
+    const { pathname, searchParams } = new URL(req.url!, 'http://x')
     const bearer = req.headers.authorization?.replace('Bearer ', '')
     const send = (status: number, value?: unknown) => {
       res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -53,7 +57,10 @@ async function fixture(t: TestContext) {
         const params = JSON.parse(body)
         const fqdn = `${params.slug}.${params.domain}`
         if (instances.has(fqdn) || state.used.has(fqdn)) return send(409, `${fqdn} is already taken`)
-        if (params.org_id !== 'seedtest' || !params.skip_email_validation) return send(400)
+        // A tree instance belongs to no organization.
+        const tree = params.slug === 'seedtree'
+        if (params.org_id !== (tree ? undefined : 'seedtest') || (tree && params.offer !== 'twake_default') ||
+          !params.skip_email_validation) return send(400)
         state.created.push(fqdn)
         state.emails.push(params.email)
         const _id = randomUUID()
@@ -92,19 +99,38 @@ async function fixture(t: TestContext) {
     if (!bearer || tokens.get(bearer) !== host) return send(401)
     const route = `${req.method} ${pathname}`
     if (route === 'GET /settings/instance') {
-      const orgID = host === state.foreign ? 'another' : 'seedtest'
+      const orgID = host === state.foreign ? 'another' : host === tree ? undefined : 'seedtest'
       return send(200, { data: { attributes: { org_id: orgID, uuid: instances.get(host)!._id } } })
     }
     if (route === 'GET /settings/context') {
       const autoAccept = host !== state.noAutoAccept
       return send(200, { data: { attributes: { common_contacts: autoAccept, sharing: { auto_accept_trusted: true } } } })
     }
-    if (route === 'POST /files/io.cozy.files.root-dir') {
+    if (route === 'POST /sharings/drives') {
+      const root = `drive-${files.size}`
+      files.set(root, { body: raw, type: 'directory', name: 'drive', dir_id: 'shared-drives',
+        refs: [{ type: 'io.cozy.sharings', id: `sharing-${root}` }] })
+      return send(201, { data: { id: `sharing-${root}`, attributes: { rules: [{ values: [root] }] } } })
+    }
+    if (route === 'GET /files/io.cozy.files.root-dir') {
+      const count = [...files.values()].filter(f => f.dir_id === 'io.cozy.files.root-dir').length
+      return send(200, { data: { id: 'io.cozy.files.root-dir', relationships: { contents: { meta: { count } } } } })
+    }
+    if (req.method === 'POST' && parts[1] === 'files') {
       const id = `file-${files.size}`
-      files.set(id, body)
+      files.set(id, { body: raw, type: searchParams.get('Type')!, name: searchParams.get('Name')!, dir_id: parts[2]! })
       return send(201, { data: { id } })
     }
-    if (route.startsWith('GET /files/download/')) return send(200, state.corrupt ? 'other bytes' : files.get(parts[3]!))
+    if (route.startsWith('GET /files/download/')) {
+      return send(200, state.corrupt ? 'other bytes' : files.get(parts[3]!)!.body.toString())
+    }
+    const file = files.get(parts[2] ?? '')
+    if (req.method === 'GET' && parts[1] === 'files' && file) {
+      return send(200, { data: { id: parts[2], type: 'io.cozy.files', attributes: {
+        type: file.type, name: file.name, dir_id: file.dir_id, size: String(file.body.length),
+        md5sum: createHash('md5').update(file.body).digest('base64'),
+      }, relationships: { referenced_by: { data: file.refs } } } })
+    }
     if (route.startsWith('DELETE /files/')) return send(200, {})
     send(500)
   })
@@ -143,7 +169,7 @@ async function fixture(t: TestContext) {
     const code = await new Promise<number | null>(resolve => child.on('close', resolve))
     return { code, output }
   }
-  return { state, run, manifest: () => JSON.parse(readFileSync(manifest, 'utf8')) }
+  return { state, files, run, manifest: () => JSON.parse(readFileSync(manifest, 'utf8')) }
 }
 
 test('seeds and reuses the organization with per-instance tokens only', async t => {
@@ -240,4 +266,36 @@ test('another organization\'s instance with a fixture name is never recorded, de
   match(result.output, /Kept instances not verified as organization seedtest: seedtest09\.dev\.example\.test/)
   deepEqual([...f.state.instances.keys()], [...unrelated, member(9)])
   deepEqual(f.state.released.sort(), [org, member(1), member(2), member(3)].sort())
+})
+
+test('a tree fixture is one instance outside any organization, verified and torn down by its manifest', async t => {
+  const f = await fixture(t)
+  const neighbour = `seedtree01.${domain}`
+  f.state.instances.set(neighbour, { _id: randomUUID(), fqdn: neighbour })
+  const manifest = join(mkdtempSync(join(tmpdir(), 'seed-tree-')), 'tree.json')
+  const env = { SEED_CLOUDERY_PREFIX: 'seedtree', SEED_MANIFEST: manifest }
+  const seed = await f.run('seed-tree', env)
+  equal(seed.code, 0, seed.output)
+  deepEqual(f.state.created, [tree])
+  deepEqual([...f.state.orgs], [])
+  const record = JSON.parse(readFileSync(manifest, 'utf8'))
+  deepEqual([record.profile, record.organization, record.status], ['tree', null, 'complete'])
+  deepEqual(record.instances.map((i: any) => [i.domain, i.files.length, i.dirs.length, i.drives.length, i.root_entries]),
+    [[tree, 7, 5, 1, 3]])
+
+  const verified = await f.run('verify-tree', env)
+  equal(verified.code, 0, verified.output)
+  match(verified.output, /Fixture verified: seedtree\.dev\.example\.test/)
+  const file = f.files.get(record.instances[0].files[0])!
+  f.files.set(record.instances[0].files[0], { ...file, body: Buffer.from('other bytes') })
+  const changed = await f.run('verify-tree', env)
+  equal(changed.code, 2)
+  match(changed.output, /seedtree\.dev\.example\.test: file readme\.txt changed/)
+
+  equal((await f.run('seed-tree', env)).code, 2)
+  const teardown = await f.run('teardown-tree', env)
+  equal(teardown.code, 0, teardown.output)
+  deepEqual([...f.state.instances.keys()], [...unrelated, neighbour])
+  deepEqual(f.state.released, [tree])
+  equal(f.state.adminCalls, 0)
 })
