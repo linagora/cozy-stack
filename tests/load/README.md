@@ -717,7 +717,8 @@ Budgets stay each runner's own (`MAX_VUS`, `MAX_REQUESTS`, `MAX_UPLOAD_BYTES`,
 Every search advances after each passing level and stops at the first that does
 not pass; the ramp and the mixed workload run each level in its own k6 run
 (`src/scripts/capacity/step-ramp.ts`). The first level must fit the budgets; a
-later level beyond them ends the search as a lower bound. The upload search
+later level beyond them, or one that would not finish within `MAX_RUNTIME`, ends
+the search as a lower bound. The upload search
 refines its result by bisection and confirmation; `CONFIRMATION_ITERATIONS=0`
 skips that and keeps the bracket its levels found. The result envelope's
 `capacity.stop` records why a search stopped: its first failing level and why,

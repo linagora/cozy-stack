@@ -130,6 +130,7 @@ export function readConfig(env: Env) {
     executionId, loadTarget, domain, manifestFile, manifest, entry, profile, soak, capacity, rate, levels, durationMs,
     warmupMs, graceMs, drainMs, maxVus, observers, needs, budgets, recovery, deadlineMs: runtimeMs, ...criteria(env),
     exceeds: (rate: number) => exceeds(rates.indexOf(rate) + 1),
+    levelMs: warmupMs + graceMs + durationMs + LEVEL_OVERHEAD_MS,
   }
 }
 
@@ -361,6 +362,7 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
   })
 
   if (config.capacity) {
+    // A rate that would run past MAX_RUNTIME ends the search before it, rather than being stopped.
     const search = await stepRamp(config.levels.map(l => l.rate), async rate => {
       const { maxVus } = config.levels.find(l => l.rate === rate)!
       const id = `${config.executionId}-r${rate}`
@@ -371,7 +373,8 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
       const level = { ...verdict, rate, max_vus: maxVus, execution_id: id, started_at: levelStartedAt,
         ended_at: new Date().toISOString(), problems, cleanup: work.cleanup, k6: work.k6 }
       return { ...level, ...judgeRate(level) }
-    }, { fits: config.exceeds, interrupted: () => interruption() !== null })
+    }, { fits: rate => config.exceeds(rate) || (Date.now() + config.levelMs > deadline ? 'MAX_RUNTIME' : ''),
+      interrupted: () => interruption() !== null })
     // Every run's own directory is gone by now, so the fixture must verify as seeded.
     const after = verify(config)
     const endedAt = new Date().toISOString()

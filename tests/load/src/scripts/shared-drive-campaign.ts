@@ -118,7 +118,8 @@ async function main(): Promise<number> {
       : 'its fixtures were removed'}`)
   })
 
-  // A level's k6 run shares the ramp's ID in k6 metrics, as a mixed search's rates do.
+  // A level's k6 run shares the ramp's ID in k6 metrics, as a mixed search's rates do. A level that would
+  // run past MAX_RUNTIME ends the ramp before it, rather than being stopped.
   const search = await stepRamp(config.plan.levels, async level => {
     const id = `${config.executionId}-l${level}`
     const startedAt = new Date().toISOString()
@@ -151,7 +152,8 @@ async function main(): Promise<number> {
         : result.status === 'failed' ? 'failed' as const : 'inconclusive' as const,
       reasons: result.reasons ?? [],
     }
-  }, { fits: config.exceeds, interrupted: () => interruption() !== null })
+  }, { fits: level => config.exceeds(level) || (Date.now() + config.levelMs > deadline ? 'MAX_RUNTIME' : ''),
+    interrupted: () => interruption() !== null })
   let accessFailure = ''
   let actorProblem = ''
   try { await actors?.finish() } catch (error) {
