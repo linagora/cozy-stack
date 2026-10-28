@@ -3,6 +3,7 @@ package orgdirectory
 import (
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
@@ -70,6 +71,26 @@ func singleManagedContact(matches []*contact.Contact, label string) (*contact.Co
 		return nil, fmt.Errorf("%w for %s", ErrMultipleManagedContacts, label)
 	}
 	return managed[0], nil
+}
+
+// FindGroupsByText finds managed groups belonging to the organization.
+func FindGroupsByText(inst *instance.Instance, organizationID, text string, limit int) ([]*contact.Group, error) {
+	if organizationID == "" {
+		return nil, nil
+	}
+	// shortcut: group-name search scans groups, add a search index if directories grow large.
+	req := managedDocsRequest(organizationID)
+	req.Selector = mango.And(req.Selector,
+		mango.Map{"_id": mango.Map{"$regex": "^b2b-group-"}},
+		mango.Map{"name": mango.Map{"$regex": "(*UTF8)(?i)" + regexp.QuoteMeta(text)}},
+	)
+	req.Limit = limit
+	var groups []*contact.Group
+	err := couchdb.FindDocsUnoptimized(inst, consts.Groups, req, &groups)
+	if couchdb.IsNoDatabaseError(err) || couchdb.IsNotFoundError(err) {
+		return nil, nil
+	}
+	return groups, err
 }
 
 func listManagedGroups(inst *instance.Instance, organizationID string) ([]*contact.Group, error) {
