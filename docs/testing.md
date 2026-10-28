@@ -25,6 +25,22 @@ Keep Go tests near their packages and reuse `tests/testutils`. Keep useful Ruby
 coverage; replace brittle waits and shared state incrementally. Retire legacy
 scalability scripts only when their coverage has an identified replacement.
 
+## Drive web E2E on demand
+
+Add `e2e:web` to a same-repository PR to build its merge commit and call Drive's
+existing four-shard web E2E workflow. Remove and re-add the label to test a newer
+commit; pushes alone do not trigger it. Fork PRs are skipped.
+
+The existing release script publishes one mutable Docker Hub tag per PR, such
+as `cozy/cozy-stack:e2e-pr5119-chore-drive-web-e2e-label`, using the existing
+Docker Hub secrets. Rebuilds overwrite it; release tags and `latest` are unchanged.
+Tags are not automatically deleted. Use **Re-run all jobs** to rebuild the
+original revision, since rerunning only web jobs pulls the current tag.
+
+The [caller](../.github/workflows/drive-web-e2e.yml) tests Drive's `master` branch.
+Its workflow reference stays pinned until the reusable workflow is merged into
+Drive's `master`, then it can use `@master`. Scribe and desktop app tests are excluded.
+
 ## Load-test lifecycle
 
 ```mermaid
