@@ -14685,6 +14685,1736 @@
             }
           }
         }
+      },
+      "panel-4001": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2040,
+          "title": "Workflows completed",
+          "description": "Workflows completed at every tested rate. Each workflow lists a fixture directory, reads and checks a fixture file and uploads 1 KiB.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_result_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"workflows_completed\"}",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "auto",
+                "reduceOptions": {
+                  "values": false,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": ""
+                },
+                "text": {
+                  "valueSize": 30,
+                  "titleSize": 12
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4002": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2041,
+          "title": "Highest tested rate",
+          "description": "The highest rate the search started; the Performance verdict gives the highest one that passed.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_result_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"highest_tested_rate\"}",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "auto",
+                "reduceOptions": {
+                  "values": false,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": ""
+                },
+                "text": {
+                  "valueSize": 30,
+                  "titleSize": 12
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "suffix: workflows/s",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4003": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2042,
+          "title": "Worst p95 \u00b7 highest passing rate",
+          "description": "The slowest operation's p95 at the highest rate that passed.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_result_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"worst_passing_p95_ms\"}",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "auto",
+                "reduceOptions": {
+                  "values": false,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": ""
+                },
+                "text": {
+                  "valueSize": 30,
+                  "titleSize": 12
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ms",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4004": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2043,
+          "title": "Dropped workflows",
+          "description": "Arrivals k6 could not start because every VU was busy, at every tested rate.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_result_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"dropped_workflows\"}",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "auto",
+                "reduceOptions": {
+                  "values": false,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": ""
+                },
+                "text": {
+                  "valueSize": 30,
+                  "titleSize": 12
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4005": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2044,
+          "title": "Tested rates",
+          "description": "Each row is one rate of the search, one k6 run. Inspect opens its workload and time range.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",kind=\"mixed\"}",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true,
+                        "Value": true,
+                        "__name__": true,
+                        "job": true,
+                        "instance": true,
+                        "campaign": true,
+                        "run": true,
+                        "kind": true,
+                        "load_target": true,
+                        "mode": true,
+                        "execution_id": true,
+                        "point_title": true,
+                        "p95": false,
+                        "window_recorded": true,
+                        "access": true,
+                        "revoked": true,
+                        "raw_start_ms": true,
+                        "raw_end_ms": true,
+                        "payload_bytes": true,
+                        "failures": true,
+                        "point_window": true,
+                        "point_only": true,
+                        "evidence": true,
+                        "phase": true,
+                        "recipient_revoked": true
+                      },
+                      "indexByName": {
+                        "inspect": 0,
+                        "load": 1,
+                        "completed": 2,
+                        "planned": 3,
+                        "p95": 4,
+                        "correctness": 5,
+                        "cleanup": 6,
+                        "status": 7,
+                        "reason": 8,
+                        "index": 9
+                      },
+                      "renameByName": {
+                        "inspect": "Inspect",
+                        "load": "Rate (workflows/s)",
+                        "completed": "Workflows completed",
+                        "planned": "Workflows offered",
+                        "p95": "Slowest operation p95",
+                        "correctness": "Content checks",
+                        "cleanup": "Cleanup",
+                        "status": "Outcome",
+                        "reason": "Reason",
+                        "index": "Step"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "table",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "showHeader": true,
+                "cellHeight": "sm",
+                "sortBy": [
+                  {
+                    "displayName": "Step",
+                    "desc": false
+                  }
+                ]
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Inspect"
+                    },
+                    "properties": [
+                      {
+                        "id": "links",
+                        "value": [
+                          {
+                            "title": "Inspect this tested point",
+                            "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=${__data.fields.point_id}&dtab=workload&from=${__data.fields.start_ms}&to=${__data.fields.end_ms}",
+                            "targetBlank": false
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "point_id"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hideFrom.viz",
+                        "value": true
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "start_ms"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hideFrom.viz",
+                        "value": true
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "end_ms"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hideFrom.viz",
+                        "value": true
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^(Content checks|Cleanup|Outcome)$"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "Verified": {
+                                "color": "green"
+                              },
+                              "passed": {
+                                "color": "green"
+                              },
+                              "Failed": {
+                                "color": "red"
+                              },
+                              "failed": {
+                                "color": "red"
+                              },
+                              "Unverified": {
+                                "color": "orange"
+                              },
+                              "Partial": {
+                                "color": "orange"
+                              },
+                              "generator_saturated": {
+                                "color": "orange"
+                              },
+                              "not_measured": {
+                                "color": "text"
+                              },
+                              "Not recorded": {
+                                "color": "text"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "color-text"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-4006": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2045,
+          "title": "Achieved rate by tested rate",
+          "description": "Workflows k6 started per second at each tested rate, against the offered rate. A gap means dropped arrivals.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "label_replace(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",kind=\"mixed\",metric=\"achieved_rate\"} * on(run,index) group_left(evidence) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\"}, \"metric\", \"achieved\", \"metric\", \".*\") or label_replace(label_replace(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",kind=\"mixed\",metric=\"load\"}, \"metric\", \"offered\", \"metric\", \".*\"), \"evidence\", \"Offered\", \"metric\", \".*\")",
+                        "format": "table",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true,
+                        "__name__": true,
+                        "job": true,
+                        "instance": true,
+                        "campaign": true,
+                        "kind": true,
+                        "load_target": true,
+                        "mode": true,
+                        "cleanup": true
+                      },
+                      "indexByName": {
+                        "load": 0,
+                        "Value": 1,
+                        "run": 2,
+                        "phase": 3,
+                        "index": 4
+                      },
+                      "renameByName": {}
+                    }
+                  }
+                },
+                {
+                  "kind": "convertFieldType",
+                  "spec": {
+                    "id": "convertFieldType",
+                    "options": {
+                      "conversions": [
+                        {
+                          "targetField": "load",
+                          "destinationType": "number"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "kind": "sortBy",
+                  "spec": {
+                    "id": "sortBy",
+                    "options": {
+                      "sort": [
+                        {
+                          "field": "load",
+                          "desc": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "kind": "partitionByValues",
+                  "spec": {
+                    "id": "partitionByValues",
+                    "options": {
+                      "fields": [
+                        "metric",
+                        "evidence"
+                      ],
+                      "keepFields": false,
+                      "naming": {
+                        "asLabels": true
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "xychart",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "mapping": "auto",
+                "series": [
+                  {
+                    "x": {
+                      "matcher": {
+                        "id": "byName",
+                        "options": "load"
+                      }
+                    },
+                    "y": {
+                      "matcher": {
+                        "id": "byName",
+                        "options": "Value"
+                      }
+                    }
+                  }
+                ],
+                "legend": {
+                  "showLegend": true,
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "none",
+                  "maxHeight": 300
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "noValue": "Not recorded",
+                  "unit": "none",
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "show": "points+lines",
+                    "lineWidth": 1,
+                    "pointSize": {
+                      "fixed": 5
+                    },
+                    "axisBorderShow": true,
+                    "axisGridShow": true
+                  },
+                  "displayName": "${__field.labels.metric} \u00b7 ${__field.labels.evidence}"
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "load"
+                    },
+                    "properties": [
+                      {
+                        "id": "unit",
+                        "value": "short"
+                      },
+                      {
+                        "id": "custom.axisLabel",
+                        "value": "Tested rate (workflows/s)"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Value"
+                    },
+                    "properties": [
+                      {
+                        "id": "unit",
+                        "value": "short"
+                      },
+                      {
+                        "id": "custom.axisLabel",
+                        "value": "Workflows per second"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": ".*(Unverified|Retained|Partial|Not recorded|Not measured).*"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "orange"
+                        }
+                      },
+                      {
+                        "id": "custom.show",
+                        "value": "points"
+                      },
+                      {
+                        "id": "custom.pointSize",
+                        "value": {
+                          "fixed": 8
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": ".*Failed.*"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "red"
+                        }
+                      },
+                      {
+                        "id": "custom.show",
+                        "value": "points"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": ".*Offered.*"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "text"
+                        }
+                      },
+                      {
+                        "id": "custom.lineStyle",
+                        "value": {
+                          "fill": "dash",
+                          "dash": [
+                            10,
+                            10
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-4007": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2046,
+          "title": "p95 by tested rate",
+          "description": "Each operation's p95 at each tested rate, against the run's p95 limit. Any operation over it fails the rate.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "label_replace(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",kind=\"mixed\",metric=~\"(list|metadata|upload)_p95_ms\"} * on(run,index) group_left(evidence) cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\"}, \"metric\", \"$1\", \"metric\", \"(list|metadata|upload)_p95_ms\") or label_replace(label_replace((cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",kind=\"mixed\",metric=\"load\"} * 0 + on(run) group_left() cozy_load_result_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",metric=\"p95_limit_ms\"}), \"metric\", \"p95 limit\", \"metric\", \".*\"), \"evidence\", \"Criterion\", \"metric\", \".*\")",
+                        "format": "table",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true,
+                        "__name__": true,
+                        "job": true,
+                        "instance": true,
+                        "campaign": true,
+                        "kind": true,
+                        "load_target": true,
+                        "mode": true,
+                        "cleanup": true
+                      },
+                      "indexByName": {
+                        "load": 0,
+                        "Value": 1,
+                        "run": 2,
+                        "phase": 3,
+                        "index": 4
+                      },
+                      "renameByName": {}
+                    }
+                  }
+                },
+                {
+                  "kind": "convertFieldType",
+                  "spec": {
+                    "id": "convertFieldType",
+                    "options": {
+                      "conversions": [
+                        {
+                          "targetField": "load",
+                          "destinationType": "number"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "kind": "sortBy",
+                  "spec": {
+                    "id": "sortBy",
+                    "options": {
+                      "sort": [
+                        {
+                          "field": "load",
+                          "desc": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "kind": "partitionByValues",
+                  "spec": {
+                    "id": "partitionByValues",
+                    "options": {
+                      "fields": [
+                        "metric",
+                        "evidence"
+                      ],
+                      "keepFields": false,
+                      "naming": {
+                        "asLabels": true
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "xychart",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "mapping": "auto",
+                "series": [
+                  {
+                    "x": {
+                      "matcher": {
+                        "id": "byName",
+                        "options": "load"
+                      }
+                    },
+                    "y": {
+                      "matcher": {
+                        "id": "byName",
+                        "options": "Value"
+                      }
+                    }
+                  }
+                ],
+                "legend": {
+                  "showLegend": true,
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "none",
+                  "maxHeight": 300
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "noValue": "Not recorded",
+                  "unit": "none",
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "show": "points+lines",
+                    "lineWidth": 1,
+                    "pointSize": {
+                      "fixed": 5
+                    },
+                    "axisBorderShow": true,
+                    "axisGridShow": true
+                  },
+                  "displayName": "${__field.labels.metric} \u00b7 ${__field.labels.evidence}"
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "load"
+                    },
+                    "properties": [
+                      {
+                        "id": "unit",
+                        "value": "short"
+                      },
+                      {
+                        "id": "custom.axisLabel",
+                        "value": "Tested rate (workflows/s)"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Value"
+                    },
+                    "properties": [
+                      {
+                        "id": "unit",
+                        "value": "ms"
+                      },
+                      {
+                        "id": "custom.axisLabel",
+                        "value": "p95 by operation"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": ".*(Unverified|Retained|Partial|Not recorded|Not measured).*"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "orange"
+                        }
+                      },
+                      {
+                        "id": "custom.show",
+                        "value": "points"
+                      },
+                      {
+                        "id": "custom.pointSize",
+                        "value": {
+                          "fixed": 8
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": ".*Failed.*"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "red"
+                        }
+                      },
+                      {
+                        "id": "custom.show",
+                        "value": "points"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": ".*p95 limit.*"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "red"
+                        }
+                      },
+                      {
+                        "id": "custom.show",
+                        "value": "lines"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-4008": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2047,
+          "title": "Workflows completed",
+          "description": "Workflows completed at the selected rates. Each workflow lists a fixture directory, reads and checks a fixture file and uploads 1 KiB.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "sum(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"mixed\",metric=\"achieved_workflows\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"mixed\",metric=\"achieved_workflows\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"mixed\"}))",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "auto",
+                "reduceOptions": {
+                  "values": false,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": ""
+                },
+                "text": {
+                  "valueSize": 30,
+                  "titleSize": 12
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4009": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2048,
+          "title": "Highest selected rate",
+          "description": "The highest of the selected rates.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"mixed\",metric=\"load\"})",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "auto",
+                "reduceOptions": {
+                  "values": false,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": ""
+                },
+                "text": {
+                  "valueSize": 30,
+                  "titleSize": 12
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "suffix: workflows/s",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4010": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2049,
+          "title": "Worst p95 \u00b7 selected rates",
+          "description": "The slowest operation's p95 at the selected rates.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "max(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"mixed\",metric=~\"(list|metadata|upload)_p95_ms\"})",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "auto",
+                "reduceOptions": {
+                  "values": false,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": ""
+                },
+                "text": {
+                  "valueSize": 30,
+                  "titleSize": 12
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ms",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4011": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2050,
+          "title": "Dropped workflows",
+          "description": "Arrivals k6 could not start because every VU was busy, at the selected rates.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "sum(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"mixed\",metric=\"dropped_workflows\"}) and on() (count(cozy_load_point_value{load_target=\"$env\",mode=\"$mode\",run=\"$run\",index=~\"$point_index\",kind=\"mixed\",metric=\"dropped_workflows\"}) == count(cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",point_id=~\"$point\",kind=\"mixed\"}))",
+                        "instant": true,
+                        "range": false,
+                        "format": "time_series"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "auto",
+                "reduceOptions": {
+                  "values": false,
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": ""
+                },
+                "text": {
+                  "valueSize": 30,
+                  "titleSize": 12
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4012": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2051,
+          "title": "Requests per second by operation",
+          "description": "Requests per second each operation sent, over the rates' k6 runs. Each workflow sends one of each.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "prometheus"
+                      },
+                      "spec": {
+                        "expr": "sum by (operation) (rate(k6_http_reqs_total{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=~\"list|metadata|upload\"}[$__rate_interval]))",
+                        "instant": false,
+                        "range": true,
+                        "format": "time_series",
+                        "legendFormat": "{{operation}}"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "legend": {
+                  "showLegend": true,
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "none"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "reqps",
+                  "noValue": "No samples in this window",
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "lineWidth": 2,
+                    "fillOpacity": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4013": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2052,
+          "title": "p95 by operation",
+          "description": "Each operation's p95 as k6 reports it during the rates' runs.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "prometheus"
+                      },
+                      "spec": {
+                        "expr": "max by (operation) (k6_http_req_duration_p95{campaignid=\"$run\",load_target=\"$env\",mode=\"$mode\",executionid=~\"$execution\",operation=~\"list|metadata|upload\"})",
+                        "instant": false,
+                        "range": true,
+                        "format": "time_series",
+                        "legendFormat": "{{operation}}"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "legend": {
+                  "showLegend": true,
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "none"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "noValue": "No samples in this window",
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "lineWidth": 2,
+                    "fillOpacity": 5,
+                    "showPoints": "auto",
+                    "spanNulls": false
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4014": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2053,
+          "title": "Tested rates",
+          "description": "Each row is one rate of the search, one k6 run. Inspect opens its workload and time range.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "load-reports"
+                      },
+                      "spec": {
+                        "expr": "cozy_load_point_evidence_info{load_target=\"$env\",mode=\"$mode\",run=\"$run\",kind=\"mixed\"}",
+                        "instant": true,
+                        "range": false,
+                        "format": "table"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true,
+                        "Value": true,
+                        "__name__": true,
+                        "job": true,
+                        "instance": true,
+                        "campaign": true,
+                        "run": true,
+                        "kind": true,
+                        "load_target": true,
+                        "mode": true,
+                        "execution_id": true,
+                        "point_title": true,
+                        "p95": false,
+                        "window_recorded": true,
+                        "access": true,
+                        "revoked": true,
+                        "raw_start_ms": true,
+                        "raw_end_ms": true,
+                        "payload_bytes": true,
+                        "failures": true,
+                        "point_window": true,
+                        "point_only": true,
+                        "evidence": true,
+                        "phase": true,
+                        "recipient_revoked": true
+                      },
+                      "indexByName": {
+                        "inspect": 0,
+                        "load": 1,
+                        "completed": 2,
+                        "planned": 3,
+                        "p95": 4,
+                        "correctness": 5,
+                        "cleanup": 6,
+                        "status": 7,
+                        "reason": 8,
+                        "index": 9
+                      },
+                      "renameByName": {
+                        "inspect": "Inspect",
+                        "load": "Rate (workflows/s)",
+                        "completed": "Workflows completed",
+                        "planned": "Workflows offered",
+                        "p95": "Slowest operation p95",
+                        "correctness": "Content checks",
+                        "cleanup": "Cleanup",
+                        "status": "Outcome",
+                        "reason": "Reason",
+                        "index": "Step"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "table",
+            "version": "13.2.0",
+            "spec": {
+              "options": {
+                "showHeader": true,
+                "cellHeight": "sm",
+                "sortBy": [
+                  {
+                    "displayName": "Step",
+                    "desc": false
+                  }
+                ]
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "none",
+                  "noValue": "Not recorded",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "text"
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Inspect"
+                    },
+                    "properties": [
+                      {
+                        "id": "links",
+                        "value": [
+                          {
+                            "title": "Inspect this tested point",
+                            "url": "/d/twake-drive-capacity?var-env=${env:percentencode}&var-mode=${mode:percentencode}&var-run=${run:percentencode}&var-point=${__data.fields.point_id}&dtab=workload&from=${__data.fields.start_ms}&to=${__data.fields.end_ms}",
+                            "targetBlank": false
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "point_id"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hideFrom.viz",
+                        "value": true
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "start_ms"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hideFrom.viz",
+                        "value": true
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "end_ms"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hideFrom.viz",
+                        "value": true
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^(Content checks|Cleanup|Outcome)$"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "Verified": {
+                                "color": "green"
+                              },
+                              "passed": {
+                                "color": "green"
+                              },
+                              "Failed": {
+                                "color": "red"
+                              },
+                              "failed": {
+                                "color": "red"
+                              },
+                              "Unverified": {
+                                "color": "orange"
+                              },
+                              "Partial": {
+                                "color": "orange"
+                              },
+                              "generator_saturated": {
+                                "color": "orange"
+                              },
+                              "not_measured": {
+                                "color": "text"
+                              },
+                              "Not recorded": {
+                                "color": "text"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "color-text"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "layout": {
@@ -15497,6 +17227,201 @@
                                 "spec": {
                                   "x": 0,
                                   "y": 0,
+                                  "width": 6,
+                                  "height": 4,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4001"
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 6,
+                                  "y": 0,
+                                  "width": 6,
+                                  "height": 4,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4002"
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 12,
+                                  "y": 0,
+                                  "width": 6,
+                                  "height": 4,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4003"
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 18,
+                                  "y": 0,
+                                  "width": 6,
+                                  "height": 4,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4004"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "visibility": "show",
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "variable": "kind",
+                                  "operator": "equals",
+                                  "value": "mixed"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "title": "",
+                        "hideHeader": true,
+                        "collapse": false,
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 0,
+                                  "y": 0,
+                                  "width": 24,
+                                  "height": 8,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4005"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "visibility": "show",
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "variable": "kind",
+                                  "operator": "equals",
+                                  "value": "mixed"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "title": "",
+                        "hideHeader": true,
+                        "collapse": false,
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 0,
+                                  "y": 0,
+                                  "width": 12,
+                                  "height": 8,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4006"
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 12,
+                                  "y": 0,
+                                  "width": 12,
+                                  "height": 8,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4007"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "visibility": "show",
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "variable": "kind",
+                                  "operator": "equals",
+                                  "value": "mixed"
+                                }
+                              },
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "variable": "mode",
+                                  "operator": "equals",
+                                  "value": "capacity"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "title": "",
+                        "hideHeader": true,
+                        "collapse": false,
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 0,
+                                  "y": 0,
                                   "width": 12,
                                   "height": 8,
                                   "element": {
@@ -16064,6 +17989,90 @@
                       "kind": "RowsLayoutRow",
                       "spec": {
                         "title": "",
+                        "hideHeader": true,
+                        "collapse": false,
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 0,
+                                  "y": 0,
+                                  "width": 6,
+                                  "height": 4,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4008"
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 6,
+                                  "y": 0,
+                                  "width": 6,
+                                  "height": 4,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4009"
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 12,
+                                  "y": 0,
+                                  "width": 6,
+                                  "height": 4,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4010"
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 18,
+                                  "y": 0,
+                                  "width": 6,
+                                  "height": 4,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4011"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "visibility": "show",
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "variable": "kind",
+                                  "operator": "equals",
+                                  "value": "mixed"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "title": "",
                         "collapse": false,
                         "hideHeader": true,
                         "conditionalRendering": {
@@ -16405,6 +18414,117 @@
                                   "variable": "kind",
                                   "operator": "equals",
                                   "value": "fanout"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "title": "",
+                        "hideHeader": true,
+                        "collapse": false,
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 0,
+                                  "y": 0,
+                                  "width": 12,
+                                  "height": 8,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4012"
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 12,
+                                  "y": 0,
+                                  "width": 12,
+                                  "height": 8,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4013"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "visibility": "show",
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "variable": "kind",
+                                  "operator": "equals",
+                                  "value": "mixed"
+                                }
+                              },
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "variable": "window_state",
+                                  "operator": "notEquals",
+                                  "value": "outside"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "title": "",
+                        "hideHeader": true,
+                        "collapse": false,
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "x": 0,
+                                  "y": 0,
+                                  "width": 24,
+                                  "height": 8,
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4014"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "visibility": "show",
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "variable": "kind",
+                                  "operator": "equals",
+                                  "value": "mixed"
                                 }
                               }
                             ]

@@ -259,9 +259,10 @@ mixed-run: upload-binary observability-up
 		-e P95_LIMIT_MS="$(P95_LIMIT_MS)" \
 		-e EXECUTION_ID="$(EXECUTION_ID)" \
 		k6 run -o experimental-prometheus-rw \
-		--tag campaignid="$(EXECUTION_ID)" \
+		--tag campaignid="$(or $(CAPACITY_RUN_ID),$(EXECUTION_ID))" \
+		--tag executionid="$(EXECUTION_ID)" \
 		--tag load_target="$(LOAD_TARGET)" \
-		--tag mode=regression \
+		--tag mode="$(or $(MIXED_MODE),regression)" \
 		--tag topology="$(LOAD_TOPOLOGY)" \
 		/scripts/mixed-workload.ts
 

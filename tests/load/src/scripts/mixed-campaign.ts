@@ -288,6 +288,8 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
 
   // One k6 run at one rate, under its own ID. An interruption stops k6; the run's directory, including
   // writes still landing, is removed after it.
+  // A search's rates share its run ID in k6 metrics, as an upload search's attempts do; each keeps its own.
+  const runIds = config.capacity ? [`CAPACITY_RUN_ID=${config.executionId}`, 'MIXED_MODE=capacity'] : []
   const runRate = async (rate: number, maxVus: number, id: string) => {
     const fixturePath = `${harness}data/results/${id}-mixed-fixture.json`
     writeFileSync(fixturePath, fixture, { mode: 0o600 })
@@ -298,7 +300,7 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
       makeTarget: 'mixed-run',
       args: [`MIXED_RATE=${rate}`, `MIXED_DURATION=${config.durationMs}ms`, `MIXED_MAX_VUS=${maxVus}`,
         `MIXED_WARMUP=${config.warmupMs}ms`, `MIXED_OBSERVERS=${config.observers}`,
-        `MIN_SUCCESS_RATE=${config.minSuccessRate}`, `P95_LIMIT_MS=${config.p95LimitMs}`],
+        `MIN_SUCCESS_RATE=${config.minSuccessRate}`, `P95_LIMIT_MS=${config.p95LimitMs}`, ...runIds],
       deadline,
       cleanup: { prefix: `twake-load-mixed-${id}-`, dirs: [ROOT] },
     })

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { getReportSamples, renderMetrics, type ReportFile } from './capacity-metrics.ts'
-import { uploadEnvelope } from './result-envelope.ts'
+import { mixedCapacityEnvelope, uploadEnvelope } from './result-envelope.ts'
 
 const counts = { valid: 1, invalid: 0, unsupported: 0 }
 
@@ -462,6 +462,34 @@ test('activity levels show the content their readers verified, and the run clean
   // A level the ramp never reached has nothing to verify.
   assert.match(samples(evidence([level, { level: 2, status: 'not_run' }]), 'work_info')[0]!,
     /readback="2 content checks matched"/)
+})
+
+test('a mixed search reports its rates, their slowest operations and the workflows they checked', () => {
+  const level = (rate: number, status: string, p95: number, extra: Record<string, unknown> = {}) => ({
+    rate, status, execution_id: `search-r${rate}`, achieved_workflows: rate * 60, offered_workflows: rate * 60,
+    achieved_rate: rate, dropped_iterations: 0, problems: [], correctness_failures: [],
+    operations: { list: { p95_ms: 30, error_rate: 0 }, metadata: { p95_ms: 20, error_rate: 0 }, upload: { p95_ms: p95, error_rate: 0 } },
+    correctness: { complete: true, metadata_checks: rate * 60, upload_checks: rate * 60 },
+    cleanup: { cleaned: ['d'], remaining: [] },
+    started_at: `2026-10-27T10:0${rate === 16 ? 0 : 1}:00Z`, ended_at: `2026-10-27T10:0${rate === 16 ? 1 : 2}:00Z`, ...extra,
+  })
+  const search = { mode: 'capacity', load_target: 'local', outcome: 0, status: 'completed', result_bound: 'bracket',
+    max_sustained_rate: 16, first_failed_rate: 32, correctness_failures: [], criteria: { p95_limit_ms: 2000 },
+    dataset: { profile: 'tree', version: 1 },
+    levels: [level(16, 'passed', 133), level(32, 'failed', 3159.2, { achieved_workflows: 1896, dropped_iterations: 28 })] }
+  const data = { ...search, result: mixedCapacityEnvelope(search, { interrupted: false, versions: { harness: 'h', stack: 's' },
+    topology: 'single-host', start: '2026-10-27T10:00:00Z', end: '2026-10-27T10:02:00Z' }) }
+  const output = renderMetrics([report('mixed', data)], counts)
+  assert.match(samples(output, 'run_info')[0]!, /workload="Mixed workflows",.*dataset="tree v1"/)
+  assert.match(samples(output, 'verdict_info')[0]!, /correctness="Verified",cleanup="Verified",performance="\[16, 32\)",performance_detail="Workflows per second"/)
+  const run = (metric: string) => value(output.split('\n').filter(l => l.includes(`metric="${metric}"`)).join('\n'), 'result_value')
+  assert.deepEqual([run('workflows_completed'), run('dropped_workflows'), run('highest_tested_rate'), run('worst_passing_p95_ms')],
+    [2856, 28, 32, 133])
+  assert.match(samples(output, 'work_info')[0]!, /completed="2856 workflows",readback="5760 responses checked"/)
+  const failed = samples(output, 'point_evidence_info').find(l => l.includes('index="2"'))!
+  assert.match(failed, /point_title="32 workflows\/s · Rate · point 2",status="failed",completed="1896",planned="1920"/)
+  assert.match(failed, /p95="3159.2 ms"/)
+  assert.ok(samples(output, 'point_value').some(l => /index="2".*metric="upload_p95_ms"} 3159.2$/.test(l)))
 })
 
 test('recipient revocation counts require recipient observations even when the owner reports success', () => {

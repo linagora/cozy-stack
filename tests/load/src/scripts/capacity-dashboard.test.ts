@@ -65,7 +65,7 @@ test('every layout reference is unique and resolves to a panel; each fixed row h
 })
 
 test('workload-specific evidence is conditional on the run, independently of its environment', () => {
-  for (const env of ['local', 'dev']) for (const kind of ['upload', 'shared_drive', 'fanout']) {
+  for (const env of ['local', 'dev']) for (const kind of ['upload', 'shared_drive', 'fanout', 'mixed']) {
     const overview = visible(dashboard.spec.layout.spec!.tabs![0]!, { env, kind, mode: 'capacity', dev_source: '' })
     const titles = overview.map(p => p.spec.title)
     for (const title of ['Execution', 'Correctness', 'Cleanup', 'Performance']) assert.ok(titles.includes(title))
@@ -73,8 +73,22 @@ test('workload-specific evidence is conditional on the run, independently of its
     assert.equal(titles.includes('Tested recipient batches'), kind === 'fanout')
     assert.equal(titles.includes('Tested activity levels'), kind === 'shared_drive')
     assert.equal(titles.includes('Uploads completed / planned'), kind === 'upload')
+    assert.equal(titles.includes('Tested rates'), kind === 'mixed')
     if (kind === 'fanout') assert.ok(!overview.some(p => p.spec.vizConfig.group === 'timeseries'))
   }
+})
+
+test('a mixed search shows each rate, and its k6 runs follow the selected rates', () => {
+  const overview = visible(dashboard.spec.layout.spec!.tabs![0]!, { env: 'local', kind: 'mixed', mode: 'capacity' })
+  assert.deepEqual(overview.filter(p => p.spec.vizConfig.group === 'xychart').map(p => p.spec.title),
+    ['Achieved rate by tested rate', 'p95 by tested rate'])
+  const workload = visible(dashboard.spec.layout.spec!.tabs![1]!, { env: 'local', kind: 'mixed', mode: 'capacity' })
+  const telemetry = workload.filter(p => p.spec.vizConfig.group === 'timeseries').flatMap(queries)
+  assert.equal(telemetry.length, 2)
+  for (const query of telemetry) assert.match(query.spec.expr!, /campaignid="\$run",.*executionid=~"\$execution"/)
+  // Selected-rate totals show only when every selected rate recorded them.
+  const completed = workload.find(p => p.spec.title === 'Workflows completed')!
+  assert.match(queries(completed)[0]!.spec.expr!, /index=~"\$point_index".*== count\(cozy_load_point_evidence_info/)
 })
 
 test('regression does not present capacity curves and the producer owns the four verdicts', () => {

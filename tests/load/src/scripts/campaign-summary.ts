@@ -48,7 +48,7 @@ export type CampaignSummaryInput = {
 
 const GRAFANA_MARGIN_MS = 60_000
 
-const dashboardKinds = ['shared-drive-ramp', 'upload-capacity', 'upload-regression', 'org-drive-fanout']
+const dashboardKinds = ['shared-drive-ramp', 'upload-capacity', 'upload-regression', 'org-drive-fanout', 'mixed-capacity']
 
 export function parseSteps(tsv: string): CampaignStep[] {
   return tsv

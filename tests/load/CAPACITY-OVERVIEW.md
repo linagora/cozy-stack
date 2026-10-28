@@ -75,8 +75,8 @@ unverified bound into a passing run.
 - Fan-out keeps recipient access, content readback, owner observations and
   revocation separate. Intentional local fixture retention is not cleanup.
 
-The reader currently accepts upload regression/capacity, shared-drive ramp and
-organization fan-out reports. Fan-out access/revocation curves from the mockup remain
+The reader currently accepts upload regression/capacity, shared-drive ramp,
+organization fan-out and mixed workload capacity reports. Fan-out access/revocation curves from the mockup remain
 unavailable until its producer records timed observations; scalar proofs remain
 visible. Synthetic mock values are not production measurements.
 

@@ -583,7 +583,8 @@ $ make mixed-capacity MIXED_DOMAIN='seed-<32-hex-id>.localhost:8080' MIXED_RATES
 ```
 
 `data/results/<EXECUTION_ID>-mixed-capacity.json` keeps every rate's verdict,
-the highest passing rate and the first failing one. Every rate passing gives a
+the highest passing rate and the first failing one; the dashboard shows each
+rate, and each operation's request rate and p95 over its k6 run. Every rate passing gives a
 lower bound, and a later rate failing a bracket: both exit 0. The first rate
 failing exits 1, as does wrong content at any rate. A rate the generator could
 not keep, or that did not run cleanly, ends the search inconclusive, exit 2.

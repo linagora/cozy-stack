@@ -19,7 +19,7 @@ type Limits = { maxEntries: number; maxReports: number; maxFileBytes: number; ma
 const defaults: Limits = {
   maxEntries: 2048, maxReports: 128, maxFileBytes: 1024 * 1024, maxTotalBytes: 8 * 1024 * 1024,
 }
-const reportPattern = /-(upload-capacity|upload-regression|shared-drive-ramp|org-drive-fanout)\.json$/
+const reportPattern = /-(upload-capacity|upload-regression|shared-drive-ramp|org-drive-fanout|mixed-capacity)\.json$/
 // A producer's own recorded time, for runs outside a campaign.
 const seconds = (value: unknown): number | undefined => {
   const time = typeof value === 'string' ? Date.parse(value) : NaN
@@ -163,10 +163,10 @@ export function readResults(directory: string, options: Partial<Limits> = {}): S
         if (!isJsonRecord(source)) throw new Error('invalid_report')
         const content = source
         const kind = format.startsWith('upload-') ? 'upload'
-          : format === 'shared-drive-ramp' ? 'shared_drive' : 'fanout'
+          : format === 'shared-drive-ramp' ? 'shared_drive' : format === 'mixed-capacity' ? 'mixed' : 'fanout'
         const run = kind === 'upload' ? content.campaign_id : name.replace(reportPattern, '')
         if (!safeId(run)) throw new Error('invalid_identity')
-        const pointField = { upload: 'attempts', shared_drive: 'levels', fanout: 'points' }[kind]
+        const pointField = { upload: 'attempts', shared_drive: 'levels', fanout: 'points', mixed: 'levels' }[kind]
         const points = content[pointField]
         if (Array.isArray(points)) {
           pointCount += points.length

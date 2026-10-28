@@ -3,7 +3,7 @@ import { validateEnvelope } from './result-envelope.ts'
 export type ReportFile = {
   campaign: string
   run: string
-  kind: 'upload' | 'shared_drive' | 'fanout'
+  kind: 'upload' | 'shared_drive' | 'fanout' | 'mixed'
   timestamp: number
   startedAt?: number | undefined
   endedAt?: number | undefined
@@ -82,6 +82,10 @@ function checks(kind: ReportFile['kind'], data: Record<string, unknown>): { corr
         recipients.every(recipient => record(recipient.add).converged === true &&
           record(recipient.add).marker_matches === true && record(recipient.remove).converged === true)
     }) ? 'Verified' : 'Partial'
+  } else if (kind === 'mixed' && points.length) {
+    // Each rate checked every successful metadata read and upload against the fixture.
+    correctness = points.some(point => Array.isArray(point.correctness_failures) && point.correctness_failures.length)
+      ? 'Failed' : points.every(point => record(point.correctness).complete === true) ? 'Verified' : 'Partial'
   } else if (kind === 'shared_drive' && points.length) {
     // Readers download a sample of each level's uploads back, as the producer judges a level.
     correctness = points.some(point => point.content_mismatches || point.content_denied) ? 'Failed'
@@ -101,6 +105,8 @@ function checks(kind: ReportFile['kind'], data: Record<string, unknown>): { corr
     else if (finite(data.cleanup_success_rate)) {
       cleanup = data.cleanup_success_rate === 1 ? 'Verified' : 'Unverified'
     }
+  } else if (kind === 'mixed' && points.length) {
+    cleanup = points.every(cleared) ? 'Verified' : 'Unverified'
   } else if (kind === 'fanout') {
     const retained = record(data.cleanup).retained
     if (Array.isArray(retained)) cleanup = retained.length === 0 ? 'Verified' : 'Unverified'
@@ -118,6 +124,25 @@ const regressionVerdicts: Record<string, string> = {
 function numbers(source: Record<string, unknown>, mapping: Record<string, string>): Record<string, number> {
   return Object.fromEntries(Object.entries(mapping).flatMap(([metric, key]) =>
     finite(source[key]) ? [[metric, source[key]]] : []))
+}
+
+// The slowest operation's p95 at one rate of a mixed search.
+function worstP95(level: Record<string, unknown>): number | undefined {
+  const p95s = Object.values(record(level.operations)).map(op => record(op).p95_ms).filter(finite)
+  return p95s.length ? Math.max(...p95s) : undefined
+}
+
+function mixedValues(level: Record<string, unknown>): Record<string, number> {
+  const values = numbers(level, {
+    achieved_rate: 'achieved_rate', achieved_workflows: 'achieved_workflows', dropped_workflows: 'dropped_iterations',
+  })
+  for (const [name, op] of Object.entries(record(level.operations))) {
+    if (!/^[a-z]+$/.test(name)) continue
+    const { p95_ms: p95, error_rate: errors } = record(op)
+    if (finite(p95)) values[`${name}_p95_ms`] = p95
+    if (finite(errors) && errors <= 1) values[`${name}_success_rate`] = 1 - errors
+  }
+  return values
 }
 
 function fanoutValues(point: Record<string, unknown>): Record<string, number> {
@@ -240,7 +265,7 @@ export function getReportSamples(
     const size = allowed(data.file_size, Object.keys(fileBytes), 'n/a')
     const target = allowed(data.upload_target, ['shared-drive', 'personal'], 'n/a')
     const workload = kind === 'upload' ? `${target === 'personal' ? 'Personal' : target === 'shared-drive' ? 'Shared-drive' : 'Legacy'} uploads`
-      : kind === 'fanout' ? 'Organization sharing' : 'Shared-drive activity'
+      : kind === 'fanout' ? 'Organization sharing' : kind === 'mixed' ? 'Mixed workflows' : 'Shared-drive activity'
     const recordedStart = declared?.time.start ?? (finite(startedAt) && startedAt < 8.64e12
       ? new Date(startedAt * 1000).toISOString() : '')
     const versions = record(declared?.versions ?? data.versions)
@@ -253,7 +278,8 @@ export function getReportSamples(
       ? 'Owner, writer and read-only member identities' : 'Writer / WebSocket / changes roles · one identity'
     emit('run_info', { ...base, title: `${workload}${size === 'n/a' ? '' : ` · ${size}`} · ${recordedStart.slice(5, 19).replace('T', ' ')} UTC`,
       workload, profile: kind === 'upload' ? `${size} files · ${target}`
-        : kind === 'fanout' ? 'Distinct organization recipients' : activityProfile,
+        : kind === 'fanout' ? 'Distinct organization recipients'
+        : kind === 'mixed' ? 'Tree fixture · list, metadata check and upload per workflow' : activityProfile,
       file_size: size, upload_target: target,
       reason: runReason,
       schema: declared === undefined ? 'legacy' : declared === null ? 'invalid' : declared.schema,
@@ -262,7 +288,8 @@ export function getReportSamples(
       runtime_budget: runtime,
       vus_budget: finite(budgets.max_vus) ? String(budgets.max_vus) : 'Not recorded',
       bytes_budget: finite(budgets.max_upload_bytes) ? String(budgets.max_upload_bytes) : 'Not recorded',
-      dataset: declared?.dataset === null ? 'None' : 'Not recorded',
+      dataset: declared?.dataset ? `${declared.dataset.profile} v${declared.dataset.version}`
+        : declared?.dataset === null ? 'None' : 'Not recorded',
       topology: allowed(declared?.topology, ['single-host', 'shared-dev', 'distributed'], 'Not recorded'),
     }, 1)
     emit('verdict_info', {
@@ -276,7 +303,8 @@ export function getReportSamples(
       performance_detail: regression ? (finite(p95Limit) ? 'See recorded p95 criterion'
         : observational ? 'No latency gate' : 'Latency criterion not recorded')
         : evidence ? `Retained evidence: ${describe(evidence.lower, evidence.upper, evidence.exact)}`
-        : kind === 'upload' ? 'Upload workers' : kind === 'fanout' ? 'Recipients' : 'Activity mix units',
+        : kind === 'upload' ? 'Upload workers' : kind === 'fanout' ? 'Recipients'
+        : kind === 'mixed' ? 'Workflows per second' : 'Activity mix units',
       outcome: [0, 1, 2].includes(outcome as number) ? String(outcome) : 'Not recorded',
     }, 1)
     if (finite(startedAt) && finite(endedAt) && endedAt >= startedAt && endedAt < 8.64e12) {
@@ -293,7 +321,8 @@ export function getReportSamples(
     }
     emit('result_info', {
       ...base,
-      scope: kind === 'fanout' ? 'recipients' : kind === 'shared_drive' ? 'activity_mix' : 'upload_workers',
+      scope: kind === 'fanout' ? 'recipients' : kind === 'shared_drive' ? 'activity_mix'
+        : kind === 'mixed' ? 'workflow_rate' : 'upload_workers',
       status: regression ? verdict ?? 'inconclusive'
         : running ? 'running' : lower === undefined ? 'inconclusive' : 'completed',
       bound: regression ? 'none' : bound,
@@ -342,6 +371,22 @@ export function getReportSamples(
           changes_readers_per_level: 'changesReaders',
         }),
       }
+    } else if (kind === 'mixed') {
+      const levels = records(data.levels)
+      const sum = (key: string) => levels.length && levels.every(l => finite(l[key]))
+        ? levels.reduce((total, l) => total + (l[key] as number), 0) : undefined
+      // The highest rate that passed, and its slowest operation.
+      const passing = levels.filter(l => l.status === 'passed' && Array.isArray(l.problems) && !l.problems.length).at(-1)
+      const worst = passing && worstP95(passing)
+      values = {
+        ...numbers(record(data.criteria), { minimum_success_rate: 'minimum_success_rate', p95_limit_ms: 'p95_limit_ms' }),
+        ...numbers(plan, { duration_s: 'duration_s' }),
+        ...numbers({ workflows: sum('achieved_workflows'), dropped: sum('dropped_iterations'),
+          highest: levels.length ? Math.max(...levels.map(l => finite(l.rate) ? l.rate : 0)) : undefined, worst }, {
+          workflows_completed: 'workflows', dropped_workflows: 'dropped', highest_tested_rate: 'highest',
+          worst_passing_p95_ms: 'worst',
+        }),
+      }
     } else {
       values = numbers(record(data.settings), {
         budget_ms: 'timeout_ms', stable_ms: 'stable_ms', observer_concurrency: 'observer_concurrency',
@@ -349,7 +394,8 @@ export function getReportSamples(
       })
     }
     for (const [metric, value] of Object.entries(values)) emit('result_value', { ...base, metric }, value)
-    const rawPoints = kind === 'upload' ? data.attempts : kind === 'shared_drive' ? data.levels : data.points
+    const rawPoints = kind === 'upload' ? data.attempts : kind === 'shared_drive' || kind === 'mixed' ? data.levels
+      : data.points
     const points = Array.isArray(rawPoints) ? rawPoints : []
     const attempts = records(rawPoints)
     if (kind === 'upload' && attempts.length > 0) {
@@ -374,6 +420,15 @@ export function getReportSamples(
       emit('work_info', { ...base, completed: `${attempts.length} recorded levels`,
         readback: checks(kind, { points: ran }).correctness === 'Verified' ? `${matched} content checks matched` : 'Content not verified',
       }, 1)
+    } else if (kind === 'mixed' && attempts.length > 0) {
+      const workflows = attempts.map(level => level.achieved_workflows)
+      const checked = attempts.map(level => record(level.correctness))
+      emit('work_info', { ...base,
+        completed: workflows.every(finite) ? `${workflows.reduce((a, b) => a + b, 0)} workflows` : 'Not recorded',
+        readback: checked.every(c => c.complete === true && finite(c.metadata_checks) && finite(c.upload_checks))
+          ? `${checked.reduce((total, c) => total + (c.metadata_checks as number) + (c.upload_checks as number), 0)} responses checked`
+          : 'Readback coverage incomplete',
+      }, 1)
     } else if (kind === 'fanout' && attempts.length > 0) {
       emit('work_info', { ...base, completed: `${attempts.length} recorded recipient batches`,
         readback: recordedChecks.correctness,
@@ -381,16 +436,18 @@ export function getReportSamples(
     }
     points.forEach((raw, index) => {
       const point = record(raw)
-      const load = kind === 'upload' ? point.vus : kind === 'shared_drive' ? point.level : point.n
+      const load = kind === 'upload' ? point.vus : kind === 'shared_drive' ? point.level
+        : kind === 'mixed' ? point.rate : point.n
       if (!integer(load) || load === 0) return
       const phase = kind === 'upload' ? allowed(point.phase,
         ['baseline', 'discovery', 'discovery-retry', 'discovery-decider', 'confirmation', 'regression'], 'unknown')
-        : kind === 'shared_drive' ? 'hold'
+        : kind === 'shared_drive' ? 'hold' : kind === 'mixed' ? 'rate'
         : allowed(point.phase, ['setup', 'add', 'remove', 'complete'], 'unknown')
       const recordedStatus = kind === 'upload' ? point.result : point.status
       const status = allowed(recordedStatus, kind === 'upload'
         ? ['passed', 'failed', 'infrastructure_failure', 'stopped']
         : kind === 'shared_drive' ? ['passed', 'failed', 'not_run', 'not_measured', 'inconclusive']
+        : kind === 'mixed' ? ['passed', 'failed', 'generator_saturated', 'not_measured']
         : ['passed', 'failed', 'inconclusive'], 'missing_result')
       const dimensions = { ...base, index: String(index + 1), load: String(load), phase }
       const pointId = `${run}-point-${index + 1}`
@@ -401,15 +458,19 @@ export function getReportSamples(
       const pointStart = parseTimestamp(point.started_at)
       const pointEnd = parseTimestamp(point.ended_at)
       const pointWindow = pointStart !== null && pointEnd !== null && pointEnd >= pointStart
-      const unit = kind === 'upload' ? 'workers' : kind === 'fanout' ? 'recipients' : 'mix units'
+      const unit = kind === 'upload' ? 'workers' : kind === 'fanout' ? 'recipients'
+        : kind === 'mixed' ? 'workflows/s' : 'mix units'
       const phaseTitle = phase.charAt(0).toUpperCase() + phase.slice(1)
-      const planned = kind === 'upload' && integer(point.iterations_per_vu) ? load * point.iterations_per_vu : null
-      const complete = kind === 'upload' && integer(point.completed_iterations) ? point.completed_iterations : null
+      const planned = kind === 'upload' && integer(point.iterations_per_vu) ? load * point.iterations_per_vu
+        : kind === 'mixed' && integer(point.offered_workflows) ? point.offered_workflows : null
+      const complete = kind === 'upload' && integer(point.completed_iterations) ? point.completed_iterations
+        : kind === 'mixed' && integer(point.achieved_workflows) ? point.achieved_workflows : null
       // The ramp cleans every level's uploads once, after the last level.
       const pointChecks = kind === 'upload' ? checks(kind, { attempts: [point] }) : checks(kind, { points: [point],
         ...kind === 'shared_drive' ? { cleanup: data.cleanup, cleanup_success_rate: data.cleanup_success_rate } : {} })
       const safeReason = reasonCategory(point.reason ?? point.error ?? (Array.isArray(point.reasons) ? point.reasons.join('; ') : ''), status === 'passed')
       const fanout = kind === 'fanout' ? fanoutValues(point) : {}
+      const pointP95 = kind === 'mixed' ? worstP95(point) : point.p95_ms
       emit('point_evidence_info', { ...dimensions, execution_id: executionId,
         point_title: `${load} ${unit} · ${phaseTitle} · point ${index + 1}`, status,
         completed: complete === null ? 'Not recorded' : String(complete),
@@ -419,7 +480,7 @@ export function getReportSamples(
         revoked: finite(fanout.owner_revoked) ? `${fanout.owner_revoked} / ${load}` : 'Not recorded',
         recipient_revoked: finite(fanout.recipient_revocation_proofs)
           ? `${fanout.recipient_revocation_proofs} / ${load}` : 'Not recorded',
-        p95: finite(point.p95_ms) ? `${point.p95_ms.toFixed(1)} ms` : 'Not recorded',
+        p95: finite(pointP95) ? `${pointP95.toFixed(1)} ms` : 'Not recorded',
         reason: safeReason,
         start_ms: !pointWindow ? finite(startedAt) ? String(Math.max(0, startedAt * 1000 - 60_000)) : ''
           : String(Math.max(0, pointStart - 30_000)),
@@ -452,7 +513,7 @@ export function getReportSamples(
         upload_p95_ms: 'upload_p95_ms', success_rate: 'upload_success_rate',
         ws_delivery_ratio: 'ws_delivery_ratio', changes_delivery_ratio: 'changes_delivery_ratio',
         completed_uploads: 'uploads',
-      }) : fanoutValues(point)
+      }) : kind === 'mixed' ? mixedValues(point) : fanoutValues(point)
       if (pointStart !== null && pointEnd !== null && pointEnd > pointStart) {
         values.started_at_seconds = pointStart / 1000
         values.ended_at_seconds = pointEnd / 1000

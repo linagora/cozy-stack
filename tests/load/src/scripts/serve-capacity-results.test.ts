@@ -41,6 +41,13 @@ test('reads recognized top-level reports and preserves file mtime, not scrape ti
   assert.deepEqual(snapshot.counts, { valid: 1, invalid: 0, unsupported: 1 })
 })
 
+test('reads a mixed capacity search under its run ID, with its rates as points', t => {
+  const dir = directory(t)
+  writeFileSync(join(dir, 'search-mixed-capacity-mixed-capacity.json'), JSON.stringify({ levels: [{ rate: 1 }, { rate: 2 }] }))
+  const [report] = readResults(dir).reports
+  assert.deepEqual([report?.kind, report?.run], ['mixed', 'search-mixed-capacity'])
+})
+
 test('rejects file and root symlinks without following them', t => {
   const dir = directory(t)
   const outside = directory(t)
