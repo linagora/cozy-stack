@@ -1,4 +1,4 @@
-import { parseDurationToMs } from './duration.ts'
+import { readCapacitySteps } from './capacity-steps.ts'
 import { parsePositiveIntegerEnv } from './env.ts'
 
 // A ramp holds the shared-drive mix at increasing levels. Level L runs
@@ -13,7 +13,6 @@ const RAMP_DRAIN_MS = 10_000
 // uploads that finish at the boundary still arrive.
 export const RAMP_EVENT_GRACE_MS = 2_000
 const MINIMUM_HOLD_MS = 5_000
-const DEFAULT_RAMP_LEVELS = '1,2,4,8,16'
 
 export type RampVusPerLevel = {
   changesReaders: number
@@ -204,39 +203,16 @@ const judgedDeliveries: readonly JudgedDelivery[] = [
   },
 ]
 
-export function parseRampLevels(raw: string): number[] {
-  const parts = raw.split(',').map((part: string): string => part.trim())
-  const levels = parts.map(Number)
-  const isValid =
-    raw.trim().length > 0 &&
-    parts.every((part: string): boolean => /^[1-9][0-9]*$/.test(part)) &&
-    levels.every(
-      (level: number, index: number): boolean =>
-        index === 0 || level > (levels[index - 1] ?? 0),
-    )
-
-  if (!isValid) {
-    throw new Error(
-      `RAMP_LEVELS must be strictly increasing positive integers, got "${raw}"`,
-    )
-  }
-
-  return levels
-}
-
 export function parseRampPlan(env: Environment): RampPlan {
-  const rawStepDuration = env.RAMP_STEP_DURATION || '1m'
-  const holdMs = parseDurationToMs(rawStepDuration)
+  const { holdMs, levels } = readCapacitySteps(env, { max: 16 })
 
   if (holdMs < MINIMUM_HOLD_MS) {
-    throw new Error(
-      `RAMP_STEP_DURATION must be at least 5s, got "${rawStepDuration}"`,
-    )
+    throw new Error(`CAPACITY_HOLD must be at least 5s, got "${env.CAPACITY_HOLD}"`)
   }
 
   return {
     holdMs,
-    levels: parseRampLevels(env.RAMP_LEVELS || DEFAULT_RAMP_LEVELS),
+    levels,
     transitionMs: RAMP_TRANSITION_MS,
     vusPerLevel: {
       changesReaders: parsePositiveIntegerEnv(

@@ -180,7 +180,7 @@ describe('classifyUploadPoint', (): void => {
       baselineIterations: 4,
       configuredP95LimitMs: 200,
       confirmationIterations: 4,
-      maxVus: 8,
+      levels: [1, 2, 4, 8],
       runPoint: async (request) => {
         requests.push(request)
         const expectedIterations = request.iterationsPerVu * request.vus

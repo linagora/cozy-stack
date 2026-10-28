@@ -295,7 +295,7 @@ Shared drives can be tested in two modes:
    - **Changes feed readers**: periodic polling of `/sharings/drives/:id/_changes`.
 
    ```console
-   $ make shared-drive-ramp RAMP_LEVELS=1,2,4,8,16 RAMP_STEP_DURATION=1m
+   $ make shared-drive-ramp CAPACITY_MAX=16 CAPACITY_HOLD=1m
    ```
 
    The ramp goes through the campaign runner ([Upload campaigns](#upload-campaigns)).
@@ -325,13 +325,13 @@ Shared drives can be tested in two modes:
    and whether recipients take the same-Stack path, with every access status.
 
    ```console
-   $ make shared-drive-ramp ACTORS_DOMAIN='seed-<32-hex-id>.localhost:8080' RAMP_LEVELS=1,2
+   $ make shared-drive-ramp ACTORS_DOMAIN='seed-<32-hex-id>.localhost:8080' CAPACITY_MAX=2
    ```
 
    Level L runs L writers, 3L WebSocket readers, and 2L changes readers
    (`RAMP_WRITERS_PER_LEVEL`, `RAMP_WS_READERS_PER_LEVEL`,
    `RAMP_CHANGES_READERS_PER_LEVEL`). Each level gets a 10s transition and
-   a hold of `RAMP_STEP_DURATION`; new VUs start in the first half of the
+   a hold of `CAPACITY_HOLD`; new VUs start in the first half of the
    transition, so every reader is connected before the hold. Samples taken during the hold are tagged
    with `level`; transitions are tagged apart and never judged.
 
@@ -577,14 +577,14 @@ only.
 ### Capacity
 
 `make mixed-capacity` finds the highest rate the fixture sustains: it runs the
-same workload at each of `MIXED_RATES` (default `1,2,4,8` workflows per
-second), for `MIXED_DURATION` each (default 1m), one k6 run per rate, and
+same workload at each [capacity level](#capacity-searches) (default 1 to 8
+workflows per second), for `CAPACITY_HOLD` each (default 1m), one k6 run per rate, and
 stops at the first rate that does not pass. Each rate gets at least eight VUs
 per workflow per second, so arrivals drop only once a workflow takes longer
 than eight seconds. The budgets cover every rate.
 
 ```console
-$ make mixed-capacity MIXED_DOMAIN='seed-<32-hex-id>.localhost:8080' MIXED_RATES=1,2,4,8,16
+$ make mixed-capacity MIXED_DOMAIN='seed-<32-hex-id>.localhost:8080' CAPACITY_MAX=16
 ```
 
 `data/results/<EXECUTION_ID>-mixed-capacity.json` keeps every rate's verdict,
@@ -695,6 +695,30 @@ summary with outcome 2; `make campaign` itself then ends with the signal's
 status. Treat any exit other than 0 and 1, or a run directory without
 `summary.md`, as inconclusive: that also covers a campaign killed outright.
 
+### Capacity searches
+
+Every capacity search steps through the same kind of ladder, each in its own
+unit. It starts at `CAPACITY_START` (default 1), multiplies the last level by
+`CAPACITY_GROWTH` (default 2) and ends at `CAPACITY_MAX`, which it always
+tests. The shared-drive ramp and the mixed workload hold each level for
+`CAPACITY_HOLD` (default 1m). An upload level holds for its uploads per worker
+(`CONFIRMATION_ITERATIONS`), and a fan-out level until its recipients converge.
+Budgets stay each runner's own (`MAX_VUS`, `MAX_REQUESTS`, `MAX_UPLOAD_BYTES`,
+`MAX_RUNTIME`), locally and on shared DEV.
+
+| Runner | Unit | Default `CAPACITY_MAX` |
+| --- | --- | --- |
+| `upload-capacity` | concurrent uploads | what `MAX_VUS` and `MAX_UPLOAD_BYTES` allow |
+| `shared-drive-ramp` | activity level | 16 |
+| `org-drive-fanout` | recipients | 16 |
+| `mixed-capacity` | workflows per second | 8 |
+
+The upload, fan-out and mixed searches advance after each passing level and stop
+at the first that does not pass. The ramp runs every level in one k6 run and
+judges them after it. The result envelope's `capacity.stop` records why a search
+stopped: its first failing level and why, the budget it reached, or that every
+level passed. The dashboard's **Why the run stopped** shows its category.
+
 ### Result envelope
 
 Each producer report (upload capacity or regression, shared-drive ramp, group
@@ -795,9 +819,9 @@ make upload-regression VUS=2 ITERATIONS_PER_VU=5 FILE_SIZE=1M MAX_VUS=2 MAX_UPLO
 make upload-capacity FILE_SIZE=1M MAX_VUS=8 MAX_UPLOAD_BYTES=160M MAX_RUNTIME=30m \
   BASELINE_ITERATIONS=10 CONFIRMATION_ITERATIONS=20
 make shared-drive-ramp MAX_VUS=96 MAX_UPLOAD_BYTES=20M MAX_RUNTIME=10m
-make org-drive-fanout FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m   # ORG-DRIVE-FANOUT.md
+make org-drive-fanout CAPACITY_MAX=16 MAX_RUNTIME=30m   # ORG-DRIVE-FANOUT.md
 export MIXED_DOMAIN=<tree prefix>.<domain> SEED_MANIFEST=~/private/<tree prefix>-fixture.json
-make mixed-capacity MIXED_RATES=1,2,4,8,16 MAX_VUS=129 MAX_REQUESTS=8000 MAX_UPLOAD_BYTES=4M MAX_RUNTIME=20m
+make mixed-capacity CAPACITY_MAX=16 MAX_VUS=129 MAX_REQUESTS=8000 MAX_UPLOAD_BYTES=4M MAX_RUNTIME=20m
 make campaign CAMPAIGN=capacity   # all four, with the budgets in campaigns/capacity.sh
 ```
 

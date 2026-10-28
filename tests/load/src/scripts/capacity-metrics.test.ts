@@ -531,6 +531,20 @@ test('point explanations are safe categories and legacy attempt IDs come only fr
   assert.doesNotMatch(output, /private-token|private.example|\/private\/|secret-summary/)
 })
 
+test('a completed search names why it stopped as a safe category', () => {
+  const run = (stop: string) => samples(renderMetrics([report('mixed', { status: 'completed', outcome: 0,
+    mode: 'capacity', load_target: 'dev', levels: [], result: mixedCapacityEnvelope({ outcome: 0,
+      load_target: 'dev', status: 'completed', result_bound: 'bracket', max_sustained_rate: 4, first_failed_rate: 8,
+      levels: [{ rate: 4, status: 'passed', correctness: { complete: true }, cleanup: { remaining: [] } },
+        { rate: 8, status: 'failed', reasons: [stop], correctness: { complete: true }, cleanup: { remaining: [] } }],
+    }, { interrupted: false, versions: { harness: 'abc', stack: '1.6' }, topology: 'shared-dev',
+      start: '2026-10-28T10:00:00Z', end: '2026-10-28T10:05:00Z' }) })], counts), 'run_info')[0]!
+  assert.match(run('upload p95 3234.4 ms exceeds 2000 ms at private.example'), /reason="Latency limit exceeded"/)
+  assert.match(run('changes delivery 0.8775 is below 0.95'), /reason="Delivery below minimum"/)
+  assert.match(run('HTTP 503 instance busy'), /reason="Server error"/)
+  assert.doesNotMatch(run('upload p95 at private.example'), /private/)
+})
+
 test('headline verdicts follow a valid envelope and an invalid envelope cannot become green', () => {
   const data = { status: 'completed', outcome: 0, mode: 'capacity', load_target: 'local',
     maximum_concurrent_uploads: 2, result_bound: 'lower_bound',

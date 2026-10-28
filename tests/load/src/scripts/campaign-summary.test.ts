@@ -62,6 +62,18 @@ describe('describeStepResult', (): void => {
     )
   })
 
+  it('adds why an exact search stopped, as its envelope records it', (): void => {
+    equal(
+      describeStepResult(uploadStep, {
+        maximum_concurrent_uploads: 48,
+        result_bound: 'exact',
+        status: 'completed',
+        result: { capacity: { stop: 'level 49 (concurrent uploads): upload p95 2100 ms exceeds 2000 ms' } },
+      }),
+      'maximum concurrent uploads = 48; level 49 (concurrent uploads): upload p95 2100 ms exceeds 2000 ms',
+    )
+  })
+
   it('reports a lower bound with the failing reason absent', (): void => {
     equal(
       describeStepResult(uploadStep, {

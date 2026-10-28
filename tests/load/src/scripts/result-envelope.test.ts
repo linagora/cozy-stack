@@ -27,7 +27,8 @@ test('a producer envelope keeps each outcome dimension apart and validates', () 
   deepEqual(validateEnvelope(envelope), envelope)
   deepEqual([envelope.execution, envelope.correctness, envelope.performance, envelope.cleanup],
     ['completed', 'verified', 'passed', 'verified'])
-  deepEqual(envelope.capacity, { kind: 'exact', lower: 8, upper_exclusive: null, unit: 'concurrent uploads', verified: true })
+  deepEqual(envelope.capacity, { kind: 'exact', lower: 8, upper_exclusive: null, unit: 'concurrent uploads', verified: true,
+    stop: 'level 9 (concurrent uploads): failed' })
   deepEqual(envelope.versions, context.versions)
   deepEqual(envelope.time, { start: context.start, end: context.end })
   equal(declaredOutcome({ result: envelope })?.code, 0)
@@ -75,7 +76,8 @@ test('unverified and interrupted measurements stay evidence, and failures name t
     first_failed_level: 16, cleanup_success_rate: 1, cleanup: clean, criteria: {}, plan: { levels: [8, 16] } }
   const sampled = rampEnvelope(ramp, context)
   deepEqual([sampled.correctness, sampled.cleanup, sampled.capacity], ['not_verified', 'verified',
-    { kind: 'bracket', lower: 8, upper_exclusive: 16, unit: 'activity level', verified: true }])
+    { kind: 'bracket', lower: 8, upper_exclusive: 16, unit: 'activity level', verified: true,
+      stop: 'level 16 (activity level): failed' }])
   ok(validateEnvelope(sampled))
   const stopped = rampEnvelope({ ...ramp, status: 'infrastructure_failure', outcome: 2,
     failure_reason: 'k6 exited 2' }, context)
@@ -137,4 +139,27 @@ test('the summary and the exporter present the declared verdict and never upgrad
   equal(classifyStep({ ...step('upload-capacity'), producerExitCode: 2 }, passing).code, 2)
   match(renderMetrics([{ campaign: 'c', run: 'run-1', kind: 'upload', timestamp: 1, data: passing }], counts),
     /status="completed",bound="exact",result="= 8"/)
+})
+
+test('every capacity search records why it stopped, in its own unit', () => {
+  const failed = { vus: 9, result: 'failed', reason: 'upload p95 950 ms exceeds 900 ms' }
+  const stop = (envelope: ResultEnvelope) => envelope.capacity?.stop
+  equal(stop(uploadEnvelope({ ...upload, attempts: [...upload.attempts, failed] }, context)),
+    'level 9 (concurrent uploads): upload p95 950 ms exceeds 900 ms')
+  equal(stop(uploadEnvelope({ ...upload, result_bound: 'lower_bound', budget_reached: 'upload bytes' }, context)),
+    'MAX_UPLOAD_BYTES reached after level 8 (concurrent uploads)')
+  equal(stop(uploadEnvelope({ ...upload, result_bound: 'lower_bound', budget_reached: 'levels' }, context)),
+    'every level passed, up to 8 (concurrent uploads)')
+  const ramp = { status: 'completed', outcome: 0, load_target: 'local', result_bound: 'bracket', max_sustained_level: 8,
+    first_failed_level: 16, cleanup_success_rate: 1, cleanup: clean,
+    levels: [{ level: 16, status: 'failed', reasons: ['changes delivery 0.8775 is below 0.95', 'upload p95 high'] }] }
+  equal(stop(rampEnvelope(ramp, context)),
+    'level 16 (activity level): changes delivery 0.8775 is below 0.95; upload p95 high')
+  const fanout = { status: 'passed', outcome: 0, load_target: 'local', points: [{ n: 4, status: 'passed' }],
+    capacity: { kind: 'lower_bound', lower: 4, upper_exclusive: null } }
+  equal(stop(fanoutEnvelope({ ...fanout, budget_reached: 'runtime' }, context)),
+    'MAX_RUNTIME reached after level 4 (recipients)')
+  equal(stop(fanoutEnvelope({ ...fanout, status: 'failed', capacity: { kind: 'bracket', lower: 4, upper_exclusive: 8 },
+    points: [...fanout.points, { n: 8, status: 'failed', error: 'Observation SLA deadline exceeded' }] }, context)),
+  'level 8 (recipients): Observation SLA deadline exceeded')
 })

@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { readCapacitySteps } from '../lib/capacity-steps.ts'
 import { WARMUP_GRACE_MS } from '../lib/mixed-workload.ts'
 import { TREE_VERSION, treeFiles } from './dataset-profile.ts'
 import { stackAddress } from './drive-actors.ts'
@@ -59,11 +60,10 @@ export function readConfig(env: Env) {
   const capacity = profile === 'capacity'
   check(!dev || !soak, 'A soak samples the Stack admin metrics, which shared DEV does not expose')
   // A capacity search steps through increasing rates, one k6 run each; fixed and soak runs keep one rate.
-  const rates = capacity ? (env.MIXED_RATES || '1,2,4,8').split(',').map(r => getPositiveInteger('MIXED_RATES', r))
-    : [getPositiveInteger('MIXED_RATE', env.MIXED_RATE || '1')]
-  check(rates.every((r, i) => i === 0 || r > rates[i - 1]!), 'MIXED_RATES must be increasing workflows per second')
+  const steps = capacity ? readCapacitySteps(env, { max: 8 }) : null
+  const rates = steps?.levels ?? [getPositiveInteger('MIXED_RATE', env.MIXED_RATE || '1')]
   const rate = rates[0]!
-  const durationMs = getDurationMs('MIXED_DURATION', env.MIXED_DURATION || (soak ? '10m' : capacity ? '1m' : '2m'))
+  const durationMs = steps?.holdMs ?? getDurationMs('MIXED_DURATION', env.MIXED_DURATION || (soak ? '10m' : '2m'))
   const warmupMs = getDurationMs('MIXED_WARMUP', env.MIXED_WARMUP || (soak ? '1m' : '0s'))
   const drainMs = getDurationMs('MIXED_DRAIN', env.MIXED_DRAIN || (soak ? '1m' : '0s'))
   const maxVus = getPositiveInteger('MIXED_MAX_VUS', env.MIXED_MAX_VUS || '10')

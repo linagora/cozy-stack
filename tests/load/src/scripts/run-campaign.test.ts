@@ -145,8 +145,8 @@ const mixed = { ...mixedSearch, result: mixedCapacityEnvelope(mixedSearch, { int
   versions: { harness: 'test', stack: 'test' }, topology: 'single-host', start: '2026-10-27T10:00:00Z',
   end: '2026-10-27T10:01:00Z' }) }
 const producers = `upload_capacity upload FILE_SIZE=1M
-shared_drive_ramp ramp RAMP_LEVELS=8,16
-org_drive_fanout fanout FANOUT_LEVELS=2,4`
+shared_drive_ramp ramp CAPACITY_START=8 CAPACITY_MAX=16
+org_drive_fanout fanout CAPACITY_START=2 CAPACITY_MAX=4`
 const producerExits = (run: Run): string[] => run.steps.map(step => step[6] ?? '')
 
 test('a campaign whose steps all completed exits 0', async t => {
@@ -272,9 +272,9 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     'mixed-capacity': { exit: 0, report: mixed },
   }
   // Locally the capacity ladders go past the VM's limits; shared DEV keeps them within its budgets.
-  for (const [campaign, vus, levels, batches, members, rates, devLevels] of [
-    ['smoke', '2', '1,2', '1,2', '2', '1,2', '1,2'],
-    ['capacity', undefined, '1,2,4,8,16,32,64', '1,2,4,8,16,32,64,128,256', '256', '1,2,4,8,16,32', '1,2,4,8,16'],
+  for (const [campaign, uploads, levels, batches, members, rates, devLevels] of [
+    ['smoke', '2', '2', '2', '2', '2', '2'],
+    ['capacity', undefined, '64', '256', '256', '32', '16'],
   ] as const) {
     const run = await runCampaign(t, '', plays, undefined, { campaign })
     equal(run.code, 0, run.log)
@@ -282,9 +282,9 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     deepEqual(run.targets, ['cozy-prepare', 'upload-capacity', 'seed-org', 'shared-drive-ramp', 'org-drive-fanout',
       'seed-org-cleanup', 'seed-scale', 'mixed-capacity', 'seed-scale-cleanup'])
     deepEqual([setting(run.commands[1], 'LOAD_TARGET'), setting(run.commands[1], 'FILE_SIZE'),
-      setting(run.commands[1], 'MAX_VUS'), setting(run.commands[3], 'RAMP_LEVELS'),
-      setting(run.commands[2], 'SEED_USERS'), setting(run.commands[4], 'FANOUT_LEVELS')],
-    ['local', '100K', vus, levels, members, batches])
+      setting(run.commands[1], 'CAPACITY_MAX'), setting(run.commands[3], 'CAPACITY_MAX'),
+      setting(run.commands[2], 'SEED_USERS'), setting(run.commands[4], 'CAPACITY_MAX')],
+    ['local', '100K', uploads, levels, members, batches])
     const org = setting(run.commands[2], 'SEED_DOMAIN')!
     match(org, /^seed-[a-f0-9]{32}\./)
     deepEqual([setting(run.commands[3], 'ACTORS_DOMAIN'), setting(run.commands[4], 'FANOUT_ORG_DOMAIN'),
@@ -294,7 +294,7 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     match(tree, /^seed-[a-f0-9]{32}\./)
     ok(tree !== org)
     deepEqual([setting(run.commands[6], 'SEED_PROFILE'), setting(run.commands[7], 'MIXED_DOMAIN'),
-      setting(run.commands[7], 'MIXED_RATES'), setting(run.commands[8], 'SEED_DOMAIN')], ['tree', tree, rates, tree])
+      setting(run.commands[7], 'CAPACITY_MAX'), setting(run.commands[8], 'SEED_DOMAIN')], ['tree', tree, rates, tree])
     if (!hasFlock()) continue
     // On shared DEV, the agreed budgets apply and a smoke ladder stays below them.
     const dev = await runCampaign(t, '', plays, undefined, { campaign, env: {
@@ -302,10 +302,10 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
     equal(dev.code, 0, dev.log)
     deepEqual(dev.targets, ['upload-capacity', 'shared-drive-ramp', 'org-drive-fanout', 'mixed-capacity'])
     deepEqual(dev.commands.map(command => setting(command, 'LOAD_TARGET')), ['dev', 'dev', 'dev', 'dev'])
-    deepEqual([setting(dev.commands[0], 'MAX_VUS'), setting(dev.commands[0], 'MAX_UPLOAD_BYTES'),
-      setting(dev.commands[1], 'RAMP_LEVELS'), setting(dev.commands[2], 'FANOUT_LEVELS'),
-      setting(dev.commands[3], 'MIXED_RATES'), setting(dev.commands[3], 'MAX_VUS')],
-    [vus ?? '128', '2560M', devLevels, devLevels, devLevels, '129'])
+    deepEqual([setting(dev.commands[0], 'MAX_VUS'), setting(dev.commands[0], 'CAPACITY_MAX'),
+      setting(dev.commands[0], 'MAX_UPLOAD_BYTES'), setting(dev.commands[1], 'CAPACITY_MAX'),
+      setting(dev.commands[2], 'CAPACITY_MAX'), setting(dev.commands[3], 'CAPACITY_MAX'), setting(dev.commands[3], 'MAX_VUS')],
+    ['128', uploads, '2560M', devLevels, devLevels, devLevels, '129'])
   }
 })
 

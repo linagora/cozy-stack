@@ -4,6 +4,7 @@ import { closeSync, mkdirSync, openSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
+import { readCapacitySteps } from '../lib/capacity-steps.ts'
 import { parseDurationToMs } from '../lib/duration.ts'
 import { FixtureDeadline, FixtureError, request, type Reply } from './fixture-http.ts'
 import {
@@ -157,12 +158,12 @@ async function main(): Promise<void> {
     typeof value === 'string' && !['schema', 'producer', 'workload'].includes(key) ? redact(value) : value, 2) + '\n'
   try {
     check(process.argv.length === 2, 'Configuration belongs in environment variables, not arguments')
-    const levelsRaw = process.env.FANOUT_LEVELS ?? '1,2,4,8,16'
-    const levels = levelsRaw.split(',').map(Number)
-    const validLevels = /^[1-9]\d*(,[1-9]\d*)*$/.test(levelsRaw) && levels.every((n, i) =>
-      Number.isSafeInteger(n) && n <= 1000 && (i === 0 || n > levels[i - 1]!))
-    check(validLevels, 'Invalid FANOUT_LEVELS')
+    let levels: number[]
+    try { ({ levels } = readCapacitySteps(process.env, { max: 16 })) } catch (error) {
+      throw new FanoutError(error instanceof Error ? error.message : 'Invalid capacity levels')
+    }
     const maxN = levels.at(-1)!
+    check(maxN <= 1000, 'CAPACITY_MAX must be at most 1000 recipients')
     const timeout = integer('FANOUT_TIMEOUT_MS', '60000')
     const poll = integer('FANOUT_POLL_MS', '500')
     const concurrency = integer('FANOUT_POLL_CONCURRENCY', '8', 1000)

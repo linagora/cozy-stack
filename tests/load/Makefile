@@ -8,7 +8,11 @@ SEED_SETTINGS := SEED_ADMIN_URL SEED_STACK_URL SEED_ADMIN_USERNAME SEED_ADMIN_PA
                  SEED_MANIFEST ACTORS_DOMAIN SEED_PROFILE SEED_GENERATION_SEED
 $(foreach setting,$(SEED_SETTINGS),$(if $(filter undefined,$(origin $(setting))),,$(eval export $(setting))))
 
-FANOUT_SETTINGS := FANOUT_ORG_DOMAIN FANOUT_LEVELS FANOUT_TIMEOUT_MS FANOUT_POLL_MS \
+# Every capacity search's levels (README, Capacity searches).
+CAPACITY_SETTINGS := CAPACITY_START CAPACITY_GROWTH CAPACITY_MAX CAPACITY_HOLD
+$(foreach setting,$(CAPACITY_SETTINGS),$(if $(filter undefined,$(origin $(setting))),,$(eval export $(setting))))
+
+FANOUT_SETTINGS := FANOUT_ORG_DOMAIN FANOUT_TIMEOUT_MS FANOUT_POLL_MS \
                    FANOUT_POLL_CONCURRENCY FANOUT_STABLE_MS FANOUT_REPORT
 $(foreach setting,$(FANOUT_SETTINGS),$(if $(filter undefined,$(origin $(setting))),,$(eval export $(setting))))
 
@@ -92,7 +96,7 @@ help:
 	@echo "make seed-org SEED_USERS=50                    Build an organization with empty user instances"
 	@echo "make seed-org-cleanup SEED_DOMAIN=...          Delete the organization fixture and its users"
 	@echo "make seed-verify SEED_DOMAIN=...               Check a seeded fixture against its manifest"
-	@echo "make org-drive-fanout FANOUT_LEVELS=10,50,100   Check group auto-accept and revoke convergence"
+	@echo "make org-drive-fanout CAPACITY_MAX=64           Check group auto-accept and revoke convergence"
 	@echo "Runners target BASE_URL (make cozy-prepare sets the bundled Stack), or shared DEV with LOAD_TARGET=dev,"
 	@echo "DEV_INSTANCE and the MAX_VUS, MAX_UPLOAD_BYTES and MAX_RUNTIME budgets agreed with the DEV owner."
 	@echo "make fixture-up FIXTURE_PROJECT=load-fixture-seed"
@@ -112,7 +116,7 @@ help:
 	@echo "make upload UPLOAD_TARGET=shared-drive SHARED_DRIVE_ID=... SHARED_DRIVE_ROOT_ID=..."
 	@echo "make upload-capacity BASE_URL=https://... FILE_SIZE=10M"
 	@echo "make upload-regression BASE_URL=https://... VUS=2 ITERATIONS_PER_VU=5"
-	@echo "make mixed-capacity MIXED_DOMAIN=... MIXED_RATES=1,2,4,8  The highest workflow rate a tree fixture sustains"
+	@echo "make mixed-capacity MIXED_DOMAIN=... CAPACITY_MAX=8  The highest workflow rate a tree fixture sustains"
 	@echo "make status | make logs | make down"
 
 doctor:
@@ -216,8 +220,6 @@ cozy-up:
 cozy-prepare: $(NODE_MODULES_MARKER) cozy-up
 	@COZY_INSTANCE_DOMAIN="$(COZY_INSTANCE_DOMAIN)" COZY_BASE_URL="$(COZY_BASE_URL)" COZY_CLIENT_SOFTWARE_ID="$(COZY_CLIENT_SOFTWARE_ID)" COZY_TOKEN_EXPIRATION="$(COZY_TOKEN_EXPIRATION)" $(NODE_BIN)/tsx src/scripts/prepare-local-cozy-instance.ts
 
-RAMP_LEVELS ?= 1,2,4,8,16
-RAMP_STEP_DURATION ?= 1m
 RAMP_WRITERS_PER_LEVEL ?= 1
 RAMP_WS_READERS_PER_LEVEL ?= 3
 RAMP_CHANGES_READERS_PER_LEVEL ?= 2
@@ -238,8 +240,10 @@ shared-drive-ramp-run: upload-binary observability-up
 		-e SHARED_DRIVE_ID="$(SHARED_DRIVE_ID)" \
 		-e SHARED_DRIVE_ROOT_ID="$(SHARED_DRIVE_ROOT_ID)" \
 		-e FILE_SIZE="$(FILE_SIZE)" \
-		-e RAMP_LEVELS="$(RAMP_LEVELS)" \
-		-e RAMP_STEP_DURATION="$(RAMP_STEP_DURATION)" \
+		-e CAPACITY_START="$(CAPACITY_START)" \
+		-e CAPACITY_GROWTH="$(CAPACITY_GROWTH)" \
+		-e CAPACITY_MAX="$(CAPACITY_MAX)" \
+		-e CAPACITY_HOLD="$(CAPACITY_HOLD)" \
 		-e RAMP_WRITERS_PER_LEVEL="$(RAMP_WRITERS_PER_LEVEL)" \
 		-e RAMP_WS_READERS_PER_LEVEL="$(RAMP_WS_READERS_PER_LEVEL)" \
 		-e RAMP_CHANGES_READERS_PER_LEVEL="$(RAMP_CHANGES_READERS_PER_LEVEL)" \
@@ -281,18 +285,18 @@ mixed-run: upload-binary observability-up
 		/scripts/mixed-workload.ts
 
 # A fixed arrival rate of workflows against a tree fixture (README, Mixed workload); mixed-soak keeps it
-# up for longer between a warm-up and a drain, and mixed-capacity steps through MIXED_RATES. LOAD_TARGET=dev
+# up for longer between a warm-up and a drain, and mixed-capacity steps through the capacity levels. LOAD_TARGET=dev
 # runs against the Cloudery tree fixture under the shared DEV lock.
 .PHONY: mixed-workload mixed-soak mixed-capacity
 mixed-soak: MIXED_PROFILE := soak
 mixed-capacity: MIXED_PROFILE := capacity
 mixed-workload mixed-soak mixed-capacity: $(NODE_MODULES_MARKER)
-	@MIXED_PROFILE="$(MIXED_PROFILE)" MIXED_RATES="$(MIXED_RATES)" MIXED_WARMUP="$(MIXED_WARMUP)" MIXED_DRAIN="$(MIXED_DRAIN)" SOAK_TRIAL="$(SOAK_TRIAL)" SOAK_MAX_GOROUTINE_GROWTH="$(SOAK_MAX_GOROUTINE_GROWTH)" SOAK_MAX_HEAP_GROWTH="$(SOAK_MAX_HEAP_GROWTH)" MIXED_DOMAIN="$(MIXED_DOMAIN)" MIXED_RATE="$(MIXED_RATE)" MIXED_DURATION="$(MIXED_DURATION)" MIXED_MAX_VUS="$(MIXED_MAX_VUS)" MIXED_OBSERVERS="$(MIXED_OBSERVERS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MAX_VUS="$(MAX_VUS)" MAX_REQUESTS="$(MAX_REQUESTS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" \
+	@MIXED_PROFILE="$(MIXED_PROFILE)" MIXED_WARMUP="$(MIXED_WARMUP)" MIXED_DRAIN="$(MIXED_DRAIN)" SOAK_TRIAL="$(SOAK_TRIAL)" SOAK_MAX_GOROUTINE_GROWTH="$(SOAK_MAX_GOROUTINE_GROWTH)" SOAK_MAX_HEAP_GROWTH="$(SOAK_MAX_HEAP_GROWTH)" MIXED_DOMAIN="$(MIXED_DOMAIN)" MIXED_RATE="$(MIXED_RATE)" MIXED_DURATION="$(MIXED_DURATION)" MIXED_MAX_VUS="$(MIXED_MAX_VUS)" MIXED_OBSERVERS="$(MIXED_OBSERVERS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MAX_VUS="$(MAX_VUS)" MAX_REQUESTS="$(MAX_REQUESTS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" \
 		$(RECORD_EXIT) $(if $(filter dev,$(LOAD_TARGET)),bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)") node --import tsx src/scripts/mixed-campaign.ts
 
 # The shared-drive ramp through the campaign runner: LOAD_TARGET=dev holds the shared DEV lock, as for
 # uploads. The runner creates or reuses the test drive itself.
-SHARED_DRIVE_CAMPAIGN = LOAD_TARGET="$(LOAD_TARGET)" BASE_URL="$(BASE_URL)" STACK_URL="$(STACK_URL)" FILE_SIZE="$(FILE_SIZE)" RAMP_LEVELS="$(RAMP_LEVELS)" RAMP_STEP_DURATION="$(RAMP_STEP_DURATION)" RAMP_WRITERS_PER_LEVEL="$(RAMP_WRITERS_PER_LEVEL)" RAMP_WS_READERS_PER_LEVEL="$(RAMP_WS_READERS_PER_LEVEL)" RAMP_CHANGES_READERS_PER_LEVEL="$(RAMP_CHANGES_READERS_PER_LEVEL)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_DELIVERY_RATIO="$(MIN_DELIVERY_RATIO)" MAX_VUS="$(MAX_VUS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" EXECUTION_ID="$(EXECUTION_ID)" \
+SHARED_DRIVE_CAMPAIGN = LOAD_TARGET="$(LOAD_TARGET)" BASE_URL="$(BASE_URL)" STACK_URL="$(STACK_URL)" FILE_SIZE="$(FILE_SIZE)" RAMP_WRITERS_PER_LEVEL="$(RAMP_WRITERS_PER_LEVEL)" RAMP_WS_READERS_PER_LEVEL="$(RAMP_WS_READERS_PER_LEVEL)" RAMP_CHANGES_READERS_PER_LEVEL="$(RAMP_CHANGES_READERS_PER_LEVEL)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MIN_DELIVERY_RATIO="$(MIN_DELIVERY_RATIO)" MAX_VUS="$(MAX_VUS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" EXECUTION_ID="$(EXECUTION_ID)" \
 	$(RECORD_EXIT) $(if $(filter dev,$(LOAD_TARGET)),bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)") node --import tsx src/scripts/shared-drive-campaign.ts
 shared-drive-ramp: export COZY_ACCESS_TOKEN := $(COZY_ACCESS_TOKEN)
 shared-drive-ramp: $(NODE_MODULES_MARKER)

@@ -20,14 +20,14 @@ const fixture = async (t: TestContext) => {
 test('rejects a ramp beyond its budgets before any request', async t => {
   const f = await fixture(t)
   for (const env of [{ MAX_VUS: '95' }, { MAX_UPLOAD_BYTES: '2M' }, { MAX_RUNTIME: '7m' }, { MAX_RUNTIME: '' },
-    { RAMP_LEVELS: '4,2' }, { EXECUTION_ID: '../x' }]) {
+    { CAPACITY_GROWTH: '1' }, { EXECUTION_ID: '../x' }]) {
     const { code, output } = await f.run(env)
     equal(code, 2, output)
   }
   deepEqual(f.state.requests, [])
   deepEqual(f.docker(), [])
   // One k6 run holds one 30-minute instance token, so a ramp longer than a DEV run never starts.
-  const { code, output } = await f.run({ RAMP_STEP_DURATION: '5m', MAX_RUNTIME: '1h', MAX_UPLOAD_BYTES: '20M' })
+  const { code, output } = await f.run({ CAPACITY_HOLD: '5m', MAX_RUNTIME: '1h', MAX_UPLOAD_BYTES: '20M' })
   equal(code, 2, output)
   match(output, /beyond one k6 run on this target/)
   deepEqual(f.state.requests, [`127.0.0.1 POST /api/public/instances/${fqdn}/token`, `${fqdn} GET /settings/instance`])
@@ -38,7 +38,7 @@ test('ramp setup cannot reset MAX_RUNTIME before creating its drive', async t =>
   f.state.tokenDelayMs = 1200
   const clock = join(f.dockerDir, 'clock.mjs')
   writeFileSync(clock, 'const real = Date.now, start = real()\nDate.now = () => start + (real() - start) * 100\n')
-  const { code, output } = await f.start({ ...budgets, RAMP_LEVELS: '1', RAMP_STEP_DURATION: '5s',
+  const { code, output } = await f.start({ ...budgets, CAPACITY_MAX: '1', CAPACITY_HOLD: '5s',
     MAX_RUNTIME: '200s' }, ['--import', clock]).done
   equal(code, 2, output)
   match(output, /MAX_RUNTIME/)
@@ -64,7 +64,8 @@ test('creates the test drive once, recovers earlier data and keeps the ramp verd
   equal(report.monitoring.dev, 'unknown')
   const envelope = validateEnvelope(report.result)
   deepEqual([envelope?.producer, envelope?.outcome, envelope?.correctness, envelope?.capacity], ['shared-drive-ramp', 0,
-    'not_verified', { kind: 'lower_bound', lower: 16, upper_exclusive: null, unit: 'activity level', verified: true }])
+    'not_verified', { kind: 'lower_bound', lower: 16, upper_exclusive: null, unit: 'activity level', verified: true,
+      stop: 'every level passed, up to 16 (activity level)' }])
   deepEqual(classifyStep({ name: 'ramp', kind: 'shared-drive-ramp', id: 'x', startedAt: '', endedAt: '', exitCode: 0,
     producerExitCode: code }, report), { code: 0, reason: '' })
   const run = f.docker().find(c => c.args?.[1] === 'run')
@@ -158,8 +159,8 @@ test('a ramp that runs out of time after preparing its actors still removes thei
   // stops before k6.
   const clock = join(f.dockerDir, 'clock.mjs')
   writeFileSync(clock, 'const real = Date.now, start = real()\nDate.now = () => start + (real() - start) * 100000\n')
-  const { code, output } = await f.start({ ...budgets, ...f.local, ...actors.env, RAMP_LEVELS: '1',
-    RAMP_STEP_DURATION: '5s', MAX_RUNTIME: '200s' }, ['--import', clock]).done
+  const { code, output } = await f.start({ ...budgets, ...f.local, ...actors.env, CAPACITY_MAX: '1',
+    CAPACITY_HOLD: '5s', MAX_RUNTIME: '200s' }, ['--import', clock]).done
   equal(code, 2, output)
   match(output, /MAX_RUNTIME expired during ramp setup; its fixtures were removed/)
   deepEqual([actors.state.root, actors.state.docs.size], ['gone', 0])

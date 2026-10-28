@@ -12,7 +12,6 @@ import {
   getServedRampPhase,
   getRampTotalDurationMs,
   parseRampCriteria,
-  parseRampLevels,
   parseRampPlan,
   parseRampUploadLevel,
   rampLevelMetricName,
@@ -131,18 +130,6 @@ const healthy: LevelSample = {
   wsHandshake: 1,
 }
 
-describe('parseRampLevels', (): void => {
-  it('parses strictly increasing positive integers', (): void => {
-    deepEqual(parseRampLevels(' 1, 2 ,4,8 '), [1, 2, 4, 8])
-  })
-
-  it('rejects empty, non-integer, non-positive, or unordered levels', (): void => {
-    for (const raw of ['', '1,,2', '1,2.5', '0,1', '-1', '2,2', '4,2', 'a']) {
-      throws(() => parseRampLevels(raw), /RAMP_LEVELS/, raw)
-    }
-  })
-})
-
 describe('parseRampPlan', (): void => {
   it('uses the documented defaults', (): void => {
     deepEqual(parseRampPlan({}), {
@@ -157,8 +144,10 @@ describe('parseRampPlan', (): void => {
     deepEqual(
       parseRampPlan({
         RAMP_CHANGES_READERS_PER_LEVEL: '1',
-        RAMP_LEVELS: '2,6',
-        RAMP_STEP_DURATION: '1m30s',
+        CAPACITY_START: '2',
+        CAPACITY_GROWTH: '3',
+        CAPACITY_MAX: '6',
+        CAPACITY_HOLD: '1m30s',
         RAMP_WRITERS_PER_LEVEL: '2',
         RAMP_WS_READERS_PER_LEVEL: '4',
       }),
@@ -173,8 +162,8 @@ describe('parseRampPlan', (): void => {
 
   it('rejects hold durations too short to measure a level', (): void => {
     throws(
-      () => parseRampPlan({ RAMP_STEP_DURATION: '4s' }),
-      /RAMP_STEP_DURATION must be at least 5s/,
+      () => parseRampPlan({ CAPACITY_HOLD: '4s' }),
+      /CAPACITY_HOLD must be at least 5s/,
     )
   })
 })

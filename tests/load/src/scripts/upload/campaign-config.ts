@@ -11,6 +11,7 @@ import {
   uploadDataSizes,
   type UploadDataSize,
 } from '../../fixtures/upload-sizes.ts'
+import { readCapacitySteps } from '../../lib/capacity-steps.ts'
 import { parseDurationToMs } from '../../lib/duration.ts'
 import { getUploadTarget, type UploadTargetKind } from '../../lib/upload-target.ts'
 import { harness as harnessDirectory, type Target } from './exact-work.ts'
@@ -20,7 +21,8 @@ const ONE_GIBIBYTE = 1024n * 1024n * 1024n
 
 export type Mode = 'regression' | 'capacity'
 // The budget behind a lower bound.
-export type Budget = 'concurrency' | 'upload bytes' | 'runtime'
+// levels: the search reached CAPACITY_MAX, below what the budgets allow.
+export type Budget = 'concurrency' | 'upload bytes' | 'runtime' | 'levels'
 
 export type CampaignConfig = {
   mode: Mode
@@ -45,6 +47,8 @@ export type CampaignConfig = {
   iterationsPerVu: number
   // The highest search level in capacity mode, the fixed workers in regression mode.
   maxVus: number
+  // The capacity search's levels (lib/capacity-steps.ts), up to maxVus.
+  levels: number[]
   minimumSuccessRate: number
   uploadTargetKind: UploadTargetKind
 }
@@ -177,6 +181,7 @@ export function getCampaignConfig(): CampaignConfig {
     budgets.maxUploadBytes === null ||
     vus * iterations * fileSizeBytes <= budgets.maxUploadBytes
   let maxVus: number
+  let levels: number[] = []
   let capBudget: Budget = 'concurrency'
   let iterationsPerVu = 1
 
@@ -211,6 +216,12 @@ export function getCampaignConfig(): CampaignConfig {
 
     maxVus = Math.min(vusCap, bytesCap)
     capBudget = bytesCap < vusCap ? 'upload bytes' : 'concurrency'
+    levels = readCapacitySteps(environment, { max: maxVus }).levels
+    if (levels.at(-1)! > maxVus) {
+      throw new Error(`CAPACITY_MAX exceeds the ${capBudget} budget of ${maxVus} VUs`)
+    }
+    if (levels.at(-1)! < maxVus) capBudget = 'levels'
+    maxVus = levels.at(-1)!
   }
 
   const campaignId =
@@ -242,6 +253,7 @@ export function getCampaignConfig(): CampaignConfig {
     forceCapacityRun: environment.FORCE_CAPACITY_RUN === '1',
     iterationsPerVu,
     maxVus,
+    levels,
     minimumSuccessRate: getMinimumSuccessRate(
       environment.MIN_SUCCESS_RATE || '0.99',
     ),

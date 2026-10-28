@@ -22,7 +22,7 @@ function makeOptions(
     baselineIterations: 50,
     configuredP95LimitMs: null,
     confirmationIterations: 20,
-    maxVus: 16,
+    levels: [1, 2, 4, 8, 16],
     runPoint: async (request: PointRequest): Promise<PointOutcome> => runPoint(request),
     ...overrides,
   }
@@ -45,7 +45,7 @@ describe('searchCapacity', (): void => {
   it('reports a lower bound when every level passes up to the cap', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
     const result = await searchCapacity(
-      makeOptions(passUpTo(Infinity, requests), { maxVus: 8 }),
+      makeOptions(passUpTo(Infinity, requests), { levels: [1, 2, 4, 8] }),
     )
 
     deepEqual(result, {
@@ -74,7 +74,7 @@ describe('searchCapacity', (): void => {
   it('judges no point on latency unless a limit is configured', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
     const result = await searchCapacity(
-      makeOptions(passUpTo(Infinity, requests), { maxVus: 2 }),
+      makeOptions(passUpTo(Infinity, requests), { levels: [1, 2] }),
     )
 
     equal(result.status === 'completed' && result.p95LimitMs, null)
@@ -89,7 +89,7 @@ describe('searchCapacity', (): void => {
     const result = await searchCapacity(
       makeOptions(passUpTo(Infinity, requests), {
         configuredP95LimitMs: 750,
-        maxVus: 2,
+        levels: [1, 2],
       }),
     )
 
@@ -143,7 +143,7 @@ describe('searchCapacity', (): void => {
             result: outcomes[`${request.phase}-${request.vus}`] ?? 'passed',
           }
         },
-        { maxVus: 2 },
+        { levels: [1, 2] },
       ),
     )
 
@@ -171,7 +171,7 @@ describe('searchCapacity', (): void => {
             request.phase !== 'confirmation' || request.vus <= sustainedLimit
           return { p95Ms: 100, result: passed ? 'passed' : 'failed' }
         },
-        { maxVus: 8 },
+        { levels: [1, 2, 4, 8] },
       ),
     )
 
@@ -202,7 +202,7 @@ describe('searchCapacity', (): void => {
           p95Ms: 100,
           result: request.phase === 'confirmation' ? 'failed' : 'passed',
         }),
-        { maxVus: 4 },
+        { levels: [1, 2, 4] },
       ),
     )
 
@@ -266,7 +266,7 @@ describe('searchCapacity', (): void => {
   it('confirms a single-VU cap without discovery points', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
     const result = await searchCapacity(
-      makeOptions(passUpTo(Infinity, requests), { maxVus: 1 }),
+      makeOptions(passUpTo(Infinity, requests), { levels: [1] }),
     )
 
     equal(result.status === 'completed' && result.bound, 'lower_bound')

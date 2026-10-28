@@ -83,6 +83,12 @@ export function parseEnvironment(text: string): Record<string, string> {
   return environment
 }
 
+// Why a search stopped, as its envelope records it (result-envelope.ts), after a result that needs it.
+function stopped(result: JsonRecord): string {
+  const capacity = isJsonRecord(result.result) && isJsonRecord(result.result.capacity) ? result.result.capacity : {}
+  return typeof capacity.stop === 'string' ? `; ${capacity.stop}` : ''
+}
+
 function describeUploadCapacity(result: JsonRecord): string {
   if (result.status !== 'completed') {
     return `stopped: ${String(result.failure_reason ?? result.status)}`
@@ -91,7 +97,7 @@ function describeUploadCapacity(result: JsonRecord): string {
   const maximum = String(result.maximum_concurrent_uploads)
   return result.result_bound === 'lower_bound'
     ? `maximum concurrent uploads ≥ ${maximum} (cap reached)`
-    : `maximum concurrent uploads = ${maximum}`
+    : `maximum concurrent uploads = ${maximum}${stopped(result)}`
 }
 
 function describeRamp(result: JsonRecord): string {
@@ -153,7 +159,7 @@ function describeFanout(result: JsonRecord): string {
   if (bound?.kind === 'lower_bound') {
     return `member batch ≥ ${bound.lower} recipients (ready, access and revocation verified)`
   }
-  if (bound?.kind === 'bracket') return `tested member batch bracket [${bound.lower}, ${bound.upper})`
+  if (bound?.kind === 'bracket') return `tested member batch bracket [${bound.lower}, ${bound.upper})${stopped(result)}`
   const points = Array.isArray(result.points) ? result.points.filter(isJsonRecord) : []
   const last = points.at(-1)
   if (!last) return 'inconclusive'

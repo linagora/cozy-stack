@@ -185,6 +185,15 @@ test('a capacity search on DEV stays within its concurrency and upload-bytes bud
   equal(report.configured_max_vus, 2)
   equal(report.maximum_concurrent_uploads, 2)
   equal(report.budget_reached, 'upload bytes')
+
+  // The common capacity levels end the search below its budgets, but never beyond them.
+  equal((await f.run({ ...search, MAX_VUS: '8', CAPACITY_GROWTH: '3', CAPACITY_MAX: '3' })).code, 0)
+  report = f.report('upload-capacity')
+  deepEqual(phases(report), [['baseline', 1], ['discovery', 3], ['confirmation', 3]])
+  deepEqual([report.configured_max_vus, report.budget_reached], [3, 'levels'])
+  const over = await f.run({ ...search, MAX_VUS: '8', CAPACITY_MAX: '9' })
+  equal(over.code, 2)
+  match(over.output, /CAPACITY_MAX exceeds the concurrency budget of 8 VUs/)
 })
 
 test('a content mismatch ends a capacity search at once', async t => {

@@ -54,7 +54,7 @@ export SEED_CONTEXT_NAME=load-org-sharing
 export SEED_DOMAIN_SUFFIX=load.example.test:8443
 # Also set SEED_ADMIN_URL, SEED_STACK_URL and private admin credentials.
 
-make org-drive-fanout FANOUT_LEVELS=10,50,100
+make org-drive-fanout CAPACITY_START=10 CAPACITY_GROWTH=5 CAPACITY_MAX=100   # 10, 50, 100
 ```
 
 With no `FANOUT_ORG_DOMAIN`, the runner creates a fresh organization and enough
@@ -68,7 +68,7 @@ To use a pre-created disposable fixture, including one restored from a baseline:
 make seed-org SEED_USERS=100 SEED_CONTEXT_NAME=load-org-sharing
 # Preserve the printed organization domain and complete server-side routing.
 make org-drive-fanout FANOUT_ORG_DOMAIN='seed-<32-hex-id>.load.example.test:8443' \
-  FANOUT_LEVELS=10,50,100 FANOUT_REPORT="$HOME/private/fanout.json"
+  CAPACITY_START=10 CAPACITY_GROWTH=5 CAPACITY_MAX=100 FANOUT_REPORT="$HOME/private/fanout.json"
 ```
 
 Selecting an existing organization is explicit; the runner verifies fixture scope
@@ -86,7 +86,7 @@ admin API. Run it only from the designated load VM, under the shared DEV lock:
 ```sh
 export SEED_CLOUDERY_TOKEN_FILE=~/private/cloudery-token.json
 export SEED_CLOUDERY_MANIFEST=~/private/<prefix>-cloudery-fixture.json
-make org-drive-fanout LOAD_TARGET=dev FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m
+make org-drive-fanout LOAD_TARGET=dev CAPACITY_MAX=16 MAX_RUNTIME=30m
 ```
 
 - Before any write, each instance must match its manifest UUID on the Stack, and
@@ -110,7 +110,8 @@ make org-drive-fanout LOAD_TARGET=dev FANOUT_LEVELS=1,2,4,8,16 MAX_RUNTIME=30m
 
 ## Settings and success criteria
 
-- `FANOUT_LEVELS`: increasing distinct recipient counts, default `1,2,4,8,16`.
+- `CAPACITY_START`, `CAPACITY_GROWTH`, `CAPACITY_MAX`: the distinct recipient counts
+  ([README](README.md#capacity-searches)), default 1 to 16, doubling.
 - `FANOUT_TIMEOUT_MS`: per-operation convergence budget, default `60000`.
 - `FANOUT_POLL_MS`: observation interval, default `500`.
 - `FANOUT_POLL_CONCURRENCY`: bounded observer concurrency, default `8`.

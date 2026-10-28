@@ -20,6 +20,9 @@ export interface Capacity {
   unit: string
   // False keeps a measurement the run could not verify as evidence only.
   verified: boolean
+  // Why the search stopped: its first failing level and why, the budget it reached, or that every level
+  // passed. Envelopes written before it have none.
+  stop?: string
 }
 export interface ResultEnvelope {
   schema: typeof RESULT_SCHEMA
@@ -62,7 +65,7 @@ export function validateEnvelope(value: unknown): ResultEnvelope | null {
   const e = value as unknown as ResultEnvelope
   const c = e.capacity
   const capacity = c === null || (isJsonRecord(c) && oneOf(c.kind, ['exact', 'lower_bound', 'bracket']) &&
-    count(c.lower) && text(c.unit) && typeof c.verified === 'boolean' &&
+    count(c.lower) && text(c.unit) && typeof c.verified === 'boolean' && (c.stop === undefined || text(c.stop)) &&
     (c.kind === 'bracket' ? count(c.upper_exclusive) && c.upper_exclusive > c.lower : c.upper_exclusive === null))
   const start = Date.parse(e.time?.start)
   const end = Date.parse(e.time?.end)
@@ -89,6 +92,21 @@ export function declaredOutcome(report: JsonRecord): { code: 0 | 1 | 2, reason: 
   if (report.result === undefined) return null
   const envelope = validateEnvelope(report.result)
   return envelope ? { code: envelope.outcome, reason: envelope.reason } : { code: 2, reason: 'invalid result envelope' }
+}
+
+// The budget that ended a search while its levels still passed, by its setting.
+const BUDGETS: Record<string, string> = {
+  concurrency: 'MAX_VUS', 'upload bytes': 'MAX_UPLOAD_BYTES', runtime: 'MAX_RUNTIME',
+}
+
+function stopOf(unit: string, lower: number, failed: { level: number, reasons: unknown } | null,
+  budget?: unknown): string {
+  if (failed) {
+    const reasons = [failed.reasons].flat().filter(text).join('; ')
+    return `level ${failed.level} (${unit}): ${reasons || 'failed'}`
+  }
+  const setting = BUDGETS[String(budget)]
+  return setting ? `${setting} reached after level ${lower} (${unit})` : `every level passed, up to ${lower} (${unit})`
 }
 
 function cleanupOf(cleanups: Array<{ remaining: unknown[] } | null | undefined>): Verification {
@@ -123,6 +141,10 @@ export function uploadEnvelope(report: Record<string, any>, context: RunContext)
     capacity: measured ? {
       kind: report.result_bound, lower: maximum, upper_exclusive: null, unit: 'concurrent uploads',
       verified: report.outcome === 0,
+      // An exact capacity stopped at the level above it, which failed.
+      stop: stopOf('concurrent uploads', maximum, report.result_bound === 'exact' ? {
+        level: maximum + 1, reasons: attempts.filter(a => a.vus === maximum + 1 && a.result === 'failed').at(-1)?.reason,
+      } : null, report.budget_reached),
     } : null,
     cleanup: cleanupOf(attempts.map(a => a.cleanup)),
     workload: `upload-${report.mode}`,
@@ -148,6 +170,9 @@ export function rampEnvelope(report: Record<string, any>, context: RunContext): 
     capacity: count(lower) && (lower > 0 || bracket) ? {
       kind: bracket ? 'bracket' : 'lower_bound', lower, upper_exclusive: bracket ? upper : null,
       unit: 'activity level', verified: report.outcome === 0,
+      stop: stopOf('activity level', lower, bracket ? {
+        level: upper, reasons: report.levels?.find((l: Record<string, any>) => l.level === upper)?.reasons,
+      } : null),
     } : null,
     cleanup: typeof k6Cleanup === 'number' && k6Cleanup < 1 ? 'failed'
       : k6Cleanup === 1 ? cleanupOf([report.cleanup]) : 'not_verified',
@@ -170,6 +195,9 @@ export function fanoutEnvelope(report: Record<string, any>, context: RunContext)
     capacity: oneOf(kind, ['lower_bound', 'bracket']) && count(lower) ? {
       kind, lower, upper_exclusive: kind === 'bracket' ? upper : null, unit: 'recipients',
       verified: report.outcome === 0,
+      stop: stopOf('recipients', lower, kind === 'bracket' ? {
+        level: upper, reasons: report.points?.at(-1)?.error ?? report.error,
+      } : null, report.budget_reached),
     } : null,
     // Locally the organization fixture is retained by design: nothing claims its cleanup.
     cleanup: !Array.isArray(retained) ? 'not_verified' : retained.length ? 'failed' : 'verified',
@@ -214,6 +242,8 @@ export function mixedCapacityEnvelope(report: Record<string, any>, context: RunC
       capacity: count(lower) && (lower > 0 || bracket) ? {
         kind: bracket ? 'bracket' : 'lower_bound', lower, upper_exclusive: bracket ? upper : null,
         unit: 'workflows/s', verified: report.outcome === 0,
+        stop: stopOf('workflows/s', lower, bracket
+          ? { level: upper, reasons: levels.find(l => l.rate === upper)?.reasons } : null),
       } : null,
       cleanup: cleanupOf(levels.map(l => l.cleanup)),
       workload: 'mixed-capacity',

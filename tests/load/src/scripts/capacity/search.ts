@@ -24,8 +24,9 @@ export type CapacitySearchOptions = {
   baselineIterations: number
   configuredP95LimitMs: number | null
   confirmationIterations: number
+  // The capacity levels (lib/capacity-steps.ts): level 1 is the baseline, the last is the cap.
+  levels: number[]
   log?: (message: string) => void
-  maxVus: number
   runPoint: (request: PointRequest) => Promise<PointOutcome>
 }
 
@@ -142,12 +143,10 @@ type DiscoveryResult =
   | { reason: string; status: 'infrastructure_failure' }
 
 async function discover(context: SearchContext): Promise<DiscoveryResult> {
-  const { maxVus } = context.options
   let lastPassingVus = 1
   let firstFailingVus = 0
-  let currentVus = 2
 
-  while (currentVus <= maxVus) {
+  for (const currentVus of context.options.levels.filter(level => level > 1)) {
     const outcome = await evaluateBurstLevel(context, currentVus)
 
     if (outcome.result === 'infrastructure_failure') {
@@ -163,12 +162,6 @@ async function discover(context: SearchContext): Promise<DiscoveryResult> {
     }
 
     lastPassingVus = currentVus
-
-    if (currentVus === maxVus) {
-      break
-    }
-
-    currentVus = Math.min(currentVus * 2, maxVus)
   }
 
   if (firstFailingVus === 0) {
@@ -255,7 +248,7 @@ export async function searchCapacity(
       candidateVus,
       getCapacityResultBound(
         candidateVus,
-        options.maxVus,
+        options.levels.at(-1)!,
         discovery.firstFailingVus,
       ),
     )

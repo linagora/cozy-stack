@@ -106,14 +106,14 @@ const search = (levels: Record<string, any>[], planned = levels.length, problems
 }
 
 test('a capacity search steps through increasing rates, each with VUs for its rate, within one budget', () => {
-  const capacity = { ...env, MIXED_PROFILE: 'capacity', MIXED_RATES: '1,2,4', MIXED_DURATION: '30s' }
+  const capacity = { ...env, MIXED_PROFILE: 'capacity', CAPACITY_MAX: '4', CAPACITY_HOLD: '30s' }
   const config = readConfig(capacity)
   deepEqual(config.levels, [{ rate: 1, maxVus: 8 }, { rate: 2, maxVus: 16 }, { rate: 4, maxVus: 32 }])
   // 213 workflows over the three runs; each run has its own observer, k6 setup and cleanup, and k6 starts
   // and stops again between rates.
   deepEqual(config.needs, { vus: 33, requests: 697, bytes: 218_112, runtimeMs: 390_000 })
-  throws(() => readConfig({ ...capacity, MIXED_RATES: '2,1' }), /increasing/)
-  throws(() => readConfig({ ...capacity, MIXED_RATES: '1,x' }), /MIXED_RATES must be a positive integer/)
+  throws(() => readConfig({ ...capacity, CAPACITY_GROWTH: '1' }), /CAPACITY_GROWTH/)
+  throws(() => readConfig({ ...capacity, CAPACITY_MAX: 'x' }), /CAPACITY_MAX must be a positive integer/)
   deepEqual(readConfig({ ...env, MIXED_PROFILE: 'capacity' }).levels.map(l => l.rate), [1, 2, 4, 8])
 })
 

@@ -48,7 +48,7 @@ export function readFixture(env: Record<string, string | undefined>, recipients:
   const members = instances.filter(i => i.role === 'member').sort((a, b) => String(a.fqdn).localeCompare(String(b.fqdn)))
   check(org.length === 1 && [...org, ...members].every(i => i.fqdn && i.uuid),
     'The manifest needs one organization and identified members')
-  check(members.length >= recipients, `FANOUT_LEVELS needs ${recipients} members; the fixture has ${members.length}`)
+  check(members.length >= recipients, `CAPACITY_MAX needs ${recipients} members; the fixture has ${members.length}`)
   return {
     root: org[0]!.fqdn!,
     // Only the members the levels need. DEV_STACK_URL is a connection origin for tests; each

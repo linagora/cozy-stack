@@ -2,24 +2,25 @@
 # (make campaign CAMPAIGN=capacity LOAD_TARGET=dev). smoke.sh runs the same steps on short ladders.
 # Locally, members is the organization fixture's size: the largest fan-out batch, and at least the
 # ramp's writer and reader.
+# Every ladder starts at 1 and doubles up to its CAPACITY_MAX (README, Capacity searches).
 if [ "$CAMPAIGN" = smoke ]; then
-  upload=(MAX_VUS=2 BASELINE_ITERATIONS=4 CONFIRMATION_ITERATIONS=2)
-  ramp=(RAMP_LEVELS=1,2 RAMP_STEP_DURATION=30s)
-  fanout=(FANOUT_LEVELS=1,2)
+  upload=(CAPACITY_MAX=2 BASELINE_ITERATIONS=4 CONFIRMATION_ITERATIONS=2)
+  ramp=(CAPACITY_MAX=2 CAPACITY_HOLD=30s)
+  fanout=(CAPACITY_MAX=2)
   members=2
-  mixed=(MIXED_RATES=1,2 MIXED_DURATION=30s)
+  mixed=(CAPACITY_MAX=2 CAPACITY_HOLD=30s)
 elif [ "${SHARED_DEV:-}" = 1 ]; then
   upload=(BASELINE_ITERATIONS=50 CONFIRMATION_ITERATIONS=20)
-  ramp=(RAMP_LEVELS=1,2,4,8,16)
-  fanout=(FANOUT_LEVELS=1,2,4,8,16)
-  mixed=(MIXED_RATES=1,2,4,8,16)
+  ramp=(CAPACITY_MAX=16)
+  fanout=(CAPACITY_MAX=16)
+  mixed=(CAPACITY_MAX=16)
 else
   # Past the limits seen on the load VM, so each search ends on a failing level.
   upload=(BASELINE_ITERATIONS=50 CONFIRMATION_ITERATIONS=20)
-  ramp=(RAMP_LEVELS=1,2,4,8,16,32,64)
-  fanout=(FANOUT_LEVELS=1,2,4,8,16,32,64,128,256)
+  ramp=(CAPACITY_MAX=64)
+  fanout=(CAPACITY_MAX=256)
   members=256
-  mixed=(MIXED_RATES=1,2,4,8,16,32)
+  mixed=(CAPACITY_MAX=32)
 fi
 # Shared DEV budgets, agreed with the DEV owner: raise them only with that agreement. The ladders come
 # last, so a smoke ladder stays below them. DEV needs DEV_INSTANCE and the Cloudery token and manifest,

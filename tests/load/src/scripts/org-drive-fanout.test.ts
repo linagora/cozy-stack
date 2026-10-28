@@ -169,7 +169,7 @@ async function fixture(t: TestContext, override?: Override) {
     const child = spawn(process.execPath, args, { timeout: 15000, env: {
       ...inherited, SEED_ADMIN_URL: origins.admin, SEED_STACK_URL: origins.stack, SEED_ADMIN_PASSWORD: secret,
       SEED_DOMAIN_SUFFIX: 'localhost:8080', SEED_CONTEXT_NAME: 'fanout-test', FANOUT_ORG_DOMAIN: root,
-      FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '800', FANOUT_POLL_MS: '10', FANOUT_STABLE_MS: '20',
+      CAPACITY_MAX: '2', FANOUT_TIMEOUT_MS: '800', FANOUT_POLL_MS: '10', FANOUT_STABLE_MS: '20',
       FANOUT_POLL_CONCURRENCY: '2', SEED_MANIFEST: join(dir, 'seed-manifest.json'), ...env,
     } })
     options.onSpawn?.(child)
@@ -218,7 +218,8 @@ test('real child ramps group fanout, proves every recipient access and one-opera
   // The local organization is retained by design, so the envelope claims no cleanup.
   const envelope = validateEnvelope(result.report.result)
   deepEqual([envelope?.outcome, envelope?.capacity, envelope?.cleanup, envelope?.versions.stack], [0,
-    { kind: 'lower_bound', lower: 2, upper_exclusive: null, unit: 'recipients', verified: true }, 'not_verified', '1.6.test'])
+    { kind: 'lower_bound', lower: 2, upper_exclusive: null, unit: 'recipients', verified: true,
+      stop: 'every level passed, up to 2 (recipients)' }, 'not_verified', '1.6.test'])
   deepEqual(classifyStep({ name: 'fanout', kind: 'org-drive-fanout', id: 'run', startedAt: '', endedAt: '', exitCode: 0,
     producerExitCode: result.code }, result.report), { code: 0, reason: '' })
   deepEqual(result.report.points.map((p: any) => p.n), [1, 2])
@@ -285,7 +286,7 @@ test('pending peer snapshots may omit instance URLs without invalidating the rea
       return value
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '2' })
+  const result = await f.run({ CAPACITY_START: '2', CAPACITY_MAX: '2' })
   equal(result.code, 0, result.stdout + result.stderr)
   equal(result.report.points[0].status, 'passed')
   ok(result.report.points[0].recipients.every((r: any) => r.add.own_status === 'ready'))
@@ -318,7 +319,7 @@ test('recipient canonical scheme mismatch is inconclusive, not a ready cohort', 
     ] } } }))
     return true
   })
-  const result = await f.run({ FANOUT_LEVELS: '1' })
+  const result = await f.run({ CAPACITY_MAX: '1' })
   equal(result.code, 2, result.stdout)
   equal(result.report.status, 'inconclusive')
   equal(result.report.points[0].add.status, 'inconclusive')
@@ -339,7 +340,7 @@ test('unrecognized roster fields cannot leak an upstream secret into the report'
       return value
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '1', FANOUT_TIMEOUT_MS: '120' })
+  const result = await f.run({ CAPACITY_MAX: '1', FANOUT_TIMEOUT_MS: '120' })
   equal(result.code, 2)
   ok(!result.stdout.includes(secret), result.stdout)
   equal(result.report.status, 'inconclusive')
@@ -353,7 +354,7 @@ test('healthy all-N nonconvergence yields a sparse bracket and retains running a
       return true
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '1,2,4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
+  const result = await f.run({ CAPACITY_MAX: '4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
   equal(result.code, 0, result.stdout)
   equal(result.report.status, 'failed', result.stdout)
   deepEqual(result.report.capacity, { kind: 'bracket', lower: 1, upper_exclusive: 2, max: null })
@@ -371,7 +372,7 @@ test('an observation still in flight at the phase deadline misses the SLA like a
       if (mode === 'body') res.writeHead(200).write('{')
       return true
     })
-    const result = await f.run({ FANOUT_LEVELS: '1,2,4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
+    const result = await f.run({ CAPACITY_MAX: '4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
     equal(result.code, 0, result.stdout)
     equal(result.report.status, 'failed', result.stdout)
     deepEqual(result.report.capacity, { kind: 'bracket', lower: 1, upper_exclusive: 2, max: null })
@@ -437,7 +438,7 @@ test('mixed observer failures preserve uncertainty after a passed level in eithe
       if (held.size === 2) respond(firstHost, 'first')
       return true
     })
-    const result = await f.run({ FANOUT_LEVELS: '1,2,4', FANOUT_TIMEOUT_MS: '5000' }, {
+    const result = await f.run({ CAPACITY_MAX: '4', FANOUT_TIMEOUT_MS: '5000' }, {
       preload: observerClock,
       onStderr: text => {
         if (drainedFirst || !text.includes('settled:first')) return
@@ -486,7 +487,7 @@ test('transient recipient absence is pending, then all-N access must stabilize',
       return true
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '2', FANOUT_STABLE_MS: '35' })
+  const result = await f.run({ CAPACITY_START: '2', CAPACITY_MAX: '2', FANOUT_STABLE_MS: '35' })
   equal(result.code, 0, result.stdout)
   ok(misses >= 4)
   ok(result.report.points[0].add.elapsed_ms >= 60)
@@ -500,7 +501,7 @@ test('wrong canary bytes cannot pass even with an entirely ready owner roster', 
       return true
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
+  const result = await f.run({ CAPACITY_MAX: '2', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
   equal(result.code, 1)
   equal(result.report.status, 'failed', result.stdout)
   equal(result.report.capacity.kind, 'inconclusive')
@@ -517,7 +518,7 @@ test('wrong bytes after a passed level fail the run instead of measuring a brack
       return true
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
+  const result = await f.run({ CAPACITY_MAX: '2', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
   equal(result.code, 1, result.stdout)
   equal(result.report.status, 'failed')
   equal(result.report.content_mismatch, true)
@@ -533,7 +534,7 @@ test('removal without denial invalidates every usable capacity claim, retaining 
       return true
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '1,2,4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
+  const result = await f.run({ CAPACITY_MAX: '4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
   equal(result.code, 2)
   equal(result.report.status, 'inconclusive', result.stdout)
   deepEqual(result.report.capacity, { kind: 'inconclusive', lower: null, upper_exclusive: null, max: null })
@@ -560,7 +561,7 @@ test('single mutation transport failures are unknown and never retried or remove
       // timeout deliberately leaves headers and body unwritten.
       return true
     })
-    const result = await f.run({ FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '120' })
+    const result = await f.run({ CAPACITY_MAX: '2', FANOUT_TIMEOUT_MS: '120' })
     equal(result.code, 2)
     equal(result.report.status, 'inconclusive', result.stdout)
     equal(result.report.capacity.max, null)
@@ -591,7 +592,7 @@ test('malformed observations are inconclusive, never capacity saturation', async
       }
       return true
     })
-    const result = await f.run({ FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '120' })
+    const result = await f.run({ CAPACITY_MAX: '2', FANOUT_TIMEOUT_MS: '120' })
     equal(result.code, 2)
     equal(result.report.status, 'inconclusive')
     equal(result.report.capacity.kind, 'inconclusive')
@@ -604,8 +605,8 @@ test('malformed observations are inconclusive, never capacity saturation', async
 test('all configuration is rejected before network or mutations', async t => {
   const f = await fixture(t)
   for (const env of [
-    { FANOUT_LEVELS: '' }, { FANOUT_LEVELS: '2,1' }, { FANOUT_LEVELS: '1,1' }, { FANOUT_LEVELS: '1,1001' },
-    { FANOUT_LEVELS: '1, 2' }, { FANOUT_LEVELS: '0' }, { FANOUT_TIMEOUT_MS: '0' }, { FANOUT_POLL_MS: '-1' },
+    { CAPACITY_GROWTH: '1' }, { CAPACITY_START: '4', CAPACITY_MAX: '2' }, { CAPACITY_MAX: '1001' },
+    { CAPACITY_MAX: '0' }, { FANOUT_TIMEOUT_MS: '0' }, { FANOUT_POLL_MS: '-1' },
     { FANOUT_POLL_CONCURRENCY: '0' }, { FANOUT_STABLE_MS: '800' }, { FANOUT_ORG_DOMAIN: 'real.example' },
     { SEED_STACK_URL: 'http://user:pass@localhost' }, { SEED_ADMIN_URL: 'http://localhost/private' },
     { SEED_CONTEXT_NAME: 'bad context' }, { SEED_DOMAIN_SUFFIX: 'different.invalid' },
@@ -658,7 +659,7 @@ test('new reports are private, byte-identical JSON and existing paths are refuse
   t.after(() => rm(base, { recursive: true, force: true }))
   const path = join(base, 'new', 'report.json')
   const f = await fixture(t)
-  const result = await f.run({ FANOUT_LEVELS: '1', FANOUT_REPORT: path })
+  const result = await f.run({ CAPACITY_MAX: '1', FANOUT_REPORT: path })
   equal(result.code, 0, result.stdout)
   equal(await readFile(path, 'utf8'), result.stdout)
   equal((await stat(path)).mode & 0o777, 0o600)
@@ -673,7 +674,7 @@ test('new reports are private, byte-identical JSON and existing paths are refuse
 test('ordinary instances without a UUID stay outside the organization cohort', async t => {
   const f = await fixture(t)
   f.instances.push({ id: 'instance-plain', attributes: { domain: 'load.localhost:8080' } } as unknown as Instance)
-  const result = await f.run({ FANOUT_LEVELS: '1' })
+  const result = await f.run({ CAPACITY_MAX: '1' })
   equal(result.code, 0, result.stdout + result.stderr)
   equal(result.report.status, 'passed')
   ok(f.calls.every(r => r.headers.host !== 'load.localhost:8080'))
@@ -683,7 +684,7 @@ test('fresh mode invokes real metadata-only seeder and never silently adopts an 
   const f = await fixture(t)
   f.instances.splice(0)
   const result = await f.run({
-    FANOUT_ORG_DOMAIN: undefined, FANOUT_LEVELS: '1,2', SEED_FILES: '99', SEED_DRIVES: '99', SEED_USERS: '99',
+    FANOUT_ORG_DOMAIN: undefined, CAPACITY_MAX: '2', SEED_FILES: '99', SEED_DRIVES: '99', SEED_USERS: '99',
   })
   equal(result.code, 0, result.stdout + result.stderr)
   equal(result.report.mode, 'fresh')
@@ -707,7 +708,7 @@ test('RPC time is part of the observation SLA and cannot manufacture a late stab
     return true
   })
   const result = await f.run({
-    FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '250', FANOUT_STABLE_MS: '150', FANOUT_POLL_MS: '80',
+    CAPACITY_MAX: '2', FANOUT_TIMEOUT_MS: '250', FANOUT_STABLE_MS: '150', FANOUT_POLL_MS: '80',
   })
   equal(result.code, 1)
   equal(result.report.status, 'failed', result.stdout)
@@ -726,7 +727,7 @@ test('readiness that flickers between recipients never satisfies a stable all-N 
     }
   })
   const result = await f.run({
-    FANOUT_LEVELS: '2,4', FANOUT_TIMEOUT_MS: '900', FANOUT_STABLE_MS: '350', FANOUT_POLL_MS: '300',
+    CAPACITY_START: '2', CAPACITY_MAX: '4', FANOUT_TIMEOUT_MS: '900', FANOUT_STABLE_MS: '350', FANOUT_POLL_MS: '300',
   })
   equal(result.code, 1)
   equal(result.report.status, 'failed', result.stdout)
@@ -750,7 +751,7 @@ test('removal rediscovers the group index immediately before its single DELETE',
     }
     if (r.method === 'DELETE') deletedIndex = Number(r.url.pathname.split('/').at(-1))
   })
-  const result = await f.run({ FANOUT_LEVELS: '1' })
+  const result = await f.run({ CAPACITY_MAX: '1' })
   equal(result.code, 0, result.stdout)
   const reads = f.calls.filter(r => r.headers.host === root && r.url.pathname === '/sharings/drive-1')
   ok(reads.length > 3)
@@ -771,7 +772,7 @@ test('recipient sharing 404 after removal still requires both access-denial prob
       return true
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '1' })
+  const result = await f.run({ CAPACITY_MAX: '1' })
   equal(result.code, 0, result.stdout)
   const proof = result.report.points[0].recipients[0].remove
   equal(proof.sharing_status, 404)
@@ -807,7 +808,7 @@ test('observer request concurrency is independently bounded while mutation concu
       if (/^\/sharings\/drive-/.test(r.url.pathname)) r.delayMs = 12
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '8', FANOUT_POLL_CONCURRENCY: '3', FANOUT_TIMEOUT_MS: '1500' })
+  const result = await f.run({ CAPACITY_START: '8', CAPACITY_MAX: '8', FANOUT_POLL_CONCURRENCY: '3', FANOUT_TIMEOUT_MS: '1500' })
   equal(result.code, 0, result.stdout)
   equal(peak, 3)
   equal(inflight, 0)
@@ -838,7 +839,7 @@ test('server errors on removal access probes are observer failures, not healthy 
       return true
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '1,2', FANOUT_TIMEOUT_MS: '250', FANOUT_POLL_MS: '50' })
+  const result = await f.run({ CAPACITY_MAX: '2', FANOUT_TIMEOUT_MS: '250', FANOUT_POLL_MS: '50' })
   equal(result.code, 2)
   equal(result.report.status, 'inconclusive')
   equal(result.report.points[0].remove.status, 'inconclusive', result.stdout)
@@ -861,7 +862,7 @@ test('owner roster must include the exact cohort with group-only writable proven
         return value
       }
     })
-    const result = await f.run({ FANOUT_LEVELS: '2,4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
+    const result = await f.run({ CAPACITY_START: '2', CAPACITY_MAX: '4', FANOUT_TIMEOUT_MS: '300', FANOUT_POLL_MS: '160' })
     equal(result.code, 1)
     equal(result.report.points[0].add.status, 'failed', result.stdout)
     equal(f.drives.size, 1)
@@ -892,7 +893,7 @@ test('a failed real seed child leaves its disclosed partial organization without
     }
   })
   f.instances.splice(0)
-  const result = await f.run({ FANOUT_ORG_DOMAIN: undefined, FANOUT_LEVELS: '1' })
+  const result = await f.run({ FANOUT_ORG_DOMAIN: undefined, CAPACITY_MAX: '1' })
   equal(result.code, 2)
   match(result.report.error, /seeder failed/)
   match(result.stderr, /API request failed/)
@@ -904,7 +905,7 @@ test('a failed real seed child leaves its disclosed partial organization without
 
 test('report records the verified effective context when no override was requested', async t => {
   const f = await fixture(t)
-  const result = await f.run({ SEED_CONTEXT_NAME: undefined, FANOUT_LEVELS: '1' })
+  const result = await f.run({ SEED_CONTEXT_NAME: undefined, CAPACITY_MAX: '1' })
   equal(result.code, 0, result.stdout)
   equal(result.report.settings.context, 'fanout-test')
   equal(result.report.settings.common_contacts, true)
@@ -922,7 +923,7 @@ test('group-index rediscovery must still identify this owner sharing before DELE
       return value
     }
   })
-  const result = await f.run({ FANOUT_LEVELS: '1', FANOUT_STABLE_MS: '1' })
+  const result = await f.run({ CAPACITY_MAX: '1', FANOUT_STABLE_MS: '1' })
   equal(result.code, 2, result.stdout)
   equal(result.report.status, 'inconclusive')
   equal(result.report.points[0].add.status, 'passed')
@@ -944,7 +945,7 @@ test(
           }
         })
         const path = join(base, randomUUID() + '.json')
-        const result = await f.run({ FANOUT_LEVELS: '1', FANOUT_REPORT: path })
+        const result = await f.run({ CAPACITY_MAX: '1', FANOUT_REPORT: path })
         equal(result.code, 2)
         ok(!result.stdout.includes(value), result.stdout)
         ok(!result.stderr.includes(value))
@@ -991,7 +992,7 @@ test('shared DEV checks its budget, identities and member auto-accept before any
       return value
     }
   })
-  for (const env of [{ MAX_RUNTIME: undefined }, { FANOUT_LEVELS: '1,13' }]) {
+  for (const env of [{ MAX_RUNTIME: undefined }, { CAPACITY_MAX: '13' }]) {
     const result = await f.devRun(env)
     equal(result.code, 2, result.stderr)
   }
@@ -1088,7 +1089,7 @@ test('MAX_RUNTIME also stops writes inside a fan-out level', async t => {
     'const real = performance.now.bind(performance), start = real()\n' +
     'performance.now = () => start + (real() - start) * 100\n')
   t.after(() => rm(clock, { force: true }))
-  const result = await f.devRun({ FANOUT_LEVELS: '8', FANOUT_TIMEOUT_MS: '60000', MAX_RUNTIME: '200s' },
+  const result = await f.devRun({ CAPACITY_START: '8', CAPACITY_MAX: '8', FANOUT_TIMEOUT_MS: '60000', MAX_RUNTIME: '200s' },
     { preload: clock })
   equal(result.code, 2, result.stderr)
   equal(result.report.budget_reached, 'runtime')

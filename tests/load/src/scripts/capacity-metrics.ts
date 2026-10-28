@@ -39,15 +39,20 @@ function records(value: unknown): Record<string, unknown>[] {
 }
 
 function reasonCategory(value: unknown, passed = false): string {
-  const text = typeof value === 'string' ? value : ''
+  // A search's stop names its level first (result-envelope.ts); the category comes from why.
+  const text = typeof value === 'string' ? value.replace(/^level \d+ \([^)]*\): /, '') : ''
   for (const [pattern, category] of [
+    [/^every level passed/i, 'Every level passed'],
     [/cleanup|reconcil|remaining|retained/i, 'Cleanup unverified'],
     [/content.*(match|mismatch)|checksum/i, 'Content mismatch'],
     [/p95|latency/i, 'Latency limit exceeded'],
     [/success rate|upload.*fail/i, 'Upload success rate below minimum'],
+    [/delivery|readers reported/i, 'Delivery below minimum'],
+    [/dropped/i, 'Arrivals dropped'],
     [/iteration|incomplete|interrupt|stopped/i, 'Work incomplete'],
     [/deadline|timeout|timed out|SLA/i, 'Observation deadline exceeded'],
-    [/budget|MAX_RUNTIME|MAX_VUS/i, 'Experiment limit reached'],
+    [/budget|MAX_(RUNTIME|VUS|UPLOAD_BYTES|REQUESTS)/i, 'Experiment limit reached'],
+    [/HTTP 5\d\d|busy/i, 'Server error'],
     [/summary|metric|report|envelope/i, 'Report evidence unavailable'],
   ] as const) if (pattern.test(text)) return category
   return text === '' ? passed ? 'Required checks passed' : 'Reason not recorded' : 'See report diagnostics'
@@ -270,8 +275,10 @@ export function getReportSamples(
       ? new Date(startedAt * 1000).toISOString() : '')
     const versions = record(declared?.versions ?? data.versions)
     const budgets = record(record(declared?.parameters).budgets ?? data.budgets)
+    // A completed search stopped for its own reason: a failing level, a budget or its last level.
     const runReason = declared === null ? 'Invalid result envelope'
-      : reasonCategory(declared?.reason ?? data.failure_reason ?? data.error, outcome === 0)
+      : reasonCategory(declared ? declared.reason || declared.capacity?.stop : data.failure_reason ?? data.error,
+        outcome === 0)
     const runtime = typeof budgets.max_runtime === 'string' && /^\d+(ms|s|m|h)$/.test(budgets.max_runtime)
       ? budgets.max_runtime : 'Not recorded'
     const activityProfile: string = records(record(data.actors).placement).some(actor => actor.role === 'writer')

@@ -424,7 +424,7 @@ async function runCapacitySearch(state: CampaignState): Promise<Outcome> {
       log: (line: string): void => {
         process.stdout.write(line)
       },
-      maxVus: config.maxVus,
+      levels: config.levels,
       runPoint: async (request: PointRequest): Promise<PointOutcome> => {
         const point = await runUploadPoint(state, request)
 
