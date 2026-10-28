@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 import { readCapacitySteps } from '../lib/capacity-steps.ts'
 import { WARMUP_GRACE_MS } from '../lib/mixed-workload.ts'
+import { stepRamp, type Judged, type StepSearch } from './capacity/step-ramp.ts'
 import { TREE_VERSION, treeFiles } from './dataset-profile.ts'
 import { stackAddress } from './drive-actors.ts'
 import { request } from './fixture-http.ts'
@@ -74,7 +75,7 @@ export function readConfig(env: Env) {
   const levels = rates.map(r => ({ rate: r, maxVus: capacity ? Math.max(maxVus, VUS_PER_RATE * r) : maxVus }))
   // The caps cover the warm-up, the observers, both fixture verifications and cleanup too. k6 starts one
   // more arrival at the very start of each arrival scenario than rate × seconds.
-  const workflows = rates.reduce((sum, r) =>
+  const workflowsFor = (n: number) => rates.slice(0, n).reduce((sum, r) =>
     sum + r * Math.ceil((warmupMs + durationMs) / 1000) + (warmupMs ? 2 : 1), 0)
   // A verification reads the instance, mints a token, then reads every directory, file and drive root and
   // the root's entry count.
@@ -86,13 +87,14 @@ export function readConfig(env: Env) {
   // Each k6 run's setup creates its directory, which cleanup removes; the runner mints a token, reads the
   // Stack version and, in a soak, samples the Stack's metrics before and after. On shared DEV, the
   // runner also reads the instance and lists the root and the trash for an earlier run's leftovers.
-  const needs = {
-    vus: Math.max(...levels.map(l => l.maxVus)) + observers, bytes: workflows * UPLOAD_BYTES,
-    runtimeMs: rates.length * (warmupMs + graceMs + durationMs) + (rates.length - 1) * LEVEL_OVERHEAD_MS + drainMs +
-      OVERHEAD_MS,
-    requests: workflows * REQUESTS_PER_WORKFLOW + rates.length * (observers + 1 + cleanupRequests) +
+  // What the first n rates need.
+  const needsFor = (n: number) => ({
+    vus: Math.max(...levels.slice(0, n).map(l => l.maxVus)) + observers, bytes: workflowsFor(n) * UPLOAD_BYTES,
+    runtimeMs: n * (warmupMs + graceMs + durationMs) + (n - 1) * LEVEL_OVERHEAD_MS + drainMs + OVERHEAD_MS,
+    requests: workflowsFor(n) * REQUESTS_PER_WORKFLOW + n * (observers + 1 + cleanupRequests) +
       2 * verifyRequests + 2 + (soak ? 2 : 0) + (dev ? 3 : 0),
-  }
+  })
+  const needs = needsFor(rates.length)
   const budgets = {
     max_vus: env.MAX_VUS ? getPositiveInteger('MAX_VUS', env.MAX_VUS) : null,
     max_requests: env.MAX_REQUESTS ? getPositiveInteger('MAX_REQUESTS', env.MAX_REQUESTS) : null,
@@ -100,14 +102,24 @@ export function readConfig(env: Env) {
     max_runtime: env.MAX_RUNTIME || null,
   }
   const runtimeMs = budgets.max_runtime ? getDurationMs('MAX_RUNTIME', budgets.max_runtime) : Infinity
-  check(budgets.max_vus === null || needs.vus <= budgets.max_vus,
-    `The workload runs up to ${needs.vus} VUs, beyond MAX_VUS`)
-  check(budgets.max_requests === null || needs.requests <= budgets.max_requests,
-    `The workload sends up to ${needs.requests} requests, beyond MAX_REQUESTS`)
-  check(budgets.max_upload_bytes === null || needs.bytes <= budgets.max_upload_bytes,
-    `The workload uploads up to ${needs.bytes} bytes, beyond MAX_UPLOAD_BYTES`)
-  check(needs.runtimeMs <= runtimeMs,
-    `The workload needs ${Math.ceil(needs.runtimeMs / 60_000)} minutes, beyond MAX_RUNTIME`)
+  // The budget the first n rates exceed, or ''.
+  const exceeds = (n: number) => {
+    const at = needsFor(n)
+    return budgets.max_vus !== null && at.vus > budgets.max_vus ? 'MAX_VUS'
+      : budgets.max_requests !== null && at.requests > budgets.max_requests ? 'MAX_REQUESTS'
+      : budgets.max_upload_bytes !== null && at.bytes > budgets.max_upload_bytes ? 'MAX_UPLOAD_BYTES'
+      : at.runtimeMs > runtimeMs ? 'MAX_RUNTIME' : ''
+  }
+  // The first rate must fit; a capacity search stops before a later one that does not, as a lower bound.
+  const first = needsFor(1)
+  check(budgets.max_vus === null || first.vus <= budgets.max_vus,
+    `The workload runs up to ${first.vus} VUs, beyond MAX_VUS`)
+  check(budgets.max_requests === null || first.requests <= budgets.max_requests,
+    `The workload sends up to ${first.requests} requests, beyond MAX_REQUESTS`)
+  check(budgets.max_upload_bytes === null || first.bytes <= budgets.max_upload_bytes,
+    `The workload uploads up to ${first.bytes} bytes, beyond MAX_UPLOAD_BYTES`)
+  check(first.runtimeMs <= runtimeMs,
+    `The workload needs ${Math.ceil(first.runtimeMs / 60_000)} minutes, beyond MAX_RUNTIME`)
   if (soak && durationMs > TRIAL_MAX_MS) checkTrial(env.SOAK_TRIAL, domain, rate)
   const recovery = {
     max_goroutine_growth: Number(env.SOAK_MAX_GOROUTINE_GROWTH || '1.25'),
@@ -117,6 +129,7 @@ export function readConfig(env: Env) {
   return {
     executionId, loadTarget, domain, manifestFile, manifest, entry, profile, soak, capacity, rate, levels, durationMs,
     warmupMs, graceMs, drainMs, maxVus, observers, needs, budgets, recovery, deadlineMs: runtimeMs, ...criteria(env),
+    exceeds: (rate: number) => exceeds(rates.indexOf(rate) + 1),
   }
 }
 
@@ -216,23 +229,30 @@ export function classifyMixed(report: Record<string, any>): { code: 0 | 1 | 2, r
   return { code: 0, reason: '' }
 }
 
-// The highest rate that passed, and the first that failed. The search stops at the first rate that did
-// not pass, so the rates that passed come first.
-export function judgeCapacity(levels: Record<string, any>[], planned: number, problems: string[]) {
-  const passed = levels.filter(l => l.status === 'passed' && !l.problems.length)
+// A rate's verdict for the step loop (capacity/step-ramp.ts): anything unverified leaves it unjudged.
+export function judgeRate(level: Record<string, any>): Judged {
+  return {
+    verdict: level.problems.length ? 'inconclusive' : level.status === 'passed' ? 'passed'
+      : level.status === 'failed' ? 'failed' : 'inconclusive',
+    reasons: level.reasons ?? [],
+  }
+}
+
+// The search's bound, with what left it unverified and any wrong content.
+export function judgeCapacity(search: StepSearch<Record<string, any>>, problems: string[]) {
+  const { levels } = search
   const last = levels.at(-1)
-  const failed = last?.status === 'failed' && !last.problems.length ? last : undefined
   const allProblems = [...levels.flatMap(l => l.problems.map((p: string) => `${l.rate} workflows/s: ${p}`)),
     ...problems]
   const correctnessFailures = levels.flatMap(l => (l.correctness_failures ?? [])
     .map((f: string) => `${l.rate} workflows/s: ${f}`))
-  const resultBound = failed ? 'bracket' : passed.length === planned ? 'lower_bound' : 'inconclusive'
   return {
-    max_sustained_rate: passed.at(-1)?.rate ?? 0,
-    first_failed_rate: failed?.rate ?? null,
-    result_bound: resultBound,
+    max_sustained_rate: search.lower,
+    first_failed_rate: search.upper,
+    result_bound: search.bound,
+    budget_reached: search.budget,
     status: correctnessFailures.length ? 'correctness_failure'
-      : allProblems.length || resultBound === 'inconclusive' ? 'inconclusive' : 'completed',
+      : allProblems.length || search.bound === 'inconclusive' ? 'inconclusive' : 'completed',
     correctness_failures: correctnessFailures,
     problems: allProblems,
     reasons: last && last.status !== 'passed'
@@ -341,17 +361,17 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
   })
 
   if (config.capacity) {
-    const levels: Record<string, any>[] = []
-    for (const { rate, maxVus } of config.levels) {
+    const search = await stepRamp(config.levels.map(l => l.rate), async rate => {
+      const { maxVus } = config.levels.find(l => l.rate === rate)!
       const id = `${config.executionId}-r${rate}`
       const levelStartedAt = new Date().toISOString()
       const { work, verdict, problems, reportPath } = await runRate(rate, maxVus, id)
       // The search's report keeps every rate's verdict.
       rmSync(reportPath, { force: true })
-      levels.push({ ...verdict, rate, max_vus: maxVus, execution_id: id, started_at: levelStartedAt,
-        ended_at: new Date().toISOString(), problems, cleanup: work.cleanup, k6: work.k6 })
-      if (problems.length || verdict?.status !== 'passed' || interruption() !== null) break
-    }
+      const level = { ...verdict, rate, max_vus: maxVus, execution_id: id, started_at: levelStartedAt,
+        ended_at: new Date().toISOString(), problems, cleanup: work.cleanup, k6: work.k6 }
+      return { ...level, ...judgeRate(level) }
+    }, { fits: config.exceeds, interrupted: () => interruption() !== null })
     // Every run's own directory is gone by now, so the fixture must verify as seeded.
     const after = verify(config)
     const endedAt = new Date().toISOString()
@@ -361,7 +381,7 @@ async function run(env: Env, config: ReturnType<typeof readConfig>): Promise<num
       plan: { rates: config.levels.map(l => l.rate), duration_s: config.durationMs / 1000,
         observers: config.observers },
       criteria: { minimum_success_rate: config.minSuccessRate, p95_limit_ms: config.p95LimitMs },
-      levels, ...judgeCapacity(levels, config.levels.length,
+      levels: search.levels, ...judgeCapacity(search,
         after ? [`the fixture did not verify after the run: ${after}`] : []),
       started_at: startedAt, ended_at: endedAt,
     }

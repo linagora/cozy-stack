@@ -173,7 +173,8 @@ export function getCampaignConfig(): CampaignConfig {
     'BASELINE_ITERATIONS',
     environment.BASELINE_ITERATIONS || '50',
   )
-  const confirmationIterations = getPositiveInteger(
+  // 0 skips the search's refinement (capacity/search.ts); a level then uploads one file per worker.
+  const confirmationIterations = environment.CONFIRMATION_ITERATIONS === '0' ? 0 : getPositiveInteger(
     'CONFIRMATION_ITERATIONS',
     environment.CONFIRMATION_ITERATIONS || '20',
   )
@@ -206,7 +207,7 @@ export function getCampaignConfig(): CampaignConfig {
     const bytesCap =
       budgets.maxUploadBytes === null
         ? Infinity
-        : Math.floor(budgets.maxUploadBytes / (fileSizeBytes * confirmationIterations))
+        : Math.floor(budgets.maxUploadBytes / (fileSizeBytes * Math.max(1, confirmationIterations)))
 
     if (!fitsBytes(1, baselineIterations) || bytesCap < 1) {
       throw new Error(
@@ -282,7 +283,7 @@ export function ensureResourceCapacity(config: CampaignConfig): true {
     BigInt(
       config.mode === 'regression'
         ? config.maxVus * config.iterationsPerVu
-        : Math.max(config.baselineIterations, config.maxVus * config.confirmationIterations),
+        : Math.max(config.baselineIterations, config.maxVus * Math.max(1, config.confirmationIterations)),
     )
   const projectedDiskBytes = uploadBinaryBytes + largestPointBytes
 

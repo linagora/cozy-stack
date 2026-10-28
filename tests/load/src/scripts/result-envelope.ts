@@ -105,7 +105,8 @@ function stopOf(unit: string, lower: number, failed: { level: number, reasons: u
     const reasons = [failed.reasons].flat().filter(text).join('; ')
     return `level ${failed.level} (${unit}): ${reasons || 'failed'}`
   }
-  const setting = BUDGETS[String(budget)]
+  // The step loop (capacity/step-ramp.ts) names the budget's setting itself.
+  const setting = BUDGETS[String(budget)] ?? (/^MAX_[A-Z_]+$/.test(String(budget)) ? String(budget) : undefined)
   return setting ? `${setting} reached after level ${lower} (${unit})` : `every level passed, up to ${lower} (${unit})`
 }
 
@@ -129,7 +130,9 @@ export function uploadEnvelope(report: Record<string, any>, context: RunContext)
   const regression = report.mode === 'regression'
   const attempts: Record<string, any>[] = report.attempts ?? []
   const maximum = report.maximum_concurrent_uploads
-  const measured = !regression && count(maximum) && oneOf(report.result_bound, ['exact', 'lower_bound'])
+  const measured = !regression && count(maximum) && oneOf(report.result_bound, ['exact', 'lower_bound', 'bracket'])
+  // An exact capacity stopped at the level above it, an unrefined bracket at its first failing level.
+  const failing = report.result_bound === 'exact' ? maximum + 1 : report.first_failed_vus
   const finished = oneOf(report.status, ['completed', 'regression_failure', 'correctness_failure'])
   return envelope(regression ? 'upload-regression' : 'upload-capacity', report, context, report.failure_reason, {
     execution: context.interrupted ? 'interrupted' : finished ? 'completed' : 'incomplete',
@@ -139,12 +142,12 @@ export function uploadEnvelope(report: Record<string, any>, context: RunContext)
       ? report.status === 'regression_failure' ? 'failed' : report.status === 'completed' ? 'passed' : 'not_measured'
       : !measured ? 'not_measured' : maximum === 0 ? 'failed' : 'passed',
     capacity: measured ? {
-      kind: report.result_bound, lower: maximum, upper_exclusive: null, unit: 'concurrent uploads',
+      kind: report.result_bound, lower: maximum,
+      upper_exclusive: report.result_bound === 'bracket' ? report.first_failed_vus : null, unit: 'concurrent uploads',
       verified: report.outcome === 0,
-      // An exact capacity stopped at the level above it, which failed.
-      stop: stopOf('concurrent uploads', maximum, report.result_bound === 'exact' ? {
-        level: maximum + 1, reasons: attempts.filter(a => a.vus === maximum + 1 && a.result === 'failed').at(-1)?.reason,
-      } : null, report.budget_reached),
+      stop: stopOf('concurrent uploads', maximum, report.result_bound === 'lower_bound' ? null : {
+        level: failing, reasons: attempts.filter(a => a.vus === failing && a.result === 'failed').at(-1)?.reason,
+      }, report.budget_reached),
     } : null,
     cleanup: cleanupOf(attempts.map(a => a.cleanup)),
     workload: `upload-${report.mode}`,
@@ -172,7 +175,7 @@ export function rampEnvelope(report: Record<string, any>, context: RunContext): 
       unit: 'activity level', verified: report.outcome === 0,
       stop: stopOf('activity level', lower, bracket ? {
         level: upper, reasons: report.levels?.find((l: Record<string, any>) => l.level === upper)?.reasons,
-      } : null),
+      } : null, report.budget_reached),
     } : null,
     cleanup: typeof k6Cleanup === 'number' && k6Cleanup < 1 ? 'failed'
       : k6Cleanup === 1 ? cleanupOf([report.cleanup]) : 'not_verified',
@@ -243,7 +246,7 @@ export function mixedCapacityEnvelope(report: Record<string, any>, context: RunC
         kind: bracket ? 'bracket' : 'lower_bound', lower, upper_exclusive: bracket ? upper : null,
         unit: 'workflows/s', verified: report.outcome === 0,
         stop: stopOf('workflows/s', lower, bracket
-          ? { level: upper, reasons: levels.find(l => l.rate === upper)?.reasons } : null),
+          ? { level: upper, reasons: levels.find(l => l.rate === upper)?.reasons } : null, report.budget_reached),
       } : null,
       cleanup: cleanupOf(levels.map(l => l.cleanup)),
       workload: 'mixed-capacity',

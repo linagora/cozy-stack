@@ -6,7 +6,8 @@ export type CapacityPhase =
   | 'confirmation'
 
 export type PointResult = 'passed' | 'failed' | 'infrastructure_failure'
-export type ResultBound = 'exact' | 'lower_bound'
+// bracket: the levels' own [last passing, first failing), when the search does not refine it.
+export type ResultBound = 'exact' | 'lower_bound' | 'bracket'
 
 export type PointRequest = {
   iterationsPerVu: number
@@ -23,6 +24,7 @@ export type PointOutcome = {
 export type CapacitySearchOptions = {
   baselineIterations: number
   configuredP95LimitMs: number | null
+  // 0 skips the refinement, bisection and confirmation, and keeps the levels' bracket.
   confirmationIterations: number
   // The capacity levels (lib/capacity-steps.ts): level 1 is the baseline, the last is the cap.
   levels: number[]
@@ -34,6 +36,8 @@ export type CapacitySearchResult =
   | {
       baselineP95Ms: number
       bound: ResultBound
+      // The first failing level, in a bracket.
+      firstFailingVus?: number
       maximumVus: number
       p95LimitMs: number | null
       status: 'completed'
@@ -164,7 +168,7 @@ async function discover(context: SearchContext): Promise<DiscoveryResult> {
     lastPassingVus = currentVus
   }
 
-  if (firstFailingVus === 0) {
+  if (firstFailingVus === 0 || context.options.confirmationIterations === 0) {
     return { firstFailingVus, lastPassingVus, status: 'completed' }
   }
 
@@ -211,12 +215,14 @@ export async function searchCapacity(
   const complete = (
     maximumVus: number,
     bound: ResultBound,
+    firstFailingVus?: number,
   ): CapacitySearchResult => ({
     baselineP95Ms,
     bound,
     maximumVus,
     p95LimitMs,
     status: 'completed',
+    ...(firstFailingVus ? { firstFailingVus } : {}),
   })
 
   if (baselineOutcome.result === 'failed') {
@@ -235,6 +241,11 @@ export async function searchCapacity(
   }
 
   const candidateVus = discovery.lastPassingVus
+  if (options.confirmationIterations === 0) {
+    return discovery.firstFailingVus
+      ? complete(candidateVus, 'bracket', discovery.firstFailingVus)
+      : complete(candidateVus, 'lower_bound')
+  }
   const confirmationOutcome = await evaluateConfirmationLevel(context, candidateVus)
 
   if (confirmationOutcome.result === 'infrastructure_failure') {

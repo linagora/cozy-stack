@@ -49,13 +49,15 @@ const hang = () => {
   setInterval(() => {}, 1000)
 }
 const mismatch = mode.includes('mismatch') && Number(env.UPLOAD_VUS) >= Number(process.env.FAKE_MISMATCH_VUS || 1)
-// The ramp writes its own verdict, as handleSummary does; FAKE_RAMP sets its bound and level.
+// The ramp writes its one level's verdict, as handleSummary does; levels from FAKE_RAMP_FAIL on fail.
 const ramp = args.includes('/scripts/shared-drive-ramp.ts')
 const finishRamp = () => {
-  const [bound, level] = (process.env.FAKE_RAMP || 'lower_bound:16').split(':')
+  const level = Number(env.CAPACITY_START)
+  const failed = level >= Number(process.env.FAKE_RAMP_FAIL || Infinity)
   if (mode !== 'no-report') fs.writeFileSync('data/results/' + env.EXECUTION_ID + '-shared-drive-ramp.json', JSON.stringify({
-    status: 'completed', result_bound: bound, max_sustained_level: Number(level), first_failed_level: null,
-    failure_reason: null, cleanup_success_rate: 1, levels: [] }))
+    status: 'completed', result_bound: failed ? 'bracket' : 'lower_bound', max_sustained_level: failed ? 0 : level,
+    first_failed_level: failed ? level : null, failure_reason: null, cleanup_success_rate: 1, correctness_failures: [],
+    levels: [{ level, status: failed ? 'failed' : 'passed', reasons: failed ? ['upload p95 3000 ms exceeds 2000 ms'] : [] }] }))
   process.exit(Number(process.env.FAKE_RAMP_EXIT || 0))
 }
 const finishUpload = () => {

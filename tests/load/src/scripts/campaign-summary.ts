@@ -95,9 +95,10 @@ function describeUploadCapacity(result: JsonRecord): string {
   }
 
   const maximum = String(result.maximum_concurrent_uploads)
-  return result.result_bound === 'lower_bound'
-    ? `maximum concurrent uploads ≥ ${maximum} (cap reached)`
-    : `maximum concurrent uploads = ${maximum}${stopped(result)}`
+  return result.result_bound === 'lower_bound' ? `maximum concurrent uploads ≥ ${maximum} (cap reached)`
+    : result.result_bound === 'bracket'
+      ? `concurrent uploads bracket [${maximum}, ${String(result.first_failed_vus)})${stopped(result)}`
+      : `maximum concurrent uploads = ${maximum}${stopped(result)}`
 }
 
 function describeRamp(result: JsonRecord): string {
@@ -106,7 +107,8 @@ function describeRamp(result: JsonRecord): string {
   }
   const maximum = String(result.max_sustained_level)
   if (result.result_bound === 'lower_bound') {
-    return `maximum sustained level ≥ ${maximum} (every level passed)`
+    return `maximum sustained level ≥ ${maximum} ` +
+      `(${result.budget_reached ? `${String(result.budget_reached)} reached` : 'every level passed'})`
   }
 
   const levels = Array.isArray(result.levels) ? result.levels.filter(isJsonRecord) : []
@@ -130,7 +132,8 @@ function describeMixedCapacity(result: JsonRecord): string {
       `${Array.isArray(last.reasons) ? last.reasons.join('; ') : String(result.failure_reason ?? '')}`
   const maximum = String(result.max_sustained_rate ?? 0)
   if (result.result_bound === 'lower_bound') {
-    return `maximum sustained rate ≥ ${maximum} workflows/s (every rate passed)`
+    return `maximum sustained rate ≥ ${maximum} workflows/s ` +
+      `(${result.budget_reached ? `${String(result.budget_reached)} reached` : 'every rate passed'})`
   }
   if (result.result_bound === 'bracket') {
     return `sustained rate bracket [${maximum}, ${String(result.first_failed_rate)}) workflows/s${detail}`

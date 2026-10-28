@@ -71,6 +71,21 @@ describe('searchCapacity', (): void => {
     )
   })
 
+  it('without refinement, keeps the levels\' own bracket or lower bound', async (): Promise<void> => {
+    const requests: RecordedRequest[] = []
+    const result = await searchCapacity(
+      makeOptions(passUpTo(5, requests), { confirmationIterations: 0, levels: [1, 2, 4, 8, 16] }),
+    )
+    deepEqual(result, {
+      baselineP95Ms: 100, bound: 'bracket', firstFailingVus: 8, maximumVus: 4, p95LimitMs: null, status: 'completed',
+    })
+    // No bisection between 4 and 8, and no confirmation.
+    deepEqual(requests.map(({ phase, vus }) => [phase, vus]),
+      [['baseline', 1], ['discovery', 2], ['discovery', 4], ['discovery', 8], ['discovery-retry', 8]])
+    const all = await searchCapacity(makeOptions(passUpTo(Infinity, []), { confirmationIterations: 0, levels: [1, 2] }))
+    deepEqual([all.status, all.status === 'completed' && all.bound], ['completed', 'lower_bound'])
+  })
+
   it('judges no point on latency unless a limit is configured', async (): Promise<void> => {
     const requests: RecordedRequest[] = []
     const result = await searchCapacity(

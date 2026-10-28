@@ -5,9 +5,10 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import {
-  classifyMixed, classifyMixedCapacity, holdLock, judgeCapacity, judgeRecovery, parseResources, readConfig,
+  classifyMixed, classifyMixedCapacity, holdLock, judgeCapacity, judgeRate, judgeRecovery, parseResources, readConfig,
   runningMixedWorkloads,
 } from './mixed-campaign.ts'
+import { stepRamp } from './capacity/step-ramp.ts'
 import { mixedCapacityEnvelope, mixedEnvelope, validateEnvelope, type RunContext } from './result-envelope.ts'
 
 // A seeded single-instance tree fixture: 5 directories, 7 files, 1 drive and 6 root entries.
@@ -98,8 +99,12 @@ const level = (rate: number, status = 'passed', extra: Record<string, unknown> =
   cleanup: { cleaned: ['d'], remaining: [] },
   ...extra,
 })
-const search = (levels: Record<string, any>[], planned = levels.length, problems: string[] = []) => {
-  const judged = judgeCapacity(levels, planned, problems)
+// The rates as the step loop runs them, up to the first that does not pass.
+const search = async (levels: Record<string, any>[], problems: string[] = []) => {
+  const judged = judgeCapacity(await stepRamp(levels.map(l => l.rate), async rate => {
+    const ran = levels.find(l => l.rate === rate)!
+    return { ...ran, ...judgeRate(ran) }
+  }), problems)
   const { code, reason } = classifyMixedCapacity(judged)
   return { ...judged, levels, load_target: 'local', dataset: { profile: 'tree', version: 1 }, outcome: code,
     failure_reason: reason || null, code, reason }
@@ -115,35 +120,43 @@ test('a capacity search steps through increasing rates, each with VUs for its ra
   throws(() => readConfig({ ...capacity, CAPACITY_GROWTH: '1' }), /CAPACITY_GROWTH/)
   throws(() => readConfig({ ...capacity, CAPACITY_MAX: 'x' }), /CAPACITY_MAX must be a positive integer/)
   deepEqual(readConfig({ ...env, MIXED_PROFILE: 'capacity' }).levels.map(l => l.rate), [1, 2, 4, 8])
+  // A later rate beyond a budget ends the search before it; the first rate must fit.
+  deepEqual([1, 2, 4].map(readConfig({ ...capacity, MAX_VUS: '17' }).exceeds), ['', '', 'MAX_VUS'])
+  deepEqual([1, 2, 4].map(readConfig({ ...capacity, MAX_RUNTIME: '5m' }).exceeds), ['', '', 'MAX_RUNTIME'])
+  throws(() => readConfig({ ...capacity, MAX_VUS: '8' }), /beyond MAX_VUS/)
 })
 
-test('the search keeps the highest passing rate: a later failure brackets it, a first one is a regression', () => {
-  const all = search([level(1), level(2), level(4)])
+test('the search keeps the highest passing rate: a later failure brackets it, a first one is a regression', async () => {
+  const all = await search([level(1), level(2), level(4)])
   deepEqual([all.result_bound, all.max_sustained_rate, all.code], ['lower_bound', 4, 0])
-  const bracket = search([level(1), level(2), level(4, 'failed')], 4)
+  const bracket = await search([level(1), level(2), level(4, 'failed')])
   deepEqual([bracket.result_bound, bracket.max_sustained_rate, bracket.first_failed_rate, bracket.code],
     ['bracket', 2, 4, 0])
-  deepEqual([search([level(1, 'failed')], 4).code, search([level(1, 'failed')], 4).reason],
+  const first = await search([level(1, 'failed')])
+  deepEqual([first.code, first.reason],
     [1, 'the first rate failed: 1 workflows/s: upload p95 3000 ms exceeds 2000 ms'])
-  const saturated = search([level(1), level(2, 'generator_saturated')], 4)
+  const capped = await stepRamp([1, 2, 4], async rate => ({ ...level(rate), ...judgeRate(level(rate)) }),
+    { fits: rate => rate > 2 ? 'MAX_VUS' : '' })
+  deepEqual([judgeCapacity(capped, []).result_bound, judgeCapacity(capped, []).budget_reached], ['lower_bound', 'MAX_VUS'])
+  const saturated = await search([level(1), level(2, 'generator_saturated')])
   deepEqual([saturated.result_bound, saturated.max_sustained_rate, saturated.code], ['inconclusive', 1, 2])
-  const broken = search([level(1), level(2, 'passed', { problems: ['k6 exited 107'] })], 4)
+  const broken = await search([level(1), level(2, 'passed', { problems: ['k6 exited 107'] })])
   deepEqual([broken.code, broken.reason], [2, '2 workflows/s: k6 exited 107'])
-  const wrong = search([level(1, 'failed', { correctness_failures: ['1 uploads were recorded wrong'] })], 4)
+  const wrong = await search([level(1, 'failed', { correctness_failures: ['1 uploads were recorded wrong'] })])
   deepEqual([wrong.status, wrong.code, wrong.reason],
     ['correctness_failure', 1, '1 workflows/s: 1 uploads were recorded wrong'])
   // Rates that passed on a fixture that no longer verifies prove nothing.
-  equal(search([level(1)], 1, ['the fixture did not verify after the run: missing']).code, 2)
+  equal((await search([level(1)], ['the fixture did not verify after the run: missing'])).code, 2)
 })
 
-test('the capacity envelope claims the rate it measured, in workflows/s on the tree dataset', () => {
+test('the capacity envelope claims the rate it measured, in workflows/s on the tree dataset', async () => {
   for (const [levels, expected] of [
     [[level(1), level(2)], ['lower_bound', 2, null, 0]],
     [[level(1), level(2, 'failed')], ['bracket', 1, 2, 0]],
     [[level(1, 'failed')], ['bracket', 0, 1, 1]],
     [[level(1), level(2, 'generator_saturated')], ['lower_bound', 1, null, 2]],
   ] as const) {
-    const envelope = validateEnvelope(mixedCapacityEnvelope(search([...levels], 2), context))
+    const envelope = validateEnvelope(mixedCapacityEnvelope(await search([...levels]), context))
     ok(envelope, JSON.stringify(levels))
     deepEqual([envelope.capacity?.kind, envelope.capacity?.lower, envelope.capacity?.upper_exclusive, envelope.outcome],
       expected)
@@ -151,7 +164,7 @@ test('the capacity envelope claims the rate it measured, in workflows/s on the t
       ['workflows/s', expected[3] === 0, { profile: 'tree', version: 1 }])
   }
   // A rate whose successful responses were not all checked verifies nothing.
-  const unchecked = mixedCapacityEnvelope(search([level(1, 'passed', { correctness: { complete: false } })]), context)
+  const unchecked = mixedCapacityEnvelope(await search([level(1, 'passed', { correctness: { complete: false } })]), context)
   equal(unchecked.correctness, 'not_verified')
 })
 

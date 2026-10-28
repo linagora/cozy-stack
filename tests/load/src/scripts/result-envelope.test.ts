@@ -146,6 +146,10 @@ test('every capacity search records why it stopped, in its own unit', () => {
   const stop = (envelope: ResultEnvelope) => envelope.capacity?.stop
   equal(stop(uploadEnvelope({ ...upload, attempts: [...upload.attempts, failed] }, context)),
     'level 9 (concurrent uploads): upload p95 950 ms exceeds 900 ms')
+  const bracket = uploadEnvelope({ ...upload, result_bound: 'bracket', first_failed_vus: 9,
+    attempts: [...upload.attempts, failed] }, context)
+  deepEqual([bracket.capacity?.kind, bracket.capacity?.upper_exclusive, stop(bracket)],
+    ['bracket', 9, 'level 9 (concurrent uploads): upload p95 950 ms exceeds 900 ms'])
   equal(stop(uploadEnvelope({ ...upload, result_bound: 'lower_bound', budget_reached: 'upload bytes' }, context)),
     'MAX_UPLOAD_BYTES reached after level 8 (concurrent uploads)')
   equal(stop(uploadEnvelope({ ...upload, result_bound: 'lower_bound', budget_reached: 'levels' }, context)),

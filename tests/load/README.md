@@ -289,7 +289,7 @@ slower uploads, as they would in an immediate read-after-write check.
 
 Shared drives can be tested in two modes:
 
-1. **Activity ramp (`shared-drive-ramp.ts`)**: finds the highest activity level one instance sustains, in a single k6 run, with concurrent collaborative activity combining:
+1. **Activity ramp (`shared-drive-ramp.ts`)**: finds the highest activity level one instance sustains, one k6 run per level, with concurrent collaborative activity combining:
    - **File writers**: concurrent uploads into the shared drive.
    - **WebSocket readers**: persistent connections to `/sharings/drives/:id/realtime` listening for real-time `CREATED`/`UPDATED` events.
    - **Changes feed readers**: periodic polling of `/sharings/drives/:id/_changes`.
@@ -581,7 +581,8 @@ same workload at each [capacity level](#capacity-searches) (default 1 to 8
 workflows per second), for `CAPACITY_HOLD` each (default 1m), one k6 run per rate, and
 stops at the first rate that does not pass. Each rate gets at least eight VUs
 per workflow per second, so arrivals drop only once a workflow takes longer
-than eight seconds. The budgets cover every rate.
+than eight seconds. The budgets cover the first rate; a later rate beyond them ends
+the search as a lower bound.
 
 ```console
 $ make mixed-capacity MIXED_DOMAIN='seed-<32-hex-id>.localhost:8080' CAPACITY_MAX=16
@@ -713,11 +714,15 @@ Budgets stay each runner's own (`MAX_VUS`, `MAX_REQUESTS`, `MAX_UPLOAD_BYTES`,
 | `org-drive-fanout` | recipients | 16 |
 | `mixed-capacity` | workflows per second | 8 |
 
-The upload, fan-out and mixed searches advance after each passing level and stop
-at the first that does not pass. The ramp runs every level in one k6 run and
-judges them after it. The result envelope's `capacity.stop` records why a search
-stopped: its first failing level and why, the budget it reached, or that every
-level passed. The dashboard's **Why the run stopped** shows its category.
+Every search advances after each passing level and stops at the first that does
+not pass; the ramp and the mixed workload run each level in its own k6 run
+(`src/scripts/capacity/step-ramp.ts`). The first level must fit the budgets; a
+later level beyond them ends the search as a lower bound. The upload search
+refines its result by bisection and confirmation; `CONFIRMATION_ITERATIONS=0`
+skips that and keeps the bracket its levels found. The result envelope's
+`capacity.stop` records why a search stopped: its first failing level and why,
+the budget it reached, or that every level passed. The dashboard's **Why the run
+stopped** shows its category.
 
 ### Result envelope
 

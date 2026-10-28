@@ -115,6 +115,8 @@ type CapacityReport = {
   p95_limit_ms?: number | null
   maximum_concurrent_uploads?: number
   result_bound?: ResultBound
+  // The first failing level of an unrefined bracket.
+  first_failed_vus?: number
   budget_reached?: Budget
   failure_reason?: string
 }
@@ -462,6 +464,7 @@ async function runCapacitySearch(state: CampaignState): Promise<Outcome> {
   report.p95_limit_ms = result.p95LimitMs
   report.maximum_concurrent_uploads = result.maximumVus
   report.result_bound = result.bound
+  if (result.firstFailingVus) report.first_failed_vus = result.firstFailingVus
 
   if (result.bound === 'lower_bound') {
     report.budget_reached = budget
@@ -470,11 +473,10 @@ async function runCapacitySearch(state: CampaignState): Promise<Outcome> {
     return finishReport(state, 'infrastructure_failure', 2, unverified)
   }
 
-  const comparison = result.bound === 'lower_bound' ? '>=' : '='
+  const comparison = result.bound === 'lower_bound' ? `>= ${result.maximumVus}`
+    : result.bound === 'bracket' ? `in [${result.maximumVus}, ${result.firstFailingVus})` : `= ${result.maximumVus}`
 
-  process.stdout.write(
-    `\nResult for ${config.fileSize}: maximum concurrent uploads ${comparison} ${result.maximumVus}\n`,
-  )
+  process.stdout.write(`\nResult for ${config.fileSize}: maximum concurrent uploads ${comparison}\n`)
   return finishReport(state, 'completed', result.maximumVus === 0 ? 1 : 0, '')
 }
 

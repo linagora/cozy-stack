@@ -191,6 +191,13 @@ test('a capacity search on DEV stays within its concurrency and upload-bytes bud
   report = f.report('upload-capacity')
   deepEqual(phases(report), [['baseline', 1], ['discovery', 3], ['confirmation', 3]])
   deepEqual([report.configured_max_vus, report.budget_reached], [3, 'levels'])
+  // Without refinement, the levels' own bracket: no bisection and no confirmation.
+  const plan = JSON.stringify({ 'discovery:4': 'fail', 'discovery-retry:4': 'fail' })
+  equal((await f.run({ ...search, MAX_VUS: '8', CONFIRMATION_ITERATIONS: '0', FAKE_PLAN: plan })).code, 0)
+  report = f.report('upload-capacity')
+  deepEqual(phases(report), [['baseline', 1], ['discovery', 2], ['discovery', 4], ['discovery-retry', 4]])
+  deepEqual([report.result_bound, report.maximum_concurrent_uploads, report.first_failed_vus,
+    report.result.capacity.upper_exclusive], ['bracket', 2, 4, 4])
   const over = await f.run({ ...search, MAX_VUS: '8', CAPACITY_MAX: '9' })
   equal(over.code, 2)
   match(over.output, /CAPACITY_MAX exceeds the concurrency budget of 8 VUs/)
