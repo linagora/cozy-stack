@@ -60,6 +60,33 @@ func FindGroupsByText(db prefixer.Prefixer, text string, limit int) ([]*Group, e
 	return groups, err
 }
 
+// CountGroupMembers returns active membership counts without loading contacts.
+func CountGroupMembers(db prefixer.Prefixer, groupIDs []string) (map[string]int, error) {
+	counts := make(map[string]int, len(groupIDs))
+	if len(groupIDs) == 0 {
+		return counts, nil
+	}
+	keys := make([]interface{}, len(groupIDs))
+	for i, id := range groupIDs {
+		keys[i] = id
+	}
+	var result couchdb.ViewResponse
+	err := couchdb.ExecView(db, couchdb.ContactGroupMemberCount, &couchdb.ViewRequest{
+		Keys: keys, Reduce: true, Group: true,
+	}, &result)
+	if couchdb.IsNoDatabaseError(err) {
+		return counts, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range result.Rows {
+		id := row.Key.(string)
+		counts[id] = int(row.Value.(float64))
+	}
+	return counts, nil
+}
+
 // GetAllContacts returns the list of contacts inside this group.
 func (g *Group) GetAllContacts(db prefixer.Prefixer) ([]*Contact, error) {
 	var docs []*Contact

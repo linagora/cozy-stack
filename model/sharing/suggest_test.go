@@ -210,6 +210,13 @@ func TestSuggest(t *testing.T) {
 						assert.Equal(t, before, calls.Load(), "local-only mode must not call the external service")
 					}
 					assert.ElementsMatch(t, wantGroups, []string{suggestions[0].Group.Name(), suggestions[1].Group.Name()})
+					for _, suggestion := range suggestions[:2] {
+						count := 0
+						if centralized && suggestion.Group.ID() == other.ID() {
+							count = 1
+						}
+						assert.Equal(t, count, suggestion.MemberCount)
+					}
 					assert.Equal(t, "#123456", suggestions[0].Group.Color())
 					assert.Nil(t, suggestions[2].Group)
 					limited, err := Suggest(alice, "du", 1)

@@ -85,7 +85,10 @@ Groups matching by name come first, followed by people in the order of the
 search. The limit applies to the combined list after filtering people. In
 centralized mode, instances without an organization return people only. A group
 has type `io.cozy.contacts.groups`, its stable document `id`, and `name` and
-`color` attributes. When a group has no color, `color` is an empty string. For
+`color` attributes, plus `member_count` (the number of non-trashed contacts in that
+group, including contacts without an email). Counts come from the same local or
+organization database as the group, and empty groups return zero. The API does
+not return member documents. When a group has no color, `color` is an empty string. For
 people, `meta.kind` is `member` when the document was found on the organization
 instance, and `contact` when it was found on the instance. A person with no
 matching document comes back without `id` and `meta`, with their name and email:
@@ -102,7 +105,7 @@ Content-Type: application/vnd.api+json
     {
       "type": "io.cozy.contacts.groups",
       "id": "b2b-group-1234567890abcdef1234567890abcdef",
-      "attributes": { "name": "Dupont Team", "color": "#3366ff" }
+      "attributes": { "name": "Dupont Team", "color": "#3366ff", "member_count": 12 }
     },
     {
       "type": "io.cozy.contacts",

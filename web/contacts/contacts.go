@@ -90,9 +90,11 @@ func SuggestHandler(c echo.Context) error {
 	for i, s := range suggestions {
 		if s.Group != nil {
 			data[i] = apiSuggestion{
-				Type:       consts.Groups,
-				ID:         s.Group.ID(),
-				Attributes: map[string]interface{}{"name": s.Group.Name(), "color": s.Group.Color()},
+				Type: consts.Groups,
+				ID:   s.Group.ID(),
+				Attributes: map[string]interface{}{
+					"name": s.Group.Name(), "color": s.Group.Color(), "member_count": s.MemberCount,
+				},
 			}
 			continue
 		}

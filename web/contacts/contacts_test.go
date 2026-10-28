@@ -153,6 +153,13 @@ func TestContacts(t *testing.T) {
 		group.SetID("friends")
 		group.M["name"] = "Dupont [Friends]"
 		require.NoError(t, couchdb.CreateNamedDocWithDB(testInstance, group))
+		member := contact.New()
+		member.M["relationships"] = map[string]interface{}{
+			"groups": map[string]interface{}{"data": []interface{}{
+				map[string]interface{}{"_id": group.ID(), "_type": consts.Groups},
+			}},
+		}
+		require.NoError(t, couchdb.CreateDoc(testInstance, member))
 		local = suggest("dupont")
 		local.Length().Equal(2)
 		localGroup := local.First().Object()
@@ -160,6 +167,7 @@ func TestContacts(t *testing.T) {
 		localGroup.ValueEqual("id", group.ID())
 		localGroup.Path("$.attributes.name").Equal("Dupont [Friends]")
 		localGroup.Path("$.attributes.color").Equal("")
+		localGroup.Path("$.attributes.member_count").Equal(1)
 		local.Value(1).Object().ValueEqual("id", jean.ID())
 		suggest("[f").Length().Equal(1)
 	})
@@ -209,5 +217,6 @@ func TestSuggestOrganizationGroups(t *testing.T) {
 	result.ValueEqual("id", group.ID())
 	result.Path("$.attributes.name").Equal("IT")
 	result.Path("$.attributes.color").Equal("#123456")
+	result.Path("$.attributes.member_count").Equal(0)
 	result.Value("attributes").Object().NotContainsKey(orgdirectory.DirectoryMetadataKey)
 }

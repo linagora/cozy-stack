@@ -18,11 +18,12 @@ const (
 // A Suggestion is a group or person the user can share with. Contact is nil
 // when no document matches the email: the client then shares by email.
 type Suggestion struct {
-	Contact *contact.Contact
-	Group   *contact.Group
-	Kind    string
-	Name    string
-	Email   string
+	Contact     *contact.Contact
+	Group       *contact.Group
+	MemberCount int
+	Kind        string
+	Name        string
+	Email       string
 }
 
 // Suggest returns matching groups followed by people. Without a centralized
@@ -51,8 +52,20 @@ func Suggest(inst *instance.Instance, q string, limit int) ([]Suggestion, error)
 	if err != nil {
 		log.Warnf("Cannot search contact groups: %s", err)
 	} else {
+		groupIDs := make([]string, len(groups))
+		for i, group := range groups {
+			groupIDs[i] = group.ID()
+		}
+		groupDB := inst
+		if centralized {
+			groupDB = orgInst
+		}
+		counts, err := contact.CountGroupMembers(groupDB, groupIDs)
+		if err != nil {
+			return nil, err
+		}
 		for _, group := range groups {
-			suggestions = append(suggestions, Suggestion{Group: group})
+			suggestions = append(suggestions, Suggestion{Group: group, MemberCount: counts[group.ID()]})
 		}
 	}
 	if len(suggestions) >= limit {
