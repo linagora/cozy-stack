@@ -16,8 +16,8 @@ else
   # Past the limits seen on the load VM, so each search ends on a failing level.
   upload=(BASELINE_ITERATIONS=50 CONFIRMATION_ITERATIONS=20)
   ramp=(RAMP_LEVELS=1,2,4,8,16,32,64)
-  fanout=(FANOUT_LEVELS=1,2,4,8,16,32,64,128)
-  members=128
+  fanout=(FANOUT_LEVELS=1,2,4,8,16,32,64,128,256)
+  members=256
   mixed=(MIXED_RATES=1,2,4,8,16,32)
 fi
 # Shared DEV budgets, agreed with the DEV owner: raise them only with that agreement. The ladders come

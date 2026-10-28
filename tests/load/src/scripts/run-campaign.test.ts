@@ -274,7 +274,7 @@ test('smoke and capacity run every runner on their own ladders, locally on one o
   // Locally the capacity ladders go past the VM's limits; shared DEV keeps them within its budgets.
   for (const [campaign, vus, levels, batches, members, rates, devLevels] of [
     ['smoke', '2', '1,2', '1,2', '2', '1,2', '1,2'],
-    ['capacity', undefined, '1,2,4,8,16,32,64', '1,2,4,8,16,32,64,128', '128', '1,2,4,8,16,32', '1,2,4,8,16'],
+    ['capacity', undefined, '1,2,4,8,16,32,64', '1,2,4,8,16,32,64,128,256', '256', '1,2,4,8,16,32', '1,2,4,8,16'],
   ] as const) {
     const run = await runCampaign(t, '', plays, undefined, { campaign })
     equal(run.code, 0, run.log)
