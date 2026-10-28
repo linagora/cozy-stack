@@ -61,14 +61,17 @@ type apiSuggestion struct {
 }
 
 // SuggestHandler is the handler for GET /contacts/suggest. It returns the
-// people the user can share with, for what they are typing.
+// groups and people the user can share with, for what they are typing.
 func SuggestHandler(c echo.Context) error {
 	if err := middlewares.AllowWholeType(c, permission.GET, consts.Contacts); err != nil {
 		return err
 	}
+	if err := middlewares.AllowWholeType(c, permission.GET, consts.Groups); err != nil {
+		return err
+	}
 	q := strings.TrimSpace(c.QueryParam("q"))
-	if utf8.RuneCountInString(q) < 3 {
-		return jsonapi.InvalidParameter("q", errors.New("at least 3 characters are required"))
+	if utf8.RuneCountInString(q) < 2 {
+		return jsonapi.InvalidParameter("q", errors.New("at least 2 characters are required"))
 	}
 	limit := 20
 	if l := c.QueryParam("limit"); l != "" {
@@ -85,6 +88,14 @@ func SuggestHandler(c echo.Context) error {
 	}
 	data := make([]apiSuggestion, len(suggestions))
 	for i, s := range suggestions {
+		if s.Group != nil {
+			data[i] = apiSuggestion{
+				Type:       consts.Groups,
+				ID:         s.Group.ID(),
+				Attributes: map[string]interface{}{"name": s.Group.Name(), "color": s.Group.Color()},
+			}
+			continue
+		}
 		data[i] = apiSuggestion{Type: consts.Contacts}
 		if s.Contact == nil {
 			data[i].Attributes = map[string]interface{}{
