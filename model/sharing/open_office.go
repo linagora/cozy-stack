@@ -116,10 +116,13 @@ func (o *onlyOffice) GetAudience() (jwt.ClaimStrings, error)       { return nil,
 // OfficeOpener can be used to find the parameters for opening an office document.
 type OfficeOpener struct {
 	*FileOpener
+	// User is the person opening the document as their instance, or nil when
+	// the opener is not a person (anonymous share, service token).
+	User *instance.Instance
 }
 
 // Open will return an OfficeOpener for the given file.
-func OpenOffice(inst *instance.Instance, fileID string) (*OfficeOpener, error) {
+func OpenOffice(inst *instance.Instance, fileID string, user *instance.Instance) (*OfficeOpener, error) {
 	file, err := inst.VFS().FileByID(fileID)
 	if err != nil {
 		return nil, err
@@ -134,7 +137,7 @@ func OpenOffice(inst *instance.Instance, fileID string) (*OfficeOpener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &OfficeOpener{opener}, nil
+	return &OfficeOpener{FileOpener: opener, User: user}, nil
 }
 
 // GetResult looks if the file can be opened locally or not, which code can be
@@ -215,6 +218,7 @@ func (o *OfficeOpener) openLocalDocument(memberIndex int, readOnly bool) (*apiOf
 			Infof("Cannot add doc to store: %s", err)
 		return nil, ErrInternalServerError
 	}
+	office.OpenSession(o.Inst, o.User, key)
 	publicName, _ := settings.PublicName(o.Inst)
 	doc.PublicName = publicName
 	doc.OO = &onlyOffice{

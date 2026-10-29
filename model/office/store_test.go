@@ -33,3 +33,31 @@ func TestStoreSessionSharesNoMemory(t *testing.T) {
 	assert.Equal(t, []byte{1, 2, 3}, again.MD5Sum)
 	assert.Equal(t, "1-abc", again.Rev)
 }
+
+func TestStoreMoveToRevisionMovesTheFileIndex(t *testing.T) {
+	config.UseTestFile(t)
+	db := prefixer.NewPrefixer(0, "move.example.net", "move-example-net")
+	store := office.GetStore()
+
+	key, err := store.AddDoc(db, office.ConflictDetector{ID: "original", Rev: "1-abc"})
+	require.NoError(t, err)
+	require.NoError(t, store.AddParticipant(db, key, "alice.example.net"))
+
+	// A conflict moves the session to the copy of the file.
+	require.NoError(t, store.MoveToRevision(db, key, "copy", "1-def", []byte{4, 5, 6}))
+
+	got, err := store.GetDoc(db, key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "copy", got.ID)
+	assert.Equal(t, "1-def", got.Rev)
+	assert.Equal(t, []byte{4, 5, 6}, got.MD5Sum)
+	assert.Equal(t, []string{"alice.example.net"}, got.Participants())
+
+	secret, err := store.GetSecretByID(db, "copy")
+	require.NoError(t, err)
+	assert.Equal(t, key, secret, "the copy points to the session")
+	secret, err = store.GetSecretByID(db, "original")
+	require.NoError(t, err)
+	assert.Empty(t, secret, "the original file no longer points to the session")
+}
