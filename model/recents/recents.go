@@ -6,11 +6,13 @@ package recents
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/feature"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/metrics"
 )
 
 // flagEnabled is the rollout feature flag of the server-side personal
@@ -89,4 +91,108 @@ func ResourceKey(src *instance.Instance, fileID string) string {
 func PublicID(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])[:32]
+}
+
+// RecordActivity upserts the personal recents row of the actor on an item.
+// The actor is the person doing the activity, as their instance: the row lives
+// in their io.cozy.files.recents database, whoever owns the item (src). The
+// date is stamped by the server here: a single stack means a single clock.
+func RecordActivity(actor, src *instance.Instance, fileID string, kind Kind) error {
+	if err := recordActivity(actor, src, fileID, kind, time.Now()); err != nil {
+		metrics.RecentsWriteFailures.Inc()
+		return err
+	}
+	return nil
+}
+
+// maxAttempts bounds the read-merge-write loop when several requests update
+// the same row (CouchDB update conflicts).
+const maxAttempts = 3
+
+func recordActivity(actor, src *instance.Instance, fileID string, kind Kind, at time.Time) error {
+	key := ResourceKey(src, fileID)
+	locator := src.Domain + "/" + fileID
+	stamp := at.UTC().Format(time.RFC3339)
+
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var doc FileDirActivity
+		err = couchdb.GetDoc(actor, consts.FilesRecents, key, &doc)
+		if couchdb.IsNotFoundError(err) || couchdb.IsNoDatabaseError(err) {
+			doc = FileDirActivity{
+				DocID:         key,
+				SourceLocator: locator,
+				SchemaVersion: SchemaVersion,
+			}
+			if !mergeActivity(&doc, kind, stamp) {
+				return nil
+			}
+			err = couchdb.CreateNamedDocWithDB(actor, &doc)
+			if couchdb.IsConflictError(err) {
+				continue
+			}
+			return err
+		}
+		if err != nil {
+			return err
+		}
+
+		old := doc
+		// The domain of the source instance may have changed since the row
+		// was written: the new activity carries the current one.
+		moved := doc.SourceLocator != locator
+		doc.SourceLocator = locator
+		if !mergeActivity(&doc, kind, stamp) && !moved {
+			return nil // A replayed or too close activity is a no-op.
+		}
+		err = couchdb.UpdateDocWithOld(actor, &doc, &old)
+		if couchdb.IsConflictError(err) {
+			continue
+		}
+		return err
+	}
+	return err
+}
+
+// minRewriteInterval is the minimal interval between two stored activities
+// of the same kind on a row: the hot write paths (typing in a note, a sync
+// client uploading files) do not rewrite the row on every request.
+const minRewriteInterval = 60 * time.Second
+
+// mergeActivity applies an activity to a row with a max monotone per
+// component, then recomputes the sort key: an older activity arriving late
+// never downgrades a date. It reports whether the row changed.
+func mergeActivity(doc *FileDirActivity, kind Kind, stamp string) bool {
+	changed := false
+	switch kind {
+	case KindEdit:
+		if isNewer(stamp, doc.LastEditedAt) {
+			doc.LastEditedAt = stamp
+			changed = true
+		}
+	case KindView:
+		if isNewer(stamp, doc.LastViewedAt) {
+			doc.LastViewedAt = stamp
+			changed = true
+		}
+	}
+	doc.LastActivityAt = max(doc.LastEditedAt, doc.LastViewedAt)
+	return changed
+}
+
+// isNewer reports whether stamp is at least minRewriteInterval after the
+// stored stamp of the same kind.
+func isNewer(stamp, stored string) bool {
+	if stamp <= stored {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return true
+	}
+	prev, err := time.Parse(time.RFC3339, stored)
+	if err != nil {
+		return true // no stored stamp, or a malformed one
+	}
+	return at.Sub(prev) >= minRewriteInterval
 }
