@@ -93,7 +93,7 @@ func TestCheckParams(t *testing.T) {
 		}}
 		params, err := checkParams(&search, map[string]interface{}{"limit": 5.0, "score": 0.5, "unread": true}, "")
 		require.NoError(t, err)
-		assert.Equal(t, map[string]interface{}{"limit": int64(5), "score": 0.5, "unread": true}, params)
+		assert.Equal(t, map[string]interface{}{"limit": 5.0, "score": 0.5, "unread": true}, params)
 
 		params, err = checkParams(&search, map[string]interface{}{"limit": 2.5, "score": "high", "unread": nil}, "")
 		require.NoError(t, err)
@@ -431,6 +431,9 @@ func TestValidateActions(t *testing.T) {
 		"a string with items": {withEmailParameters(func(p *ParametersSchema) {
 			p.Properties["to"] = ParamSchema{Type: "string", Items: &ItemsSchema{Type: "string"}}
 		}), "param to must be a string, a number, an integer, a boolean or a list of strings"},
+		"a user-written integer": {withEmailParameters(func(p *ParametersSchema) {
+			p.Properties["limit"] = ParamSchema{Type: "integer", UserWritten: true}
+		}), "param limit must be a string or a list of strings to be user-written"},
 		"an unknown required param": {withEmailParameters(func(p *ParametersSchema) {
 			p.Required = append(p.Required, "cc")
 		}), `required param "cc" is not a property`},

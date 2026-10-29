@@ -144,6 +144,9 @@ func (p ParametersSchema) validate() error {
 		default:
 			return fmt.Errorf("param %s must be a string, a number, an integer, a boolean or a list of strings", name)
 		}
+		if prop.UserWritten && prop.Type != "string" && prop.Type != "array" {
+			return fmt.Errorf("param %s must be a string or a list of strings to be user-written", name)
+		}
 	}
 	for _, name := range p.Required {
 		if _, ok := p.Properties[name]; !ok {
@@ -576,59 +579,61 @@ func runeAt(text []rune, i int) rune {
 func checkParams(a *ActionDefinition, raw map[string]interface{}, written string) (map[string]interface{}, error) {
 	params := map[string]interface{}{}
 	for _, name := range a.Parameters.paramNames() {
-		value, empty := checkParam(a.Parameters.Properties[name], raw[name], written)
-		if empty && a.Parameters.isRequired(name) {
+		prop := a.Parameters.Properties[name]
+		required := a.Parameters.isRequired(name)
+		if prop.Type == "array" {
+			list := []string{}
+			seen := map[string]bool{}
+			values, _ := raw[name].([]interface{})
+			for _, value := range values {
+				s, ok := value.(string)
+				if !ok {
+					continue
+				}
+				s = checkValue(prop, s, written)
+				if s == "" || seen[s] {
+					continue
+				}
+				seen[s] = true
+				list = append(list, s)
+			}
+			if required && len(list) == 0 {
+				return nil, fmt.Errorf("missing %s", name)
+			}
+			params[name] = list
+			continue
+		}
+		if prop.Type != "string" {
+			value := raw[name]
+			if !hasType(prop.Type, value) {
+				value = nil
+			}
+			if required && value == nil {
+				return nil, fmt.Errorf("missing %s", name)
+			}
+			params[name] = value
+			continue
+		}
+		s, _ := raw[name].(string)
+		s = checkValue(prop, s, written)
+		if required && s == "" {
 			return nil, fmt.Errorf("missing %s", name)
 		}
-		params[name] = value
+		params[name] = s
 	}
 	return params, nil
 }
 
-func checkParam(prop ParamSchema, raw interface{}, written string) (interface{}, bool) {
-	switch prop.Type {
-	case "array":
-		list := []string{}
-		seen := map[string]bool{}
-		values, _ := raw.([]interface{})
-		for _, value := range values {
-			s, ok := value.(string)
-			if !ok {
-				continue
-			}
-			s = checkValue(prop, s, written)
-			if s == "" || seen[s] {
-				continue
-			}
-			seen[s] = true
-			list = append(list, s)
-		}
-		return list, len(list) == 0
-	case "string":
-		s, _ := raw.(string)
-		s = checkValue(prop, s, written)
-		return s, s == ""
-	default:
-		value := checkScalar(prop.Type, raw)
-		return value, value == nil
-	}
-}
-
-func checkScalar(kind string, value interface{}) interface{} {
+// hasType tells if a value decoded from JSON has the type of the schema. The
+// value is kept as decoded: a float64 integer is encoded back without a dot.
+func hasType(kind string, value interface{}) bool {
 	switch v := value.(type) {
 	case float64:
-		if kind == "number" {
-			return v
-		}
-		if kind == "integer" && v == math.Trunc(v) {
-			return int64(v)
-		}
+		return kind == "number" || kind == "integer" && v == math.Trunc(v)
 	case bool:
-		if kind == "boolean" {
-			return v
-		}
+		return kind == "boolean"
 	}
-	return nil
+	return false
 }
 
 // checkValue trims a value, and keeps a user-written one as the user wrote
