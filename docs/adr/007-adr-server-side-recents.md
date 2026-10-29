@@ -50,7 +50,12 @@ for recently modified files.
 Creating/uploading a file, creating a folder and saving a file's contents
 count as edits, and so does restoring a file from the trash: the restorer acts
 like the item was recreated, and this is a genuine personal edit. Rename, move,
-trash, copy and permission changes do not count.
+trash, copy and permission changes do not count. The automatic writes of the
+flagship app do not count either: the photo backup (files tagged with
+`metadata.backupDeviceIds` and its folders), the konnector folders, and the
+konnector traces and support logs under `/Settings/Logs` and
+`/Settings/AALogs`. Uploads from the share sheet of the mobile app count as
+file creations.
 
 ### Stored data and sorting
 
@@ -94,18 +99,38 @@ Map every supported write path to its identity source:
 | Write path | Identity source |
 |---|---|
 | Browser/mobile with a webapp or mobile session | The instance owner. |
-| Sharing write by a recipient (`share-interact` token) | The sharing member, resolved by the actor middleware. |
-| `cozy-desktop` / `cozy-flagship` OAuth clients | The instance owner. |
+| Sharing write by a recipient (`share-interact` token) | The sharing member, resolved by the actor middleware, once they have accepted the sharing. |
+| Shared drive proxy (same stack) | The recipient, when their original token is a person. |
+| Flagship OAuth client (certified, or with the `*` scope when its context skips the certification) | The instance owner, except for its automatic writes (see above). |
+| OAuth clients that declare the `desktop` kind (`cozy-desktop`) | The instance owner. |
 | Other app tokens and konnectors | Not a person. No edit recorded. |
 | OnlyOffice callback | The user or member who opened the editing session, recorded server-side when the session starts. |
 | Background saves and workers | Not a person. No edit recorded. |
 
 Verified against the current code: `cozyMetadata` records only app slugs, never
 a person, so it cannot identify the editor. The actor middleware
-(`ResolveRequestActor`) covers the owner session and `share-interact` members,
-the two cases above. There is no inbound WebDAV server path; writes from remote
-members arrive through the sharing drive routes. Do not trust a client-supplied
-editor ID. Verify callback identities on the server.
+(`ResolveRequestActor`) tells, from the original token of the request, whether
+it stands for a person, and carries the instance of that person when it lives
+on this stack: the owner for their own tokens, a `share-interact` member who
+has accepted the sharing. Before the acceptance, the member's Cozy URL comes
+from the sharer's contacts and is not trusted. The shared drive proxy swaps the
+recipient's token for the drive token on the owner's side, and keeps the actor
+resolved from the original token; a proxied route without authentication gets
+an actor that is not a person. A member whose instance is on another stack is
+skipped silently. There is no inbound WebDAV server path; writes from remote
+members arrive through the sharing drive routes. Do not trust a
+client-supplied editor ID. Verify callback identities on the server.
+
+Known limit: the `desktop` kind is declared by the OAuth client itself, like
+the other client metadata. Any OAuth client that registers with this kind
+counts as its user.
+
+Known limit: the shared drive proxy checks the original token only when it
+serves the owner's instance directly on this stack. When it cannot load that
+instance from the URL of the owner (an alias, an old domain, a port, a
+transient error), it forwards the request over HTTP, and the owner's side only
+sees the drive token: any request of the recipient then counts as the
+recipient, a konnector or service token included.
 
 Opening a document counts as personal activity, detected from reads. The same
 HTTP request serves an editor open and a download, so the stack tells them
@@ -137,6 +162,16 @@ All involved instances live on the same stack, so there is no
 server-to-server delivery: no jobs, locks, retries or ordering machinery. The
 row write upserts by `resource_key` and keeps the maximum date per component,
 so writing a row twice is a no-op.
+
+Two activities of the same kind on a row less than 60 seconds apart are one:
+the row is not rewritten, so that the hot write paths (typing in a note, a
+sync client uploading files) do not write it on every request. Each process
+also remembers, for 60 seconds, the activities it has stored, and skips the
+read of the row for an activity it knows to be already there. A row deleted by
+other means is therefore not recreated by that process for up to 60 seconds,
+which no legitimate activity needs: the documents and instances whose rows are
+deleted are gone for good, and an instance reset by an import stays blocked
+much longer.
 
 Dates are stamped by the server that captures the activity, never by the
 client: a browser clock is not trusted. One stack means one clock, so no
