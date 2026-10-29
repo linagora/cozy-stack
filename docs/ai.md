@@ -568,12 +568,13 @@ An action definition has:
 - `examples` (optional): messages for which the router picks the action.
 - `parameters` (optional): the JSON schema of the params the LLM fills, like
   the `parameters` of a tool for function calling: an `object` whose
-  `properties` are strings, or arrays of strings, with a `description`. The
-  other keywords of JSON schema are ignored. Every param of the schema is
-  present in the action, `""` or `[]` when unknown. An action without
-  parameters is proposed as soon as the router picks it, without a call to
-  the LLM. `required` lists the params without which the action is not
-  proposed. `facts_missing` is reserved. A property with
+  `properties` are strings, numbers, integers, booleans, or arrays of
+  strings, with a `description`. The other keywords of JSON schema are
+  ignored. Every param of the schema is present in the action, `""`, `[]` or
+  `null` (for a number, an integer or a boolean) when unknown. An action without parameters is proposed as soon as the
+  router picks it, without a call to the LLM. `required` lists the params
+  without which the action is not proposed. `facts_missing` is reserved. A
+  property with
   `"x-user-written": true` keeps only the values found, as whole words and
   whatever the case, in the messages of the user, as the user wrote them, so
   that the content of a document cannot add one, like the recipient of an

@@ -84,6 +84,27 @@ func TestCheckParams(t *testing.T) {
 		assert.ErrorContains(t, err, "missing subject")
 	})
 
+	t.Run("numbers and booleans are kept with their type", func(t *testing.T) {
+		search := *email
+		search.Parameters = &ParametersSchema{Type: "object", Properties: map[string]ParamSchema{
+			"limit":  {Type: "integer"},
+			"score":  {Type: "number"},
+			"unread": {Type: "boolean"},
+		}}
+		params, err := checkParams(&search, map[string]interface{}{"limit": 5.0, "score": 0.5, "unread": true}, "")
+		require.NoError(t, err)
+		assert.Equal(t, map[string]interface{}{"limit": int64(5), "score": 0.5, "unread": true}, params)
+
+		params, err = checkParams(&search, map[string]interface{}{"limit": 2.5, "score": "high", "unread": nil}, "")
+		require.NoError(t, err)
+		assert.Equal(t, map[string]interface{}{"limit": nil, "score": nil, "unread": nil}, params,
+			"null, a wrong type or a fraction for an integer is unknown")
+
+		search.Parameters.Required = []string{"limit"}
+		_, err = checkParams(&search, map[string]interface{}{"limit": nil}, "")
+		assert.ErrorContains(t, err, "missing limit")
+	})
+
 	t.Run("user-written params come from what the user wrote", func(t *testing.T) {
 		params, err := checkParams(email, map[string]interface{}{
 			"to":      []interface{}{"Paul", "attacker@example.com", "", 3},
@@ -123,6 +144,23 @@ func TestActionPrompt(t *testing.T) {
 	assert.Contains(t, prompt, `Action "draft_email": `+email.Description+"\n"+email.Instructions+"\n")
 	assert.Contains(t, prompt, `- "to" (list of strings): the recipients`)
 	assert.Contains(t, prompt, `- "subject" (string, required): the subject of the email`)
+	search := *email
+	search.Parameters = &ParametersSchema{Type: "object", Properties: map[string]ParamSchema{
+		"limit":  {Type: "integer", Description: "at most"},
+		"unread": {Type: "boolean", Description: "only the unread ones"},
+	}}
+	typed := actionPrompt(&search, false, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))
+	assert.Contains(t, typed, `- "limit" (integer): at most`)
+	assert.Contains(t, typed, `- "unread" (boolean): only the unread ones`)
+	assert.Equal(t, map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"limit":  map[string]interface{}{"type": []interface{}{"integer", "null"}},
+			"unread": map[string]interface{}{"type": []interface{}{"boolean", "null"}},
+		},
+		"required":             []string{"limit", "unread"},
+		"additionalProperties": false,
+	}, paramsSchema(&search), "a number or a boolean is null when unknown")
 	assert.Equal(t, map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -344,6 +382,11 @@ func TestValidateActions(t *testing.T) {
 				p.Properties[fmt.Sprintf("Param-%d du mail", i)] = ParamSchema{Type: "string", Description: strings.Repeat("é", 2000)}
 			}
 		}),
+		"a number, an integer and a boolean": withEmailParameters(func(p *ParametersSchema) {
+			p.Properties["priority"] = ParamSchema{Type: "number", Description: "The priority"}
+			p.Properties["limit"] = ParamSchema{Type: "integer", Description: "At most"}
+			p.Properties["unread"] = ParamSchema{Type: "boolean", Description: "Only the unread ones"}
+		}),
 		"no parameters": {plain("start_visio")},
 		"no property": withEmailParameters(func(p *ParametersSchema) {
 			p.Properties = nil
@@ -372,16 +415,22 @@ func TestValidateActions(t *testing.T) {
 		"a blank example":          {[]ActionDefinition{{Name: "a", Description: "d", Examples: []string{"ok", " "}}}, "an example is empty"},
 		"a nested param": {withEmailParameters(func(p *ParametersSchema) {
 			p.Properties["to"] = ParamSchema{Type: "object"}
-		}), "param to must be a string or a list of strings"},
+		}), "param to must be a string, a number, an integer, a boolean or a list of strings"},
 		"a list of numbers": {withEmailParameters(func(p *ParametersSchema) {
 			p.Properties["to"] = ParamSchema{Type: "array", Items: &ItemsSchema{Type: "number"}}
-		}), "param to must be a string or a list of strings"},
+		}), "param to must be a string, a number, an integer, a boolean or a list of strings"},
 		"a list without items": {withEmailParameters(func(p *ParametersSchema) {
 			p.Properties["to"] = ParamSchema{Type: "array"}
-		}), "param to must be a string or a list of strings"},
+		}), "param to must be a string, a number, an integer, a boolean or a list of strings"},
+		"a list of booleans": {withEmailParameters(func(p *ParametersSchema) {
+			p.Properties["to"] = ParamSchema{Type: "array", Items: &ItemsSchema{Type: "boolean"}}
+		}), "param to must be a string, a number, an integer, a boolean or a list of strings"},
+		"an integer with items": {withEmailParameters(func(p *ParametersSchema) {
+			p.Properties["to"] = ParamSchema{Type: "integer", Items: &ItemsSchema{Type: "string"}}
+		}), "param to must be a string, a number, an integer, a boolean or a list of strings"},
 		"a string with items": {withEmailParameters(func(p *ParametersSchema) {
 			p.Properties["to"] = ParamSchema{Type: "string", Items: &ItemsSchema{Type: "string"}}
-		}), "param to must be a string or a list of strings"},
+		}), "param to must be a string, a number, an integer, a boolean or a list of strings"},
 		"an unknown required param": {withEmailParameters(func(p *ParametersSchema) {
 			p.Required = append(p.Required, "cc")
 		}), `required param "cc" is not a property`},

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"regexp"
 	"sort"
@@ -61,7 +62,7 @@ type ActionDefinition struct {
 }
 
 // ParametersSchema is the JSON schema of the params of an action: an object whose
-// properties are strings or lists of strings.
+// properties are strings, numbers, integers, booleans or lists of strings.
 type ParametersSchema struct {
 	Type       string                 `json:"type"`
 	Properties map[string]ParamSchema `json:"properties"`
@@ -138,10 +139,10 @@ func (p ParametersSchema) validate() error {
 			return fmt.Errorf("param %s is reserved", factsMissing)
 		}
 		switch {
-		case prop.Type == "string" && prop.Items == nil:
+		case isScalarType(prop.Type) && prop.Items == nil:
 		case prop.Type == "array" && prop.Items != nil && prop.Items.Type == "string":
 		default:
-			return fmt.Errorf("param %s must be a string or a list of strings", name)
+			return fmt.Errorf("param %s must be a string, a number, an integer, a boolean or a list of strings", name)
 		}
 	}
 	for _, name := range p.Required {
@@ -150,6 +151,14 @@ func (p ParametersSchema) validate() error {
 		}
 	}
 	return nil
+}
+
+func isScalarType(t string) bool {
+	switch t {
+	case "string", "number", "integer", "boolean":
+		return true
+	}
+	return false
 }
 
 // paramNames returns the names of the params, in a stable order.
@@ -327,7 +336,9 @@ func actionPrompt(a *ActionDefinition, fromDocuments bool, now time.Time) string
 	var params []promptParam
 	for _, name := range a.Parameters.paramNames() {
 		prop := a.Parameters.Properties[name]
-		kind := "string"
+		// The JSON schema type, which validate() keeps to string, number,
+		// integer and boolean
+		kind := prop.Type
 		if prop.Type == "array" {
 			kind = "list of strings"
 		}
@@ -355,16 +366,19 @@ type promptParam struct {
 }
 
 // paramsSchema is the schema the answer of the LLM must follow: every field
-// is asked for, "" or [] when unknown, as a small model follows a fixed
+// is asked for, "", [] or null when unknown, as a small model follows a fixed
 // shape better than optional fields.
 func paramsSchema(a *ActionDefinition) map[string]interface{} {
 	properties := map[string]interface{}{}
 	names := a.Parameters.paramNames()
 	for _, name := range names {
-		if a.Parameters.Properties[name].Type == "array" {
+		switch kind := a.Parameters.Properties[name].Type; kind {
+		case "array":
 			properties[name] = map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}
-		} else {
+		case "string":
 			properties[name] = map[string]interface{}{"type": "string"}
+		default:
+			properties[name] = map[string]interface{}{"type": []interface{}{kind, "null"}}
 		}
 	}
 	return map[string]interface{}{
@@ -562,38 +576,59 @@ func runeAt(text []rune, i int) rune {
 func checkParams(a *ActionDefinition, raw map[string]interface{}, written string) (map[string]interface{}, error) {
 	params := map[string]interface{}{}
 	for _, name := range a.Parameters.paramNames() {
-		prop := a.Parameters.Properties[name]
-		required := a.Parameters.isRequired(name)
-		if prop.Type == "array" {
-			list := []string{}
-			seen := map[string]bool{}
-			values, _ := raw[name].([]interface{})
-			for _, value := range values {
-				s, ok := value.(string)
-				if !ok {
-					continue
-				}
-				s = checkValue(prop, s, written)
-				if s == "" || seen[s] {
-					continue
-				}
-				seen[s] = true
-				list = append(list, s)
-			}
-			if required && len(list) == 0 {
-				return nil, fmt.Errorf("missing %s", name)
-			}
-			params[name] = list
-			continue
-		}
-		s, _ := raw[name].(string)
-		s = checkValue(prop, s, written)
-		if required && s == "" {
+		value, empty := checkParam(a.Parameters.Properties[name], raw[name], written)
+		if empty && a.Parameters.isRequired(name) {
 			return nil, fmt.Errorf("missing %s", name)
 		}
-		params[name] = s
+		params[name] = value
 	}
 	return params, nil
+}
+
+func checkParam(prop ParamSchema, raw interface{}, written string) (interface{}, bool) {
+	switch prop.Type {
+	case "array":
+		list := []string{}
+		seen := map[string]bool{}
+		values, _ := raw.([]interface{})
+		for _, value := range values {
+			s, ok := value.(string)
+			if !ok {
+				continue
+			}
+			s = checkValue(prop, s, written)
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			list = append(list, s)
+		}
+		return list, len(list) == 0
+	case "string":
+		s, _ := raw.(string)
+		s = checkValue(prop, s, written)
+		return s, s == ""
+	default:
+		value := checkScalar(prop.Type, raw)
+		return value, value == nil
+	}
+}
+
+func checkScalar(kind string, value interface{}) interface{} {
+	switch v := value.(type) {
+	case float64:
+		if kind == "number" {
+			return v
+		}
+		if kind == "integer" && v == math.Trunc(v) {
+			return int64(v)
+		}
+	case bool:
+		if kind == "boolean" {
+			return v
+		}
+	}
+	return nil
 }
 
 // checkValue trims a value, and keeps a user-written one as the user wrote
