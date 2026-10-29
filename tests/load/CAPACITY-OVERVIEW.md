@@ -12,7 +12,7 @@ make capacity-dashboard-url
 
 The top bar contains **Environment → Mode → Run**. File size, personal/shared
 upload target and campaign describe the selected report; they are not filters.
-The compact context and **Run time range** controls appear on every tab.
+The compact context and **Run time range** controls appear on every tab and stay on it.
 **Run + context** clears the point selection and restores the recorded UTC
 window with a one-minute margin. **Run only** uses the recorded start/end without margins.
 Producer and campaign links already include the window.
@@ -40,9 +40,7 @@ expand **Point: … · change** to choose another point directly. The controls o
 the point with context or without margins; older reports explicitly fall back to
 the run window when point time is unavailable.
 Concurrency, phase and execution ID follow the point; raw IDs and numeric
-report fields stay under **Advanced diagnostics**. Selected-point work summaries
-show counts, payload and final latency only when the necessary evidence exists;
-partial evidence cannot turn an unknown failure count into zero. Upload reports record each
+report fields stay under **Advanced diagnostics**. Upload reports record each
 attempt's execution ID and start/end. Older upload reports can identify their
 execution through the known summary filename; without point times, links use
 the recorded whole-run window. Activity and fan-out also retain the run window
@@ -104,8 +102,8 @@ Activity summaries show completed uploads, peak activity level, delivery ratios
 for the last selected level and worst upload p95. Fan-out summaries show the
 largest batch, recipient-side access and revocation checks for the last selected
 batch, and the number of tested batches. Missing recipient observations remain
-unavailable even when the owner reports success. Overview covers the whole run;
-Workload follows the selected points.
+unavailable even when the owner reports success. These summaries are on
+Overview; Workload's timelines and tables follow the selected points.
 
 A configured p95 criterion becomes a
 native threshold line; no line is inferred for observational runs. Capacity
@@ -146,6 +144,7 @@ Grafana 13.2 provisions the v2 dashboard resource from
 `config/grafana/dashboards/capacity-overview.json`; native tabs and conditional
 sections require the new layouts feature. Earlier dashboard UIDs contain
 compatibility links to these tabs rather than duplicate query implementations.
+Each panel is defined once in `elements` and referenced from every tab that shows it.
 
 `capacity-metrics.ts` projects bounded, allowlisted report fields.
 `serve-capacity-results.ts` reads result files read-only and exposes Prometheus

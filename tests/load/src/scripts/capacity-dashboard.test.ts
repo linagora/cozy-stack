@@ -6,7 +6,7 @@ type Query = { group: string, datasource: { name: string }, spec: { expr?: strin
 type Panel = { kind: string, spec: { id: number, title: string, description?: string,
   data: { spec: { queries: { spec: { query: Query } }[], transformations: { kind: string, spec: Record<string, unknown> }[] } },
   vizConfig: { group: string, spec: { options: Record<string, unknown>, fieldConfig: {
-    defaults: Record<string, unknown>, overrides: { matcher: { options: string }, properties: { id: string, value: unknown }[] }[],
+    defaults: Record<string, unknown>, overrides: { matcher: { id: string, options: string }, properties: { id: string, value: unknown }[] }[],
   } } } } }
 type Variable = { kind: string, spec: { name: string, hide: string, includeAll?: boolean, allValue?: string,
   regex?: string, refresh?: string, query?: { spec: { query: string } } } }
@@ -49,11 +49,13 @@ test('one native dashboard has three tabs and only Environment, Mode and Run in 
   assert.ok(!dashboard.spec.variables.some(v => ['size', 'target', 'concurrency', 'phase'].includes(v.spec.name)))
 })
 
-test('every layout reference is unique and resolves to a panel; each fixed row has no overlaps', () => {
+test('each panel is defined once, every reference resolves to it and each fixed row has no overlaps', () => {
   const nodes = walk(dashboard.spec.layout), refs = nodes.filter(n => n.kind === 'ElementReference').map(n => n.name!)
-  assert.equal(new Set(refs).size, refs.length)
-  assert.deepEqual(refs.slice().sort(), Object.keys(dashboard.spec.elements).sort())
+  assert.deepEqual([...new Set(refs)].sort(), Object.keys(dashboard.spec.elements).sort())
   assert.equal(new Set(panels.map(p => p.spec.id)).size, panels.length)
+  // Tabs reference a shared panel instead of carrying a copy of it.
+  const bodies = panels.map(p => JSON.stringify({ ...p, spec: { ...p.spec, id: 0 } }))
+  assert.equal(new Set(bodies).size, panels.length)
   for (const grid of nodes.filter(n => n.kind === 'GridLayout')) {
     const items = grid.spec!.items!.map(i => i.spec!)
     for (const [index, a] of items.entries()) {
@@ -86,9 +88,8 @@ test('a mixed search shows each rate, and its k6 runs follow the selected rates'
   const telemetry = workload.filter(p => p.spec.vizConfig.group === 'timeseries').flatMap(queries)
   assert.equal(telemetry.length, 2)
   for (const query of telemetry) assert.match(query.spec.expr!, /campaignid="\$run",.*executionid=~"\$execution"/)
-  // Selected-rate totals show only when every selected rate recorded them.
-  const completed = workload.find(p => p.spec.title === 'Workflows completed')!
-  assert.match(queries(completed)[0]!.spec.expr!, /index=~"\$point_index".*== count\(cozy_load_point_evidence_info/)
+  // Overview owns the run summary; Workload does not repeat it for the selected rates.
+  assert.ok(!workload.some(p => p.spec.vizConfig.group === 'stat' && p.spec.title !== 'Selected run'))
 })
 
 test('regression does not present capacity curves and the producer owns the four verdicts', () => {
@@ -161,8 +162,9 @@ test('run and point links carry both the actual identity and the recorded time w
   const window = named('Run time range')
   const windowLinks = window.spec.vizConfig.spec.fieldConfig.overrides
     .flatMap(o => o.properties.filter(p => p.id === 'links').flatMap(p => p.value as { url: string }[]))
-  const all = windowLinks.find(l => l.url.includes('dtab=overview') && l.url.includes('focus_from_ms'))!
+  const all = windowLinks.find(l => l.url.includes('focus_from_ms'))!
   assert.ok(all)
+  assert.doesNotMatch(all.url, /dtab=/, 'the control keeps the current tab')
   assert.match(all.url, /var-point=\$__all/)
   assert.match(all.url, /from=\$\{__data.fields.focus_from_ms\}&to=\$\{__data.fields.focus_to_ms\}/)
   assert.doesNotMatch(all.url, /now-14d|__url_time_range/)
@@ -198,17 +200,11 @@ test('report facts use their own datasource and every tab can restore the full r
     const controls = displayed.find(p => p.spec.title === 'Run time range')!
     for (const url of controls.spec.vizConfig.spec.fieldConfig.overrides
       .flatMap(o => o.properties.filter(p => p.id === 'links').flatMap(p => p.value as { url: string }[]))) {
-      if (url.url.includes('dtab=')) assert.ok(url.url.includes(`dtab=${tab.spec!.title!.toLowerCase()}`))
+      assert.doesNotMatch(url.url, /dtab=/, `${tab.spec!.title}: the control keeps the current tab`)
     }
   }
   const point = dashboard.spec.variables.find(v => v.spec.name === 'point')!
   assert.match(point.spec.regex!, /point_id/)
-})
-
-test('partial measurements cannot turn a selected-point failure count into zero', () => {
-  const selected = panels.filter(p => p.spec.title === 'Failed uploads')
-    .flatMap(queries).find(q => q.spec.expr?.includes('cozy_load_point_value'))!
-  assert.match(selected.spec.expr!, /and on\(\).*count\(cozy_load_point_value.*== count\(cozy_load_point_evidence_info/)
 })
 
 test('table links retain their hidden identity/time fields after transformations', () => {
@@ -220,7 +216,8 @@ test('table links retain their hidden identity/time fields after transformations
     for (const link of links) for (const match of link.url.matchAll(/\$\{__data\.fields\.([a-z_]+)\}/g)) {
       assert.ok(!options?.excludeByName?.[match[1]!], `${panel.spec.title}: ${match[1]} removed`)
       if (options?.includeByName) assert.ok(options.includeByName[match[1]!])
-      const hidden = panel.spec.vizConfig.spec.fieldConfig.overrides.find(o => o.matcher.options === match[1])
+      const hidden = panel.spec.vizConfig.spec.fieldConfig.overrides.find(o => o.matcher.id === 'byRegexp'
+        ? new RegExp(o.matcher.options).test(match[1]!) : o.matcher.options === match[1])
       assert.ok(hidden?.properties.some(p => p.id === 'custom.hideFrom.viz' && p.value === true),
         `${panel.spec.title}: ${match[1]} must stay available to links and hidden in Grafana 13.2`)
     }
