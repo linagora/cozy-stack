@@ -1,0 +1,46 @@
+name: Drive web E2E
+run-name: 'Drive web E2E for PR #${{ github.event.pull_request.number }}'
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+# An unrelated label must not cancel an E2E run already in progress.
+concurrency:
+  group: drive-web-e2e-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: >-
+      github.event.label.name == 'e2e:web' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check publishing behavior
+        run: bash scripts/docker/production/release_test.sh
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_SECRET }}
+      - name: Build and publish the PR image
+        id: image
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BRANCH: ${{ github.head_ref }}
+        run: scripts/docker/production/release.sh --pr "$PR_NUMBER" "$PR_BRANCH"
+
+  web:
+    needs: build
+    uses: linagora/twake-drive/.github/workflows/e2e.yml@55c1e2883731e2008b26136bd8acd7d0d6b64b80
+    with:
+      drive-ref: master
+      stack-image: ${{ needs.build.outputs.image }}
