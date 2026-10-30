@@ -334,8 +334,9 @@ func TestRecentsCapture(t *testing.T) {
 	})
 
 	t.Run("NoOpenOnDownload", func(t *testing.T) {
-		// A download is never an open, whoever reads: an editor read is the
-		// same request.
+		// Opens are recorded by the routes that open a file (editor, notes,
+		// office): a download is the same request as an editor read, it is
+		// never an open, whoever reads.
 		note := createRecentsFile(t, inst, "a-note.cozy-note", consts.NoteMimeType)
 		drawing := createRecentsFile(t, inst, "a-drawing.excalidraw", "application/json")
 

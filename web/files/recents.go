@@ -1,11 +1,14 @@
 package files
 
 import (
+	"strings"
+
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/recents"
+	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
 )
@@ -27,8 +30,9 @@ func RecordActivity(c echo.Context, fileID string, kind recents.Kind) {
 
 // ActorInstance returns the instance of the person behind the request: the
 // instance owner for a session-bound app token or a desktop/flagship OAuth
-// client, the sharing member for a share-interact token. It returns nil when
-// the request is not a person (konnector, service token, CLI, anonymous share,
+// client, the sharing member for a share-interact token or for the preview
+// code of a member (a read-only opening). It returns nil when the request is
+// not a person (konnector, service token, CLI, anonymous share by link,
 // background worker): those record no activity. Unsupported write paths (ADR),
 // never any activity: openings of mobile OAuth apps, other app tokens and
 // konnectors.
@@ -46,6 +50,15 @@ func ActorInstance(c echo.Context) *instance.Instance {
 			return nil
 		}
 		return memberInstance(inst, actor.Domain)
+
+	case permission.TypeSharePreview:
+		// The request actor of a preview is anonymous, but a preview code is
+		// minted per member: it tells which member opens the file read-only.
+		member := previewMember(c, inst, pdoc)
+		if member == nil || member.InstanceHost() == "" {
+			return nil
+		}
+		return memberInstance(inst, member.InstanceHost())
 
 	case permission.TypeWebapp:
 		// A session-bound app token is the user in their browser; an app token
@@ -79,4 +92,26 @@ func memberInstance(inst *instance.Instance, domain string) *instance.Instance {
 		return nil
 	}
 	return user
+}
+
+// previewMember returns the sharing member to whom the preview code of the
+// request was given, or nil for a code that is not a member's.
+func previewMember(c echo.Context, inst *instance.Instance, pdoc *permission.Permission) *sharing.Member {
+	token, err := middlewares.TransformShortcodeToJWT(inst, middlewares.GetRequestToken(c))
+	if err != nil || token == "" {
+		return nil
+	}
+	_, sharingID, ok := strings.Cut(pdoc.SourceID, "/")
+	if !ok {
+		return nil
+	}
+	s, err := sharing.FindSharing(inst, sharingID)
+	if err != nil {
+		return nil
+	}
+	member, err := s.FindMemberBySharecode(inst, token)
+	if err != nil {
+		return nil
+	}
+	return member
 }

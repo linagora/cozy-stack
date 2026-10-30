@@ -107,17 +107,17 @@ the two cases above. There is no inbound WebDAV server path; writes from remote
 members arrive through the sharing drive routes. Do not trust a client-supplied
 editor ID. Verify callback identities on the server.
 
-Opening a document counts as personal activity, detected from reads. The same
-HTTP request serves an editor open and a download, so the stack tells them
-apart by who reads what: a content read by the app that edits this file type
-counts as an open — a note read by the notes app, a drawing read by the
-excalidraw app. Downloads, previews and reads of non-editable files by any app
-do not count. Reads with OAuth, CLI or konnector tokens never count, and
-neither do metadata reads such as folder listings. OnlyOffice sessions are
-visible server-side and need no heuristic. Audit each editor app's background
-reads before rollout: an editor that starts prefetching would create false
-opens. Mobile apps read with OAuth tokens, so their opens do not count until a
-trusted-client rule covers them.
+Opening a document counts as personal activity, recorded by the routes that
+open it, never detected from reads: a content read is the same HTTP request as
+a download, a preview or a sync, whatever the app. Drive opens a drawing in its
+excalidraw editor and a PDF file in its viewer with `GET /editor/:file-id/open`,
+the notes editor loads a note with `GET /notes/:id`, and OnlyOffice sessions
+are opened server-side. Each of these routes records the open for the person
+behind the request, a sharing member included, read-only or not. Downloads,
+previews, metadata reads, and reads with OAuth, CLI or konnector tokens never
+count. A new editor must open its files through such a route for its opens to
+be recorded. Mobile apps act with OAuth tokens, so their opens do not count
+until a trusted-client rule covers them.
 
 Keep one row per user/item pair. If Alice saves and then Bob saves, both users'
 activity must survive: each user's row is written on their own instance. The
