@@ -10,6 +10,7 @@ import (
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -33,7 +34,9 @@ func TestContacts(t *testing.T) {
 		Email:      "alice@example.com",
 		PublicName: "Alice",
 	})
-	_, token := setup.GetTestClient(consts.Contacts)
+	_, token := setup.GetTestClient(consts.Contacts + " " + consts.Groups)
+	_, contactsOnly := setup.GetTestClient(consts.Contacts)
+	_, groupsOnly := setup.GetTestClient(consts.Groups)
 	ts := setup.GetTestServer("/contacts", Routes)
 	ts.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
 	t.Cleanup(ts.Close)
@@ -89,14 +92,20 @@ func TestContacts(t *testing.T) {
 				Object().Value("data").Array()
 		}
 
-		e.GET("/contacts/suggest").WithQuery("q", "du").
+		e.GET("/contacts/suggest").WithQuery("q", "d").
 			WithHeader("Authorization", "Bearer "+token).
 			Expect().Status(422)
 		e.GET("/contacts/suggest").WithQuery("q", "dupont").WithQuery("limit", "0").
 			WithHeader("Authorization", "Bearer "+token).
 			Expect().Status(422)
 
-		// Without contacts_search, the contacts of the instance are searched.
+		for _, restricted := range []string{contactsOnly, groupsOnly} {
+			e.GET("/contacts/suggest").WithQuery("q", "du").
+				WithHeader("Authorization", "Bearer "+restricted).Expect().Status(403)
+		}
+		suggest("du").Length().Equal(1)
+
+		// Without centralized_org_directory, the local databases are searched.
 		local := suggest("DUPONT")
 		local.Length().Equal(1)
 		local.Value(0).Object().ValueEqual("id", jean.ID())
@@ -109,7 +118,9 @@ func TestContacts(t *testing.T) {
 		}))
 		t.Cleanup(side.Close)
 		previous := config.GetConfig().Contexts
-		config.GetConfig().Contexts = map[string]interface{}{config.DefaultInstanceContext: map[string]interface{}{"common_contacts": true}}
+		config.GetConfig().Contexts = map[string]interface{}{config.DefaultInstanceContext: map[string]interface{}{
+			"centralized_org_directory": true, "common_contacts": true,
+		}}
 		t.Cleanup(func() { config.GetConfig().Contexts = previous })
 		config.GetConfig().ContactsSearch = map[string]config.ContactsSearch{
 			testInstance.ContextName: {URL: side.URL, Token: "s3cr3t"},
@@ -134,5 +145,78 @@ func TestContacts(t *testing.T) {
 
 		config.GetConfig().Contexts[config.DefaultInstanceContext] = map[string]interface{}{"centralized_org_directory": true}
 		suggest("dupont").Length().Equal(1)
+
+		config.GetConfig().Contexts[config.DefaultInstanceContext] = map[string]interface{}{
+			"centralized_org_directory": false, "common_contacts": true,
+		}
+		group := contact.NewGroup()
+		group.SetID("friends")
+		group.M["name"] = "Dupont [Friends]"
+		require.NoError(t, couchdb.CreateNamedDocWithDB(testInstance, group))
+		member := contact.New()
+		member.M["relationships"] = map[string]interface{}{
+			"groups": map[string]interface{}{"data": []interface{}{
+				map[string]interface{}{"_id": group.ID(), "_type": consts.Groups},
+			}},
+		}
+		require.NoError(t, couchdb.CreateDoc(testInstance, member))
+		local = suggest("dupont")
+		local.Length().Equal(2)
+		localGroup := local.First().Object()
+		localGroup.ValueEqual("type", consts.Groups)
+		localGroup.ValueEqual("id", group.ID())
+		localGroup.Path("$.attributes.name").Equal("Dupont [Friends]")
+		localGroup.Path("$.attributes.color").Equal("")
+		localGroup.Path("$.attributes.member_count").Equal(1)
+		local.Value(1).Object().ValueEqual("id", jean.ID())
+		suggest("[f").Length().Equal(1)
 	})
+}
+
+func TestSuggestOrganizationGroups(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	previous := config.GetConfig().Contexts
+	config.GetConfig().Contexts = map[string]interface{}{config.DefaultInstanceContext: map[string]interface{}{
+		"centralized_org_directory": true,
+	}}
+	t.Cleanup(func() { config.GetConfig().Contexts = previous })
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	orgID := "suggest" + suffix
+	orgDomain := orgID + ".example"
+	setup := testutils.NewSetup(t, t.Name())
+	setup.GetTestInstance(&lifecycle.Options{
+		Domain: "alice-" + suffix + ".sg.localhost", OrgID: orgID, OrgDomain: orgDomain,
+		Email: "alice@example.com",
+	})
+	org, err := lifecycle.Create(&lifecycle.Options{
+		Domain: orgID + ".sg.localhost", OrgID: orgID, OrgDomain: orgDomain,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lifecycle.Destroy(org.Domain) })
+	group := contact.NewGroup()
+	group.SetID(orgdirectory.GroupDocID(orgID, "it"))
+	group.M["name"] = "IT"
+	group.M["color"] = "#123456"
+	group.M[orgdirectory.DirectoryMetadataKey] = map[string]interface{}{"managed": true, "organizationId": orgID}
+	require.NoError(t, couchdb.CreateNamedDocWithDB(org, group))
+	_, token := setup.GetTestClient(consts.Contacts + " " + consts.Groups)
+	ts := setup.GetTestServer("/contacts", Routes)
+	ts.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
+	t.Cleanup(ts.Close)
+	e := testutils.CreateTestClient(t, ts.URL)
+	data := e.GET("/contacts/suggest").WithQuery("q", "it").
+		WithHeader("Authorization", "Bearer "+token).Expect().Status(200).
+		JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object().Value("data").Array()
+	data.Length().Equal(1)
+	result := data.First().Object()
+	result.ValueEqual("type", consts.Groups)
+	result.ValueEqual("id", group.ID())
+	result.Path("$.attributes.name").Equal("IT")
+	result.Path("$.attributes.color").Equal("#123456")
+	result.Path("$.attributes.member_count").Equal(0)
+	result.Value("attributes").Object().NotContainsKey(orgdirectory.DirectoryMetadataKey)
 }

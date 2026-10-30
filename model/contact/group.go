@@ -1,6 +1,7 @@
 package contact
 
 import (
+	"regexp"
 	"sort"
 
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -43,6 +44,47 @@ func FindGroup(db prefixer.Prefixer, groupID string) (*Group, error) {
 	doc := &Group{}
 	err := couchdb.GetDoc(db, consts.Groups, groupID, doc)
 	return doc, err
+}
+
+// FindGroupsByText returns local groups whose names contain text, ignoring case.
+func FindGroupsByText(db prefixer.Prefixer, text string, limit int) ([]*Group, error) {
+	// shortcut: group-name search scans groups, add a search index if directories grow large.
+	var groups []*Group
+	err := couchdb.FindDocsUnoptimized(db, consts.Groups, &couchdb.FindRequest{
+		Selector: mango.Map{"name": mango.Map{"$regex": "(*UTF8)(?i)" + regexp.QuoteMeta(text)}},
+		Limit:    limit,
+	}, &groups)
+	if couchdb.IsNoDatabaseError(err) {
+		return nil, nil
+	}
+	return groups, err
+}
+
+// CountGroupMembers returns active membership counts without loading contacts.
+func CountGroupMembers(db prefixer.Prefixer, groupIDs []string) (map[string]int, error) {
+	counts := make(map[string]int, len(groupIDs))
+	if len(groupIDs) == 0 {
+		return counts, nil
+	}
+	keys := make([]interface{}, len(groupIDs))
+	for i, id := range groupIDs {
+		keys[i] = id
+	}
+	var result couchdb.ViewResponse
+	err := couchdb.ExecView(db, couchdb.ContactGroupMemberCount, &couchdb.ViewRequest{
+		Keys: keys, Reduce: true, Group: true,
+	}, &result)
+	if couchdb.IsNoDatabaseError(err) {
+		return counts, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range result.Rows {
+		id := row.Key.(string)
+		counts[id] = int(row.Value.(float64))
+	}
+	return counts, nil
 }
 
 // GetAllContacts returns the list of contacts inside this group.

@@ -14,7 +14,7 @@ import (
 
 // IndexViewsVersion is the version of current definition of views & indexes.
 // This number should be incremented when this file changes.
-const IndexViewsVersion int = 42
+const IndexViewsVersion int = 43
 
 // Indexes is the index list required by an instance to run properly.
 var Indexes = []*mango.Index{
@@ -310,6 +310,27 @@ function(doc) {
 `,
 }
 
+// ContactGroupMemberCount counts active contacts in each group.
+var ContactGroupMemberCount = &View{
+	Name:    "contact-group-member-count",
+	Doctype: consts.Contacts,
+	Reduce:  "_count",
+	Map: `
+function(doc) {
+	if (doc.trashed === true || !doc.relationships || !doc.relationships.groups) return;
+	var groups = doc.relationships.groups.data;
+	if (!isArray(groups)) return;
+	var seen = [];
+	for (var i = 0; i < groups.length; i++) {
+		var group = groups[i];
+		if (!group || group._type !== "io.cozy.contacts.groups" || typeof group._id !== "string") continue;
+		if (seen.indexOf(group._id) !== -1) continue;
+		seen.push(group._id);
+		emit(group._id, null);
+	}
+}`,
+}
+
 // Views is the list of all views that are created by the stack.
 var Views = []*View{
 	DiskUsageView,
@@ -326,6 +347,7 @@ var Views = []*View{
 	SharedDocsBySharingID,
 	SharingsByDocTypeView,
 	ContactByEmail,
+	ContactGroupMemberCount,
 }
 
 // ViewsByDoctype returns the list of views for a specified doc type.
