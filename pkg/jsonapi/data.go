@@ -17,10 +17,13 @@ type Object interface {
 // Meta is a container for the couchdb revision and the total number of items,
 // in JSON-API land
 type Meta struct {
-	Rev            string                  `json:"rev,omitempty"`
-	Warning        string                  `json:"warning,omitempty"`
-	Count          *int                    `json:"count,omitempty"`
-	FileID         string                  `json:"file_id,omitempty"`
+	Rev     string `json:"rev,omitempty"`
+	Warning string `json:"warning,omitempty"`
+	Count   *int   `json:"count,omitempty"`
+	FileID  string `json:"file_id,omitempty"`
+	// Incomplete is true when a paginated result may miss items, e.g. an
+	// unreachable owner or a work limit reached during the traversal.
+	Incomplete     *bool                   `json:"incomplete,omitempty"`
 	ExecutionStats *couchdb.ExecutionStats `json:"execution_stats,omitempty"`
 }
 

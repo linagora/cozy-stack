@@ -54,10 +54,10 @@ trash, copy and permission changes do not count.
 
 ### Stored data and sorting
 
-A row needs these fields:
+A row is keyed by its resource key, the stable source-instance ID + file ID,
+used as its `_id`. It needs these fields:
 
 ```text
-resource_key         string    stable source-instance ID + file ID
 source_locator       string    where to fetch the original file
 last_edited_at       string    my latest successful edit, if any (RFC 3339)
 last_viewed_at       string    my latest open, if any (RFC 3339)
@@ -78,7 +78,7 @@ is the CouchDB-generated `_id` of the instance document
 independent of the domain, so it survives domain changes. The optional manager
 `Instance.UUID` is not used for this, as operators may leave it empty.
 
-Sort by `last_activity_at` descending, then `resource_key` descending. Use
+Sort by `last_activity_at` descending, then `_id` descending. Use
 the time of the successful edit or open, not the time the row was written.
 Another person's change to `updated_at` must not affect this order.
 
@@ -135,7 +135,7 @@ for a recents list.
 
 All involved instances live on the same stack, so there is no
 server-to-server delivery: no jobs, locks, retries or ordering machinery. The
-row write upserts by `resource_key` and keeps the maximum date per component,
+row write upserts by resource key and keeps the maximum date per component,
 so writing a row twice is a no-op.
 
 Dates are stamped by the server that captures the activity, never by the
@@ -151,7 +151,9 @@ JSON:API: one resource per item with the fields the interface needs (name,
 type, size, last modification metadata), the source instance for items owned
 by another instance, a `links.next` cursor and a `meta.incomplete` flag set
 when the page may miss items. Only visible paths are returned, never the
-owner's private parent folders.
+owner's private parent folders. The resource key holds the internal ID of the
+source instance, possibly another person's: resources and cursors carry a hash
+of it, never the key itself.
 
 For each candidate, check that it still belongs in recents and that the caller
 can read it. Fetch current metadata and permissions directly from the owner's

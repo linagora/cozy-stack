@@ -409,13 +409,21 @@ func TestRecentsFeatureFlag(t *testing.T) {
 			Object().Path("$.data.id").String().NotEmpty().Raw()
 	}
 
-	t.Run("FlagDisabledGatesCapture", func(t *testing.T) {
+	t.Run("FlagDisabledGatesEndpointAndCapture", func(t *testing.T) {
+		e.GET("/files/recents").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(http.StatusNotFound)
+
 		fileID := createFlaggedFile("flagged-off.txt")
 		assert.Nil(t, findRecentsRow(t, inst, inst, fileID), "no capture while the flag is off")
 	})
 
 	t.Run("FlagEnabledKeepsCurrentBehavior", func(t *testing.T) {
 		testutils.WithFlag(t, inst, "drive.recents.enabled", true)
+
+		e.GET("/files/recents").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
 
 		fileID := createFlaggedFile("flagged-on.txt")
 		row := findRecentsRow(t, inst, inst, fileID)

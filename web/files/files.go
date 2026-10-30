@@ -2324,6 +2324,7 @@ func Routes(router *echo.Group) {
 	router.HEAD("/:file-id", HeadDirOrFile)
 
 	router.GET("/metadata", ReadMetadataFromPathHandler)
+	router.GET("/recents", ReadRecentsHandler)
 	router.GET("/:file-id", ReadMetadataFromIDHandler)
 	router.GET("/:file-id/relationships/contents", GetChildrenHandler)
 	router.GET("/:file-id/size", GetDirSize)
