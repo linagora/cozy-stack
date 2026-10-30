@@ -17,6 +17,17 @@ var RecentsActivityFailures = prometheus.NewCounter(
 	},
 )
 
+// RecentsSeedFailures counts the failed seedings of the personal recents.
+var RecentsSeedFailures = prometheus.NewCounter(
+	prometheus.CounterOpts{
+		Namespace: "recents",
+		Subsystem: "seed",
+		Name:      "failures_total",
+
+		Help: "Number of failed personal recents seedings",
+	},
+)
+
 func init() {
-	prometheus.MustRegister(RecentsActivityFailures)
+	prometheus.MustRegister(RecentsActivityFailures, RecentsSeedFailures)
 }

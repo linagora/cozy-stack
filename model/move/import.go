@@ -10,6 +10,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/recents"
 	csettings "github.com/cozy/cozy-stack/model/settings"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -169,6 +170,13 @@ func Import(inst *instance.Instance, options ImportOptions) ([]string, error) {
 		if erri := im.importPart(cursor); erri != nil {
 			err = multierror.Append(err, erri)
 		}
+	}
+	// A seed of the recents that ran while the import was starting has seen
+	// the files of the instance before the import: the next read must seed
+	// them again from the imported files.
+	if errf := recents.ForgetSeed(inst); errf != nil {
+		inst.Logger().WithNamespace("move").
+			Warnf("Cannot forget the recents seed: %s", errf)
 	}
 	if err != nil {
 		return nil, err
