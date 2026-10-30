@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,6 +19,13 @@ type ConflictDetector struct {
 	ID     string
 	Rev    string
 	MD5Sum []byte
+}
+
+// Clone returns a deep copy of the session, which shares no memory with it.
+func (d *ConflictDetector) Clone() ConflictDetector {
+	cloned := *d
+	cloned.MD5Sum = slices.Clone(d.MD5Sum)
+	return cloned
 }
 
 // Store is an object to store and retrieve document server keys <-> id,rev
@@ -113,7 +121,7 @@ func (s *memStore) AddDoc(db prefixer.Prefixer, payload ConflictDetector) (strin
 	s.byID[payload.ID] = secret
 	key := docKey(db, secret)
 	s.vals[key] = &memRef{
-		val: payload,
+		val: payload.Clone(),
 		exp: time.Now().Add(storeTTL),
 	}
 	return secret, nil
@@ -131,7 +139,9 @@ func (s *memStore) GetDoc(db prefixer.Prefixer, secret string) (*ConflictDetecto
 		delete(s.vals, key)
 		return nil, nil
 	}
-	return &ref.val, nil
+	// A copy: the stored session is only changed under the lock.
+	cloned := ref.val.Clone()
+	return &cloned, nil
 }
 
 func (s *memStore) UpdateDoc(db prefixer.Prefixer, secret string, payload ConflictDetector) error {
@@ -142,7 +152,7 @@ func (s *memStore) UpdateDoc(db prefixer.Prefixer, secret string, payload Confli
 	}
 	key := docKey(db, secret)
 	s.vals[key] = &memRef{
-		val: payload,
+		val: payload.Clone(),
 		exp: time.Now().Add(storeTTL),
 	}
 	return nil
