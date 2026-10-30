@@ -111,7 +111,8 @@ This route can be used to send documents in the real-time without having to
 persist them in CouchDB (and they can't be used for triggers).
 
 A permission on POST for the document `:doctype/:id` is required to use this
-endpoint.
+endpoint. For `io.cozy.files`, the rules are checked against the file and its
+parent directories, not against the request body.
 
 ### Request
 

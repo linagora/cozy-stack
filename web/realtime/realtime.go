@@ -129,22 +129,26 @@ func sendErr(ctx context.Context, errc chan *wsError, e *wsError) {
 	}
 }
 
-func authorized(i *instance.Instance, perms permission.Set, permType, id string) bool {
-	if perms.AllowWholeType(permission.GET, permType) {
+func authorized(i *instance.Instance, perms permission.Set, verb permission.Verb, permType, id string) bool {
+	if perms.AllowWholeType(verb, permType) {
 		return true
 	} else if id == "" {
 		return false
 	} else if permType == consts.Files {
-		fs := i.VFS()
+		// XXX: without the VFS lock, as a notification is sent for each cursor
+		// move and a redis read lock is not shared between two cozy-stacks.
+		fs := i.VFS().GetIndexer()
 		dir, file, err := fs.DirOrFileByID(id)
 		if dir != nil {
-			err = vfs.Allows(fs, perms, permission.GET, dir)
+			err = vfs.Allows(fs, perms, verb, dir)
 		} else if file != nil {
-			err = vfs.Allows(fs, perms, permission.GET, file)
+			err = vfs.Allows(fs, perms, verb, file)
+		} else {
+			return false
 		}
 		return err == nil
 	} else {
-		return perms.AllowID(permission.GET, permType, id)
+		return perms.AllowID(verb, permType, id)
 	}
 }
 
@@ -214,7 +218,7 @@ func readPump(ctx context.Context, c echo.Context, i *instance.Instance, ws *web
 		if withAuthentication &&
 			cmd.Payload.Type != consts.SharingsInitialSync &&
 			cmd.Payload.Type != consts.AuthConfirmations {
-			if !authorized(i, pdoc.Permissions, permType, permID) {
+			if !authorized(i, pdoc.Permissions, permission.GET, permType, permID) {
 				sendErr(ctx, errc, forbidden(cmd))
 				continue
 			}
@@ -333,7 +337,18 @@ func Notify(c echo.Context) error {
 	}
 	payload.SetID(id)
 	payload.Type = doctype
-	if err := middlewares.Allow(c, permission.POST, &payload); err != nil {
+	// XXX: a permission on a directory also covers the files inside it, which
+	// only the VFS can tell. The payload is not the file, so it must not be
+	// used to match the rules on io.cozy.files.
+	if doctype == consts.Files {
+		pdoc, err := middlewares.GetPermission(c)
+		if err != nil {
+			return err
+		}
+		if !authorized(inst, pdoc.Permissions, permission.POST, doctype, id) {
+			return middlewares.ErrForbidden
+		}
+	} else if err := middlewares.Allow(c, permission.POST, &payload); err != nil {
 		return err
 	}
 

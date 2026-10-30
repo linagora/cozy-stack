@@ -138,7 +138,7 @@ func (f *FileDoc) ResetFullpath() {
 }
 
 // Parent returns the parent directory document
-func (f *FileDoc) Parent(fs VFS) (*DirDoc, error) {
+func (f *FileDoc) Parent(fs Indexer) (*DirDoc, error) {
 	parent, err := fs.DirByID(f.DirID)
 	if os.IsNotExist(err) {
 		err = ErrParentDoesNotExist

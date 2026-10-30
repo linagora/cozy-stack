@@ -85,7 +85,7 @@ func (d *DirDoc) Path(fs FilePather) (string, error) {
 }
 
 // Parent returns the parent directory document
-func (d *DirDoc) Parent(fs VFS) (*DirDoc, error) {
+func (d *DirDoc) Parent(fs Indexer) (*DirDoc, error) {
 	parent, err := fs.DirByID(d.DirID)
 	if os.IsNotExist(err) {
 		err = ErrParentDoesNotExist

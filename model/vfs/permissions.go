@@ -15,7 +15,7 @@ type Fetcher interface {
 	permission.Fetcher
 	parentID() string
 	Path(fs FilePather) (string, error)
-	Parent(fs VFS) (*DirDoc, error)
+	Parent(fs Indexer) (*DirDoc, error)
 }
 
 // FileDoc & DirDoc are vfs.Fetcher
@@ -23,7 +23,7 @@ var _ Fetcher = (*FileDoc)(nil)
 var _ Fetcher = (*DirDoc)(nil)
 
 // Allows check if a permSet allows verb on given file
-func Allows(fs VFS, pset permission.Set, v permission.Verb, fd Fetcher) error {
+func Allows(fs Indexer, pset permission.Set, v permission.Verb, fd Fetcher) error {
 	allowedIDs := []string{}
 	otherRules := []permission.Rule{}
 
@@ -163,7 +163,7 @@ func AllowsRule(fs VFS, parent permission.Set, r permission.Rule) error {
 	return nil
 }
 
-func pathFromID(fs VFS, id string) (string, error) {
+func pathFromID(fs Indexer, id string) (string, error) {
 	if id == consts.RootDirID {
 		return "", nil
 	}
