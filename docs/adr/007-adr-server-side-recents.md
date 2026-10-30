@@ -132,17 +132,27 @@ transient error), it forwards the request over HTTP, and the owner's side only
 sees the drive token: any request of the recipient then counts as the
 recipient, a konnector or service token included.
 
-Opening a document counts as personal activity, detected from reads. The same
-HTTP request serves an editor open and a download, so the stack tells them
-apart by who reads what: a content read by the app that edits this file type
-counts as an open — a note read by the notes app, a drawing read by the
-excalidraw app. Downloads, previews and reads of non-editable files by any app
-do not count. Reads with OAuth, CLI or konnector tokens never count, and
-neither do metadata reads such as folder listings. OnlyOffice sessions are
-visible server-side and need no heuristic. Audit each editor app's background
-reads before rollout: an editor that starts prefetching would create false
-opens. Mobile apps read with OAuth tokens, so their opens do not count until a
-trusted-client rule covers them.
+Opening a document counts as personal activity, recorded by the routes that
+open it, never detected from reads: a content read is the same HTTP request as
+a download, a preview or a sync, whatever the app. Drive opens a drawing in its
+excalidraw editor and a PDF file in its viewer with `GET /editor/:file-id/open`,
+the notes editor loads a note with `GET /notes/:id`, and OnlyOffice sessions
+are opened server-side. Each of these routes records the open for the person
+behind the request, a sharing member included, read-only or not. A read-only
+open uses a `share-preview` code: its request actor is anonymous, but
+`ParseJWT` finds the member to whom the code was given, credited once they have
+accepted the sharing. The mobile app shows Drive and Notes in webviews with
+session-bound app tokens, so its opens count like the browser's. Downloads,
+metadata reads, and reads with OAuth, CLI or konnector tokens never count, and
+neither does the `cozy-viewer` preview of Drive, which only reads the content
+of the file. A new editor must open its files through such a route for its
+opens to be recorded.
+
+Known limit: an open route of a sharing gives the client a `share-interact` or
+`share-preview` code, then used directly on the owner's instance. Whoever holds
+the code of a member counts as that member. Through the shared drive proxy, an
+open made with a token that is not a person records nothing, but the code it
+gets back records the opens made with it as the member's.
 
 Keep one row per user/item pair. If Alice saves and then Bob saves, both users'
 activity must survive: each user's row is written on their own instance. The

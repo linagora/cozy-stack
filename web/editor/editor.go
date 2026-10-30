@@ -7,10 +7,12 @@ import (
 	"strconv"
 
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/recents"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
+	"github.com/cozy/cozy-stack/web/files"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
 )
@@ -57,6 +59,10 @@ func OpenURLWithReadOnly(c echo.Context, readOnly bool) error {
 	if err != nil {
 		return wrapError(err)
 	}
+	// Drive calls this route each time it shows a file in one of its editors
+	// (excalidraw, the PDF viewer): it is the open, whereas the content read
+	// that follows is the same request as a download.
+	files.RecordActivity(c, fileID, recents.KindView)
 
 	return jsonapi.Data(c, http.StatusOK, doc, nil)
 }

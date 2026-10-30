@@ -7,6 +7,7 @@ import (
 	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/recents"
+	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
@@ -30,18 +31,30 @@ func RecordActivity(c echo.Context, fileID string, kind recents.Kind) {
 // ActorInstance returns the instance of the person behind the request, as
 // resolved by the actor middleware: the instance owner for a session-bound app
 // token, the flagship app (certified, or with the "*" scope) or a desktop
-// OAuth client, and the sharing member for a share-interact code, once the
-// member has accepted the sharing. On the shared drive proxy, the person is
-// checked on the original token of the recipient when the owner's instance is
-// served directly on this stack; a request forwarded over HTTP only carries
-// the drive token and counts as the recipient (ADR). It returns nil when the
-// request is not a person (konnector, service token, other OAuth client, CLI,
-// anonymous share by link, background worker), when the member has not
-// accepted the sharing yet, or when the member's instance is not on this
-// stack: those record no activity.
+// OAuth client, and the sharing member for a share-interact code or a preview
+// code (a read-only opening), once the member has accepted the sharing. On the
+// shared drive proxy, the person is checked on the original token of the
+// recipient when the owner's instance is served directly on this stack; a
+// request forwarded over HTTP only carries the drive token and counts as the
+// recipient (ADR). It returns nil when the request is not a person (konnector,
+// service token, other OAuth client, CLI, anonymous share by link, background
+// worker), when the member has not accepted the sharing yet, or when the
+// member's instance is not on this stack: those record no activity.
 func ActorInstance(c echo.Context) *instance.Instance {
-	if _, err := middlewares.GetPermission(c); err != nil {
+	pdoc, err := middlewares.GetPermission(c)
+	if err != nil || pdoc == nil {
 		return nil
+	}
+	if pdoc.Type == permission.TypeSharePreview {
+		// The request actor of a preview is anonymous, but ParseJWT has found
+		// the member to whom the code was given. Before the acceptance, the
+		// instance of a member comes from the sharer's contacts.
+		member := middlewares.GetShareMember(c)
+		if member == nil || member.Status != sharing.MemberStatusReady ||
+			member.InstanceHost() == "" {
+			return nil
+		}
+		return middlewares.MemberInstance(middlewares.GetInstance(c), member.InstanceHost())
 	}
 	actor, ok := middlewares.GetActor(c)
 	if !ok || !actor.Person {

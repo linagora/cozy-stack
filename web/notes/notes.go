@@ -15,6 +15,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/note"
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/recents"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -68,6 +69,7 @@ func CreateNote(c echo.Context) error {
 	if err != nil {
 		return wrapError(err)
 	}
+	files.RecordActivity(c, file.ID(), recents.KindEdit)
 
 	return files.FileData(c, http.StatusCreated, file, false, nil, nil)
 }
@@ -120,8 +122,30 @@ func GetNote(c echo.Context) error {
 	if err != nil {
 		return wrapError(err)
 	}
+	recordNoteOpen(c, file.ID())
 
 	return files.FileData(c, http.StatusOK, file, false, nil, nil)
+}
+
+// recordNoteOpen records a personal open of the note: the notes editor loads
+// the whole note with GET /notes/:id when it opens it, it never downloads its
+// content. The caller is the notes app of the user, or a sharing member with
+// the sharecode the open route gave them, read-only (share-preview) or not.
+func recordNoteOpen(c echo.Context, fileID string) {
+	pdoc, err := middlewares.GetPermission(c)
+	if err != nil {
+		return
+	}
+	switch pdoc.Type {
+	case permission.TypeWebapp:
+		if pdoc.SourceID != consts.Apps+"/"+consts.NotesSlug {
+			return
+		}
+	case permission.TypeShareInteract, permission.TypeSharePreview:
+	default:
+		return
+	}
+	files.RecordActivity(c, fileID, recents.KindView)
 }
 
 func GetNoteText(c echo.Context) error {
@@ -238,6 +262,7 @@ func PatchNote(c echo.Context) error {
 	if file, err = note.ApplySteps(inst, file, ifMatch, steps); err != nil {
 		return wrapError(err)
 	}
+	files.RecordActivity(c, file.ID(), recents.KindEdit)
 
 	return files.FileData(c, http.StatusOK, file, false, nil, nil)
 }

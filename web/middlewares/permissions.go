@@ -31,6 +31,7 @@ import (
 const bearerAuthScheme = "Bearer "
 const basicAuthScheme = "Basic "
 const contextPermissionDoc = "permissions_doc"
+const contextShareMember = "share_member"
 
 // ErrForbidden is used to send a forbidden response when the request does not
 // have the right permissions.
@@ -342,6 +343,7 @@ func ParseJWT(c echo.Context, instance *instance.Instance, token string) (*permi
 				member.Status = sharing.MemberStatusSeen
 				_ = couchdb.UpdateDoc(instance, sharingDoc)
 			}
+			c.Set(contextShareMember, member)
 		}
 
 		return pdoc, nil
@@ -419,6 +421,13 @@ func GetPermission(c echo.Context) (*permission.Permission, error) {
 // echo.Context.
 func ForcePermission(c echo.Context, pdoc *permission.Permission) {
 	c.Set(contextPermissionDoc, pdoc)
+}
+
+// GetShareMember returns the sharing member to whom the share-preview or
+// share-interact code of the request was given, as found by ParseJWT, or nil.
+func GetShareMember(c echo.Context) *sharing.Member {
+	member, _ := c.Get(contextShareMember).(*sharing.Member)
+	return member
 }
 
 // AllowWholeType validates that the context permission set can use a verb on
