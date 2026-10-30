@@ -1,8 +1,13 @@
 package move
 
 import (
+	"archive/tar"
+	"bytes"
+	"errors"
+	"io"
 	"math/rand"
 	"path"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +115,36 @@ func TestExport(t *testing.T) {
 			}
 		}
 		assert.Len(t, versionsIDs, nbVersions)
+	})
+
+	t.Run("ExportWithoutRecents", func(t *testing.T) {
+		err := couchdb.CreateNamedDocWithDB(inst, &couchdb.JSONDoc{
+			Type: consts.FilesRecents,
+			M: map[string]interface{}{
+				"_id":              "resource-key-one",
+				"resource_key":     "resource-key-one",
+				"last_activity_at": "2026-10-26T10:00:00Z",
+			},
+		})
+		assert.NoError(t, err)
+
+		exportDoc := &ExportDoc{PartsSize: 10}
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		_, err = exportDocuments(inst, exportDoc, time.Now(), tw)
+		assert.NoError(t, err)
+		assert.NoError(t, tw.Close())
+
+		tr := tar.NewReader(&buf)
+		for {
+			header, err := tr.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			assert.NoError(t, err)
+			assert.False(t, strings.HasPrefix(header.Name, consts.FilesRecents),
+				"the recents must not be exported, found %s", header.Name)
+		}
 	})
 }
 

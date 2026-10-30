@@ -33,6 +33,14 @@ var Indexes = []*mango.Index{
 	mango.MakeIndex(consts.Files, "by-sharing-status", mango.IndexDef{Fields: []string{"metadata.sharing.status"}}),
 	// Used to find old files and directories in the trashed that should be deleted
 	mango.MakeIndex(consts.Files, "by-dir-id-updated-at", mango.IndexDef{Fields: []string{"dir_id", "updated_at"}}),
+	// Used by the recents seed to pick the most recently updated files
+	mango.MakeIndex(consts.Files, "by-updated-at-trashed", mango.IndexDef{Fields: []string{"trashed", "updated_at"}}),
+	// Used to seed the recents with the most recently created directories:
+	// they have no trashed boolean, so they need their own index.
+	mango.MakeIndex(consts.Files, "by-type-created-at", mango.IndexDef{Fields: []string{"type", "created_at"}}),
+
+	// Used to sort the personal recents by their last activity
+	mango.MakeIndex(consts.FilesRecents, "by-last-activity-and-id", mango.IndexDef{Fields: []string{"last_activity_at", "_id"}}),
 
 	// Used to lookup a queued and running jobs
 	mango.MakeIndex(consts.Jobs, "by-worker-and-state", mango.IndexDef{Fields: []string{"worker", "state"}}),

@@ -40,6 +40,9 @@ const (
 	FilesVersions = "io.cozy.files.versions"
 	// FilesShortcuts doc type for high-level information about .url files
 	FilesShortcuts = "io.cozy.files.shortcuts"
+	// FilesRecents doc type for the files and directories recently opened or
+	// edited by the user
+	FilesRecents = "io.cozy.files.recents"
 	// Thumbnails is a synthetic doctype for thumbnails, used for realtime
 	// events
 	Thumbnails = "io.cozy.files.thumbnails"

@@ -54,10 +54,10 @@ trash, copy and permission changes do not count.
 
 ### Stored data and sorting
 
-A row needs these fields:
+A row is keyed by its resource key, the stable source-instance ID + file ID,
+used as its `_id`. It needs these fields:
 
 ```text
-resource_key         string    stable source-instance ID + file ID
 source_locator       string    where to fetch the original file
 last_edited_at       string    my latest successful edit, if any (RFC 3339)
 last_viewed_at       string    my latest open, if any (RFC 3339)
@@ -78,7 +78,7 @@ is the CouchDB-generated `_id` of the instance document
 independent of the domain, so it survives domain changes. The optional manager
 `Instance.UUID` is not used for this, as operators may leave it empty.
 
-Sort by `last_activity_at` descending, then `resource_key` descending. Use
+Sort by `last_activity_at` descending, then `_id` descending. Use
 the time of the successful edit or open, not the time the row was written.
 Another person's change to `updated_at` must not affect this order.
 
@@ -107,17 +107,17 @@ the two cases above. There is no inbound WebDAV server path; writes from remote
 members arrive through the sharing drive routes. Do not trust a client-supplied
 editor ID. Verify callback identities on the server.
 
-Opening a document counts as personal activity, detected from reads. The same
-HTTP request serves an editor open and a download, so the stack tells them
-apart by who reads what: a content read by the app that edits this file type
-counts as an open — a note read by the notes app, a drawing read by the
-excalidraw app. Downloads, previews and reads of non-editable files by any app
-do not count. Reads with OAuth, CLI or konnector tokens never count, and
-neither do metadata reads such as folder listings. OnlyOffice sessions are
-visible server-side and need no heuristic. Audit each editor app's background
-reads before rollout: an editor that starts prefetching would create false
-opens. Mobile apps read with OAuth tokens, so their opens do not count until a
-trusted-client rule covers them.
+Opening a document counts as personal activity, recorded by the routes that
+open it, never detected from reads: a content read is the same HTTP request as
+a download, a preview or a sync, whatever the app. Drive opens a drawing in its
+excalidraw editor and a PDF file in its viewer with `GET /editor/:file-id/open`,
+the notes editor loads a note with `GET /notes/:id`, and OnlyOffice sessions
+are opened server-side. Each of these routes records the open for the person
+behind the request, a sharing member included, read-only or not. Downloads,
+previews, metadata reads, and reads with OAuth, CLI or konnector tokens never
+count. A new editor must open its files through such a route for its opens to
+be recorded. Mobile apps act with OAuth tokens, so their opens do not count
+until a trusted-client rule covers them.
 
 Keep one row per user/item pair. If Alice saves and then Bob saves, both users'
 activity must survive: each user's row is written on their own instance. The
@@ -135,7 +135,7 @@ for a recents list.
 
 All involved instances live on the same stack, so there is no
 server-to-server delivery: no jobs, locks, retries or ordering machinery. The
-row write upserts by `resource_key` and keeps the maximum date per component,
+row write upserts by resource key and keeps the maximum date per component,
 so writing a row twice is a no-op.
 
 Dates are stamped by the server that captures the activity, never by the
@@ -151,7 +151,9 @@ JSON:API: one resource per item with the fields the interface needs (name,
 type, size, last modification metadata), the source instance for items owned
 by another instance, a `links.next` cursor and a `meta.incomplete` flag set
 when the page may miss items. Only visible paths are returned, never the
-owner's private parent folders.
+owner's private parent folders. The resource key holds the internal ID of the
+source instance, possibly another person's: resources and cursors carry a hash
+of it, never the key itself.
 
 For each candidate, check that it still belongs in recents and that the caller
 can read it. Fetch current metadata and permissions directly from the owner's
