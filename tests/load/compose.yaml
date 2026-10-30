@@ -273,6 +273,9 @@ services:
       MAX_DURATION: ${MAX_DURATION:-30m}
       UPLOAD_TIMEOUT: ${UPLOAD_TIMEOUT:-30m}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      # One sample per second, so an attempt of a few seconds still has the two
+      # samples a rate needs (the default is 5s).
+      K6_PROMETHEUS_RW_PUSH_INTERVAL: 1s
       K6_PROMETHEUS_RW_TREND_STATS: p(50),p(90),p(95),p(99),min,max,avg
       K6_PROMETHEUS_RW_STALE_MARKERS: "false"
       # Every default system tag except url: upload names and changes

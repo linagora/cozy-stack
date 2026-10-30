@@ -9203,7 +9203,7 @@
             "spec": {
               "options": {
                 "mode": "markdown",
-                "content": "**Download evidence** in **Run time range** saves the results shown here as JSON. Keep the original test report for the full details.\n\nWorkload metrics: runner Prometheus, every 5 s. DEV infrastructure: optional InfluxDB, every 60 s, across shared hosts. Missing data is shown as unavailable."
+                "content": "**Download evidence** in **Run time range** saves the results shown here as JSON. Keep the original test report for the full details.\n\nWorkload metrics: runner Prometheus, every 1 s. DEV infrastructure: optional InfluxDB, every 60 s, across shared hosts. Missing data is shown as unavailable."
               },
               "fieldConfig": {
                 "defaults": {
