@@ -365,6 +365,31 @@ func BulkDeleteDocs(db prefixer.Prefixer, doctype string, docs []Doc) error {
 	return nil
 }
 
+// BulkWriteDocs writes several documents in one call, and returns the
+// response of each document, in the same order: a conflict on a document
+// does not fail the others, and the caller checks them one by one. A document
+// serialized with `"_deleted": true` is deleted. Unlike BulkUpdateDocs, there
+// is no retry and no realtime event.
+func BulkWriteDocs(db prefixer.Prefixer, doctype string, docs []interface{}) ([]UpdateResponse, error) {
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	body := struct {
+		Docs []interface{} `json:"docs"`
+	}{
+		Docs: docs,
+	}
+	var res []UpdateResponse
+	if err := makeRequest(db, doctype, http.MethodPost, "_bulk_docs", body, &res); err != nil {
+		return nil, err
+	}
+	if len(res) != len(docs) {
+		return nil, errors.New("BulkWriteDocs receive an unexpected number of responses")
+	}
+	logBulk(db, "BulkWriteDocs", doctype, res)
+	return res, nil
+}
+
 // BulkForceUpdateDocs is used to update several docs in one call, and to force
 // the revisions history. It is used by replications.
 func BulkForceUpdateDocs(db prefixer.Prefixer, doctype string, docs []map[string]interface{}) error {

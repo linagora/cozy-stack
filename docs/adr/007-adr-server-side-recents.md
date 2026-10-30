@@ -59,10 +59,10 @@ file creations.
 
 ### Stored data and sorting
 
-A row needs these fields:
+A row is keyed by its resource key, the stable source-instance ID + file ID,
+used as its `_id`. It needs these fields:
 
 ```text
-resource_key         string    stable source-instance ID + file ID
 source_locator       string    where to fetch the original file
 last_edited_at       string    my latest successful edit, if any (RFC 3339)
 last_viewed_at       string    my latest open, if any (RFC 3339)
@@ -79,11 +79,12 @@ The same file appears once. Files from different owners remain separate even
 if their local IDs match.
 Do not use names, paths or checksums to identify them. The stable instance ID
 is the CouchDB-generated `_id` of the instance document
-(`instance.Instance.DocID`): a UUID assigned once at creation, never modified,
-independent of the domain, so it survives domain changes. The optional manager
-`Instance.UUID` is not used for this, as operators may leave it empty.
+(`instance.Instance.DocID`): a UUID assigned once at creation, never modified.
+The domain of an instance never changes either: a change of domain is a move,
+which creates a new instance with a new ID and keeps the file IDs. The optional
+manager `Instance.UUID` is not used for this, as operators may leave it empty.
 
-Sort by `last_activity_at` descending, then `resource_key` descending. Use
+Sort by `last_activity_at` descending, then `_id` descending. Use
 the time of the successful edit or open, not the time the row was written.
 Another person's change to `updated_at` must not affect this order.
 
@@ -170,7 +171,7 @@ for a recents list.
 
 All involved instances live on the same stack, so there is no
 server-to-server delivery: no jobs, locks, retries or ordering machinery. The
-row write upserts by `resource_key` and keeps the maximum date per component,
+row write upserts by resource key and keeps the maximum date per component,
 so writing a row twice is a no-op.
 
 Two activities of the same kind on a row less than 60 seconds apart are one:
@@ -196,7 +197,9 @@ JSON:API: one resource per item with the fields the interface needs (name,
 type, size, last modification metadata), the source instance for items owned
 by another instance, a `links.next` cursor and a `meta.incomplete` flag set
 when the page may miss items. Only visible paths are returned, never the
-owner's private parent folders.
+owner's private parent folders. The resource key holds the internal ID of the
+source instance, possibly another person's: resources and cursors carry a hash
+of it, never the key itself.
 
 For each candidate, check that it still belongs in recents and that the caller
 can read it. Fetch current metadata and permissions directly from the owner's
@@ -204,6 +207,20 @@ instance database on the same stack, batching reads where possible. Requests
 depend on the owners of candidate items, not every accessible share. The
 owner's instance applies the same effective-access rules it applies for the
 sharing itself.
+
+The source of a row is found from the instance ID of its key, not from its
+`source_locator`, which is refreshed when it differs. The instance of a moved
+source remains, with frozen data, until it is deleted, but its rows are
+migrated as soon as they are read, under the key of its successor on the same
+stack, given by the target of the move or by the instance that declares the old
+domain, and the dates of both rows are merged with their maximum. A migrated
+row gets a new public ID. The user's own rows are never migrated. The rows of a
+source that is no longer on the stack and has no successor on it, moved to
+another stack included, are deleted. A source that cannot be checked hides its
+rows and marks the page as incomplete. Only the target of the move and the
+instance that declares the old domain designate a successor: an instance that
+only has that domain as an alias, or as its own domain, is not one, as it may
+belong to another person.
 
 Skip trashed, deleted or unauthorized items and read more candidates to fill
 the page, within a fixed work limit. If an owner is unavailable or the limit

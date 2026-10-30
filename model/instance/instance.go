@@ -836,6 +836,32 @@ func FindByOldDomain(oldDomain string) (*Instance, error) {
 	return docs[0], nil
 }
 
+// GetByIDs loads the instances with the given CouchDB IDs in one request,
+// indexed by ID. The IDs of deleted or unknown instances are absent from the
+// map.
+func GetByIDs(ids []string) (map[string]*Instance, error) {
+	insts := make(map[string]*Instance, len(ids))
+	if len(ids) == 0 {
+		return insts, nil
+	}
+	var docs []*Instance
+	req := &couchdb.AllDocsRequest{Keys: ids}
+	err := couchdb.GetAllDocs(prefixer.GlobalPrefixer, consts.Instances, req, &docs)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range docs {
+		if inst == nil {
+			continue
+		}
+		if err := inst.MakeVFS(); err != nil {
+			return nil, err
+		}
+		insts[inst.DocID] = inst
+	}
+	return insts, nil
+}
+
 // PickKey choose which of the Instance keys to use depending on token audience
 func (i *Instance) PickKey(audience string) ([]byte, error) {
 	switch audience {

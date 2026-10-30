@@ -10,3 +10,7 @@ const SeededMarkerID = seededMarkerID
 // RecordActivityAt exposes recordActivity with a controlled date to the tests
 // of the recents_test package.
 var RecordActivityAt = recordActivity
+
+// GetInstancesByIDs exposes the loader of the source instances to the tests
+// of the recents_test package, to simulate a failure of CouchDB.
+var GetInstancesByIDs = &getInstancesByIDs
