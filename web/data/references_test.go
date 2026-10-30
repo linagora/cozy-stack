@@ -1,6 +1,7 @@
 package data
 
 import (
+	"net/http"
 	"net/url"
 	"testing"
 	"time"
@@ -103,6 +104,103 @@ func TestReferences(t *testing.T) {
 
 		obj.Value("included").Array().Length().Equal(4)
 		obj.Path("$.included[0].id").String().NotEmpty()
+	})
+
+	t.Run("FilePermissions", func(t *testing.T) {
+		for _, kind := range []string{"file", "directory"} {
+			for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+				t.Run(kind+"/"+method, func(t *testing.T) {
+					e := testutils.CreateTestClient(t, ts.URL)
+					doc := getDocForTest(Type, testInstance)
+					ref := couchdb.DocReference{Type: Type, ID: doc.ID()}
+					var target couchdb.Doc
+					if kind == "directory" {
+						dir, err := vfs.NewDirDoc(testInstance.VFS(), doc.ID(), consts.RootDirID, nil)
+						require.NoError(t, err)
+						if method != http.MethodPost {
+							dir.AddReferencedBy(ref)
+						}
+						require.NoError(t, testInstance.VFS().CreateDir(dir))
+						target = dir
+					} else {
+						id := makeReferencedTestFile(t, testInstance, doc, doc.ID()+".jpg")
+						file, err := testInstance.VFS().FileByID(id)
+						require.NoError(t, err)
+						if method == http.MethodPost {
+							file.RemoveReferencedBy(ref)
+							require.NoError(t, couchdb.UpdateDoc(testInstance, file))
+						}
+						target = file
+					}
+
+					path := "/data/" + Type + "/" + doc.ID() + "/relationships/references"
+					docScope := Type + ":ALL:" + doc.ID()
+					verb, wrongVerb, success := "PATCH", "GET", http.StatusNoContent
+					if method == http.MethodGet {
+						verb, wrongVerb, success = "GET", "PATCH", http.StatusOK
+					}
+					denied := []struct {
+						name  string
+						scope string
+					}{
+						{name: "DocumentOnly", scope: docScope},
+						{name: "OtherFile", scope: docScope + " io.cozy.files:ALL:other-file"},
+						{name: "WrongVerb", scope: docScope + " io.cozy.files:" + wrongVerb},
+					}
+					if method == http.MethodPost {
+						denied = append(denied, struct{ name, scope string }{
+							name:  "CannotGrantOwnAccess",
+							scope: docScope + " io.cozy.files:ALL:" + doc.ID() + ":referenced_by",
+						})
+					}
+					for _, tc := range denied {
+						t.Run(tc.name, func(t *testing.T) {
+							e := testutils.CreateTestClient(t, ts.URL)
+							_, restricted := setup.GetTestClient(tc.scope)
+							e.Request(method, path).
+								WithQuery("include", "files").
+								WithHeader("Authorization", "Bearer "+restricted).
+								WithHeader("Content-Type", "application/vnd.api+json").
+								WithJSON(M{"data": S{M{"type": consts.Files, "id": target.ID()}}}).
+								Expect().Status(http.StatusForbidden)
+							dir, file, err := testInstance.VFS().DirOrFileByID(target.ID())
+							require.NoError(t, err)
+							if dir != nil {
+								assert.Equal(t, target.Rev(), dir.Rev())
+							} else {
+								assert.Equal(t, target.Rev(), file.Rev())
+							}
+						})
+					}
+
+					for _, scope := range []string{
+						docScope + " io.cozy.files:" + verb + ":" + target.ID(),
+						"io.cozy.files:" + verb,
+					} {
+						_, scoped := setup.GetTestClient(scope)
+						e.Request(method, path).
+							WithQuery("include", "files").
+							WithHeader("Authorization", "Bearer "+scoped).
+							WithHeader("Content-Type", "application/vnd.api+json").
+							WithJSON(M{"data": S{M{"type": consts.Files, "id": target.ID()}}}).
+							Expect().Status(success)
+					}
+
+					if method == http.MethodGet {
+						_, shared := setup.GetTestClient(docScope + " io.cozy.files:GET:" + doc.ID() + ":referenced_by")
+						obj := e.GET(path).WithQuery("include", "files").
+							WithHeader("Authorization", "Bearer "+shared).
+							Expect().Status(http.StatusOK).
+							JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+							Object()
+						obj.Value("included").Array().Length().Equal(1)
+						if kind == "file" {
+							obj.Path("$.included[0].links.large").String().Contains("/thumbnails/")
+						}
+					}
+				})
+			}
+		}
 	})
 
 	t.Run("AddReferencesHandler", func(t *testing.T) {

@@ -152,10 +152,17 @@ func ListReferencesHandler(c echo.Context) error {
 			if err != nil {
 				return err
 			}
-			if f, ok := docs[i].(*file); ok {
-				if f.doc.Class == "image" || f.doc.Class == "pdf" {
-					thumbIDs = append(thumbIDs, f.ID())
+			switch doc := docs[i].(type) {
+			case *dir:
+				err = middlewares.AllowVFS(c, permission.GET, doc.doc)
+			case *file:
+				err = middlewares.AllowVFS(c, permission.GET, doc.doc)
+				if doc.doc.Class == "image" || doc.doc.Class == "pdf" {
+					thumbIDs = append(thumbIDs, doc.ID())
 				}
+			}
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -208,6 +215,9 @@ func AddReferencesHandler(c echo.Context) error {
 		dir, file, errd := fs.DirOrFileByID(fRef.ID)
 		if errd != nil {
 			return WrapVfsError(errd)
+		}
+		if err := checkPerm(c, permission.PATCH, dir, file); err != nil {
+			return err
 		}
 		if dir != nil {
 			oldDir := dir.Clone()
@@ -277,6 +287,9 @@ func RemoveReferencesHandler(c echo.Context) error {
 		dir, file, err := fs.DirOrFileByID(fRef.ID)
 		if err != nil {
 			return WrapVfsError(err)
+		}
+		if err := checkPerm(c, permission.PATCH, dir, file); err != nil {
+			return err
 		}
 		if dir != nil {
 			oldDir := dir.Clone()
