@@ -579,6 +579,7 @@ func Routes(router *echo.Group) {
 	router.GET("/self", displayPermissions)
 	router.POST("/exists", listPermissions)
 	router.GET("/:permdocid", showPermissions)
+	router.GET("/:permdocid/statistics", downloadPublicLinkStatistics)
 	router.PATCH("/:permdocid", patchPermission(permission.GetPermissionByIDIncludingExpired, "permdocid"))
 	router.DELETE("/:permdocid", revokePermission)
 

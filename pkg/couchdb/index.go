@@ -14,7 +14,7 @@ import (
 
 // IndexViewsVersion is the version of current definition of views & indexes.
 // This number should be incremented when this file changes.
-const IndexViewsVersion int = 44
+const IndexViewsVersion int = 45
 
 // Indexes is the index list required by an instance to run properly.
 var Indexes = []*mango.Index{
@@ -338,8 +338,23 @@ function(doc) {
 }`,
 }
 
+// PublicLinkEventsByTime orders events by instant and document ID without rewriting old documents.
+var PublicLinkEventsByTime = &View{
+	Name:    "public-link-events-by-time",
+	Doctype: consts.PublicLinkEvents,
+	Map: `function(doc) {
+  if (typeof doc.link_id !== 'string') return;
+  var date = doc.occurred_at || '0001-01-01T00:00:00Z';
+  var ms = Date.parse(date);
+  var fraction = typeof date === 'string' && date.match(/\.(\d{1,9})(?:Z|[+-]\d\d:\d\d)$/);
+  var nanos = fraction ? Number((fraction[1] + '000000000').slice(0, 9)) : 0;
+  emit([doc.link_id, isNaN(ms) ? null : Math.floor(ms / 1000), nanos], null);
+}`,
+}
+
 // Views is the list of all views that are created by the stack.
 var Views = []*View{
+	PublicLinkEventsByTime,
 	DiskUsageView,
 	DirFilesStatsView,
 	OldVersionsDiskUsageView,
