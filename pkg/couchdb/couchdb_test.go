@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -47,6 +50,27 @@ func TestCloneDocPreservesDocType(t *testing.T) {
 	cloned := cloneDoc(doc)
 
 	assert.Equal(t, TestDoctype, cloned.DocType())
+}
+
+func TestCreateDBConflictIsFileExists(t *testing.T) {
+	config.UseTestFile(t)
+	t.Cleanup(func() { config.UseTestFile(t) })
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"conflict","reason":"Document update conflict."}`))
+	}))
+	t.Cleanup(ts.Close)
+	u, err := url.Parse(ts.URL + "/")
+	require.NoError(t, err)
+	cfg := config.GetConfig()
+	cfg.CouchDB.Client = ts.Client()
+	cfg.CouchDB.Global = config.CouchDBCluster{URL: u}
+	cfg.CouchDB.Clusters = nil
+
+	err = CreateDB(TestPrefix, TestDoctype)
+	assert.True(t, IsFileExists(err), "got %v", err)
 }
 
 func TestCouchdb(t *testing.T) {

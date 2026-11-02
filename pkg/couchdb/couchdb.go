@@ -462,6 +462,16 @@ func CreateDB(db prefixer.Prefixer, doctype string) error {
 		query = "?q=1&n=1"
 	}
 	if err := makeRequest(db, doctype, http.MethodPut, query, nil, nil); err != nil {
+		// CouchDB answers 409 instead of 412 when it loses a race with a
+		// concurrent creation of the same database.
+		if IsConflictError(err) {
+			return &Error{
+				StatusCode: http.StatusPreconditionFailed,
+				Name:       "file_exists",
+				Reason:     "The database could not be created, the file already exists.",
+				Original:   err,
+			}
+		}
 		return err
 	}
 
