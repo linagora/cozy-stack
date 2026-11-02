@@ -223,6 +223,18 @@ func TestLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("InstanceHasReferencedPhotosDir", func(t *testing.T) {
+		i, err := lifecycle.GetInstance("test.cozycloud.cc")
+		require.NoError(t, err)
+
+		dir, err := i.VFS().DirByPath("/" + i.Translate("Tree Photos"))
+		require.NoError(t, err)
+		assert.Contains(t, dir.ReferencedBy, couchdb.DocReference{
+			ID:   "io.cozy.apps/photos",
+			Type: consts.Apps,
+		})
+	})
+
 	t.Run("InstanceHasIndexes", func(t *testing.T) {
 		var results []*vfs.DirDoc
 		prefix := getDB(t, "test.cozycloud.cc")
