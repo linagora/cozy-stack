@@ -94,6 +94,10 @@ func (t *EventTrigger) CombineRequest() string {
 }
 
 func eventMatchRule(e *realtime.Event, rule *permission.Rule) bool {
+	// Previously saved triggers must not receive private events either.
+	if e.Doc.DocType() == consts.PublicLinkEvents {
+		return false
+	}
 	if e.Doc.DocType() != rule.Type {
 		return false
 	}
