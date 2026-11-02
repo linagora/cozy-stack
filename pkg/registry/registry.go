@@ -276,11 +276,11 @@ type AppsPaginated struct {
 }
 
 type registryFetchState struct {
-	url          *url.URL
-	index        int // index in the registries array
-	cursor       int // cursor used to fetch the registry
-	ended        int // cursor of the last element in the regitry (-1 if unknown)
-	slugByOffset map[int]string
+	url           *url.URL
+	index         int // index in the registries array
+	cursor        int // cursor used to fetch the registry
+	ended         int // cursor of the last element in the regitry (-1 if unknown)
+	maskedOffsets map[int]bool
 }
 
 func newAppsList(ref *url.URL, registries []*url.URL, cursors []int, limit int) *appsList {
@@ -290,11 +290,11 @@ func newAppsList(ref *url.URL, registries []*url.URL, cursors []int, limit int) 
 	regStates := make([]*registryFetchState, len(registries))
 	for i := range regStates {
 		regStates[i] = &registryFetchState{
-			index:        i,
-			url:          registries[i],
-			cursor:       cursors[i],
-			ended:        -1,
-			slugByOffset: make(map[int]string),
+			index:         i,
+			url:           registries[i],
+			cursor:        cursors[i],
+			ended:         -1,
+			maskedOffsets: make(map[int]bool),
 		}
 	}
 	return &appsList{
@@ -323,7 +323,6 @@ func (a *appsList) FetchAll() error {
 func (a *appsList) fetch(r *registryFetchState, fetchAll bool) error {
 	slugs := a.slugs
 	minCursor := r.cursor
-	maxCursor := r.cursor + a.limit
 
 	var cursor, limit int
 	if fetchAll {
@@ -361,22 +360,19 @@ func (a *appsList) fetch(r *registryFetchState, fetchAll bool) error {
 
 		for i, obj := range page.Apps {
 			objCursor := cursor + i
-
-			// if an object with same slug has already been fetched, we skip it
 			slug := ParseSlug(obj["slug"])
-			r.slugByOffset[objCursor] = slug
 
-			objInRange := r.cursor >= 0 &&
-				objCursor >= minCursor &&
-				objCursor <= maxCursor
 			offsets, ok := slugs[slug]
 			if !ok {
 				offsets = make([]int, len(a.registries))
 				slugs[slug] = offsets
+			} else {
+				r.maskedOffsets[objCursor] = true
 			}
-			if objInRange {
+
+			if r.cursor >= 0 && objCursor >= minCursor {
 				offsets[r.index] = objCursor + 1
-				if !ok {
+				if !ok && (fetchAll || added < a.limit) {
 					a.list = append(a.list, obj)
 					added++
 				}
@@ -390,7 +386,7 @@ func (a *appsList) fetch(r *registryFetchState, fetchAll bool) error {
 		}
 
 		cursor, _ = strconv.Atoi(nextCursor)
-		if !fetchAll && limit-added <= 0 {
+		if !fetchAll && added >= a.limit {
 			break
 		}
 	}
@@ -404,19 +400,6 @@ func ParseSlug(raw json.RawMessage) string {
 		return ""
 	}
 	return slug
-}
-
-func (a *appsList) isMasked(regIndex int, slug string) bool {
-	offsets, ok := a.slugs[slug]
-	if !ok {
-		return false
-	}
-	for k := 0; k < regIndex; k++ {
-		if offsets[k] > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *appsList) Paginated(sortBy string, reverse bool, limit int) *AppsPaginated {
@@ -492,11 +475,7 @@ func (a *appsList) Paginated(sortBy string, reverse bool, limit int) *AppsPagina
 	// a higher-priority registry.
 	for i := 1; i < l; i++ {
 		reg := a.registries[i]
-		for cursors[i] >= 0 {
-			slug, exists := reg.slugByOffset[cursors[i]]
-			if !exists || !a.isMasked(i, slug) {
-				break
-			}
+		for cursors[i] >= 0 && reg.maskedOffsets[cursors[i]] {
 			cursors[i]++
 		}
 		if e := reg.ended; e >= 0 && cursors[i] >= e {
