@@ -296,6 +296,9 @@ func ExtractPaginationCursor(c echo.Context, defaultLimit, maxLimit int) (couchd
 		if err != nil {
 			return nil, NewError(http.StatusBadRequest, "page limit is not a number")
 		}
+		if reqLimit <= 0 {
+			return nil, NewError(http.StatusBadRequest, "page limit must be positive")
+		}
 		limit = int(reqLimit)
 	}
 	if maxLimit > 0 && limit > maxLimit {
