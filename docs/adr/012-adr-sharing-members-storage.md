@@ -50,9 +50,9 @@ Only the way the stack stores a sharing changes.
 ### Store each member in its own document
 
 - **Sharing document**, in `io.cozy.sharings`, same ID as today: everything except members and credentials (rules, flags, groups, triggers, and so on). Every existing query and index uses only these fields, so they keep working.
-- **One document per member**, in a new doctype `io.cozy.sharings.roster`. It holds the member and the credentials used to talk to that member. Its ID is `<sharing id>/<member index>`.
+- **One document per member**, in a new doctype `io.cozy.sharings.recipients`. It holds the member and the credentials used to talk to that member. Its ID is `<sharing id>/<member index>`.
   - The member index is the member's position, and it never changes: members are never removed from a sharing; revoked members stay.
-  - `io.cozy.sharings.members` is not used, because it is already the JSON:API type of members in the API.
+  - `io.cozy.sharings.recipients` is already the JSON:API type of `GET /sharings/recipients/:file-id` (effective recipients), and cozy-client uses it for those responses. They never meet these documents: effective recipients are computed and never stored, and these documents never leave the stack (see below).
 - The same storage is used on the owner and on recipients.
 
 ### The Go code keeps its shape

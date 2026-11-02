@@ -12,7 +12,7 @@ Same document as today, without `members` and `credentials`, and with a marker f
 {
   "_id": "a1f0c3e2d4b5",
   "_rev": "12-...",
-  "roster": true,
+  "members_split": true,
   "drive": true,
   "active": true,
   "owner": true,
@@ -27,7 +27,7 @@ Same document as today, without `members` and `credentials`, and with a marker f
 
 The sharing document is written from its own Go type with no `members` or `credentials` field. A `nil` slice on `Sharing` would still write `"members": null`, because that field has no `omitempty`.
 
-### Member document (`io.cozy.sharings.roster`)
+### Member document (`io.cozy.sharings.recipients`)
 
 ```json
 {
@@ -70,7 +70,7 @@ Loading rebuilds the `Members` and `Credentials` slices exactly as they are toda
 - `model/sharing/reupload.go` (`GetAllDocs`) and `model/sharing/reference.go` (`FindDocsRaw`) also read sharings directly. They must go through the same loader, or check that they don't need members.
 - Format check, in this order:
   1. The sharing document has a non-empty `members`: old format. Use it and ignore member documents. An older stack may have rewritten a converted sharing, for example after a rollback, and its version is the latest.
-  2. The sharing document has `roster: true`: read the member documents.
+  2. The sharing document has `members_split: true`: read the member documents.
   3. Otherwise: no members.
 
 ## Saving
@@ -91,7 +91,7 @@ Loading rebuilds the `Members` and `Credentials` slices exactly as they are toda
 
 ## Access
 
-- Add `io.cozy.sharings.roster` to the blocklist in `model/permission/doctype.go` as `none` (no read, no write), like `io.cozy.sharings`.
+- Add `io.cozy.sharings.recipients` to the blocklist in `model/permission/doctype.go` as `none` (no read, no write), like `io.cozy.sharings`. The effective recipients route checks file permissions, not this doctype, and app installs only check the doctype name, so blocking it breaks nothing.
 - Never publish realtime events for this doctype, and refuse `SUBSCRIBE` to it in `web/realtime`.
 
 ## Deleting a sharing
@@ -113,7 +113,7 @@ Loading rebuilds the `Members` and `Credentials` slices exactly as they are toda
 ## Release steps
 
 1. **Read both formats, write the old one.** Ship `Save`, the readers and the indexes. Behaviour stays the same.
-2. **Write the new format** when `sharing.roster_storage: true` is set in the context config. Turn it on only after every stack runs this release. A sharing converts on its first save: member documents first, then the sharing document with `roster: true` and no `members`.
+2. **Write the new format** when `sharing.members_split: true` is set in the context config. Turn it on only after every stack runs this release. A sharing converts on its first save: member documents first, then the sharing document with `members_split: true` and no `members`.
 3. **Migrate the rest** with a job per instance, using the same conversion. It also removes member documents whose sharing no longer exists. Then remove the code that reads the old format.
 
 If a conversion stops between its two writes, the sharing document still has `members`, which win. The next conversion reads the existing member documents' revisions and overwrites them.
@@ -144,7 +144,7 @@ Retries then only contact the members still `revoking`, and jobs carry no creden
 
 | Area                                | Files                                                                  |
 |-------------------------------------|------------------------------------------------------------------------|
-| New doctype                         | `pkg/consts/doctype.go`                                                |
+| New doctype                         | `pkg/consts/doctype.go`; reuse it for the local constant in `web/sharings/effective_recipients.go` |
 | Index on `sharing_id`               | `pkg/couchdb/index.go`                                                 |
 | Load, save, format check (new file) | `model/sharing/storage.go`                                             |
 | Loaders                             | `model/sharing/sharing.go` (`FindSharing`, `FindSharings`, `FindActive`, `ListDrives`, `GetSharingsByDocType`), `model/sharing/reupload.go`, `model/sharing/reference.go` |
