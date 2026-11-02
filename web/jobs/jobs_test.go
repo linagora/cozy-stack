@@ -103,10 +103,15 @@ func TestJobs(t *testing.T) {
 					"type": "@event", "arguments": args, "worker": "print",
 				}}}).Expect().Status(403)
 		}
-		e.POST("/jobs/triggers").WithHeader("Authorization", "Bearer "+appToken).
+		response := e.POST("/jobs/triggers").WithHeader("Authorization", "Bearer "+appToken).
 			WithJSON(map[string]interface{}{"data": map[string]interface{}{"attributes": map[string]interface{}{
 				"type": "@event", "arguments": "io.cozy.foos:CREATED", "worker": "print",
 			}}}).Expect().Status(201)
+		triggerID := response.JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object().
+			Value("data").Object().Value("id").String().NotEmpty().Raw()
+		t.Cleanup(func() {
+			e.DELETE("/jobs/triggers/"+triggerID).WithHeader("Authorization", "Bearer "+appToken).Expect().Status(204)
+		})
 	})
 
 	t.Run("GetQueue", func(t *testing.T) {
