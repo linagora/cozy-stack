@@ -29,7 +29,7 @@ The job system can already batch, but only for triggers stored in CouchDB. A deb
 - The first call for a batch starts its window. Calls during the window only add their payload, if they have one. At the end of the window, one job runs with all the payloads.
 - The window starts at the first call, not the last one. Work is late by at most one window, even when changes never stop.
 - The job reads the current state when it runs. Payloads are hints, such as which members changed, never the data to send. Running the same batch twice must be safe.
-- First user: the sharing member list. The 13 call sites push a batched `share-members` job with the sharing ID as the key. The job loads the sharing and sends the list once to each recipient, a few requests at a time. The 3 second wait and the lock around the sending go away.
+- First user: the sharing member list. The 13 call sites push a batched `share-members` job with the sharing ID as the key. The job loads the sharing and sends the list once to each recipient, a few requests at a time. The 3 second wait becomes the batch window, and the lock around the sending goes away.
 - Second user: realtime events for sharings, once [ADR 012](012-adr-sharing-members-storage.md) moves members out of the sharing document.
 - Other features use it when they have the same shape: many changes, and one result that only depends on the latest state.
 
@@ -63,19 +63,19 @@ sequenceDiagram
 jobs:
   workers:
     share-members:
-      batch_window: 5s
+      batch_window: 3s
 ```
 
 Each batched worker has a default window. `batch_window` sits next to the existing worker settings (`concurrency`, `max_exec_count`, `timeout`) and can change it.
 
 ### Volume
 
-- A group of 100 members whose answers arrive over 30 seconds, with a 5 second window: about 6 rounds of 100 requests, instead of up to 10,000.
-- A single change: one round, as today, up to one window later.
+- A group of 100 members whose answers arrive over 30 seconds, with a 3 second window: about 10 rounds of 100 requests, instead of up to 10,000.
+- A single change: one round, up to 3 seconds later, as today.
 
 ## Consequences
 
-- Recipients see member list changes up to one window late. Today they wait at least 3 seconds, and the change often never arrives.
+- Recipients see member list changes up to 3 seconds late, as today: each run already waits 3 seconds. The difference is that the change now always arrives.
 - A revoked member is told by the revocation, not by the member list, so this does not delay it. Only the member list sent to the other recipients waits for the window.
 - The time spent on member lists grows with the number of members, not with members × changes.
 - Redis holds one more sorted set, and one small list per open batch.
@@ -85,4 +85,4 @@ Each batched worker has a default window. `batch_window` sits next to the existi
 
 - Should ADR 010's activity digest move to this mechanism?
 - Which other features should use it?
-- Is 5 seconds the right default window for the member list?
+- Should the first change of a window be sent right away, and only the next ones batched? It would remove the delay for single changes. It can be added later without changing the callers.
