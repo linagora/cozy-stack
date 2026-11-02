@@ -105,6 +105,13 @@ func HTMLErrorHandler(err error, c echo.Context) {
 		log.Errorf("%s %s %s", req.Method, req.URL.Path, err)
 	}
 
+	// The status and headers are already sent, for instance when the client
+	// disconnects while an asset is being served. An error page can't be
+	// delivered anymore, and writing it would exceed the Content-Length.
+	if c.Response().Committed {
+		return
+	}
+
 	he, ok := err.(*echo.HTTPError)
 	if ok {
 		status = he.Code
