@@ -120,9 +120,18 @@ func createDefaultFilesTree(inst *instance.Instance) error {
 		}
 	}
 
+	// The Photos folder is referenced as io.cozy.apps/photos, the magic
+	// folder that cozy-client and the flagship app look for.
 	if createPhotosFolder {
 		name := inst.Translate("Tree Photos")
-		createDir(vfs.NewDirDocWithPath(name, consts.RootDirID, "/", nil))
+		photosFolder, err := vfs.NewDirDocWithPath(name, consts.RootDirID, "/", nil)
+		if err == nil {
+			photosFolder.AddReferencedBy(couchdb.DocReference{
+				ID:   "io.cozy.apps/photos",
+				Type: consts.Apps,
+			})
+		}
+		createDir(photosFolder, err)
 	}
 
 	return errf
