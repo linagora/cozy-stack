@@ -228,6 +228,13 @@ func (c *couchdbIndexer) UpdateFileDoc(olddoc, newdoc *FileDoc) error {
 		c.revokeSharingRefsOnFile(newdoc)
 	}
 
+	// The antivirus trigger does not rescan a file whose content is
+	// unchanged, so the previous verdict must survive an upload of the same
+	// bytes, or an infected file would be served as clean.
+	if newdoc.AntivirusScan == nil && olddoc.AntivirusScan != nil && newdoc.SameContent(olddoc) {
+		newdoc.AntivirusScan = olddoc.AntivirusScan
+	}
+
 	newdoc.SetID(olddoc.ID())
 	newdoc.SetRev(olddoc.Rev())
 	return couchdb.UpdateDocWithOld(c.db, newdoc, olddoc)
