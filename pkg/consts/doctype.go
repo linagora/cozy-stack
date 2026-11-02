@@ -70,6 +70,8 @@ const (
 	OAuthClients = "io.cozy.oauth.clients"
 	// Permissions doc type for permissions identifying a connection
 	Permissions = "io.cozy.permissions"
+	// PublicLinkEvents stores private activity on public links.
+	PublicLinkEvents = "io.cozy.public_links.events"
 	// Contacts doc type for sharing
 	Contacts = "io.cozy.contacts"
 	// Groups of contacts doc type for sharing
