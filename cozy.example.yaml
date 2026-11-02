@@ -519,6 +519,9 @@ contexts:
     # Keep directory copies until the sharing UI supports organization lookup.
     # Independent of common_contacts: B2B events can maintain the org directory.
     centralized_org_directory: false
+    # How long organization group changes are collected into one propagation
+    # to the sharings of the members, in centralized mode.
+    org_groups_propagation_delay: 30s
     # How long the Stack counts the file changes of an organization drive
     # before publishing them on the activity exchange (ADR 010).
     drive_activity:

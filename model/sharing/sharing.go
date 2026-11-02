@@ -786,7 +786,7 @@ func (s *Sharing) revokeRecipient(inst *instance.Instance, index int, removedGro
 	if !s.Owner {
 		return ErrInvalidSharing
 	}
-	if err := s.revokeMember(inst, index, removedGroupIndex); err != nil {
+	if err := s.revokeMember(inst, index); err != nil {
 		return err
 	}
 	m := &s.Members[index]
@@ -797,6 +797,9 @@ func (s *Sharing) revokeRecipient(inst *instance.Instance, index int, removedGro
 		if err := s.RemoveBitwardenMember(inst, m, rule.Values[0]); err != nil {
 			return err
 		}
+	}
+	if removedGroupIndex != nil {
+		removeGroupFromMember(m, *removedGroupIndex)
 	}
 	return s.NoMoreRecipient(inst)
 }
