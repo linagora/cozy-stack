@@ -1716,6 +1716,13 @@ func proxy(fn func(c echo.Context, inst *instance.Instance, s *sharing.Sharing) 
 		// the handler. We still rewrite the request to match the real proxied
 		// request shape. It helps for performances.
 		if owner, err := lifecycle.GetInstance(u.Host); err == nil {
+			// The actor resolved on the owner's side keeps an actor already
+			// set from the original token. A route without authentication has
+			// none: pin an actor that is not a person, so that the drive token
+			// is never taken for the person behind the request.
+			if !needsAuth {
+				middlewares.SetActor(c, &middlewares.Actor{Kind: vfs.TrashedByKindAnonymousShare})
+			}
 			c.Request().Header.Set(echo.HeaderAuthorization, "Bearer "+token)
 			middlewares.ForcePermission(c, nil)
 			c.Set("claims", nil)
