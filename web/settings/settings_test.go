@@ -235,6 +235,33 @@ func TestSettings(t *testing.T) {
 		actions.Value("infected").Array().ContainsAll("delete")
 	})
 
+	t.Run("GetContextDoesNotAlterTheConfig", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, tsURL)
+
+		conf.Contexts["test-context"] = map[string]interface{}{
+			"antivirus": map[string]interface{}{
+				"enabled": true,
+				"address": "localhost:3310",
+			},
+		}
+		defer func() {
+			delete(conf.Contexts, "test-context")
+		}()
+
+		for i := 0; i < 2; i++ {
+			e.GET("/settings/context").
+				WithCookie(sessCookie, "connected").
+				WithHeader("Accept", "application/vnd.api+json").
+				WithHeader("Authorization", "Bearer "+token).
+				Expect().Status(200).
+				JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+				Object().Value("data").Object().Value("attributes").Object().
+				Value("antivirus").Object().HasValue("enabled", true)
+		}
+
+		assert.True(t, config.GetAntivirusConfig("test-context").Enabled)
+	})
+
 	t.Run("PatchWithGoodRev", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, tsURL)
 
