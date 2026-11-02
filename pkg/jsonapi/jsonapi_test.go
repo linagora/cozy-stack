@@ -218,3 +218,16 @@ func (f *Foo) Included() []Object {
 	qux := &Foo{FID: "qux", FRev: "42-xyz", Bar: "quux"}
 	return []Object{qux}
 }
+
+func TestExtractPaginationCursorRejectsNonPositiveLimit(t *testing.T) {
+	for _, limit := range []string{"0", "-1", "-2147483648"} {
+		req := httptest.NewRequest(http.MethodGet, "/?page[limit]="+limit, nil)
+		c := echo.New().NewContext(req, httptest.NewRecorder())
+		cursor, err := ExtractPaginationCursor(c, 30, 100)
+		assert.Nil(t, cursor, "page[limit]=%s", limit)
+		var jerr *Error
+		if assert.ErrorAs(t, err, &jerr, "page[limit]=%s", limit) {
+			assert.Equal(t, http.StatusBadRequest, jerr.Status)
+		}
+	}
+}
