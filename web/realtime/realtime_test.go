@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -107,6 +108,28 @@ func TestRealtime(t *testing.T) {
 		payload.ValueEqual("status", "403 Forbidden")
 		payload.ValueEqual("code", "forbidden")
 		payload.ValueEqual("title", "The application can't subscribe to io.cozy.contacts")
+	})
+
+	t.Run("WSPrivatePublicLinkEvents", func(t *testing.T) {
+		perms := &permission.Permission{Type: permission.TypeWebapp, SourceID: consts.Apps + "/private-test", Permissions: permission.Set{{Type: "*", Verbs: permission.ALL}}}
+		require.NoError(t, couchdb.CreateDoc(inst, perms))
+		adminToken, err := inst.MakeJWT(consts.AppAudience, "private-test", "", "", time.Now())
+		require.NoError(t, err)
+		e := testutils.CreateTestClient(t, ts.URL)
+		ws := e.GET("/realtime/").WithWebsocketUpgrade().Expect().Status(http.StatusSwitchingProtocols).Websocket()
+		defer ws.Disconnect()
+		ws.WriteText(fmt.Sprintf(`{"method":"AUTH","payload":"%s"}`, adminToken))
+		ws.WriteText(`{"method":"SUBSCRIBE","payload":{"type":"io.cozy.foos"}}`)
+		for _, id := range []string{"", `,"id":"event-id"`} {
+			obj := ws.WriteText(fmt.Sprintf(`{"method":"SUBSCRIBE","payload":{"type":"%s"%s}}`, consts.PublicLinkEvents, id)).
+				Expect().TextMessage().JSON().Object()
+			obj.ValueEqual("event", "error")
+			obj.Value("payload").Object().ValueEqual("status", "403 Forbidden")
+		}
+		realtime.GetHub().Publish(inst, realtime.EventCreate, &testDoc{doctype: "io.cozy.foos", id: "control"}, nil)
+		obj := ws.Expect().TextMessage().JSON().Object()
+		obj.ValueEqual("event", "CREATED")
+		obj.Value("payload").Object().ValueEqual("id", "control")
 	})
 
 	t.Run("WSSuccess", func(t *testing.T) {

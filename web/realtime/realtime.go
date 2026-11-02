@@ -201,6 +201,11 @@ func readPump(ctx context.Context, c echo.Context, i *instance.Instance, ws *web
 			sendErr(ctx, errc, missingType(cmd))
 			continue
 		}
+		// These doctypes contain private data, even for applications with maximal permissions.
+		if cmd.Payload.Type == consts.PublicLinkEvents {
+			sendErr(ctx, errc, forbidden(cmd))
+			continue
+		}
 		permType := cmd.Payload.Type
 		permID := cmd.Payload.ID
 		// XXX: thumbnails is a synthetic doctype, listening to its events

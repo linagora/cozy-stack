@@ -30,6 +30,7 @@ var blockList = map[string]bool{
 	consts.Sharings:            none,
 	consts.Shared:              none,
 	consts.SoftDeletedAccounts: none,
+	consts.PublicLinkEvents:    none,
 
 	// Synthetic doctypes (API only)
 	consts.CertifiedCarbonCopy:     none,
