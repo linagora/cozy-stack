@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"maps"
 	"path/filepath"
 
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -18,20 +19,16 @@ type LogoItem struct {
 }
 
 func (i *Instance) GetContextWithSponsorships() map[string]interface{} {
-	context, ok := i.SettingsContext()
-	if !ok {
+	settings, _ := i.SettingsContext()
+	// Callers add keys to the returned map, so it must not be the global config.
+	context := maps.Clone(settings)
+	if context == nil {
 		context = map[string]interface{}{}
 	}
 	if len(i.Sponsorships) == 0 {
 		return context
 	}
 
-	// Avoid changing the global config
-	clone := map[string]interface{}{}
-	for k, v := range context {
-		clone[k] = v
-	}
-	context = clone
 	var logos map[string]AppLogos
 	if err := mapstructure.Decode(context["logos"], &logos); err != nil || logos == nil {
 		logos = make(map[string]AppLogos)
