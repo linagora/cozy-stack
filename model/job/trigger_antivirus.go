@@ -1,8 +1,6 @@
 package job
 
 import (
-	"bytes"
-
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -86,13 +84,7 @@ func (t *AntivirusTrigger) hasContentChanged(e *realtime.Event) bool {
 		t.log.Warnf("Event OldDoc is not *vfs.FileDoc, actual type: %T", e.OldDoc)
 		return false
 	}
-	if !bytes.Equal(newDoc.MD5Sum, oldDoc.MD5Sum) {
-		return true
-	}
-	if newDoc.ByteSize != oldDoc.ByteSize {
-		return true
-	}
-	return false
+	return !newDoc.SameContent(oldDoc)
 }
 
 func (t *AntivirusTrigger) pushJob(e *realtime.Event) {

@@ -743,6 +743,43 @@ func TestVfs(t *testing.T) {
 			assert.Equal(t, 1, len(updated.Metadata))
 			assert.Equal(t, true, updated.Metadata["only"])
 		})
+
+		t.Run("OverwriteKeepsAntivirusScanWhenContentIsUnchanged", func(t *testing.T) {
+			write := func(newdoc, olddoc *vfs.FileDoc, content string) {
+				f, err := fs.CreateFile(newdoc, olddoc)
+				require.NoError(t, err)
+				_, err = io.Copy(f, strings.NewReader(content))
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+			}
+			newDoc := func() *vfs.FileDoc {
+				doc, err := vfs.NewFileDoc("av-file", consts.RootDirID, -1, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+				require.NoError(t, err)
+				return doc
+			}
+
+			doc := newDoc()
+			write(doc, nil, "infected content")
+			infected := doc.Clone().(*vfs.FileDoc)
+			infected.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusInfected, VirusName: "Eicar"}
+			require.NoError(t, couchdb.UpdateDoc(fs, infected))
+
+			olddoc, err := fs.FileByID(doc.ID())
+			require.NoError(t, err)
+			write(newDoc(), olddoc, "infected content")
+
+			sameContent, err := fs.FileByID(doc.ID())
+			require.NoError(t, err)
+			require.NotNil(t, sameContent.AntivirusScan)
+			assert.Equal(t, vfs.AVStatusInfected, sameContent.AntivirusScan.Status)
+			assert.Equal(t, "Eicar", sameContent.AntivirusScan.VirusName)
+
+			write(newDoc(), sameContent, "other content")
+
+			otherContent, err := fs.FileByID(doc.ID())
+			require.NoError(t, err)
+			assert.Nil(t, otherContent.AntivirusScan)
+		})
 	}
 }
 

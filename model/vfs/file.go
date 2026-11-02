@@ -116,6 +116,11 @@ func (f *FileDoc) Clone() couchdb.Doc {
 	return &cloned
 }
 
+// SameContent returns true if both documents describe the same bytes.
+func (f *FileDoc) SameContent(other *FileDoc) bool {
+	return f.ByteSize == other.ByteSize && bytes.Equal(f.MD5Sum, other.MD5Sum)
+}
+
 // SetID changes the file qualified identifier
 func (f *FileDoc) SetID(id string) { f.DocID = id }
 
