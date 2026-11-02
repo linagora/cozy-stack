@@ -311,6 +311,54 @@ func TestRedisScheduler(t *testing.T) {
 		assert.Equal(t, 1, count)
 	})
 
+	t.Run("PrivatePublicLinkEvent", func(t *testing.T) {
+		received := make(chan string, 4)
+		bro := job.NewMemBroker()
+		require.NoError(t, bro.StartWorkers(job.WorkersList{{
+			WorkerType: "private-event-test", Concurrency: 1, MaxExecCount: 1, Timeout: time.Second,
+			WorkerFunc: func(ctx *job.TaskContext) error {
+				var event struct {
+					Doc struct {
+						ID string `json:"_id"`
+					} `json:"doc"`
+				}
+				if err := ctx.UnmarshalEvent(&event); err != nil {
+					return err
+				}
+				received <- event.Doc.ID
+				return nil
+			},
+		}}))
+		t.Cleanup(func() { require.NoError(t, bro.ShutdownWorkers(context.Background())) })
+		sch := job.NewRedisScheduler(client)
+		require.NoError(t, sch.StartScheduler(bro))
+		t.Cleanup(func() { require.NoError(t, sch.ShutdownScheduler(context.Background())) })
+		// Simulate a previously saved trigger, bypassing new-trigger validation.
+		trigger, err := job.NewEventTrigger(&job.TriggerInfos{
+			Type: "@event", WorkerType: "private-event-test",
+			Arguments: consts.PublicLinkEvents + " io.cozy.foos",
+			Domain:    testInstance.DomainName(), Prefix: testInstance.DBPrefix(), Cluster: testInstance.DBCluster(),
+		})
+		require.NoError(t, err)
+		require.NoError(t, sch.AddTrigger(trigger))
+		t.Cleanup(func() { require.NoError(t, sch.DeleteTrigger(testInstance, trigger.ID())) })
+		control := &couchdb.JSONDoc{Type: "io.cozy.foos", M: map[string]interface{}{"_id": "control"}}
+		private := &couchdb.JSONDoc{Type: consts.PublicLinkEvents, M: map[string]interface{}{"_id": "private", "ip": "192.0.2.1"}}
+		realtime.GetHub().Publish(testInstance, realtime.EventCreate, control, nil)
+		select {
+		case id := <-received:
+			require.Equal(t, "control", id)
+		case <-time.After(5 * time.Second):
+			t.Fatal("control event not delivered")
+		}
+		realtime.GetHub().Publish(testInstance, realtime.EventCreate, private, nil)
+		select {
+		case id := <-received:
+			t.Fatalf("private event delivered: %s", id)
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
+
 	t.Run("RedisTriggerEventForDirectories", func(t *testing.T) {
 		err := client.Del(context.Background(), job.TriggersKey, job.SchedKey).Err()
 		assert.NoError(t, err)

@@ -8,8 +8,10 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/emailer"
 	"github.com/cozy/cozy-stack/pkg/mail"
 	"github.com/cozy/cozy-stack/tests/testutils"
@@ -88,6 +90,24 @@ func TestJobs(t *testing.T) {
 	ts := setupRouter(t, testInstance, emailerSvc)
 	ts.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
 	t.Cleanup(ts.Close)
+
+	t.Run("PrivatePublicLinkEventTrigger", func(t *testing.T) {
+		perms := &permission.Permission{Type: permission.TypeWebapp, SourceID: consts.Apps + "/trigger-test", Permissions: permission.Set{{Type: "*", Verbs: permission.ALL}}}
+		require.NoError(t, couchdb.CreateDoc(testInstance, perms))
+		appToken, err := testInstance.MakeJWT(consts.AppAudience, "trigger-test", "", "", time.Now())
+		require.NoError(t, err)
+		e := testutils.CreateTestClient(t, ts.URL)
+		for _, args := range []string{consts.PublicLinkEvents, "io.cozy.foos:CREATED " + consts.PublicLinkEvents + ":UPDATED"} {
+			e.POST("/jobs/triggers").WithHeader("Authorization", "Bearer "+appToken).
+				WithJSON(map[string]interface{}{"data": map[string]interface{}{"attributes": map[string]interface{}{
+					"type": "@event", "arguments": args, "worker": "print",
+				}}}).Expect().Status(403)
+		}
+		e.POST("/jobs/triggers").WithHeader("Authorization", "Bearer "+appToken).
+			WithJSON(map[string]interface{}{"data": map[string]interface{}{"attributes": map[string]interface{}{
+				"type": "@event", "arguments": "io.cozy.foos:CREATED", "worker": "print",
+			}}}).Expect().Status(201)
+	})
 
 	t.Run("GetQueue", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)

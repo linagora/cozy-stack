@@ -138,7 +138,18 @@ func NewTrigger(db prefixer.Prefixer, infos TriggerInfos, data interface{}) (Tri
 		infos.Metadata.EnsureCreatedFields(md)
 	}
 
-	return fromTriggerInfos(&infos)
+	trigger, err := fromTriggerInfos(&infos)
+	if err != nil {
+		return nil, err
+	}
+	if event, ok := trigger.(*EventTrigger); ok {
+		for _, rule := range event.mask {
+			if rule.Type == consts.PublicLinkEvents {
+				return nil, permission.CheckReadable(rule.Type)
+			}
+		}
+	}
+	return trigger, nil
 }
 
 func fromTriggerInfos(infos *TriggerInfos) (Trigger, error) {
