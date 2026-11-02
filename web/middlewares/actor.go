@@ -1,10 +1,12 @@
 package middlewares
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -18,6 +20,19 @@ type Actor struct {
 	Kind        string
 	DisplayName string
 	Domain      string
+	// Instance is the actor's instance when it lives on this stack: the
+	// request instance for its owner's tokens, the instance of a sharing
+	// member who has accepted the sharing. It is nil for an anonymous actor,
+	// a member on another stack, or a member who has not accepted yet (the
+	// Cozy URL then comes from the sharer's contacts).
+	Instance *instance.Instance
+	// Person tells that the original token of the request stands for a
+	// person: a session-bound app token, the flagship app, an OAuth client of
+	// the desktop kind, a sharing member's share-interact code, or their
+	// share-preview code once they have accepted the sharing. It is computed
+	// when the actor is first resolved, so it is kept when the shared drive
+	// proxy swaps the token of the request.
+	Person bool
 }
 
 // GetActor returns the actor associated with the request context.
@@ -44,7 +59,9 @@ func ResolveRequestActor(c echo.Context, inst *instance.Instance, pdoc *permissi
 
 	switch pdoc.Type {
 	case permission.TypeOauth, permission.TypeCLI, permission.TypeWebapp, permission.TypeKonnector:
-		SetActor(c, actorFromInstance(inst))
+		actor := actorFromInstance(inst)
+		actor.Person = isPersonToken(c, pdoc)
+		SetActor(c, actor)
 		return nil
 
 	case permission.TypeShareInteract:
@@ -52,25 +69,13 @@ func ResolveRequestActor(c echo.Context, inst *instance.Instance, pdoc *permissi
 			return nil
 		}
 
-		token := GetRequestToken(c)
-		if token == "" {
+		sharingDoc, token, err := requestSharing(c, inst, pdoc)
+		if err != nil {
+			return err
+		}
+		if sharingDoc == nil {
 			SetActor(c, nil)
 			return nil
-		}
-
-		token, err := TransformShortcodeToJWT(inst, token)
-		if err != nil {
-			return err
-		}
-
-		sharingID := pdoc.SourceID
-		if _, id, ok := strings.Cut(sharingID, "/"); ok {
-			sharingID = id
-		}
-
-		sharingDoc, err := sharing.FindSharing(inst, sharingID)
-		if err != nil {
-			return err
 		}
 
 		member, err := sharingDoc.FindMemberByInteractCode(inst, token)
@@ -78,10 +83,34 @@ func ResolveRequestActor(c echo.Context, inst *instance.Instance, pdoc *permissi
 			return err
 		}
 
-		SetActor(c, actorFromMember(member))
+		SetActor(c, actorFromMember(inst, member))
 		return nil
 
-	case permission.TypeSharePreview, permission.TypeShareByLink:
+	case permission.TypeSharePreview:
+		sharingDoc, token, err := requestSharing(c, inst, pdoc)
+		if err != nil {
+			return err
+		}
+		if sharingDoc == nil {
+			SetActor(c, anonymousShareActor())
+			return nil
+		}
+
+		member, err := sharingDoc.FindMemberBySharecode(inst, token)
+		if err != nil && !errors.Is(err, sharing.ErrMemberNotFound) {
+			return err
+		}
+		// A preview code stands for its member only once they have accepted
+		// the sharing.
+		if member == nil || member.Status != sharing.MemberStatusReady {
+			SetActor(c, anonymousShareActor())
+			return nil
+		}
+
+		SetActor(c, actorFromMember(inst, member))
+		return nil
+
+	case permission.TypeShareByLink:
 		SetActor(c, anonymousShareActor())
 		return nil
 
@@ -95,6 +124,31 @@ func ResolveRequestActor(c echo.Context, inst *instance.Instance, pdoc *permissi
 	}
 }
 
+// requestSharing returns the sharing of a share code permission, with the code
+// of the request as a JWT. The sharing is nil when the request has no token.
+func requestSharing(c echo.Context, inst *instance.Instance, pdoc *permission.Permission) (*sharing.Sharing, string, error) {
+	token := GetRequestToken(c)
+	if token == "" {
+		return nil, "", nil
+	}
+
+	token, err := TransformShortcodeToJWT(inst, token)
+	if err != nil {
+		return nil, "", err
+	}
+
+	sharingID := pdoc.SourceID
+	if _, id, ok := strings.Cut(sharingID, "/"); ok {
+		sharingID = id
+	}
+
+	sharingDoc, err := sharing.FindSharing(inst, sharingID)
+	if err != nil {
+		return nil, "", err
+	}
+	return sharingDoc, token, nil
+}
+
 func actorFromInstance(inst *instance.Instance) *Actor {
 	displayName, err := inst.SettingsPublicName()
 	if err != nil || displayName == "" {
@@ -104,10 +158,39 @@ func actorFromInstance(inst *instance.Instance) *Actor {
 		Kind:        vfs.TrashedByKindMember,
 		DisplayName: displayName,
 		Domain:      inst.Domain,
+		Instance:    inst,
 	}
 }
 
-func actorFromMember(member *sharing.Member) *Actor {
+// isPersonToken tells if a token of the instance owner stands for the user,
+// and not for a konnector, a service or the CLI.
+func isPersonToken(c echo.Context, pdoc *permission.Permission) bool {
+	switch pdoc.Type {
+	case permission.TypeWebapp:
+		// A session-bound app token is the user in their browser; an app token
+		// with no session is a service token.
+		claims, ok := c.Get("claims").(permission.Claims)
+		return ok && claims.SessionID != ""
+
+	case permission.TypeOauth:
+		// The flagship app and cozy-desktop act for their user. The desktop kind
+		// is declared by the client itself: any client declaring it counts.
+		if client, ok := pdoc.Client.(*oauth.Client); ok &&
+			(client.Flagship || client.ClientKind == "desktop") {
+			return true
+		}
+		// Only the flagship app asks for the "*" scope: it is not certified
+		// when its context skips the certification, where the stack grants
+		// that scope to any OAuth client sending a PKCE challenge.
+		claims, ok := c.Get("claims").(permission.Claims)
+		return ok && claims.Scope == "*"
+
+	default:
+		return false
+	}
+}
+
+func actorFromMember(inst *instance.Instance, member *sharing.Member) *Actor {
 	if member == nil {
 		return nil
 	}
@@ -119,13 +202,31 @@ func actorFromMember(member *sharing.Member) *Actor {
 		Kind:        vfs.TrashedByKindMember,
 		DisplayName: displayName,
 		Domain:      member.InstanceHost(),
+		Person:      true,
 	}
 	if actor.Domain != "" {
-		if inst, err := lifecycle.GetInstance(actor.Domain); err == nil {
-			actor.Domain = inst.Domain
+		if local := memberInstance(inst, actor.Domain); local != nil {
+			actor.Domain = local.Domain
+			if member.Status == sharing.MemberStatusReady {
+				actor.Instance = local
+			}
 		}
 	}
 	return actor
+}
+
+// memberInstance returns the instance of a sharing member when it lives on
+// this stack, or nil. A member on another stack is expected and silent.
+func memberInstance(inst *instance.Instance, domain string) *instance.Instance {
+	found, err := lifecycle.GetInstance(domain)
+	if err == nil {
+		return found
+	}
+	if !errors.Is(err, instance.ErrNotFound) && !errors.Is(err, instance.ErrIllegalDomain) {
+		inst.Logger().WithNamespace("actor").
+			Warnf("Cannot load the instance of member %s: %s", domain, err)
+	}
+	return nil
 }
 
 func anonymousShareActor() *Actor {
