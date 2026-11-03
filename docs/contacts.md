@@ -89,7 +89,7 @@ has type `io.cozy.contacts.groups`, its stable document `id`, and `name` and
 group, including contacts without an email). Counts come from the same local or
 organization database as the group, and empty groups return zero. The API does
 not return member documents. When a group has no color, `color` is an empty string. For
-people, `meta.kind` is `member` when the document was found on the organization
+people, `meta.kind` is `org_member` when the document was found on the organization
 instance, and `contact` when it was found on the instance. A person with no
 matching document comes back without `id` and `meta`, with their name and email:
 the client shares with them by email.
@@ -115,7 +115,7 @@ Content-Type: application/vnd.api+json
         "email": [{ "address": "jean.dupont@org.example", "primary": true }],
         "cozy": [{ "url": "https://jdupont.org.example", "primary": true }]
       },
-      "meta": { "kind": "member" }
+      "meta": { "kind": "org_member" }
     },
     {
       "type": "io.cozy.contacts",

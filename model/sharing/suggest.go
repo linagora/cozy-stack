@@ -11,8 +11,8 @@ import (
 
 // The kinds of a suggestion, by where its contact was found.
 const (
-	SuggestionMember  = "member"
-	SuggestionContact = "contact"
+	SuggestionOrgMember = "org_member"
+	SuggestionContact   = "contact"
 )
 
 // A Suggestion is a group or person the user can share with. Contact is nil
@@ -110,7 +110,7 @@ func Suggest(inst *instance.Instance, q string, limit int) ([]Suggestion, error)
 		s := Suggestion{Name: p.Name, Email: p.Email}
 		key := strings.ToLower(p.Email)
 		if c, ok := members[key]; ok {
-			s.Contact, s.Kind = c, SuggestionMember
+			s.Contact, s.Kind = c, SuggestionOrgMember
 		} else if c, ok := contacts[key]; ok {
 			s.Contact, s.Kind = c, SuggestionContact
 		}
@@ -144,7 +144,7 @@ func suggestLocally(inst, orgInst *instance.Instance, q string, limit int, seen 
 	}
 	// A member copied to the instance is found on both: the org one wins.
 	for _, c := range members {
-		add(c, SuggestionMember)
+		add(c, SuggestionOrgMember)
 	}
 	for _, c := range contacts {
 		add(c, SuggestionContact)

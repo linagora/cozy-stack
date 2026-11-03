@@ -105,7 +105,7 @@ func TestSuggest(t *testing.T) {
 		suggestions, err := Suggest(alice, "duran", 20)
 		require.NoError(t, err)
 		assert.Equal(t, []result{
-			{bob.ID(), SuggestionMember, "Bob Durand", "bob@acme.example"},
+			{bob.ID(), SuggestionOrgMember, "Bob Durand", "bob@acme.example"},
 			{carol.ID(), SuggestionContact, "Carol Durand", "Carol@Friends.example"},
 			{"", "", "Dave Durand", "dave@unknown.example"},
 		}, results(suggestions))
@@ -119,7 +119,7 @@ func TestSuggest(t *testing.T) {
 			suggestions, err := Suggest(alice, "DURAN", 20)
 			require.NoError(t, err)
 			want := []result{
-				{bob.ID(), SuggestionMember, "Bob Durand", "bob@acme.example"},
+				{bob.ID(), SuggestionOrgMember, "Bob Durand", "bob@acme.example"},
 				{carol.ID(), SuggestionContact, "Carol Durand", "carol@friends.example"},
 			}
 			if !centralized {
@@ -136,7 +136,7 @@ func TestSuggest(t *testing.T) {
 		suggestions, err := Suggest(alice, "DURAN", 20)
 		require.NoError(t, err)
 		assert.Equal(t, []result{
-			{bob.ID(), SuggestionMember, "Bob Durand", "bob@acme.example"},
+			{bob.ID(), SuggestionOrgMember, "Bob Durand", "bob@acme.example"},
 			{carol.ID(), SuggestionContact, "Carol Durand", "carol@friends.example"},
 		}, results(suggestions))
 	})
