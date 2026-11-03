@@ -656,3 +656,33 @@ func TestChatConversationJSON(t *testing.T) {
 		require.Empty(t, chat.Attributes)
 	})
 }
+
+func TestChatPayloadValidatesAResult(t *testing.T) {
+	result := &ActionResult{MessageID: "answer", OK: true, Content: "3 emails"}
+	require.NoError(t, ChatPayload{Result: result}.Validate())
+	require.Error(t, ChatPayload{Query: "Hello", Result: result}.Validate(),
+		"a result is not a question")
+	require.Error(t, ChatPayload{Result: result, AttachmentIDs: []string{"a-file"}}.Validate())
+	require.Error(t, ChatPayload{Result: &ActionResult{OK: true}}.Validate(),
+		"a result tells which answer proposed the action")
+}
+
+func TestAwaitsResult(t *testing.T) {
+	action := &ChatAction{Name: "search_emails", Params: map[string]interface{}{}}
+	messages := []ChatMessage{
+		{ID: "question", Role: UserRole, Content: "Find the emails of Claire"},
+		{ID: "answer", Role: AssistantRole, Action: action},
+		{ID: "text", Role: AssistantRole, Content: "Hello"},
+	}
+	assert.True(t, awaitsResult(messages, "answer"))
+	assert.False(t, awaitsResult(messages, "text"), "an answer without an action")
+	assert.False(t, awaitsResult(messages, "question"), "a message of the user")
+	assert.False(t, awaitsResult(messages, "unknown"))
+
+	given := append(messages, ChatMessage{
+		ID:     "result",
+		Role:   ToolRole,
+		Result: &ActionResult{MessageID: "answer", OK: true},
+	})
+	assert.False(t, awaitsResult(given, "answer"), "a result is given once")
+}
