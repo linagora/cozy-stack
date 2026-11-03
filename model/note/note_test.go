@@ -1,9 +1,11 @@
 package note
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/prosemirror-go/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,4 +110,29 @@ func TestMarkdownTableAttributes(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, input, markdownSerializer(nil).Serialize(node))
 	})
+}
+
+func TestApplyStepThatPanicsInProsemirror(t *testing.T) {
+	doc := &Document{
+		SchemaSpec: DefaultSchemaSpecs(),
+		RawContent: map[string]interface{}{"type": "doc", "content": []interface{}{
+			map[string]interface{}{"type": "heading", "attrs": map[string]interface{}{"level": 1.0},
+				"content": []interface{}{map[string]interface{}{"type": "text", "text": "Title"}}},
+			map[string]interface{}{"type": "bulletList", "content": []interface{}{
+				map[string]interface{}{"type": "listItem", "content": []interface{}{map[string]interface{}{"type": "paragraph",
+					"content": []interface{}{map[string]interface{}{"type": "text", "text": "foo"}}}}},
+				map[string]interface{}{"type": "listItem", "content": []interface{}{map[string]interface{}{"type": "paragraph",
+					"content": []interface{}{map[string]interface{}{"type": "text", "text": "bar"}}}}},
+			}},
+		}},
+	}
+	var step Step
+	require.NoError(t, json.Unmarshal([]byte(`{"stepType":"replaceAround","from":18,"to":19,"gapFrom":18,"gapTo":19,"insert":-1,`+
+		`"slice":{"content":[{"type":"paragraph","content":[{"type":"text","text":"ab"}]}],"openStart":1,"openEnd":1},"structure":true}`), &step))
+
+	inst := &instance.Instance{Domain: "notes.example.net"}
+	require.NotPanics(t, func() {
+		assert.ErrorIs(t, apply(inst, doc, []Step{step}), ErrCannotApply)
+	})
+	assert.Equal(t, int64(0), doc.Version)
 }

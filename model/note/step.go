@@ -12,6 +12,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/prosemirror-go/model"
 	"github.com/cozy/prosemirror-go/transform"
 )
 
@@ -194,7 +195,7 @@ func apply(inst *instance.Instance, doc *Document, steps []Step) error {
 				Infof("Cannot instantiate a step: %s", err)
 			return ErrInvalidSteps
 		}
-		result := step.Apply(content)
+		result := applyStep(step, content)
 		if result.Failed != "" {
 			inst.Logger().WithNamespace("notes").
 				Infof("Cannot apply a step: %s (version=%d)", result.Failed, doc.Version)
@@ -208,6 +209,17 @@ func apply(inst *instance.Instance, doc *Document, steps []Step) error {
 	}
 	doc.SetContent(content)
 	return nil
+}
+
+// applyStep turns a panic of prosemirror-go, which does not fully validate
+// the steps sent by clients, into a failed step.
+func applyStep(step transform.Step, content *model.Node) (result transform.StepResult) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = transform.StepResult{Failed: fmt.Sprintf("panic: %v", r)}
+		}
+	}()
+	return step.Apply(content)
 }
 
 func saveSteps(inst *instance.Instance, steps []Step) error {
