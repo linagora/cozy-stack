@@ -863,8 +863,6 @@ func wrapAppsError(err error) error {
 		return jsonapi.BadRequest(err)
 	case app.ErrBadManifest:
 		return jsonapi.BadRequest(err)
-	case app.ErrInvalidFileName:
-		return jsonapi.BadRequest(err)
 	case app.ErrMissingSource:
 		return jsonapi.BadRequest(err)
 	case app.ErrLinkedAppExists:

@@ -202,11 +202,6 @@ func fetchHTTP(src *url.URL, shasum []byte, fs appfs.Copier, man Manifest, prefi
 		if len(prefix) > 0 && strings.HasPrefix(path.Join("/", name), path.Join("/", prefix)) {
 			name = name[len(prefix):]
 		}
-		// The copier refuses such a name too, but the whole tarball is
-		// rejected here with a clear error, before anything is written
-		if _, err := appfs.CleanFileName(name); err != nil {
-			return ErrInvalidFileName
-		}
 		fileinfo := appfs.NewFileInfo(name, hdr.Size, os.FileMode(hdr.Mode))
 		err = fs.Copy(fileinfo, tarReader)
 		if err != nil {

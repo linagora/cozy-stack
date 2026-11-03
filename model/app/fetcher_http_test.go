@@ -76,7 +76,7 @@ func TestFetchHTTPRejectsTraversingNames(t *testing.T) {
 	man.SetVersion("1.0.0")
 
 	err := fetchHTTP(src, nil, appfs.NewAferoCopier(fs), man, "")
-	assert.ErrorIs(t, err, ErrInvalidFileName)
+	assert.ErrorIs(t, err, appfs.ErrInvalidFileName)
 	assert.Empty(t, storedFiles(t, fs))
 }
 
