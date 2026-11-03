@@ -188,6 +188,16 @@ func isTableCell(item *markdown.StackItem) bool {
 	return name == "tableHeader" || name == "tableCell"
 }
 
+// closeTableNode closes the node on top of the stack if it has the expected
+// type, and returns an error for unbalanced table markers.
+func closeTableNode(state *markdown.MarkdownParseState, name string) error {
+	if len(state.Stack) < 2 || state.Top().Type.Name != name {
+		return fmt.Errorf("unexpected table marker: no %s to close", name)
+	}
+	_, err := state.CloseNode()
+	return err
+}
+
 func cellAttributes(node ast.Node) map[string]interface{} {
 	background, ok := node.AttributeString("background")
 	if !ok {
@@ -348,20 +358,17 @@ func markdownNodeMapper() markdown.NodeMapper {
 					if _, err := state.CloseNode(); err != nil { // Cell
 						return err
 					}
-					if _, err := state.CloseNode(); err != nil { // Row
+					if err := closeTableNode(state, "tableRow"); err != nil {
 						return err
 					}
 				}
-				if _, err := state.CloseNode(); err != nil { // Table
-					return err
-				}
-				return nil
+				return closeTableNode(state, "table")
 			case "tableRow":
 				if isTableCell(state.Top()) {
 					if _, err := state.CloseNode(); err != nil { // Cell
 						return err
 					}
-					if _, err := state.CloseNode(); err != nil { // Row
+					if err := closeTableNode(state, "tableRow"); err != nil {
 						return err
 					}
 				}
