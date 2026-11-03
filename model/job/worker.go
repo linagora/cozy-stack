@@ -96,6 +96,7 @@ type (
 		id        string
 		cookie    interface{}
 		noRetry   bool
+		execCount int
 	}
 )
 
@@ -161,6 +162,11 @@ func (c *TaskContext) SetNoRetry() {
 // NoRetry returns the no-retry flag.
 func (c *TaskContext) NoRetry() bool {
 	return c.noRetry
+}
+
+// ExecCount returns how many times the job was already executed, 0 on the first try.
+func (c *TaskContext) ExecCount() int {
+	return c.execCount
 }
 
 func (c *TaskContext) clone() *TaskContext {
@@ -465,6 +471,7 @@ func (t *task) run() (err error) {
 		}))
 
 		ctx, cancel := t.ctx.WithTimeout(timeout)
+		ctx.execCount = t.execCount
 		err = t.exec(ctx)
 		if err == nil {
 			execResultLabel = metrics.WorkerExecResultSuccess
