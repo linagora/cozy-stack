@@ -564,6 +564,28 @@ func (c *couchdbIndexer) DirOrFileByID(fileID string) (*DirDoc, *FileDoc, error)
 	return dirDoc, fileDoc, nil
 }
 
+// DirOrFileDocsByIDs loads the files and folders with the given IDs in one
+// _all_docs request, indexed by ID. Missing and deleted IDs are absent from
+// the map.
+func DirOrFileDocsByIDs(db prefixer.Prefixer, ids []string) (map[string]*DirOrFileDoc, error) {
+	docs := make(map[string]*DirOrFileDoc, len(ids))
+	if len(ids) == 0 {
+		return docs, nil
+	}
+	var results []*DirOrFileDoc
+	req := &couchdb.AllDocsRequest{Keys: ids}
+	if err := couchdb.GetAllDocs(db, consts.Files, req, &results); err != nil {
+		return nil, err
+	}
+	for _, result := range results {
+		if result == nil || result.DirDoc == nil {
+			continue
+		}
+		docs[result.ID()] = result
+	}
+	return docs, nil
+}
+
 func (c *couchdbIndexer) DirOrFileByPath(name string) (*DirDoc, *FileDoc, error) {
 	dirDoc, err := c.DirByPath(name)
 	if err == nil {
