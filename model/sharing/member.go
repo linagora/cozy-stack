@@ -902,6 +902,24 @@ func (s *Sharing) MemberMatching(ref *Member) *Member {
 	return nil
 }
 
+// readyMemberOf returns the ready member of the sharing whose Cozy URL has
+// one of the domains of the given instance, main domain or alias. Unlike
+// MemberMatching, the email is never compared: the instance is identified by
+// its URL only. As for MemberMatching, the owner entry and the members that
+// have not accepted the sharing or were revoked are not returned.
+func (s *Sharing) readyMemberOf(inst *instance.Instance) *Member {
+	for i := range s.Members {
+		m := &s.Members[i]
+		if m.Status != MemberStatusReady {
+			continue
+		}
+		if host := m.InstanceHost(); host != "" && inst.HasDomain(host) {
+			return m
+		}
+	}
+	return nil
+}
+
 // FindMemberBySharecode returns the member that is linked to the sharing by
 // the given sharecode
 func (s *Sharing) FindMemberBySharecode(db prefixer.Prefixer, sharecode string) (*Member, error) {
