@@ -661,6 +661,16 @@ func describeAction(action *ChatAction) string {
 	return fmt.Sprintf("(Proposed to the user: %s %s)", action.Name, strings.TrimSpace(raw.String()))
 }
 
+// describeResult is how the result of an action appears in the history sent
+// to the LLM: the app gives it, the user has not written it.
+func describeResult(name string, ok bool, content string) string {
+	head := fmt.Sprintf("(Result of %s, given by the app, not written by the user:)", name)
+	if !ok {
+		head = fmt.Sprintf("(The app could not run %s, it answered:)", name)
+	}
+	return strings.TrimSpace(head + "\n\n" + content)
+}
+
 // completeJSON asks the LLM behind openRAG, without retrieval, for a JSON
 // object matching the schema, and decodes it in out.
 func completeJSON(ctx context.Context, inst *instance.Instance, system, user, name string, schema map[string]interface{}, override map[string]interface{}, out interface{}) error {
