@@ -111,6 +111,20 @@ func TestSuggest(t *testing.T) {
 		}, results(suggestions))
 	})
 
+	t.Run("SideServiceWithoutCentralization", func(t *testing.T) {
+		conf.Contexts["suggest"] = map[string]interface{}{"common_contacts": true}
+		t.Cleanup(func() { conf.Contexts["suggest"] = centralizedContext })
+		before := calls.Load()
+		suggestions, err := Suggest(alice, "duran", 20)
+		require.NoError(t, err)
+		assert.Equal(t, []result{
+			{localBob.ID(), SuggestionContact, "Bob Durand", "bob@acme.example"},
+			{carol.ID(), SuggestionContact, "Carol Durand", "Carol@Friends.example"},
+			{"", "", "Dave Durand", "dave@unknown.example"},
+		}, results(suggestions))
+		assert.Equal(t, before+1, calls.Load(), "common contacts use the side service")
+	})
+
 	for _, centralized := range []bool{false, true} {
 		t.Run(fmt.Sprintf("LocalWithoutService/centralized=%t", centralized), func(t *testing.T) {
 			conf.Contexts["suggest"] = map[string]interface{}{"centralized_org_directory": centralized}
@@ -197,28 +211,39 @@ func TestSuggest(t *testing.T) {
 					before := calls.Load()
 					suggestions, err := Suggest(alice, "DU", 20)
 					require.NoError(t, err)
-					require.GreaterOrEqual(t, len(suggestions), 4)
-					require.NotNil(t, suggestions[0].Group)
-					require.NotNil(t, suggestions[1].Group)
-					wantGroups := []string{team.Name(), other.Name()}
+					// Centralized mode adds the personal groups after the organization
+					// ones, and skips the stale local copy of Team.
+					wantGroups := []string{team.Name(), other.Name(), personal.Name()}
 					if !centralized {
 						wantGroups = []string{localTeam.Name(), personal.Name()}
-						assert.Equal(t, []result{
-							{localBob.ID(), SuggestionContact, "Bob Durand", "bob@acme.example"},
-							{carol.ID(), SuggestionContact, "Carol Durand", "carol@friends.example"},
-						}, results(suggestions[2:]))
-						assert.Equal(t, before, calls.Load(), "local-only mode must not call the external service")
 					}
-					assert.ElementsMatch(t, wantGroups, []string{suggestions[0].Group.Name(), suggestions[1].Group.Name()})
-					for _, suggestion := range suggestions[:2] {
+					n := len(wantGroups)
+					require.Greater(t, len(suggestions), n)
+					var names []string
+					for _, suggestion := range suggestions[:n] {
+						require.NotNil(t, suggestion.Group)
+						names = append(names, suggestion.Group.Name())
 						count := 0
 						if centralized && suggestion.Group.ID() == other.ID() {
 							count = 1
 						}
 						assert.Equal(t, count, suggestion.MemberCount)
 					}
+					assert.ElementsMatch(t, wantGroups, names)
+					assert.Equal(t, personal.Name(), names[n-1])
 					assert.Equal(t, "#123456", suggestions[0].Group.Color())
-					assert.Nil(t, suggestions[2].Group)
+					assert.Nil(t, suggestions[n].Group)
+					if common {
+						assert.Equal(t, before+1, calls.Load(), "common contacts use the side service")
+					} else {
+						assert.Equal(t, before, calls.Load(), "without common contacts, the side service is not called")
+					}
+					if !centralized && !common {
+						assert.Equal(t, []result{
+							{localBob.ID(), SuggestionContact, "Bob Durand", "bob@acme.example"},
+							{carol.ID(), SuggestionContact, "Carol Durand", "carol@friends.example"},
+						}, results(suggestions[n:]))
+					}
 					limited, err := Suggest(alice, "du", 1)
 					require.NoError(t, err)
 					require.Len(t, limited, 1)
@@ -231,10 +256,11 @@ func TestSuggest(t *testing.T) {
 		t.Cleanup(func() { status = http.StatusOK })
 		suggestions, err := Suggest(alice, "dur", 20)
 		require.NoError(t, err)
-		require.Len(t, suggestions, 5)
-		assert.NotNil(t, suggestions[0].Group)
-		assert.NotNil(t, suggestions[1].Group)
-		assert.Equal(t, bob.ID(), suggestions[2].Contact.ID())
+		require.Len(t, suggestions, 6)
+		for _, suggestion := range suggestions[:3] {
+			assert.NotNil(t, suggestion.Group)
+		}
+		assert.Equal(t, bob.ID(), suggestions[3].Contact.ID())
 
 		literal, err := Suggest(alice, "[O", 20)
 		require.NoError(t, err)

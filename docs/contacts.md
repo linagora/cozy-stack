@@ -46,20 +46,19 @@ Content-Type: application/vnd.api+json
 ### GET /contacts/suggest
 
 This endpoint suggests groups and people the user can share with, for the text
-they are typing. The context's `centralized_org_directory` flag selects the
-sources:
+they are typing. It searches these sources:
 
-- When false or absent, it searches only the instance's local contacts and groups,
-  including personal groups and replicated organization groups. It does not query
-  the organization instance or the calendar side service, even if
-  `common_contacts` is enabled. This also works without an organization.
-- When true, it searches managed groups on the organization instance. For people,
-  it asks the calendar side service's autocomplete API when `common_contacts` is
-  enabled and `contacts_search` is configured (see `cozy.example.yaml`), then
-  looks each result up by email on the organization instance, then locally.
-  Without that service, or when the call fails or times out, it searches contact
-  names and emails on the organization instance and locally. If no organization
-  is available, only the local instance is used for database lookups.
+- Groups come from the instance's database. When the context's
+  `centralized_org_directory` flag is true, the managed groups of the
+  organization instance come first, and local copies of them are skipped.
+- People come from the calendar side service's autocomplete API when
+  `common_contacts` is enabled and `contacts_search` is configured (see
+  `cozy.example.yaml`). Each result is looked up by email on the organization
+  instance in centralized mode, then locally.
+- Without that service, or when the call fails or times out, people are searched
+  by name and email in the same databases as groups: the organization instance
+  in centralized mode, then the local instance. This also works without an
+  organization.
 
 Trashed contacts, people without an email, and the user are left out.
 
@@ -82,8 +81,7 @@ GET /contacts/suggest?q=dup HTTP/1.1
 #### Response
 
 Groups matching by name come first, followed by people in the order of the
-search. The limit applies to the combined list after filtering people. In
-centralized mode, instances without an organization return people only. A group
+search. The limit applies to the combined list after filtering people. A group
 has type `io.cozy.contacts.groups`, its stable document `id`, and `name` and
 `color` attributes, plus `member_count` (the number of non-trashed contacts in that
 group, including contacts without an email). Counts come from the same local or
