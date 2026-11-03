@@ -622,6 +622,19 @@ type ragMessage struct {
 	Content string `json:"content"`
 }
 
+// MarshalJSON sends the result of an action as a user message: it is not the
+// answer to a tool call of the LLM, which openRAG and the LLM would refuse
+func (m ragMessage) MarshalJSON() ([]byte, error) {
+	role := m.Role
+	if role == ToolRole {
+		role = UserRole
+	}
+	return json.Marshal(struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}{role, m.Content})
+}
+
 // ragMessages builds the messages sent to openRAG: the assistant's prompt as
 // a leading system message (openRAG pins it as a custom instruction), then
 // the conversation turns. The prompt is read on every query so an edit of the
@@ -640,13 +653,19 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 	for len(turns) > 0 && turns[0].Role == SystemRole {
 		turns = turns[1:]
 	}
+	// The names of the actions proposed so far, for their results
+	actions := map[string]string{}
 	for i, msg := range turns {
 		if msg.Role == UserRole && i+1 < len(turns) && turns[i+1].Role == UserRole {
 			continue
 		}
 		content := msg.Content
 		if msg.Action != nil {
+			actions[msg.ID] = msg.Action.Name
 			content = strings.TrimSpace(describeAction(msg.Action) + "\n\n" + content)
+		}
+		if msg.Result != nil {
+			content = describeResult(actions[msg.Result.MessageID], msg.Result.OK, content)
 		}
 		messages = append(messages, ragMessage{Role: msg.Role, Content: content})
 	}
