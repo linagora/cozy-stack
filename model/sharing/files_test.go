@@ -611,3 +611,45 @@ func TestValidateDriveRoot_NestedOwnerAllowed(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, dir)
 }
+
+func TestTransformFileToSentWithoutDirID(t *testing.T) {
+	key := []byte{1, 15, 0, 7, 3, 12, 9, 4, 2, 11, 5, 14, 6, 8, 10, 13}
+	newDoc := func() map[string]interface{} {
+		return map[string]interface{}{
+			"_id":  "0f8a3d2e5b1c4d6e7f8091a2b3c4d5e6",
+			"type": consts.DirType,
+			"referenced_by": []interface{}{
+				map[string]interface{}{"type": "io.cozy.photos.albums", "id": "123"},
+				map[string]interface{}{"type": "io.cozy.photos.albums", "id": "456"},
+			},
+		}
+	}
+
+	t.Run("referenced_by rule", func(t *testing.T) {
+		s := &Sharing{Rules: []Rule{{
+			Title:    "photos",
+			DocType:  consts.Files,
+			Selector: couchdb.SelectorReferencedBy,
+			Values:   []string{"io.cozy.photos.albums/123"},
+		}}}
+		doc := newDoc()
+		s.TransformFileToSent(doc, key, 0)
+
+		refs := doc[couchdb.SelectorReferencedBy].([]interface{})
+		require.Len(t, refs, 1)
+		assert.Equal(t, XorID("123", key), refs[0].(map[string]interface{})["id"])
+	})
+
+	t.Run("id rule", func(t *testing.T) {
+		s := &Sharing{Rules: []Rule{{
+			Title:   "folder",
+			DocType: consts.Files,
+			Values:  []string{"0f8a3d2e5b1c4d6e7f8091a2b3c4d5e6"},
+		}}}
+		doc := newDoc()
+		s.TransformFileToSent(doc, key, 0)
+
+		assert.NotContains(t, doc, couchdb.SelectorReferencedBy)
+		assert.NotContains(t, doc, "dir_id")
+	})
+}
