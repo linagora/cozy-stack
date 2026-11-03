@@ -32,9 +32,6 @@ var (
 	// ErrBadChecksum is used when the application checksum does not match the
 	// specified one.
 	ErrBadChecksum = errors.New("Application checksum does not match")
-	// ErrInvalidFileName is used when a file of the application has a name
-	// that could escape its directory
-	ErrInvalidFileName = errors.New("Application has a file with an invalid name")
 	// ErrLinkedAppExists is used when an OAuth client is linked to this app
 	ErrLinkedAppExists = errors.New("A linked OAuth client exists for this app")
 )
