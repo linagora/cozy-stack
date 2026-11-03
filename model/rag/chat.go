@@ -49,7 +49,25 @@ type ChatPayload struct {
 	Instructions string `json:"instructions,omitempty"`
 	// Actions are the definitions of the chat actions the client can run.
 	Actions []ActionDefinition `json:"actions,omitempty"`
+	// Result, instead of q, is the result of the action proposed by an
+	// answer, once the client has run it: the LLM goes on from it.
+	Result *ActionResult `json:"result,omitempty"`
 }
+
+// ActionResult is the result of an action the client ran: the ID of the
+// answer that proposed it, whether it worked, and what it returned.
+type ActionResult struct {
+	MessageID string `json:"messageID"`
+	OK        bool   `json:"ok"`
+	Content   string `json:"content,omitempty"`
+}
+
+// maxResultChars bounds the content of a result kept in the conversation:
+const maxResultChars = 8000
+
+// ErrResultNotAwaited is returned for a result whose message has proposed
+// no action, or whose result has already been given.
+var ErrResultNotAwaited = errors.New("the message has proposed no action, or its result is already given")
 
 // directLLM tells whether the client asks for an answer without the documents.
 func (p ChatPayload) directLLM() bool {
@@ -63,6 +81,14 @@ const maxInstructionsChars = 2000
 // Validate checks the options of a chat message: those that cannot go
 // together, and the size of the instructions.
 func (p ChatPayload) Validate() error {
+	if p.Result != nil {
+		if p.Query != "" || len(p.AttachmentIDs) > 0 {
+			return errors.New("result cannot be used with q or attachmentIDs")
+		}
+		if p.Result.MessageID == "" {
+			return errors.New("result.messageID is required")
+		}
+	}
 	if p.directLLM() && len(p.AttachmentIDs) > 0 {
 		return errors.New("attachmentIDs cannot be used without the documents")
 	}
@@ -141,13 +167,17 @@ type ChatMessage struct {
 	Sources       []Source    `json:"sources,omitempty"`
 	AttachmentIDs []string    `json:"attachmentIDs,omitempty"`
 	Action        *ChatAction `json:"action,omitempty"`
-	CreatedAt     time.Time   `json:"createdAt"`
+	// Result links a tool message to the answer whose action it ran; the
+	// content of the result is the content of the message.
+	Result    *ActionResult `json:"result,omitempty"`
+	CreatedAt time.Time     `json:"createdAt"`
 }
 
 const (
 	UserRole      = "user"
 	AssistantRole = "assistant"
 	SystemRole    = "system"
+	ToolRole      = "tool"
 	Temperature   = 0.3   // LLM parameter - Sampling temperature, lower is more deterministic, higher is more creative.
 	TopP          = 1     // LLM parameter - Alternative to temperature, take the tokens with the top p probability.
 	LogProbs      = false // LLM parameter - Whether to return log probabilities of the output tokens.
@@ -306,6 +336,11 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 		AttachmentIDs: payload.AttachmentIDs,
 		CreatedAt:     time.Now().UTC(),
 	}
+	if payload.Result != nil {
+		msg.Role = ToolRole
+		msg.Content = truncate(payload.Result.Content, maxResultChars)
+		msg.Result = &ActionResult{MessageID: payload.Result.MessageID, OK: payload.Result.OK}
+	}
 	// As for the answer, the conversation is read again on a conflict: the
 	// client writes it too, e.g. to rename or pin it.
 	var chat ChatConversation
@@ -338,6 +373,9 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 			return err
 		} else {
 			chat.CozyMetadata.UpdatedAt = time.Now().UTC()
+		}
+		if msg.Result != nil && !awaitsResult(chat.Messages, msg.Result.MessageID) {
+			return ErrResultNotAwaited
 		}
 		chat.Messages = append(chat.Messages, msg)
 		if chat.DocRev == "" {
@@ -377,6 +415,21 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 		return nil, err
 	}
 	return &chat, nil
+}
+
+// awaitsResult tells whether the message is an answer that proposed an
+// action, with no result yet.
+func awaitsResult(messages []ChatMessage, msgID string) bool {
+	proposed := false
+	for _, msg := range messages {
+		if msg.ID == msgID {
+			proposed = msg.Role == AssistantRole && msg.Action != nil
+		}
+		if msg.Result != nil && msg.Result.MessageID == msgID {
+			return false
+		}
+	}
+	return proposed
 }
 
 // decodeExtra returns the extra payload of an openRAG response. It is a JSON

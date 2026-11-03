@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -31,6 +32,9 @@ func Chat(c echo.Context) error {
 		return jsonapi.BadRequest(err)
 	}
 	chat, err := rag.Chat(inst, payload)
+	if errors.Is(err, rag.ErrResultNotAwaited) {
+		return jsonapi.BadRequest(err)
+	}
 	if err != nil {
 		return jsonapi.InternalServerError(err)
 	}
