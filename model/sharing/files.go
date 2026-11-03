@@ -122,10 +122,6 @@ func (s *Sharing) TransformFileToSent(doc map[string]interface{}, xorKey []byte,
 	}
 	id := doc["_id"].(string)
 	doc["_id"] = XorID(id, xorKey)
-	dir, ok := doc["dir_id"].(string)
-	if !ok {
-		return
-	}
 	rule := s.Rules[ruleIndex]
 	var noDirID bool
 	if rule.Selector == couchdb.SelectorReferencedBy {
@@ -153,6 +149,10 @@ func (s *Sharing) TransformFileToSent(doc map[string]interface{}, xorKey []byte,
 			}
 		}
 		delete(doc, couchdb.SelectorReferencedBy)
+	}
+	dir, ok := doc["dir_id"].(string)
+	if !ok {
+		return
 	}
 	if !noDirID {
 		for _, v := range rule.Values {
