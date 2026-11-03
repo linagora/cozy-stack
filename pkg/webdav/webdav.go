@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -198,15 +199,15 @@ type Download struct {
 	LastModified string
 }
 
-func (c *Client) List(path string) ([]Item, error) {
-	path = fixSlashes(path)
+func (c *Client) List(dir string) ([]Item, error) {
+	dir = fixSlashes(dir)
 	headers := map[string]string{
 		"Content-Type": "application/xml;charset=UTF-8",
 		"Accept":       "application/xml",
 		"Depth":        "1",
 	}
 	payload := strings.NewReader(ListFilesPayload)
-	res, err := c.req("PROPFIND", path, 0, headers, payload)
+	res, err := c.req("PROPFIND", dir, 0, headers, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +225,7 @@ func (c *Client) List(path string) ([]Item, error) {
 	case 404:
 		return nil, ErrNotFound
 	default:
-		return nil, c.unexpectedStatus("PROPFIND", path, res.StatusCode)
+		return nil, c.unexpectedStatus("PROPFIND", dir, res.StatusCode)
 	}
 
 	// https://docs.nextcloud.com/server/20/developer_manual/client_apis/WebDAV/basic.html#requesting-properties
@@ -233,17 +234,23 @@ func (c *Client) List(path string) ([]Item, error) {
 		return nil, err
 	}
 
+	parent := path.Clean(dir)
 	var items []Item
 	for _, response := range multistatus.Responses {
-		// We want only the children, not the directory itself
 		parts := strings.Split(strings.TrimPrefix(response.Href, c.BasePath), "/")
 		for i, part := range parts {
 			if p, err := url.PathUnescape(part); err == nil {
 				parts[i] = p
 			}
 		}
-		href := strings.Join(parts, "/")
-		if href == path {
+		// We want only the direct children, not the directory itself, and the
+		// server may send hrefs with "." or ".." segments or double slashes.
+		href := path.Clean("/" + strings.Join(parts, "/"))
+		if href == parent {
+			continue
+		}
+		if path.Dir(href) != parent {
+			c.Logger.Warnf("PROPFIND %s: skip %q, not a direct child", dir, response.Href)
 			continue
 		}
 
