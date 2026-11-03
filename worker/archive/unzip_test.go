@@ -90,6 +90,56 @@ func Test_archive(t *testing.T) {
 		}
 	})
 
+	t.Run("unzip keeps the files with a non UTF-8 name", func(t *testing.T) {
+		fs := inst.VFS()
+		_, err := vfs.Mkdir(fs, "/legacy", nil)
+		require.NoError(t, err)
+
+		// Names in the DOS code page (CP437), and a valid UTF-8 name, all
+		// without the UTF-8 flag
+		var buf bytes.Buffer
+		w := zip.NewWriter(&buf)
+		for _, name := range []string{"photos/\xe1", "\x82.txt", "\x8a.txt", "café.txt"} {
+			f, err := w.CreateHeader(&zip.FileHeader{Name: name, NonUTF8: true})
+			require.NoError(t, err)
+			_, err = f.Write([]byte("content"))
+			require.NoError(t, err)
+		}
+		require.NoError(t, w.Close())
+		doc := uploadRawZip(t, fs, "legacy.zip", buf.Bytes())
+
+		dst, err := fs.DirByPath("/legacy")
+		require.NoError(t, err)
+		require.NoError(t, unzip(fs, doc.ID(), dst.ID()))
+		for _, name := range []string{"/legacy/photos/ß", "/legacy/é.txt", "/legacy/è.txt", "/legacy/café.txt"} {
+			file, err := fs.FileByPath(name)
+			require.NoError(t, err, name)
+			assert.Equal(t, int64(7), file.ByteSize, name)
+		}
+	})
+
+	t.Run("unzip does not keep an entry with a bad checksum", func(t *testing.T) {
+		fs := inst.VFS()
+		dst, err := vfs.Mkdir(fs, "/crc", nil)
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		w := zip.NewWriter(&buf)
+		f, err := w.CreateHeader(&zip.FileHeader{Name: "a.txt", Method: zip.Store})
+		require.NoError(t, err)
+		_, err = f.Write([]byte("hello"))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+		raw := buf.Bytes()
+		raw[14] ^= 0xff                                        // CRC-32 of the local header
+		raw[bytes.Index(raw, []byte("PK\x01\x02"))+16] ^= 0xff // CRC-32 of the central directory
+		doc := uploadRawZip(t, fs, "crc.zip", raw)
+
+		assert.ErrorIs(t, unzip(fs, doc.ID(), dst.ID()), zip.ErrChecksum)
+		_, err = fs.FileByPath("/crc/a.txt")
+		assert.ErrorIs(t, err, os.ErrNotExist)
+	})
+
 	t.Run("test unzip", func(t *testing.T) {
 		fs := inst.VFS()
 		dst, err := vfs.Mkdir(fs, "/destination", nil)
@@ -182,4 +232,16 @@ func Test_archive(t *testing.T) {
 		// The zip archive has only a precision of a second for the modified field
 		assert.Equal(t, two.UpdatedAt.Unix(), f.UpdatedAt.Unix())
 	})
+}
+
+func uploadRawZip(t *testing.T, fs vfs.VFS, name string, raw []byte) *vfs.FileDoc {
+	doc, err := vfs.NewFileDoc(name, consts.RootDirID, int64(len(raw)), nil,
+		"application/zip", "application", time.Now(), false, false, false, nil)
+	require.NoError(t, err)
+	file, err := fs.CreateFile(doc, nil)
+	require.NoError(t, err)
+	_, err = file.Write(raw)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	return doc
 }
