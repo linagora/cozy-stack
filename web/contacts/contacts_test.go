@@ -146,9 +146,7 @@ func TestContacts(t *testing.T) {
 		config.GetConfig().Contexts[config.DefaultInstanceContext] = map[string]interface{}{"centralized_org_directory": true}
 		suggest("dupont").Length().Equal(1)
 
-		config.GetConfig().Contexts[config.DefaultInstanceContext] = map[string]interface{}{
-			"centralized_org_directory": false, "common_contacts": true,
-		}
+		config.GetConfig().Contexts[config.DefaultInstanceContext] = map[string]interface{}{"centralized_org_directory": false}
 		group := contact.NewGroup()
 		group.SetID("friends")
 		group.M["name"] = "Dupont [Friends]"
@@ -170,6 +168,12 @@ func TestContacts(t *testing.T) {
 		localGroup.Path("$.attributes.member_count").Equal(1)
 		local.Value(1).Object().ValueEqual("id", jean.ID())
 		suggest("[f").Length().Equal(1)
+
+		// common_contacts uses the side service even without a centralized directory.
+		config.GetConfig().Contexts[config.DefaultInstanceContext] = map[string]interface{}{"common_contacts": true}
+		withService := suggest("dupont")
+		withService.Length().Equal(3)
+		withService.Value(2).Object().Path("$.attributes.fullname").Equal("Paul Dupont")
 	})
 }
 

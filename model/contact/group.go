@@ -46,12 +46,14 @@ func FindGroup(db prefixer.Prefixer, groupID string) (*Group, error) {
 	return doc, err
 }
 
-// FindGroupsByText returns local groups whose names contain text, ignoring case.
-func FindGroupsByText(db prefixer.Prefixer, text string, limit int) ([]*Group, error) {
+// FindGroupsByText returns local groups whose names contain text, ignoring
+// case, and that match the optional filters.
+func FindGroupsByText(db prefixer.Prefixer, text string, limit int, filters ...mango.Filter) ([]*Group, error) {
 	// shortcut: group-name search scans groups, add a search index if directories grow large.
+	name := mango.Map{"name": mango.Map{"$regex": "(*UTF8)(?i)" + regexp.QuoteMeta(text)}}
 	var groups []*Group
 	err := couchdb.FindDocsUnoptimized(db, consts.Groups, &couchdb.FindRequest{
-		Selector: mango.Map{"name": mango.Map{"$regex": "(*UTF8)(?i)" + regexp.QuoteMeta(text)}},
+		Selector: mango.And(append([]mango.Filter{name}, filters...)...),
 		Limit:    limit,
 	}, &groups)
 	if couchdb.IsNoDatabaseError(err) {

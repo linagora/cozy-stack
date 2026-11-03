@@ -7,6 +7,7 @@ import (
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/orgdirectory"
+	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 )
 
 // The kinds of a suggestion, by where its contact was found.
@@ -26,64 +27,32 @@ type Suggestion struct {
 	Email       string
 }
 
-// Suggest returns matching groups followed by people. Without a centralized
-// directory, only the instance's local databases are searched. With one, groups
-// come from the organization and people from the calendar side service, falling
-// back to the organization and local contacts. The user is left out.
+// Suggest returns matching groups followed by people. Groups come from the
+// local database, plus the organization one in centralized mode. People come
+// from the calendar side service when common_contacts is on, and from the same
+// databases as groups otherwise or when the service fails. The user is left out.
 func Suggest(inst *instance.Instance, q string, limit int) ([]Suggestion, error) {
 	log := inst.Logger().WithNamespace("contacts")
-	centralized := inst.HasCentralizedOrgDirectory()
 	var orgInst *instance.Instance
-	if centralized {
+	if inst.HasCentralizedOrgDirectory() {
 		var err error
-		orgInst, err = findOrgInstance(inst)
-		if err != nil {
+		if orgInst, err = findOrgInstance(inst); err != nil {
 			log.Warnf("Cannot find the org instance: %s", err)
 		}
 	}
-	var groups []*contact.Group
-	var err error
-	if !centralized {
-		groups, err = contact.FindGroupsByText(inst, q, limit)
-	} else if orgInst != nil {
-		groups, err = orgdirectory.FindGroupsByText(orgInst, orgInst.OrgID, q, limit)
-	}
-	var suggestions []Suggestion
-	if err != nil {
-		log.Warnf("Cannot search contact groups: %s", err)
-	} else {
-		groupIDs := make([]string, len(groups))
-		for i, group := range groups {
-			groupIDs[i] = group.ID()
-		}
-		groupDB := inst
-		if centralized {
-			groupDB = orgInst
-		}
-		counts, err := contact.CountGroupMembers(groupDB, groupIDs)
-		if err != nil {
-			return nil, err
-		}
-		for _, group := range groups {
-			suggestions = append(suggestions, Suggestion{Group: group, MemberCount: counts[group.ID()]})
-		}
-	}
-	if len(suggestions) >= limit {
-		return suggestions, nil
+	suggestions, err := suggestGroups(inst, orgInst, q, limit)
+	if err != nil || len(suggestions) >= limit {
+		return suggestions, err
 	}
 	self, _ := inst.SettingsEMail()
 	seen := map[string]bool{strings.ToLower(self): true}
 
-	var people []contact.Person
-	err = contact.ErrNoSearch
-	if centralized {
-		people, err = contact.Search(inst, q, limit)
-	}
+	people, err := contact.Search(inst, q, limit)
 	if err != nil {
 		if !errors.Is(err, contact.ErrNoSearch) {
-			log.Warnf("Cannot search the contacts, falling back to the local search: %s", err)
+			log.Warnf("Cannot search the contacts, falling back to the databases: %s", err)
 		}
-		people, err := suggestLocally(inst, orgInst, q, limit, seen)
+		people, err := suggestFromDatabases(inst, orgInst, q, limit, seen)
 		suggestions = append(suggestions, people...)
 		return suggestions[:min(len(suggestions), limit)], err
 	}
@@ -119,7 +88,52 @@ func Suggest(inst *instance.Instance, q string, limit int) ([]Suggestion, error)
 	return suggestions, nil
 }
 
-func suggestLocally(inst, orgInst *instance.Instance, q string, limit int, seen map[string]bool) ([]Suggestion, error) {
+// suggestGroups returns the organization groups, then the local ones. In
+// centralized mode, local copies of organization groups are stale and skipped.
+func suggestGroups(inst, orgInst *instance.Instance, q string, limit int) ([]Suggestion, error) {
+	var suggestions []Suggestion
+	// A failed search is only logged, so that people are still suggested.
+	add := func(db *instance.Instance, groups []*contact.Group, err error) error {
+		if err != nil {
+			inst.Logger().WithNamespace("contacts").Warnf("Cannot search contact groups: %s", err)
+			return nil
+		}
+		ids := make([]string, len(groups))
+		for i, group := range groups {
+			ids[i] = group.ID()
+		}
+		counts, err := contact.CountGroupMembers(db, ids)
+		if err != nil {
+			return err
+		}
+		for _, group := range groups {
+			suggestions = append(suggestions, Suggestion{Group: group, MemberCount: counts[group.ID()]})
+		}
+		return nil
+	}
+	if orgInst != nil {
+		groups, err := orgdirectory.FindGroupsByText(orgInst, orgInst.OrgID, q, limit)
+		if err := add(orgInst, groups, err); err != nil {
+			return nil, err
+		}
+	}
+	if len(suggestions) >= limit {
+		return suggestions, nil
+	}
+	var filters []mango.Filter
+	if inst.HasCentralizedOrgDirectory() {
+		filters = append(filters, orgdirectory.NotManagedGroup())
+	}
+	groups, err := contact.FindGroupsByText(inst, q, limit-len(suggestions), filters...)
+	if err := add(inst, groups, err); err != nil {
+		return nil, err
+	}
+	return suggestions, nil
+}
+
+// suggestFromDatabases searches people by name or email in the organization
+// database, when there is one, then in the local one.
+func suggestFromDatabases(inst, orgInst *instance.Instance, q string, limit int, seen map[string]bool) ([]Suggestion, error) {
 	var members []*contact.Contact
 	if orgInst != nil {
 		var err error
