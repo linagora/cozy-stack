@@ -123,6 +123,12 @@ func mergeRow(dst, src *FileDirActivity) bool {
 // a row already deleted is not logged, as a concurrent activity or traversal
 // has changed the row.
 func (r *Repairs) Apply(user *instance.Instance) {
+	_ = r.write(user)
+}
+
+// write is Apply, and returns the error of a failed request, for the callers
+// that retry it.
+func (r *Repairs) write(user *instance.Instance) error {
 	docs := make([]interface{}, 0, len(r.deletes)+len(r.refreshes)+len(r.migrations))
 	for _, row := range r.deletes {
 		docs = append(docs, deletionOf(row))
@@ -146,9 +152,9 @@ func (r *Repairs) Apply(user *instance.Instance) {
 			docs = append(docs, m.to)
 		}
 	}
-	res, ok := writeRows(user, docs)
-	if !ok {
-		return
+	res, err := writeRows(user, docs)
+	if err != nil {
+		return err
 	}
 
 	var deletes []interface{}
@@ -163,19 +169,20 @@ func (r *Repairs) Apply(user *instance.Instance) {
 		}
 		deletes = append(deletes, deletionOf(m.from))
 	}
-	writeRows(user, deletes)
+	_, err = writeRows(user, deletes)
+	return err
 }
 
 // writeRows writes rows in bulk, and logs the failures.
-func writeRows(user *instance.Instance, docs []interface{}) ([]couchdb.UpdateResponse, bool) {
+func writeRows(user *instance.Instance, docs []interface{}) ([]couchdb.UpdateResponse, error) {
 	if len(docs) == 0 {
-		return nil, true
+		return nil, nil
 	}
 	log := user.Logger().WithNamespace("recents")
 	res, err := couchdb.BulkWriteDocs(user, consts.FilesRecents, docs)
 	if err != nil {
 		log.Warnf("Cannot repair the recents rows: %s", err)
-		return nil, false
+		return nil, err
 	}
 	for _, r := range res {
 		if r.Ok || r.Error == "conflict" || r.Error == "not_found" {
@@ -183,5 +190,5 @@ func writeRows(user *instance.Instance, docs []interface{}) ([]couchdb.UpdateRes
 		}
 		log.Warnf("Cannot repair the recents row %s: %s %s", r.ID, r.Error, r.Reason)
 	}
-	return res, true
+	return res, nil
 }

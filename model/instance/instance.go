@@ -862,6 +862,46 @@ func GetByIDs(ids []string) (map[string]*Instance, error) {
 	return insts, nil
 }
 
+// GetByDomains loads the instances with the given domains or domain aliases
+// in one request, indexed by the domain or alias asked. The domains of
+// unknown instances are absent from the map.
+func GetByDomains(domains []string) (map[string]*Instance, error) {
+	insts := make(map[string]*Instance, len(domains))
+	if len(domains) == 0 {
+		return insts, nil
+	}
+	keys := make([]interface{}, len(domains))
+	for i, domain := range domains {
+		keys[i] = domain
+	}
+	var res couchdb.ViewResponse
+	err := couchdb.ExecView(prefixer.GlobalPrefixer, couchdb.DomainAndAliasesView, &couchdb.ViewRequest{
+		Keys:        keys,
+		IncludeDocs: true,
+	}, &res)
+	if couchdb.IsNoDatabaseError(err) {
+		return insts, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range res.Rows {
+		domain, _ := row.Key.(string)
+		if domain == "" || insts[domain] != nil {
+			continue
+		}
+		inst := &Instance{}
+		if err := json.Unmarshal(row.Doc, inst); err != nil {
+			return nil, err
+		}
+		if err := inst.MakeVFS(); err != nil {
+			return nil, err
+		}
+		insts[domain] = inst
+	}
+	return insts, nil
+}
+
 // PickKey choose which of the Instance keys to use depending on token audience
 func (i *Instance) PickKey(audience string) ([]byte, error) {
 	switch audience {

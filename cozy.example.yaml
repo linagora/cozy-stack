@@ -163,6 +163,7 @@ jobs:
   #   - "notes-save":        saving notes to the VFS
   #   - "rag-index":         send data to the RAG server for being indexed
   #   - "rag-query":         send a query to the RAG server
+  #   - "recents-source":    following a moved or deleted instance in the recents
   #   - "push":              sending push notifications
   #   - "sms":               sending SMS notifications
   #   - "sendmail":          sending mails

@@ -222,6 +222,17 @@ instance that declares the old domain designate a successor: an instance that
 only has that domain as an alias, or as its own domain, is not one, as it may
 belong to another person.
 
+These rows are also followed without waiting for a read. When a move is
+finalized, and when an instance is destroyed, a `recents-source` job is pushed
+to each member of its sharings that lives on the stack and has the recents
+enabled: it migrates their rows on its items to the successor, at the end of
+its chain of moves, or deletes them when there is none on the stack. The job
+gives the successor by its ID, as its domain may be given to another instance
+before the job runs. The rows of a source share the prefix of its ID, and are
+read by batches from that range of the primary index. A former member removed
+from the sharings is not found, and a member whose recents are disabled is
+skipped: the reads remain the safety net.
+
 Skip trashed, deleted or unauthorized items and read more candidates to fill
 the page, within a fixed work limit. If an owner is unavailable or the limit
 is reached, report that the result may be incomplete. If an access check

@@ -13,6 +13,7 @@ import (
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/recents"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -324,6 +325,7 @@ func CallFinalize(inst *instance.Instance, otherURL, token string, vault bool) {
 // - warn the OAuth clients
 // - unblock the instance
 // - ask the manager to delete the instance in one month
+// - tell the members of the sharings to follow the move in their recents
 func Finalize(inst *instance.Instance, subdomainType string) error {
 	var errm error
 	sched := job.System()
@@ -356,6 +358,14 @@ func Finalize(inst *instance.Instance, subdomainType string) error {
 
 	if err := askManagerToDeleteInstance(inst); err != nil {
 		errm = multierror.Append(errm, err)
+	}
+
+	// Last, as it reads all the sharings: the reads of the recents also
+	// migrate the rows on the items of a moved instance, so a failure here
+	// does not fail the move.
+	if err := recents.FollowMove(inst); err != nil {
+		inst.Logger().WithNamespace("move").
+			Warnf("Cannot follow the move in the recents: %s", err)
 	}
 
 	return errm

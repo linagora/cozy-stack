@@ -11,6 +11,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	job "github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/rag"
+	"github.com/cozy/cozy-stack/model/recents"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -92,10 +93,15 @@ func Destroy(domain string) error {
 
 	removeTriggers(inst)
 
+	// The recents rows of the members of the sharings on the items of the
+	// instance are followed once its databases are deleted.
+	followRecents := recents.PrepareDestroy(inst)
+
 	if err = couchdb.DeleteAllDBs(inst); err != nil {
 		inst.Logger().Errorf("Could not delete all CouchDB databases: %s", err.Error())
 		return err
 	}
+	followRecents()
 
 	if err = inst.VFS().Delete(); err != nil {
 		inst.Logger().Errorf("Could not delete VFS: %s", err.Error())
