@@ -2,16 +2,18 @@ package archive
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"path"
 	"path/filepath"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/utils"
+	"golang.org/x/text/encoding/charmap"
 )
 
 type unzipMessage struct {
@@ -51,12 +53,18 @@ func unzip(fs vfs.VFS, zipID, destination string) error {
 
 	dirs := make(map[string]*vfs.DirDoc)
 	for _, f := range r.File {
-		f.Name = utils.CleanUTF8(f.Name)
-		if !filepath.IsLocal(f.Name) {
-			return fmt.Errorf("archive entry %q is outside the destination", f.Name)
+		isDir := f.Mode().IsDir()
+		entry := f.Name
+		if !utf8.ValidString(entry) {
+			// Archivers that do not set the UTF-8 flag usually write the names
+			// in the DOS code page. Every byte maps to a rune, so no error.
+			entry, _ = charmap.CodePage437.NewDecoder().String(entry)
 		}
-		name := path.Base(f.Name)
-		dirname := path.Dir(f.Name)
+		if !filepath.IsLocal(entry) {
+			return fmt.Errorf("archive entry %q is outside the destination", entry)
+		}
+		name := path.Base(entry)
+		dirname := path.Dir(entry)
 		dir := dstDoc
 		if dirname != "." {
 			var ok bool
@@ -76,7 +84,7 @@ func unzip(fs vfs.VFS, zipID, destination string) error {
 			}
 		}
 
-		if f.Mode().IsDir() {
+		if isDir {
 			continue
 		}
 
@@ -86,7 +94,7 @@ func unzip(fs vfs.VFS, zipID, destination string) error {
 		}
 
 		size := int64(f.UncompressedSize64)
-		mime, class := vfs.ExtractMimeAndClassFromFilename(f.Name)
+		mime, class := vfs.ExtractMimeAndClassFromFilename(name)
 		mod := f.Modified
 		doc, err := vfs.NewFileDoc(name, dir.ID(), size, nil, mime, class, mod, false, false, false, nil)
 		if err != nil {
@@ -108,6 +116,11 @@ func unzip(fs vfs.VFS, zipID, destination string) error {
 		_, err = io.Copy(file, rc)
 		cerr := file.Close()
 		if err != nil {
+			if cerr == nil {
+				// archive/zip checks the CRC on the last read, when the file
+				// has already been fully written: remove the unverified file.
+				err = errors.Join(err, fs.DestroyFile(doc))
+			}
 			return err
 		}
 		if cerr != nil {
