@@ -1,6 +1,7 @@
 package note
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -188,6 +189,24 @@ func isTableCell(item *markdown.StackItem) bool {
 	return name == "tableHeader" || name == "tableCell"
 }
 
+// errUnbalancedTable is returned when a table marker arrives where no table
+// row is open, instead of closing the document node by mistake.
+var errUnbalancedTable = errors.New("unbalanced table marker in markdown")
+
+// closeCellAndRow closes the open cell and its row. It fails, without
+// touching the stack, when the cell is not inside a row.
+func closeCellAndRow(state *markdown.MarkdownParseState) error {
+	n := len(state.Stack)
+	if n < 2 || state.Stack[n-2].Type.Name != "tableRow" {
+		return errUnbalancedTable
+	}
+	if _, err := state.CloseNode(); err != nil { // Cell
+		return err
+	}
+	_, err := state.CloseNode() // Row
+	return err
+}
+
 func cellAttributes(node ast.Node) map[string]interface{} {
 	background, ok := node.AttributeString("background")
 	if !ok {
@@ -345,12 +364,12 @@ func markdownNodeMapper() markdown.NodeMapper {
 				}
 			case "tableEnd":
 				if isTableCell(state.Top()) {
-					if _, err := state.CloseNode(); err != nil { // Cell
+					if err := closeCellAndRow(state); err != nil {
 						return err
 					}
-					if _, err := state.CloseNode(); err != nil { // Row
-						return err
-					}
+				}
+				if state.Top().Type.Name != "table" {
+					return errUnbalancedTable
 				}
 				if _, err := state.CloseNode(); err != nil { // Table
 					return err
@@ -358,10 +377,7 @@ func markdownNodeMapper() markdown.NodeMapper {
 				return nil
 			case "tableRow":
 				if isTableCell(state.Top()) {
-					if _, err := state.CloseNode(); err != nil { // Cell
-						return err
-					}
-					if _, err := state.CloseNode(); err != nil { // Row
+					if err := closeCellAndRow(state); err != nil {
 						return err
 					}
 				}
