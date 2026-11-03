@@ -3,6 +3,7 @@ package appfs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -92,7 +93,11 @@ func (f *swiftCopier) Copy(stat os.FileInfo, src io.Reader) (err error) {
 		panic("copier should call Start() before Copy()")
 	}
 
-	objName := path.Join(f.tmpObj, stat.Name())
+	name, err := CleanFileName(stat.Name())
+	if err != nil {
+		return err
+	}
+	objName := path.Join(f.tmpObj, name)
 	objMeta := swift.Metadata{
 		"content-encoding":        "br",
 		"original-content-length": strconv.FormatInt(stat.Size(), 10),
@@ -192,7 +197,11 @@ func (f *aferoCopier) Copy(stat os.FileInfo, src io.Reader) (err error) {
 		panic("copier should call Start() before Copy()")
 	}
 
-	fullpath := path.Join(f.tmpDir, stat.Name()) + ".br"
+	name, err := CleanFileName(stat.Name())
+	if err != nil {
+		return err
+	}
+	fullpath := path.Join(f.tmpDir, name) + ".br"
 	dir := path.Dir(fullpath)
 	if err = f.fs.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -245,3 +254,18 @@ func (f *fileInfo) Mode() os.FileMode  { return f.mode }
 func (f *fileInfo) ModTime() time.Time { return time.Now() }
 func (f *fileInfo) IsDir() bool        { return false }
 func (f *fileInfo) Sys() interface{}   { return nil }
+
+var ErrInvalidFileName = errors.New("appfs: invalid file name")
+
+func CleanFileName(name string) (string, error) {
+	for _, segment := range strings.Split(name, "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("%w: %q", ErrInvalidFileName, name)
+		}
+	}
+	clean := strings.TrimPrefix(path.Clean("/"+name), "/")
+	if clean == "" {
+		return "", fmt.Errorf("%w: %q", ErrInvalidFileName, name)
+	}
+	return clean, nil
+}

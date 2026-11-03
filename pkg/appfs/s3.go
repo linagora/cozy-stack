@@ -84,10 +84,9 @@ func (f *s3Copier) Copy(stat os.FileInfo, src io.Reader) error {
 	}
 
 	// Write directly to the final location (appObj/filename).
-	// Reject path traversal attempts in filenames.
-	name := stat.Name()
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("appfs: invalid filename %q", name)
+	name, err := CleanFileName(stat.Name())
+	if err != nil {
+		return err
 	}
 	objName := f.prefix + path.Join(f.appObj, name)
 
@@ -112,7 +111,7 @@ func (f *s3Copier) Copy(stat os.FileInfo, src io.Reader) error {
 	}
 
 	f.objectNames = append(f.objectNames, objName)
-	_, err := f.client.PutObject(f.ctx, f.bucket, objName,
+	_, err = f.client.PutObject(f.ctx, f.bucket, objName,
 		bytes.NewReader(buf.Bytes()), int64(buf.Len()),
 		minio.PutObjectOptions{
 			ContentType:  contentType,
