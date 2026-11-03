@@ -11,7 +11,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/logger"
-	"github.com/labstack/echo/v4"
+	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/mssola/user_agent"
 	maxminddb "github.com/oschwald/maxminddb-golang"
 )
@@ -114,13 +114,7 @@ func lookupIP(ip, locale string) (city, subdivision, country, timezone string) {
 func StoreNewLoginEntry(i *instance.Instance, sessionID, clientID string,
 	req *http.Request, logMessage string,
 ) error {
-	var ip string
-	if forwardedFor := req.Header.Get(echo.HeaderXForwardedFor); forwardedFor != "" {
-		ip = strings.TrimSpace(strings.SplitN(forwardedFor, ",", 2)[0])
-	}
-	if ip == "" {
-		ip = strings.Split(req.RemoteAddr, ":")[0]
-	}
+	ip := utils.ClientIP(req)
 
 	city, subdivision, country, timezone := lookupIP(ip, i.Locale)
 	rawUserAgent := req.UserAgent()

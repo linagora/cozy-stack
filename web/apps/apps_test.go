@@ -12,7 +12,10 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -36,6 +39,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/filetype"
+	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web"
 	webApps "github.com/cozy/cozy-stack/web/apps"
@@ -185,8 +189,50 @@ func TestApps(t *testing.T) {
 			return code
 		}
 
+		code := createShareCode("public", nil)
+		t.Run("VisitorIPThroughProxy", func(t *testing.T) {
+			type observedRequest struct{ clientIP, remoteAddr string }
+			observed := make(chan observedRequest, 1)
+			stackServer := setup.GetTestServer("/apps", webApps.WebappsRoutes, func(r *echo.Echo) *echo.Echo {
+				router, err := web.CreateSubdomainProxy(r, &stack.Services{}, func(c echo.Context) error {
+					observed <- observedRequest{utils.ClientIP(c.Request()), c.Request().RemoteAddr}
+					return webApps.Serve(c)
+				})
+				require.NoError(t, err)
+				return router
+			})
+			defer stackServer.Close()
+			target, err := url.Parse(stackServer.URL)
+			require.NoError(t, err)
+			transport := &http.Transport{DialContext: (&net.Dialer{
+				LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.2")},
+			}).DialContext}
+			defer transport.CloseIdleConnections()
+			proxy := httptest.NewServer(&httputil.ReverseProxy{
+				Transport: transport,
+				Rewrite: func(r *httputil.ProxyRequest) {
+					r.SetURL(target)
+					r.Out.Host = r.In.Host
+					r.SetXForwarded()
+				},
+			})
+			defer proxy.Close()
+
+			response := testutils.CreateTestClient(t, proxy.URL).GET("/public").
+				WithHeader("X-Forwarded-For", "203.0.113.10").
+				WithQuery("sharecode", code).
+				WithHost(slug + "." + testInstance.Domain).
+				Expect().Status(http.StatusOK)
+			response.Body().Contains(`<meta property="og:title" content="opengraph-report.pdf" />`)
+			seen := <-observed
+			assert.Equal(t, "127.0.0.1", seen.clientIP)
+			proxyIP, _, err := net.SplitHostPort(seen.remoteAddr)
+			require.NoError(t, err)
+			assert.Equal(t, "127.0.0.2", proxyIP)
+		})
+
 		body := eAnon.GET("/public").
-			WithQuery("sharecode", createShareCode("public", nil)).
+			WithQuery("sharecode", code).
 			WithHost(slug + "." + testInstance.Domain).
 			Expect().Status(200).
 			Body()
