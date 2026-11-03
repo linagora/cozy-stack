@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	pathpkg "path"
 	"strconv"
 	"strings"
 	"time"
@@ -243,7 +244,7 @@ func (c *Client) List(path string) ([]Item, error) {
 			}
 		}
 		href := strings.Join(parts, "/")
-		if href == path {
+		if !isDirectChild(path, href) {
 			continue
 		}
 
@@ -275,6 +276,16 @@ func (c *Client) List(path string) ([]Item, error) {
 		}
 	}
 	return items, nil
+}
+
+// isDirectChild tells if href, taken from a PROPFIND answer, is a direct child
+// of the listed directory dir. The directory itself (written in another way,
+// like "/dir/./"), empty or odd hrefs ("", "//", "/dir/../") and deeper
+// entries are not children, so they are skipped.
+func isDirectChild(dir, href string) bool {
+	dir = pathpkg.Clean(dir)
+	href = pathpkg.Clean(href)
+	return href != dir && pathpkg.Dir(href) == dir
 }
 
 // Size returns the recursive byte total of the resource at path, as
