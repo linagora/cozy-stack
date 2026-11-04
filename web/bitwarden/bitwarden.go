@@ -61,17 +61,13 @@ func Prelogin(c echo.Context) error {
 		hasCiphers = resp.Total > 0
 	}
 	flat := config.GetConfig().Subdomains == config.FlatSubdomains
-	saltDomain := inst.Domain
-	if inst.OldDomain != "" {
-		saltDomain = inst.OldDomain
-	}
 	return c.JSON(http.StatusOK, echo.Map{
 		"Kdf":            setting.PassphraseKdf,
 		"KdfIterations":  setting.PassphraseKdfIterations,
 		"OIDC":           oidc,
 		"HasCiphers":     hasCiphers,
 		"FlatSubdomains": flat,
-		"Salt":           "me@" + saltDomain,
+		"Salt":           string(inst.PassphraseSalt()),
 	})
 }
 
