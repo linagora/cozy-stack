@@ -2,6 +2,7 @@ package lifecycle_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -39,7 +40,7 @@ func TestLifecycle(t *testing.T) {
 	_, _, err := stack.Start()
 	require.NoError(t, err)
 
-	t.Cleanup(cleanInstance)
+	root := t
 
 	t.Run("ChooseCouchCluster", func(t *testing.T) {
 		clusters := []config.CouchDBCluster{
@@ -85,7 +86,7 @@ func TestLifecycle(t *testing.T) {
 	})
 
 	t.Run("CreateInstance", func(t *testing.T) {
-		instance, err := lifecycle.Create(&lifecycle.Options{
+		instance, err := createInstance(root, &lifecycle.Options{
 			Domain: "test.cozycloud.cc",
 			Locale: "en",
 		})
@@ -94,7 +95,7 @@ func TestLifecycle(t *testing.T) {
 			assert.Equal(t, instance.Domain, "test.cozycloud.cc")
 		}
 
-		_, err = lifecycle.Create(&lifecycle.Options{
+		_, err = createInstance(t, &lifecycle.Options{
 			Domain: "1test.cozycloud.cc",
 			Locale: "en",
 		})
@@ -102,7 +103,7 @@ func TestLifecycle(t *testing.T) {
 	})
 
 	t.Run("CreateInstanceWithFewSettings", func(t *testing.T) {
-		inst, err := lifecycle.Create(&lifecycle.Options{
+		inst, err := createInstance(t, &lifecycle.Options{
 			Domain:     "test2.cozycloud.cc",
 			Timezone:   "Europe/Berlin",
 			Email:      "alice@example.com",
@@ -129,7 +130,7 @@ func TestLifecycle(t *testing.T) {
 	})
 
 	t.Run("CreateInstanceWithMoreSettings", func(t *testing.T) {
-		inst, err := lifecycle.Create(&lifecycle.Options{
+		inst, err := createInstance(t, &lifecycle.Options{
 			Domain:      "test3.cozycloud.cc",
 			UUID:        "XXX",
 			OIDCID:      "oidc_42",
@@ -325,7 +326,7 @@ func TestLifecycle(t *testing.T) {
 	})
 
 	t.Run("RequestPassphraseReset", func(t *testing.T) {
-		in, err := lifecycle.Create(&lifecycle.Options{
+		in, err := createInstance(t, &lifecycle.Options{
 			Domain: "test.cozycloud.cc.pass_reset",
 			Locale: "en",
 		})
@@ -360,7 +361,7 @@ func TestLifecycle(t *testing.T) {
 	})
 
 	t.Run("PassphraseRenew", func(t *testing.T) {
-		in, err := lifecycle.Create(&lifecycle.Options{
+		in, err := createInstance(t, &lifecycle.Options{
 			Domain: "test.cozycloud.cc.pass_renew",
 			Locale: "en",
 		})
@@ -402,7 +403,7 @@ func TestLifecycle(t *testing.T) {
 	})
 
 	t.Run("InstanceNoDuplicate", func(t *testing.T) {
-		_, err := lifecycle.Create(&lifecycle.Options{
+		_, err := createInstance(t, &lifecycle.Options{
 			Domain: "test.cozycloud.cc.duplicate",
 			Locale: "en",
 		})
@@ -436,7 +437,7 @@ func TestLifecycle(t *testing.T) {
 
 	t.Run("CheckTOSNotSigned", func(t *testing.T) {
 		now := time.Now()
-		i, err := lifecycle.Create(&lifecycle.Options{
+		i, err := createInstance(t, &lifecycle.Options{
 			Domain:    "tos.test.cozycloud.cc",
 			Locale:    "en",
 			TOSSigned: "1.0.0-" + now.Format("20060102"),
@@ -706,14 +707,16 @@ func TestLifecycle(t *testing.T) {
 	})
 }
 
-func cleanInstance() {
-	_ = lifecycle.Destroy("test.cozycloud.cc")
-	_ = lifecycle.Destroy("test2.cozycloud.cc")
-	_ = lifecycle.Destroy("test3.cozycloud.cc")
-	_ = lifecycle.Destroy("test.cozycloud.cc.pass_reset")
-	_ = lifecycle.Destroy("test.cozycloud.cc.pass_renew")
-	_ = lifecycle.Destroy("test.cozycloud.cc.duplicate")
-	_ = lifecycle.Destroy("tos.test.cozycloud.cc")
+// createInstance destroys any leftover instance for opts.Domain, registers
+// its destruction on owner's cleanup, then creates it. The Create result is
+// returned unchanged so callers keep asserting it.
+func createInstance(owner testing.TB, opts *lifecycle.Options) (*instance.Instance, error) {
+	domain := opts.Domain
+	if err := lifecycle.Destroy(domain); err != nil && !errors.Is(err, instance.ErrNotFound) {
+		return nil, fmt.Errorf("destroy leftover %s: %w", domain, err)
+	}
+	owner.Cleanup(func() { _ = lifecycle.Destroy(domain) })
+	return lifecycle.Create(opts)
 }
 
 func getDB(t *testing.T, domain string) prefixer.Prefixer {
