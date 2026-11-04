@@ -361,7 +361,7 @@ func AppendCSPRule(c echo.Context, ruleType string, appendedValues ...string) {
 }
 
 func appendCSPRule(currentRules, ruleType string, appendedValues ...string) (newRules string) {
-	ruleIndex := strings.Index(currentRules, ruleType)
+	ruleIndex := findCSPDirective(currentRules, ruleType)
 	if ruleIndex >= 0 {
 		ruleTerminationIndex := strings.Index(currentRules[ruleIndex:], ";")
 		if ruleTerminationIndex <= 0 {
@@ -378,6 +378,26 @@ func appendCSPRule(currentRules, ruleType string, appendedValues ...string) (new
 		newRules = currentRules + ruleType + " " + strings.Join(appendedValues, " ") + ";"
 	}
 	return
+}
+
+// findCSPDirective returns the index where the directive called name starts in
+// the policy, or -1. The name must be at the start of a directive (after the
+// beginning of the policy or a ';') and be followed by a space, a ';' or the
+// end, so a source like https://frame-src.example.com is not taken for it.
+func findCSPDirective(policy, name string) int {
+	offset := 0
+	for _, directive := range strings.SplitAfter(policy, ";") {
+		trimmed := strings.TrimLeft(directive, " \t\r\n")
+		if strings.HasPrefix(trimmed, name) {
+			rest := trimmed[len(name):]
+			if rest == "" || rest[0] == ';' || rest[0] == ' ' || rest[0] == '\t' ||
+				rest[0] == '\r' || rest[0] == '\n' {
+				return offset + len(directive) - len(trimmed)
+			}
+		}
+		offset += len(directive)
+	}
+	return -1
 }
 
 // safeDomainRe matches hostname values safe to embed in a CSP header

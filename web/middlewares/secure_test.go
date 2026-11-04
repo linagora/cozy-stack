@@ -122,6 +122,21 @@ func TestSecure(t *testing.T) {
 
 		r = appendCSPRule("script '*'; toto;", "frame-ancestors", "new-rule")
 		assert.Equal(t, "script '*'; toto;frame-ancestors new-rule;", r)
+
+		// A directive name inside a source of an earlier directive is not
+		// the directive.
+		r = appendCSPRule("default-src 'self' https://frame-src.example.com/;frame-src 'self';", "frame-src", "https://svc.example.com")
+		assert.Equal(t, "default-src 'self' https://frame-src.example.com/;frame-src 'self' https://svc.example.com;", r)
+
+		r = appendCSPRule("default-src 'self' https://img-src.cdn.example/;img-src data:;", "img-src", "https://idp.example.com")
+		assert.Equal(t, "default-src 'self' https://img-src.cdn.example/;img-src data: https://idp.example.com;", r)
+
+		r = appendCSPRule("default-src frame-src;", "frame-src", "new-rule")
+		assert.Equal(t, "default-src frame-src;frame-src new-rule;", r)
+
+		// A longer directive name does not match a shorter one.
+		r = appendCSPRule("frame-src-elem 'self';", "frame-src", "new-rule")
+		assert.Equal(t, "frame-src-elem 'self';frame-src new-rule;", r)
 	})
 
 	t.Run("SecureMiddlewareCSPFrameAncestorsAllowList", func(t *testing.T) {
