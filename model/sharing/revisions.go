@@ -89,11 +89,14 @@ func (rt *RevsTree) Find(rev string) (*RevsTree, int) {
 	return nil, 0
 }
 
-// ensureMaxDepth will remove the first nodes of the branch that contains parent.
+// ensureMaxDepth will remove the first nodes of the branch that contains
+// parent, but never parent itself. As the nodes are collapsed in place, the
+// callers must look for parent again after this call, as a pointer on a node
+// can be stale.
 func (rt *RevsTree) ensureMaxDepth(parent string, depth int) {
 	current := rt
 	for depth > MaxDepth {
-		if len(current.Branches) == 0 {
+		if current.Rev == parent || len(current.Branches) == 0 {
 			break
 		} else if len(current.Branches) == 1 {
 			next := current.Branches[0]
@@ -101,13 +104,18 @@ func (rt *RevsTree) ensureMaxDepth(parent string, depth int) {
 			current.Branches = next.Branches
 			depth--
 		} else {
+			var found *RevsTree
 			for i := range current.Branches {
 				b := &current.Branches[i]
 				if sub, _ := b.Find(parent); sub != nil {
-					current = b
+					found = b
 					break
 				}
 			}
+			if found == nil {
+				break
+			}
+			current = found
 		}
 	}
 }
@@ -155,6 +163,9 @@ func (rt *RevsTree) InsertAfter(rev, parent string) {
 	}
 
 	rt.ensureMaxDepth(parent, depth+1)
+	if sub, _ := rt.Find(parent); sub != nil {
+		subtree = sub
+	}
 
 	for _, b := range subtree.Branches {
 		if b.Rev == rev {
@@ -189,6 +200,9 @@ func (rt *RevsTree) InsertChain(chain []string) {
 	}
 
 	rt.ensureMaxDepth(subtree.Rev, depth)
+	if sub, _ := rt.Find(chain[common]); sub != nil {
+		subtree = sub
+	}
 
 	for _, rev := range chain[common+1:] {
 		if len(subtree.Branches) > 0 {

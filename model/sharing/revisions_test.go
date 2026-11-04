@@ -385,3 +385,33 @@ func TestConflictID(t *testing.T) {
 		assert.True(t, unicode.IsDigit(c) || unicode.IsLetter(c))
 	}
 }
+
+func TestRevsTreeInsertChainPastMaxDepthBelowAFork(t *testing.T) {
+	tree := &RevsTree{Rev: "1-a", Branches: []RevsTree{
+		{Rev: "2-a", Branches: []RevsTree{{Rev: "3-a"}}},
+		{Rev: "2-b"},
+	}}
+	chain := []string{"3-a"}
+	for g := 4; g <= 102; g++ {
+		chain = append(chain, fmt.Sprintf("%d-c", g))
+	}
+	tree.InsertChain(chain)
+	sub, _ := tree.Find("102-c")
+	assert.NotNil(t, sub, "the last revision of the chain must be in the tree")
+}
+
+func TestRevsTreeInsertAfterPastMaxDepthBelowForks(t *testing.T) {
+	// 1-s .. 110-s, each of 1-s .. 100-s with a conflict branch (k+1)-x
+	tree := &RevsTree{Rev: "1-s"}
+	node := tree
+	for k := 1; k < 110; k++ {
+		node.Branches = []RevsTree{{Rev: fmt.Sprintf("%d-s", k+1)}}
+		if k <= 100 {
+			node.Branches = append(node.Branches, RevsTree{Rev: fmt.Sprintf("%d-x", k+1)})
+		}
+		node = &node.Branches[0]
+	}
+	tree.InsertAfter("111-s", "110-s")
+	sub, _ := tree.Find("111-s")
+	assert.NotNil(t, sub, "InsertAfter must put the revision in the tree")
+}
