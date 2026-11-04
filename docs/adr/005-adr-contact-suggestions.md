@@ -21,9 +21,9 @@ The [common contacts ADR](https://github.com/linagora/twake-workplace-private/pu
 ## Decision
 
 - The stack adds a `GET /contacts/suggest` route, called by the share modal as the user types.
-- The route calls the autocomplete API of the calendar side service, asking only for people with an email, and maps each result to a contact document by email.
-- In standalone mode (no calendar side service, so no common contacts either), the route searches the org instance and the user's instance directly.
-- The route suggests people. Groups stay out of it: they remain the stack's own documents, built from `b2b.group.*`.
+- With `common_contacts` enabled and `contacts_search` configured, the route calls the autocomplete API of the calendar side service, asking only for people with an email, and maps each result to a contact document by email.
+- Without that service, the route searches the user's instance directly, plus the org instance when `centralized_org_directory` is enabled.
+- The route suggests groups before people, searching group names in those same databases and returning member counts. Groups remain the stack's own documents; organization groups are built from `b2b.group.*`.
 
 ```mermaid
 sequenceDiagram
@@ -33,11 +33,13 @@ sequenceDiagram
   participant I as org or user instance
 
   M->>S: GET /contacts/suggest?q=dup
+  S->>I: groups by name and member counts
+  I-->>S: groups
   S->>C: search "dup" for the user, with an email
   C-->>S: names and emails
   S->>I: contacts by email
   I-->>S: contacts
-  S-->>M: suggestions
+  S-->>M: groups, then people
 ```
 
 ### The autocomplete API
@@ -72,24 +74,31 @@ Each context configures the endpoint and the shared secret:
 ```yaml
 contexts:
   my-context:
+    common_contacts: true
+    centralized_org_directory: true
     contacts_search:
       url: https://calendar-side-service.example.com:81/api/people/search
       token: abcdef
 ```
 
-A context without `contacts_search` is in standalone mode.
+A context without `contacts_search` or with `common_contacts` disabled uses the database search. Calendar search does not require `centralized_org_directory`.
 
-So the stack looks each result up by email, with the `contacts-by-email` view, on the org instance first and then on the user's instance. Where it is found gives its kind: a member on the org instance, a personal contact on the user's instance.
+So the stack looks each result up by email, with the `contacts-by-email` view, on the org instance first when `centralized_org_directory` is enabled, then on the user's instance. Where it is found gives its kind: a member on the org instance, a personal contact on the user's instance.
 
 A contact can have no email, and someone without one cannot be invited. `hasFields` keeps them out, and the standalone search applies the same rule. The share modal already hides them today, it only lists contacts with an email or a cozy URL.
 
 ### The route
 
-`GET /contacts/suggest?q=<text>&limit=<n>` on the user's instance, with `GET` on `io.cozy.contacts`. `q` needs at least 3 characters and `limit` defaults to 20.
+`GET /contacts/suggest?q=<text>&limit=<n>` on the user's instance, with whole-doctype `GET` on `io.cozy.contacts` and `io.cozy.contacts.groups`. `q` needs at least 2 characters after trimming and `limit` defaults to 20 (maximum 256), shared between groups and people. The route does not paginate.
 
 ```json
 {
   "data": [
+    {
+      "type": "io.cozy.contacts.groups",
+      "id": "b2b-group-1234567890abcdef1234567890abcdef",
+      "attributes": { "name": "Dupont Team", "color": "#3366ff", "member_count": 12 }
+    },
     {
       "type": "io.cozy.contacts",
       "id": "6f2a",
@@ -98,39 +107,40 @@ A contact can have no email, and someone without one cannot be invited. `hasFiel
         "email": [{ "address": "jean.dupont@org.tld", "primary": true }],
         "cozy": [{ "url": "https://jdupont.org.tld", "primary": true }]
       },
-      "meta": { "kind": "member" }
+      "meta": { "kind": "org_member" }
     }
   ]
 }
 ```
 
-- Results keep the order of the search.
-- Attributes use the `io.cozy.contacts` field names, so cozy-sharing can render them as today.
-- `meta.kind` is `member` or `contact`, depending on where the document was found.
-- A result with no matching document comes back without an `id` or `kind`, with the name and email from the search. The client shares it by email.
+- Groups come first, followed by people in the order of the search.
+- People use the `io.cozy.contacts` field names, so cozy-sharing can render them as today. Groups have a stable ID, name, color and `member_count` (non-trashed contacts, including those without an email), without member documents.
+- For people, `meta.kind` is `org_member` or `contact`, depending on where the document was found.
+- A person with no matching document comes back without an `id` or `kind`, with the name and email from the search. The client shares it by email.
 
 ### Standalone mode
 
-Without the calendar side service, the stack runs a case-insensitive `$regex` Mango query on names and emails, on the org instance and the user's instance.
+Without the calendar side service, the stack runs a case-insensitive `$regex` Mango query on names and emails, on the user's instance and, in centralized mode, the org instance.
 
 No existing index helps: `contacts-by-email` is an exact lookup, `by-groups` and `by-me` answer other reads, and a `$regex` cannot use an index anyway. So it stays a scan, which is fine on a standalone instance with few contacts.
 
 ## What changes for the clients
 
-- cozy-sharing stops loading every contact and calls `GET /contacts/suggest` as the user types (debounced, 3 characters minimum). It keeps reading the groups from the instance, so the group entries and their member count do not change.
-- cozy-sharing sends people as `{email}`. Today, when the typed email matches nothing, it [creates the contact itself](https://github.com/cozy/cozy-libs/blob/537656b7a2d55612500f7747d37707633d93dfa1/packages/cozy-sharing/src/helpers/contacts.js#L33) so the recipient has a document to point at. It stops, and the stack does it instead: it creates the contact, shares, publishes the address on `twake:contacts:collected`, then updates that document when Sabre sends it back ([storage ADR](006-adr-organization-contacts-storage.md)). Nothing waits on the calendar side service.
+- With `contactsSuggestEnabled` and a compatible cozy-client, the online picker stops loading full contact and group lists and calls `GET /contacts/suggest` as the user types (300 ms debounce, 2 characters minimum). Group counts come from the API. API groups are suggested only when `sharing.show-recipient-groups` is enabled.
+- cozy-sharing sends local contacts and groups by ID, and organization members or people without a local contact as `{email}`. Today, when the typed email matches nothing, it [creates the contact itself](https://github.com/cozy/cozy-libs/blob/537656b7a2d55612500f7747d37707633d93dfa1/packages/cozy-sharing/src/helpers/contacts.js#L33) so the recipient has a document to point at. In API mode, it stops, and the stack does it instead: it creates the contact, shares, then publishes the address asynchronously on `twake:contacts:collected` when `common_contacts` is enabled. It updates that document when Sabre sends it back ([storage ADR](006-adr-organization-contacts-storage.md)). Nothing waits on the calendar side service.
+- Offline, with older clients, or with `contactsSuggestEnabled` disabled, the local picker remains available using locally available data. It expands groups into members when `sharing.show-recipient-groups` is disabled.
 
 ## What to do when things fail
 
-- Calendar side service down or slow: after a short timeout, the route falls back to the standalone search and logs it.
-- Org instance unreachable: members come back without an `id` and are shared by email.
+- Calendar side service down or slow: on failure or after a 1-second timeout, the route falls back to the database search and logs it.
+- Org instance unreachable: members should come back without an `id` and be shared by email. Currently, errors reading the org contacts can still fail suggestions or sharing; this fallback is incomplete.
 
 ## Consequences
 
-- Opening the share modal no longer downloads the organization.
-- Drive suggests the same people as the other apps.
-- Suggestions depend on the calendar side service being up.
+- In online API mode, opening the share modal no longer downloads the organization.
+- Drive uses the same people search as the other apps when the calendar side service is enabled.
+- If the calendar side service is unavailable, suggestions use the database fallback.
 
 ## Open questions
 
-- What latency should the stack expect per keystroke, so it can set its timeout? @chibenwa
+- Is the current 1-second timeout appropriate for the expected latency? @chibenwa
