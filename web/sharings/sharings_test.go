@@ -2704,6 +2704,17 @@ func TestReadOnlyHandlers(t *testing.T) {
 			WithHeader("Authorization", "Bearer "+ownerAppToken).
 			Expect().Status(422)
 	})
+
+	t.Run("GetAvatar_InvalidIndex", func(t *testing.T) {
+		e := httpexpect.Default(t, tsOwner.URL)
+
+		// The sharing has 2 members (owner + 1 recipient): index 2 is just past the end
+		for _, index := range []string{"2", "99", "-1"} {
+			e.GET("/sharings/"+testSharingID+"/recipients/"+index+"/avatar").
+				WithHeader("Authorization", "Bearer "+ownerAppToken).
+				Expect().Status(404)
+		}
+	})
 }
 
 // TestOpenNoteInPreviewReturnsReadOnlySharecode checks that opening a note

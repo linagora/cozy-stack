@@ -1069,7 +1069,7 @@ func GetAvatar(c echo.Context) error {
 	if err != nil {
 		return jsonapi.InvalidParameter("index", err)
 	}
-	if index > len(s.Members) {
+	if index < 0 || index >= len(s.Members) {
 		return jsonapi.NotFound(errors.New("member not found"))
 	}
 	m := s.Members[index]
