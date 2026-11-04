@@ -360,44 +360,28 @@ func AppendCSPRule(c echo.Context, ruleType string, appendedValues ...string) {
 	c.Response().Header().Set(echo.HeaderContentSecurityPolicy, newRules)
 }
 
-func appendCSPRule(currentRules, ruleType string, appendedValues ...string) (newRules string) {
-	ruleIndex := findCSPDirective(currentRules, ruleType)
-	if ruleIndex >= 0 {
-		ruleTerminationIndex := strings.Index(currentRules[ruleIndex:], ";")
-		if ruleTerminationIndex <= 0 {
-			return
+func appendCSPRule(currentRules, ruleType string, appendedValues ...string) string {
+	// Find the directive by its first word (directive names are
+	// case-insensitive), append the values, and join the policy back
+	// together, keeping the directives in their order.
+	directives := strings.Split(currentRules, ";")
+	for i, directive := range directives {
+		fields := strings.Fields(directive)
+		if len(fields) == 0 || !strings.EqualFold(fields[0], ruleType) {
+			continue
 		}
-		ruleFields := strings.Fields(currentRules[ruleIndex : ruleIndex+ruleTerminationIndex])
-		if len(ruleFields) == 2 && ruleFields[1] == "'none'" {
-			ruleFields = ruleFields[:1]
+		if len(fields) == 2 && fields[1] == "'none'" {
+			fields = fields[:1]
 		}
-		ruleFields = append(ruleFields, appendedValues...)
-		newRules = currentRules[:ruleIndex] + strings.Join(ruleFields, " ") +
-			currentRules[ruleIndex+ruleTerminationIndex:]
-	} else {
-		newRules = currentRules + ruleType + " " + strings.Join(appendedValues, " ") + ";"
+		fields = append(fields, appendedValues...)
+		leading := directive[:len(directive)-len(strings.TrimLeft(directive, " \t\r\n"))]
+		directives[i] = leading + strings.Join(fields, " ")
+		return strings.Join(directives, ";")
 	}
-	return
-}
-
-// findCSPDirective returns the index where the directive called name starts in
-// the policy, or -1. The name must be at the start of a directive (after the
-// beginning of the policy or a ';') and be followed by a space, a ';' or the
-// end, so a source like https://frame-src.example.com is not taken for it.
-func findCSPDirective(policy, name string) int {
-	offset := 0
-	for _, directive := range strings.SplitAfter(policy, ";") {
-		trimmed := strings.TrimLeft(directive, " \t\r\n")
-		if strings.HasPrefix(trimmed, name) {
-			rest := trimmed[len(name):]
-			if rest == "" || rest[0] == ';' || rest[0] == ' ' || rest[0] == '\t' ||
-				rest[0] == '\r' || rest[0] == '\n' {
-				return offset + len(directive) - len(trimmed)
-			}
-		}
-		offset += len(directive)
+	if currentRules != "" && !strings.HasSuffix(strings.TrimRight(currentRules, " \t\r\n"), ";") {
+		currentRules += ";"
 	}
-	return -1
+	return currentRules + ruleType + " " + strings.Join(appendedValues, " ") + ";"
 }
 
 // safeDomainRe matches hostname values safe to embed in a CSP header

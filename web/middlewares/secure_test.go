@@ -137,6 +137,17 @@ func TestSecure(t *testing.T) {
 		// A longer directive name does not match a shorter one.
 		r = appendCSPRule("frame-src-elem 'self';", "frame-src", "new-rule")
 		assert.Equal(t, "frame-src-elem 'self';frame-src new-rule;", r)
+
+		// A policy without a trailing semicolon is still updated.
+		r = appendCSPRule("frame-src 'self'", "frame-src", "new-rule")
+		assert.Equal(t, "frame-src 'self' new-rule", r)
+
+		r = appendCSPRule("script 'self'", "frame-src", "new-rule")
+		assert.Equal(t, "script 'self';frame-src new-rule;", r)
+
+		// Directive names are case-insensitive, so no duplicate is added.
+		r = appendCSPRule("script '*'; FRAME-SRC 'self'; img-src data:;", "frame-src", "new-rule")
+		assert.Equal(t, "script '*'; FRAME-SRC 'self' new-rule; img-src data:;", r)
 	})
 
 	t.Run("SecureMiddlewareCSPFrameAncestorsAllowList", func(t *testing.T) {
