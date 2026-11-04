@@ -448,7 +448,7 @@ func TestLifecycle(t *testing.T) {
 	})
 
 	t.Run("CheckTOSNotSigned", func(t *testing.T) {
-		now := time.Now()
+		now := time.Now().UTC()
 		i, err := createInstance(t, &lifecycle.Options{
 			Domain:    "tos.test.cozycloud.cc",
 			Locale:    "en",
