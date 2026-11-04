@@ -273,8 +273,17 @@ func addPart(mail *gomail.Message, part *mail.Part) error {
 	if contentType != "text/plain" && contentType != "text/html" {
 		return fmt.Errorf("Unknown body content-type %s", contentType)
 	}
-	mail.AddAlternative(contentType, part.Body)
+	mail.AddAlternative(contentType, normalizeLineBreaks(part.Body))
 	return nil
+}
+
+// normalizeLineBreaks turns every line break (CRLF, or a lone CR) into LF.
+// The quoted-printable writer of the standard library drops the LF that
+// follows a lone CR when an encoded byte (like a non-ASCII character) sits
+// in between, so a lone CR must not reach it.
+func normalizeLineBreaks(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
 }
 
 func sendSupportMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
@@ -308,7 +317,7 @@ func sendSupportMail(ctx *job.TaskContext, opts *mail.Options, domain string) er
 
 	intro := fmt.Sprintf("Demande de support pour %s:\n\n", domain)
 	body, _ := opts.TemplateValues["Body"].(string)
-	email.AddAlternative("text/plain", intro+body+"\n")
+	email.AddAlternative("text/plain", normalizeLineBreaks(intro+body+"\n"))
 
 	dialer := gomail.NewDialer(dialerOptions)
 	if deadline, ok := ctx.Deadline(); ok {

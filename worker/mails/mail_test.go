@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"io"
+	"mime/quotedprintable"
 	"net"
+	stdmail "net/mail"
 	"net/textproto"
 	"strconv"
 	"strings"
@@ -18,6 +21,7 @@ import (
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/gomail"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const serverString = `220 hello world
@@ -399,4 +403,29 @@ func mailServer(t *testing.T, serverString string, clientStrings []string, expec
 		assert.Contains(t, actualcmds, s)
 	}
 	assert.EqualValues(t, expectedHeader, headers)
+}
+
+func TestAddPartKeepsLineBreaks(t *testing.T) {
+	for name, body := range map[string]string{
+		"lone CR then non-ASCII": "a\ré\nb",
+		"CRLF then non-ASCII":    "a\r\né\nb",
+		"LF then non-ASCII":      "a\né\nb",
+	} {
+		t.Run(name, func(t *testing.T) {
+			msg := gomail.NewMessage()
+			msg.SetHeader("From", "noreply@cozy.example.com")
+			msg.SetHeader("To", "you@example.com")
+			require.NoError(t, addPart(msg, &mail.Part{Type: "text/plain", Body: body}))
+
+			var buf bytes.Buffer
+			_, err := msg.WriteTo(&buf)
+			require.NoError(t, err)
+			m, err := stdmail.ReadMessage(&buf)
+			require.NoError(t, err)
+			require.Equal(t, "quoted-printable", m.Header.Get("Content-Transfer-Encoding"))
+			got, err := io.ReadAll(quotedprintable.NewReader(m.Body))
+			require.NoError(t, err)
+			assert.Equal(t, "a\né\nb", strings.ReplaceAll(string(got), "\r\n", "\n"))
+		})
+	}
 }
