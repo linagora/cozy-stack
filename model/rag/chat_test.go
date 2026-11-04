@@ -719,3 +719,20 @@ func TestRAGMessagesWithAResult(t *testing.T) {
 			ragMessages(chat, nil)[2].Content)
 	})
 }
+
+func TestActionSteps(t *testing.T) {
+	result := func() ChatMessage { return ChatMessage{Role: ToolRole, Result: &ActionResult{OK: true}} }
+	messages := []ChatMessage{
+		{Role: UserRole, Content: "Find the emails of Claire"},
+		{Role: AssistantRole},
+		result(),
+		{Role: AssistantRole},
+		{Role: UserRole, Content: "And draft a reply"},
+	}
+	assert.Equal(t, 0, actionSteps(messages), "a message of the user starts again from 0")
+	messages = append(messages, ChatMessage{Role: AssistantRole}, result())
+	assert.Equal(t, 1, actionSteps(messages))
+	messages = append(messages, ChatMessage{Role: AssistantRole}, result())
+	assert.Equal(t, 2, actionSteps(messages), "only the results since the last message of the user")
+	assert.Equal(t, 0, actionSteps(nil))
+}
