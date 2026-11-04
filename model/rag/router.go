@@ -273,11 +273,12 @@ func routerExamples(actions []ActionDefinition) []routerExample {
 	return examples
 }
 
-// turns are the user and assistant messages of the conversation.
+// turns are the user and assistant messages of the conversation, and the
+// results of the actions.
 func turns(messages []ragMessage) []ragMessage {
 	var out []ragMessage
 	for _, msg := range messages {
-		if msg.Role == UserRole || msg.Role == AssistantRole {
+		if msg.Role == UserRole || msg.Role == AssistantRole || msg.Role == ToolRole {
 			out = append(out, msg)
 		}
 	}
@@ -299,8 +300,12 @@ func lastExchange(messages []ragMessage) []ragMessage {
 	return all
 }
 
-// transcript writes the user and assistant turns for the LLM alone, each
-// quoted so that a document quoted in an answer cannot pass for a turn.
+// turnLabels name the turns in a transcript: the result of an action is given
+// by the app, it never passes for a message of the user.
+var turnLabels = map[string]string{UserRole: "user", AssistantRole: "assistant", ToolRole: "app"}
+
+// transcript writes the turns for the LLM alone, each quoted so that a
+// document quoted in an answer or a result cannot pass for a turn.
 func transcript(messages []ragMessage) string {
 	all := turns(messages)
 	if len(all) == 0 {
@@ -310,11 +315,16 @@ func transcript(messages []ragMessage) string {
 	if len(all) > 1 {
 		b.WriteString("Conversation so far:\n")
 		for _, turn := range all[:len(all)-1] {
-			fmt.Fprintf(&b, "%s: %s\n", turn.Role, strconv.Quote(strings.TrimSpace(turn.Content)))
+			fmt.Fprintf(&b, "%s: %s\n", turnLabels[turn.Role], strconv.Quote(strings.TrimSpace(turn.Content)))
 		}
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "Last user message: %s\n", strconv.Quote(strings.TrimSpace(all[len(all)-1].Content)))
+	last := all[len(all)-1]
+	label := "Last user message"
+	if last.Role == ToolRole {
+		label = "Last result given by the app"
+	}
+	fmt.Fprintf(&b, "%s: %s\n", label, strconv.Quote(strings.TrimSpace(last.Content)))
 	return b.String()
 }
 

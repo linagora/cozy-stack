@@ -29,8 +29,9 @@ func cancelKey(inst *instance.Instance, conversationID string) string {
 
 // CancelChat asks the query that answers the last message of the conversation
 // to stop: it stops openRAG, and nothing is saved nor published but a `done`
-// event. It has no effect when the last message already has its answer, so
-// that it never cancels a later message.
+// event. The last message is one of the user or the result of an action. It
+// has no effect when the last message already has its answer, so that it
+// never cancels a later message.
 func CancelChat(inst *instance.Instance, conversationID string) error {
 	var chat ChatConversation
 	if err := couchdb.GetDoc(inst, consts.ChatConversations, conversationID, &chat); err != nil {
@@ -40,7 +41,7 @@ func CancelChat(inst *instance.Instance, conversationID string) error {
 		return nil
 	}
 	last := chat.Messages[len(chat.Messages)-1]
-	if last.Role != UserRole {
+	if last.Role != UserRole && last.Role != ToolRole {
 		return nil
 	}
 	config.GetConfig().CacheStorage.Set(cancelKey(inst, conversationID), []byte(last.ID), cancelTTL)

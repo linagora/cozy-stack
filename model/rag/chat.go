@@ -432,6 +432,22 @@ func awaitsResult(messages []ChatMessage, msgID string) bool {
 	return proposed
 }
 
+// maxActionSteps bounds the actions run in a row for a message of the user,
+// so that the LLM cannot propose actions without end.
+const maxActionSteps = 5
+
+// actionSteps counts the results of the actions given since the last message
+// of the user.
+func actionSteps(messages []ChatMessage) int {
+	steps := 0
+	for i := len(messages) - 1; i >= 0 && messages[i].Role != UserRole; i-- {
+		if messages[i].Role == ToolRole {
+			steps++
+		}
+	}
+	return steps
+}
+
 // decodeExtra returns the extra payload of an openRAG response. It is a JSON
 // object, or a JSON-encoded string for openRAG <= v2.2.0 (legacy).
 func decodeExtra(raw interface{}) (map[string]interface{}, error) {
@@ -797,7 +813,8 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 		now:            time.Now().UTC(),
 		watcher:        watcher,
 	}
-	if len(query.Actions) == 0 {
+	// After the last step, the LLM answers from the results it has
+	if len(query.Actions) == 0 || actionSteps(chat.Messages) >= maxActionSteps {
 		return q.answer(ctx)
 	}
 	return q.answerWithActions(ctx, query.Actions)
