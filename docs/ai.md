@@ -361,7 +361,7 @@ Content-Type: application/json
 }
 ```
 
-- `q` is the user's message (required).
+- `q` is the user's message (required, unless `result` is given).
 - `stream` enables streaming the response via SSE deltas (defaults to `true`).
 - `websearch` enables web search for the query (defaults to `false`).
 - `documents` (defaults to `true`): when `false`, the LLM answers the
@@ -397,6 +397,9 @@ Content-Type: application/json
 - `actions` (optional) the definitions of the [chat actions](#chat-actions)
   the client can run. Without it, the message is answered as usual, without
   a router. Invalid definitions are rejected with a `400 Bad Request`.
+- `result` (optional), instead of `q`, the result of the action proposed by
+  an answer, once the client has run it: see
+  [results of the actions](#results-of-the-actions).
 
 #### Response
 
@@ -792,3 +795,57 @@ Once the user has handled the action, the client writes its outcome in the
 `action` of the message: `status` is `done`, with the `url` of what it
 created if any, or `cancelled`. The stack keeps this outcome: it reads the
 conversation again before saving a later answer.
+
+#### Results of the actions
+
+An action can give data the LLM needs to go on, like the emails a search
+found. Once it has run the action, the client posts its result on the
+conversation, instead of `q`:
+
+```json
+{
+  "result": {
+    "messageID": "0192f0a5-4d8b-7c1e-9a3f-1b2c3d4e5f60",
+    "ok": true,
+    "content": "3 emails: ..."
+  },
+  "actions": [...]
+}
+```
+
+- `messageID` (required) is the id of the assistant message that proposed
+  the action. The result is rejected with a `400 Bad Request` when this
+  message has proposed no action, or when its result has already been given.
+- `ok` tells whether the action worked, and `content` is what it returned, or
+  its error. The content is cut at 8,000 characters: it goes to the LLM with
+  every later answer.
+- `q` and `attachmentIDs` cannot go with a result. The other fields apply as
+  for a message of the user; `actions` is sent again, so that the router can
+  propose the next action.
+
+The result is saved as a message of the `tool` role:
+
+```json
+{
+  "id": "0192f0a6-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+  "role": "tool",
+  "content": "3 emails: ...",
+  "result": { "messageID": "0192f0a5-4d8b-7c1e-9a3f-1b2c3d4e5f60", "ok": true },
+  "createdAt": "2024-09-24T13:24:12.456Z"
+}
+```
+
+It is answered like a message of the user: the events have the id of the
+result, the last message of the conversation in the response, and the answer
+can be cancelled. The LLM gets the result as a user message, since it is not
+the answer to a tool call of the LLM: `(Result of name, given by the app, not
+written by the user:)`, or `(The app could not run name, it answered:)`, then
+the content. The router and the params made without the documents read it in
+the transcript as `app`, or as `Last result given by the app` when it ends
+the conversation. The router then proposes the next action the last request
+of the user needs, or a search, to answer from the results. After 5 results
+since the last message of the user, the router is not asked: the LLM answers.
+
+The content of a result is data, like a document: it never counts as written
+by the user, so that it cannot give the value of an `x-user-written` param,
+like a recipient found in an email.
