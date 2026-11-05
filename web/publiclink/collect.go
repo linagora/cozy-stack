@@ -1,0 +1,42 @@
+// Package publiclink collects private public-link activity.
+package publiclink
+
+import (
+	"time"
+
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/publiclink"
+	"github.com/cozy/cozy-stack/model/session"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/utils"
+	"github.com/cozy/cozy-stack/web/middlewares"
+	"github.com/labstack/echo/v4"
+)
+
+// Record must not change the result of the action if storage is unavailable.
+func Record(c echo.Context, inst *instance.Instance, perm *permission.Permission, action publiclink.Action) {
+	if perm == nil || perm.Type != permission.TypeShareByLink {
+		return
+	}
+	isFileLink := false
+	for _, rule := range perm.Permissions {
+		if rule.Type == consts.Files {
+			isFileLink = true
+			break
+		}
+	}
+	if !isFileLink {
+		return
+	}
+	event := &publiclink.Event{LinkID: perm.ID(), Action: action, OccurredAt: time.Now(), IP: utils.ClientIP(c.Request())}
+	if actor, ok := middlewares.GetActor(c); ok && actor.Domain != "" {
+		event.Identity = actor.Domain
+	} else if _, err := session.FromCookie(c, inst); err == nil {
+		event.Identity = inst.Domain
+	}
+	if err := couchdb.CreateDoc(inst, event); err != nil {
+		inst.Logger().WithNamespace("publiclink").Error("Could not store public link event")
+	}
+}
