@@ -31,7 +31,14 @@ func Record(c echo.Context, inst *instance.Instance, perm *permission.Permission
 		return
 	}
 	event := &publiclink.Event{LinkID: perm.ID(), Action: action, OccurredAt: time.Now(), IP: utils.ClientIP(c.Request())}
-	if actor, ok := middlewares.GetActor(c); ok && actor.Domain != "" {
+	isTransportActor := false
+	_, isSecretDownload := c.Get(downloadPermissionKey).(*permission.Permission)
+	if action == publiclink.Downloaded && isSecretDownload {
+		// A public secret can arrive with the proxy's drive token, not visitor credentials.
+		requestPermission, _ := middlewares.GetPermission(c)
+		isTransportActor = requestPermission != nil && requestPermission.Type == permission.TypeShareInteract
+	}
+	if actor, ok := middlewares.GetActor(c); ok && actor.Domain != "" && !isTransportActor {
 		event.Identity = actor.Domain
 	} else if _, err := session.FromCookie(c, inst); err == nil {
 		event.Identity = inst.Domain

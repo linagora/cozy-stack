@@ -38,6 +38,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/web/middlewares"
+	webpubliclink "github.com/cozy/cozy-stack/web/publiclink"
 	"github.com/cozy/cozy-stack/worker/thumbnail"
 	"github.com/labstack/echo/v4"
 	"github.com/ncw/swift/v2"
@@ -1074,6 +1075,7 @@ func ReadFileContentFromIDHandler(c echo.Context) error {
 		disposition = "attachment"
 	}
 
+	webpubliclink.TrackFile(c, instance, doc.ID())
 	if page := c.QueryParam("Page"); page != "" {
 		p, errp := strconv.Atoi(page)
 		if errp != nil {
@@ -1259,6 +1261,7 @@ func SendFileFromDoc(instance *instance.Instance, c echo.Context, doc *vfs.FileD
 		addCSPRuleForDirectLink(c, doc.Class, doc.Mime)
 	}
 
+	webpubliclink.TrackFile(c, instance, doc.ID())
 	if page := c.QueryParam("Page"); page != "" {
 		p, errp := strconv.Atoi(page)
 		if errp != nil {
@@ -1345,6 +1348,7 @@ func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 
 	// if accept header is application/zip, send the archive immediately
 	if c.Request().Header.Get(echo.HeaderAccept) == "application/zip" {
+		webpubliclink.TrackArchive(c, instance, entries, archive.Pages)
 		return archive.Serve(instance.VFS(), c.Response())
 	}
 
@@ -1352,6 +1356,7 @@ func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 	if err != nil {
 		return WrapVfsError(err)
 	}
+	webpubliclink.AttributeSecret(c, instance, secret)
 	archive.Secret = secret
 
 	fakeName := url.PathEscape(archive.Name)
@@ -1425,6 +1430,10 @@ func FileDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 		return WrapVfsError(err)
 	}
 
+	if versionID == "" {
+		webpubliclink.AttributeSecret(c, instance, secret)
+	}
+
 	filename := c.QueryParam("Filename")
 	if filename == "" {
 		filename = doc.DocName
@@ -1470,6 +1479,8 @@ func ArchiveDownloadHandler(c echo.Context) error {
 		}
 	}
 
+	webpubliclink.ResolveSecret(c, instance, secret)
+	webpubliclink.TrackArchive(c, instance, entries, archive.Pages)
 	if err := archive.Serve(instance.VFS(), c.Response()); err != nil {
 		return WrapVfsError(err)
 	}
@@ -1488,6 +1499,7 @@ func FileDownloadHandler(c echo.Context) error {
 	if err != nil {
 		return WrapVfsError(err)
 	}
+	webpubliclink.ResolveSecret(c, instance, secret)
 	return sendFileFromPath(c, path, false)
 }
 

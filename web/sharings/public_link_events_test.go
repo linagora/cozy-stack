@@ -31,7 +31,8 @@ func TestSharedDrivePublicLinkEvents(t *testing.T) {
 	require.NoError(t, couchdb.CreateDB(f.env.acme, consts.PublicLinkEvents))
 	require.NoError(t, couchdb.CreateDB(f.env.betty, consts.PublicLinkEvents))
 	payload := makeSharedDrivePermissionPayload(t, consts.Files, []string{f.fileID}, "", nil)
-	id, _ := createSharedDrivePermission(t, eBetty, f.sharingID, token, "link", "", payload)
+	id, attrs := createSharedDrivePermission(t, eBetty, f.sharingID, token, "link", "", payload)
+	code := attrs.Value("codes").Object().Value("link").String().NotEmpty().Raw()
 	readEvents := func() []publiclink.Event {
 		var events []publiclink.Event
 		require.NoError(t, couchdb.FindDocsUnoptimized(f.env.acme, consts.PublicLinkEvents, &couchdb.FindRequest{Selector: mango.Equal("link_id", id)}, &events))
@@ -42,7 +43,8 @@ func TestSharedDrivePublicLinkEvents(t *testing.T) {
 	require.Equal(t, "198.51.100.25", readEvents()[0].IP)
 	require.Equal(t, strings.TrimPrefix(f.env.tsB.URL, "http://"), readEvents()[0].Identity)
 	patchSharedDrivePermissionExpectStatus(t, eBetty, f.sharingID, id, token, makeSharedDrivePatchPayload(t, map[string]interface{}{"expires_at": "2099-01-01T00:00:00Z"}), 200)
-	require.Eventually(t, func() bool { return len(readEvents()) == 2 }, 5*time.Second, 10*time.Millisecond)
+	f.eOwner.GET("/files/download/"+f.fileID).WithQuery("Dl", "1").WithHeader("Authorization", "Bearer "+code).Expect().Status(200)
+	require.Eventually(t, func() bool { return len(readEvents()) == 3 }, 5*time.Second, 10*time.Millisecond)
 	counts := map[publiclink.Action]int{}
 	for _, event := range readEvents() {
 		counts[event.Action]++
@@ -50,11 +52,14 @@ func TestSharedDrivePublicLinkEvents(t *testing.T) {
 			require.Equal(t, "198.51.100.25", event.IP)
 			require.Equal(t, strings.TrimPrefix(f.env.tsB.URL, "http://"), event.Identity)
 		}
+		if event.Action == publiclink.Downloaded {
+			require.Empty(t, event.Identity)
+		}
 	}
-	require.Equal(t, map[publiclink.Action]int{publiclink.Created: 1, publiclink.Updated: 1}, counts)
+	require.Equal(t, map[publiclink.Action]int{publiclink.Created: 1, publiclink.Updated: 1, publiclink.Downloaded: 1}, counts)
 	var recipientEvents []publiclink.Event
 	require.NoError(t, couchdb.FindDocsUnoptimized(f.env.betty, consts.PublicLinkEvents, &couchdb.FindRequest{Selector: mango.Exists("link_id")}, &recipientEvents))
 	require.Empty(t, recipientEvents, "events belong to the shared drive owner, not the creator")
 	deleteSharedDrivePermissionExpectStatus(t, eBetty, f.sharingID, id, token, 204)
-	require.Len(t, readEvents(), 2)
+	require.Len(t, readEvents(), 3)
 }
