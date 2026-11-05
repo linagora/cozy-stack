@@ -111,6 +111,10 @@ func (im *importer) importZip(zr *zip.Reader) error {
 		case consts.Sessions:
 			// We don't want to import the sessions from another instance
 			continue
+		case consts.FilesRecents:
+			// Recents are personal activity, not user data: they are not
+			// exported, and a crafted archive must not create rows
+			continue
 		case consts.BitwardenCiphers, consts.BitwardenFolders, consts.BitwardenProfiles,
 			consts.BitwardenOrganizations, consts.BitwardenContacts:
 			// Bitwarden documents are encypted E2E, so they cannot be imported

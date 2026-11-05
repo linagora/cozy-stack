@@ -182,6 +182,7 @@ func Create(opts *Options) (*instance.Instance, error) {
 		g.Go(func() error { return couchdb.CreateDB(i, consts.BitwardenCiphers) })
 		g.Go(func() error { return couchdb.CreateDB(i, consts.SessionsLogins) })
 		g.Go(func() error { return couchdb.CreateDB(i, consts.Notifications) })
+		g.Go(func() error { return couchdb.CreateDB(i, consts.FilesRecents) })
 		g.Go(func() error {
 			var errg error
 			if errg = couchdb.CreateNamedDocWithDB(i, settings); errg != nil {

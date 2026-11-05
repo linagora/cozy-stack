@@ -14,7 +14,7 @@ import (
 
 // IndexViewsVersion is the version of current definition of views & indexes.
 // This number should be incremented when this file changes.
-const IndexViewsVersion int = 43
+const IndexViewsVersion int = 44
 
 // Indexes is the index list required by an instance to run properly.
 var Indexes = []*mango.Index{
@@ -33,6 +33,13 @@ var Indexes = []*mango.Index{
 	mango.MakeIndex(consts.Files, "by-sharing-status", mango.IndexDef{Fields: []string{"metadata.sharing.status"}}),
 	// Used to find old files and directories in the trashed that should be deleted
 	mango.MakeIndex(consts.Files, "by-dir-id-updated-at", mango.IndexDef{Fields: []string{"dir_id", "updated_at"}}),
+
+	// Used to sort the personal recents by their last activity
+	mango.MakeIndex(consts.FilesRecents, "by-last-activity-and-id", mango.IndexDef{Fields: []string{"last_activity_at", "_id"}}),
+	// Used to find the rows of the items of a shared drive
+	mango.MakeIndex(consts.FilesRecents, "by-drive-id", mango.IndexDef{Fields: []string{"drive_id"}}),
+	// Used to find the rows of the items of an owner
+	mango.MakeIndex(consts.FilesRecents, "by-owner-domain", mango.IndexDef{Fields: []string{"owner_domain"}}),
 
 	// Used to lookup a queued and running jobs
 	mango.MakeIndex(consts.Jobs, "by-worker-and-state", mango.IndexDef{Fields: []string{"worker", "state"}}),
