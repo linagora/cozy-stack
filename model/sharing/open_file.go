@@ -107,8 +107,11 @@ func (o *FileOpener) CheckPermission(pdoc *permission.Permission, sharingID stri
 		}
 	}
 
-	// Same for shared drives
-	if o.Sharing == nil && pdoc.Type == permission.TypeShareInteract {
+	// Same for shared drives. The code of a drive also takes precedence over
+	// the io.cozy.shared document of the file: the file can be in a cozy-to-cozy
+	// sharing too, and the rights of the member are the ones they have on the
+	// drive. The code of a cozy-to-cozy sharing only fills a missing sharing.
+	if pdoc.Type == permission.TypeShareInteract {
 		parts := strings.SplitN(pdoc.SourceID, "/", 2)
 		if len(parts) != 2 {
 			return ErrInvalidSharing
@@ -118,14 +121,16 @@ func (o *FileOpener) CheckPermission(pdoc *permission.Permission, sharingID stri
 		if err := couchdb.GetDoc(o.Inst, consts.Sharings, sharingID, &sharing); err != nil {
 			return err
 		}
-		o.Sharing = &sharing
-		preview, err := permission.GetForShareInteract(o.Inst, sharingID)
-		if err != nil {
-			return err
-		}
-		for k, v := range preview.Codes {
-			if v == o.Code {
-				o.MemberKey = k
+		if o.Sharing == nil || sharing.Drive {
+			o.Sharing = &sharing
+			preview, err := permission.GetForShareInteract(o.Inst, sharingID)
+			if err != nil {
+				return err
+			}
+			for k, v := range preview.Codes {
+				if v == o.Code {
+					o.MemberKey = k
+				}
 			}
 		}
 	}
