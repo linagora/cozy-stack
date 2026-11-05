@@ -24,6 +24,7 @@ import (
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/note"
 	"github.com/cozy/cozy-stack/model/oauth"
+	"github.com/cozy/cozy-stack/model/office"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -1084,6 +1085,7 @@ func ReadFileContentFromIDHandler(c echo.Context) error {
 		return err
 	}
 
+	doc = saveOpenOfficeSession(c, instance, doc)
 	if err = CheckAntivirusAction(instance, doc, ActionDownload); err != nil {
 		return err
 	}
@@ -1254,6 +1256,15 @@ func serveThumbnailPlaceholder(res http.ResponseWriter, req *http.Request, doc *
 	return err
 }
 
+// saveOpenOfficeSession serves the document of an open OnlyOffice session,
+// except to a HEAD request and to the document server loading that session.
+func saveOpenOfficeSession(c echo.Context, inst *instance.Instance, doc *vfs.FileDoc) *vfs.FileDoc {
+	if c.Request().Method == http.MethodHead || c.QueryParam(office.DocumentServerParam) != "" {
+		return doc
+	}
+	return office.SaveOpenSession(c.Request().Context(), inst, doc)
+}
+
 // SendFileFromDoc sends the file content to the client.
 // It does permissions, inlining, CSP rules, and PDF single page serving
 func SendFileFromDoc(instance *instance.Instance, c echo.Context, doc *vfs.FileDoc, checkPermission bool) error {
@@ -1265,6 +1276,7 @@ func SendFileFromDoc(instance *instance.Instance, c echo.Context, doc *vfs.FileD
 		}
 	}
 
+	doc = saveOpenOfficeSession(c, instance, doc)
 	if err = CheckAntivirusAction(instance, doc, ActionDownload); err != nil {
 		return err
 	}
