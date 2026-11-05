@@ -982,8 +982,12 @@ func (s *Sharing) FindMemberByCode(perms *permission.Permission, sharecode strin
 }
 
 // FindMemberByInboundClientID returns the member that have used this client
-// ID to make a request on the given sharing
+// ID to make a request on the given sharing. A member who has not accepted the
+// sharing has no client ID, so an empty one never identifies a member.
 func (s *Sharing) FindMemberByInboundClientID(clientID string) (*Member, error) {
+	if clientID == "" {
+		return nil, ErrMemberNotFound
+	}
 	if s.Owner {
 		for i, c := range s.Credentials {
 			if c.InboundClientID == clientID {
