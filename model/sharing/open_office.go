@@ -284,7 +284,8 @@ func (o *OfficeOpener) downloadURL() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return o.Inst.PageURL("/files/downloads/"+secret+"/"+o.File.DocName, nil), nil
+	query := url.Values{office.DocumentServerParam: {"1"}}
+	return o.Inst.PageURL("/files/downloads/"+secret+"/"+o.File.DocName, query), nil
 }
 
 // uploadedDate returns the uploaded date for a file in the date format used by
