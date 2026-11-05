@@ -144,7 +144,7 @@ func NewTrigger(db prefixer.Prefixer, infos TriggerInfos, data interface{}) (Tri
 	}
 	if event, ok := trigger.(*EventTrigger); ok {
 		for _, rule := range event.mask {
-			if rule.Type == consts.PublicLinkEvents {
+			if rule.Type == consts.PublicLinkEvents || rule.Type == consts.FilesRecents {
 				return nil, permission.CheckReadable(rule.Type)
 			}
 		}
