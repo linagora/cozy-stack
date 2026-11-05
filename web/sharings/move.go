@@ -258,8 +258,10 @@ func checkMoveSidePermission(callerInst, hostInst *instance.Instance, s *sharing
 		return jsonapi.NotFound(errors.New("shared drive target not found"))
 	}
 	if member.Status == sharing.MemberStatusOwner {
-		// The owner's own instance has full access to its drive.
-		return nil
+		if hostInst.Domain != callerInst.Domain {
+			return jsonapi.NotFound(errors.New("shared drive target not found"))
+		}
+		return checkFileInsideDrive(hostInst, s, targetID)
 	}
 	ea, err := sharing.NewAccessResolver(hostInst).ResolveForMember(targetID, member)
 	if err != nil {

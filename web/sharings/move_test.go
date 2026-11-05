@@ -171,6 +171,83 @@ func postMoveExpectStatus(t *testing.T, e *httpexpect.Expect, token string, body
 		Expect().Status(status)
 }
 
+func TestSharedDrivesMoveOwnerAuthorization(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test")
+	}
+	env := setupSharedDrivesEnv(t)
+
+	for _, tc := range []struct {
+		name      string
+		foreign   bool
+		source    bool
+		directory bool
+	}{
+		{name: "foreign source file", foreign: true, source: true},
+		{name: "foreign source directory", foreign: true, source: true, directory: true},
+		{name: "foreign destination", foreign: true},
+		{name: "source file outside drive", source: true},
+		{name: "source directory outside drive", source: true, directory: true},
+		{name: "destination outside drive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, operation := range []struct {
+				name string
+				copy bool
+			}{
+				{name: "copy", copy: true},
+				{name: "move"},
+			} {
+				t.Run(operation.name, func(t *testing.T) {
+					eA, _, eD := env.createClients(t)
+					targetInst, targetClient, targetToken := env.acme, eA, env.acmeToken
+					if tc.foreign {
+						targetInst, targetClient, targetToken = env.dave, eD, env.daveToken
+					}
+					name := tc.name + " " + operation.name
+					targetDirID := createRootDirectory(t, targetClient, name, targetToken)
+					sourceInst, sourceClient, sourceToken := env.acme, eA, env.acmeToken
+					sourceDirID, destDirID := env.productDirID, targetDirID
+					if tc.source {
+						sourceInst, sourceClient, sourceToken = targetInst, targetClient, targetToken
+						sourceDirID, destDirID = targetDirID, env.productDirID
+					}
+					fileID := createFile(t, sourceClient, sourceDirID, name+".txt", sourceToken)
+					source := map[string]string{"file_id": fileID}
+					if tc.directory {
+						source = map[string]string{"dir_id": sourceDirID}
+					}
+					dest := map[string]string{"dir_id": destDirID}
+					side := dest
+					if tc.source {
+						side = source
+					}
+					side["instance"] = "https://" + targetInst.Domain
+					side["sharing_id"] = env.firstSharingID
+
+					eA.POST("/sharings/drives/move").
+						WithHeader("Authorization", "Bearer "+env.acmeToken).
+						WithJSON(map[string]interface{}{"source": source, "dest": dest, "copy": operation.copy}).
+						Expect().Status(http.StatusNotFound)
+
+					verifyFileExists(t, sourceInst, fileID, name+".txt", sourceDirID, "foo")
+					destInst := targetInst
+					if tc.source {
+						destInst = env.acme
+					}
+					copiedName := name + ".txt"
+					if tc.directory {
+						copiedName = name
+					}
+					exists, err := destInst.VFS().DirChildExists(destDirID, copiedName)
+					require.NoError(t, err)
+					require.False(t, exists, "unauthorized request must not copy data")
+				})
+			}
+		})
+	}
+}
+
 func TestSharedDrivesMove(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
