@@ -31,6 +31,7 @@ import (
 const bearerAuthScheme = "Bearer "
 const basicAuthScheme = "Basic "
 const contextPermissionDoc = "permissions_doc"
+const contextShareMember = "share_member"
 
 // ErrForbidden is used to send a forbidden response when the request does not
 // have the right permissions.
@@ -248,6 +249,10 @@ func TransformShortcodeToJWT(inst *instance.Instance, token string) (string, err
 
 // ParseJWT parses a JSON Web Token, and returns the associated permissions.
 func ParseJWT(c echo.Context, instance *instance.Instance, token string) (*permission.Permission, error) {
+	// The shared drive proxy calls this again on the same context, with another
+	// token and another instance: the member of the former token must not stay.
+	c.Set(contextShareMember, nil)
+
 	token, err := TransformShortcodeToJWT(instance, token)
 	if err != nil {
 		return nil, err
@@ -342,6 +347,7 @@ func ParseJWT(c echo.Context, instance *instance.Instance, token string) (*permi
 				member.Status = sharing.MemberStatusSeen
 				_ = couchdb.UpdateDoc(instance, sharingDoc)
 			}
+			c.Set(contextShareMember, member)
 		}
 
 		return pdoc, nil
@@ -419,6 +425,13 @@ func GetPermission(c echo.Context) (*permission.Permission, error) {
 // echo.Context.
 func ForcePermission(c echo.Context, pdoc *permission.Permission) {
 	c.Set(contextPermissionDoc, pdoc)
+}
+
+// getShareMember returns the sharing member to whom the share-preview or
+// share-interact code given to the last ParseJWT call belongs, or nil.
+func getShareMember(c echo.Context) *sharing.Member {
+	member, _ := c.Get(contextShareMember).(*sharing.Member)
+	return member
 }
 
 // AllowWholeType validates that the context permission set can use a verb on

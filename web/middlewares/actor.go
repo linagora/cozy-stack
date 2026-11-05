@@ -2,7 +2,6 @@ package middlewares
 
 import (
 	"errors"
-	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
@@ -51,6 +50,8 @@ func SetActor(c echo.Context, actor *Actor) {
 }
 
 // ResolveRequestActor derives the request actor from the resolved permission.
+// It must follow the ParseJWT call that gave this permission: a share code
+// gets its member from what ParseJWT kept in the context.
 func ResolveRequestActor(c echo.Context, inst *instance.Instance, pdoc *permission.Permission) error {
 	if pdoc == nil {
 		SetActor(c, nil)
@@ -69,37 +70,11 @@ func ResolveRequestActor(c echo.Context, inst *instance.Instance, pdoc *permissi
 			return nil
 		}
 
-		sharingDoc, token, err := requestSharing(c, inst, pdoc)
-		if err != nil {
-			return err
-		}
-		if sharingDoc == nil {
-			SetActor(c, nil)
-			return nil
-		}
-
-		member, err := sharingDoc.FindMemberByInteractCode(inst, token)
-		if err != nil {
-			return err
-		}
-
-		SetActor(c, actorFromMember(inst, member))
+		SetActor(c, actorFromMember(inst, getShareMember(c)))
 		return nil
 
 	case permission.TypeSharePreview:
-		sharingDoc, token, err := requestSharing(c, inst, pdoc)
-		if err != nil {
-			return err
-		}
-		if sharingDoc == nil {
-			SetActor(c, anonymousShareActor())
-			return nil
-		}
-
-		member, err := sharingDoc.FindMemberBySharecode(inst, token)
-		if err != nil && !errors.Is(err, sharing.ErrMemberNotFound) {
-			return err
-		}
+		member := getShareMember(c)
 		// A preview code stands for its member only once they have accepted
 		// the sharing.
 		if member == nil || member.Status != sharing.MemberStatusReady {
@@ -122,31 +97,6 @@ func ResolveRequestActor(c echo.Context, inst *instance.Instance, pdoc *permissi
 		SetActor(c, nil)
 		return nil
 	}
-}
-
-// requestSharing returns the sharing of a share code permission, with the code
-// of the request as a JWT. The sharing is nil when the request has no token.
-func requestSharing(c echo.Context, inst *instance.Instance, pdoc *permission.Permission) (*sharing.Sharing, string, error) {
-	token := GetRequestToken(c)
-	if token == "" {
-		return nil, "", nil
-	}
-
-	token, err := TransformShortcodeToJWT(inst, token)
-	if err != nil {
-		return nil, "", err
-	}
-
-	sharingID := pdoc.SourceID
-	if _, id, ok := strings.Cut(sharingID, "/"); ok {
-		sharingID = id
-	}
-
-	sharingDoc, err := sharing.FindSharing(inst, sharingID)
-	if err != nil {
-		return nil, "", err
-	}
-	return sharingDoc, token, nil
 }
 
 func actorFromInstance(inst *instance.Instance) *Actor {
