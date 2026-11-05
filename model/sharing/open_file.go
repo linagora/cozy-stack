@@ -137,15 +137,32 @@ func (o *FileOpener) CheckPermission(pdoc *permission.Permission, sharingID stri
 		o.InteractToken = true
 	}
 
-	// If a file is opened via a token for cozy-to-cozy sharing, then the file
-	// must be in this sharing, or the stack should refuse to open the file.
-	if sharingID != "" && o.Sharing != nil && o.Sharing.ID() == sharingID {
+	// The instance of a member opens the files of its sharing with the token of
+	// its OAuth client, which has no rights on the VFS. Any other token goes
+	// through the VFS check: naming a sharing doesn't give access to its files.
+	if sharingID != "" && o.isClientOfSharing(pdoc, sharingID) {
 		o.ClientID = pdoc.SourceID
 		return nil
 	}
 
 	fs := o.Inst.VFS()
 	return vfs.Allows(fs, pdoc.Permissions, permission.GET, o.File)
+}
+
+// isClientOfSharing returns true if the file is in the given sharing, and the
+// token is the one of the OAuth client of a member of this sharing. For an
+// OAuth token, o.Sharing can only come from the io.cozy.shared document of the
+// file, as CheckPermission fills it from the token only for a sharecode.
+func (o *FileOpener) isClientOfSharing(pdoc *permission.Permission, sharingID string) bool {
+	s := o.Sharing
+	if s == nil || s.ID() != sharingID || pdoc.Type != permission.TypeOauth {
+		return false
+	}
+	if !s.Owner && len(s.Credentials) == 0 {
+		return false
+	}
+	_, err := s.FindMemberByInboundClientID(pdoc.SourceID)
+	return err == nil
 }
 
 // ShouldOpenLocally returns true if the file can be opened in the current
