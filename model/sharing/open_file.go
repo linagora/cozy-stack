@@ -252,18 +252,24 @@ func (o *FileOpener) GetSharecode(memberIndex int, readOnly bool) (string, error
 	}
 	// A drive member's effective write on the file may come from another
 	// sharing than the token's drive (e.g. a nested drive): mint the code
-	// from the nearest sharing scope that grants the write, else the token's
-	// sharing code would grant write access on the whole drive, outside the
-	// member's effective scope.
+	// from the nearest sharing scope that grants the write. The token's sharing
+	// code is never a fallback, as it would grant write access on the whole
+	// drive, outside the member's effective scope: without such a scope, the
+	// member gets a preview code, and on an error, nothing.
 	if o.InteractToken {
 		// ponytail: the web layer already resolved the effective access to
 		// decide readOnly; caching it across the layers would mean plumbing
 		// the result through the notes/office/editor handlers.
-		if sc, err := NewAccessResolver(o.Inst).NearestWritableSharing(o.File.ID(), member); err == nil && sc != nil {
-			o.Sharing = sc.Sharing
-			member = sc.Member
-			memberIndex = -1 // the code is keyed by the member email or instance
+		sc, err := NewAccessResolver(o.Inst).NearestWritableSharing(o.File.ID(), member)
+		if err != nil {
+			return "", err
 		}
+		if sc == nil {
+			return o.getPreviewCode(member, memberIndex)
+		}
+		o.Sharing = sc.Sharing
+		member = sc.Member
+		memberIndex = -1 // the code is keyed by the member email or instance
 	}
 	return o.Sharing.GetInteractCode(o.Inst, member, memberIndex)
 }
