@@ -559,10 +559,10 @@ data: [DONE]
 		require.NoError(t, err)
 		assert.Equal(t, "", answer.Content)
 		assert.Equal(t, "A mail.", answer.Reasoning)
-		expected := toolCall{ID: "call_1", Type: "function"}
+		expected := toolCall{ID: "call_1"}
 		expected.Function.Name = "draft_email"
 		expected.Function.Arguments = `{"subject": "Point"}`
-		assert.Equal(t, []toolCall{expected}, answer.ToolCalls)
+		assert.Equal(t, []toolCall{expected}, answer.ToolCalls, "the type is not read")
 		require.Len(t, answer.Sources, 1, "the sources of the last chunk go with the call")
 		assert.Equal(t, []string{"reasoning", "sources"}, objectsOf(events()))
 	})

@@ -676,33 +676,29 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 	for len(turns) > 0 && turns[0].Role == SystemRole {
 		turns = turns[1:]
 	}
-	// The tool calls of the actions that got their result, by message id
-	actions := map[string]ChatMessage{}
-	for _, m := range turns {
-		if m.Action != nil {
-			actions[m.ID] = m
-		}
-	}
-	calls := map[string]toolCall{}
+	// The messages of the actions that got their result
+	answered := map[string]bool{}
 	for _, msg := range turns {
 		if msg.Result != nil {
-			if m, ok := actions[msg.Result.MessageID]; ok {
-				calls[m.ID] = toolCallOf(m)
-			}
+			answered[msg.Result.MessageID] = true
 		}
 	}
+	// The ids of their tool calls, met before their results
+	callIDs := map[string]string{}
 	for i, msg := range turns {
 		if msg.Role == UserRole && i+1 < len(turns) && turns[i+1].Role == UserRole {
 			continue
 		}
 		out := ragMessage{Role: msg.Role, Content: msg.Content}
-		if call, ok := calls[msg.ID]; ok {
+		if msg.Action != nil && answered[msg.ID] {
+			call := toolCallOf(msg)
+			callIDs[msg.ID] = call.ID
 			out.ToolCalls = []toolCall{call}
 		} else if msg.Action != nil {
 			out.Content = strings.TrimSpace(describeAction(msg.Action) + "\n\n" + msg.Content)
 		}
 		if msg.Result != nil {
-			out.ToolCallID = calls[msg.Result.MessageID].ID
+			out.ToolCallID = callIDs[msg.Result.MessageID]
 			out.Content = resultContent(msg.Result.OK, msg.Content)
 		}
 		messages = append(messages, out)
@@ -1217,8 +1213,8 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 }
 
 // addToolCallDeltas adds the tool_calls of a delta to the calls, as the
-// OpenAI API streams them: each has the index of its call, its id, name and
-// type in its first part, and a piece of its arguments.
+// OpenAI API streams them: each has the index of its call, its id and name
+// in its first part, and a piece of its arguments.
 func addToolCallDeltas(calls []toolCall, raw interface{}) []toolCall {
 	parts, _ := raw.([]interface{})
 	for _, p := range parts {
@@ -1233,9 +1229,6 @@ func addToolCallDeltas(calls []toolCall, raw interface{}) []toolCall {
 		call := &calls[index]
 		if id, _ := part["id"].(string); id != "" {
 			call.ID = id
-		}
-		if kind, _ := part["type"].(string); kind != "" {
-			call.Type = kind
 		}
 		if fn, ok := part["function"].(map[string]interface{}); ok {
 			if name, _ := fn["name"].(string); name != "" && call.Function.Name == "" {
