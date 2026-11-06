@@ -693,3 +693,171 @@ func TestAccessResolver_CrossesDriveBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestAccessResolver_ResolveDocsForInstance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	createTree(t, fs, H{"batch/": H{
+		"shared/":   H{"sub/": H{"deep.txt": nil}, "own.txt": nil},
+		"readonly/": H{"ro.txt": nil},
+		"nested/":   H{"inner/": H{}},
+		"inactive/": H{"inactive.txt": nil},
+		"limited/":  H{"limited.txt": nil},
+		"foreign/":  H{"foreign.txt": nil},
+		"revoked/":  H{"revoked.txt": nil},
+		"owned/":    H{"owned.txt": nil},
+		"plain/":    H{"plain.txt": nil},
+		"rwparent/": H{"rochild/": H{"rw.txt": nil}},
+		"pending/":  H{"pending.txt": nil},
+		"seen/":     H{"seen.txt": nil},
+	}}, consts.RootDirID)
+	dirID := func(p string) string {
+		dir, err := fs.DirByPath("/batch/" + p)
+		require.NoError(t, err)
+		return dir.ID()
+	}
+	fileID := func(p string) string {
+		file, err := fs.FileByPath("/batch/" + p)
+		require.NoError(t, err)
+		return file.ID()
+	}
+
+	daveInstance := "https://dave.example.net"
+	dave := &instance.Instance{Domain: "dave.example.net"}
+	createActiveRecipientSharing(t, inst, dirID("shared"), false, daveInstance)
+	createSharing(t, inst, fileID("shared/own.txt"), false, true, DriveRootTypeFile, daveInstance)
+	createActiveRecipientSharing(t, inst, dirID("readonly"), true, daveInstance)
+	createActiveRecipientSharing(t, inst, dirID("nested"), true, daveInstance)
+	createActiveRecipientSharing(t, inst, dirID("nested/inner"), false, daveInstance)
+	sInactive := createActiveRecipientSharing(t, inst, dirID("inactive"), false, daveInstance)
+	sInactive.Active = false
+	require.NoError(t, couchdb.UpdateDoc(inst, sInactive))
+	sLimited := createActiveRecipientSharing(t, inst, dirID("limited"), false, daveInstance)
+	sLimited.AccessMode = AccessModeLimitedAccess
+	require.NoError(t, couchdb.UpdateDoc(inst, sLimited))
+	createActiveRecipientSharing(t, inst, dirID("foreign"), false, "https://someone-else.cozy.tools")
+	sRevoked := createActiveRecipientSharing(t, inst, dirID("revoked"), false, daveInstance)
+	sRevoked.Members[1].Status = MemberStatusRevoked
+	require.NoError(t, couchdb.UpdateDoc(inst, sRevoked))
+	createActiveDirSharing(t, inst, dirID("owned"))
+	createActiveRecipientSharing(t, inst, dirID("rwparent"), false, daveInstance)
+	createActiveRecipientSharing(t, inst, dirID("rwparent/rochild"), true, daveInstance)
+	for _, status := range []string{MemberStatusPendingInvitation, MemberStatusSeen} {
+		s := createActiveRecipientSharing(t, inst, dirID(status), false, daveInstance)
+		s.Members[1].Status = status
+		require.NoError(t, couchdb.UpdateDoc(inst, s))
+	}
+
+	// The targets are loaded after the sharings, which add references to
+	// their roots, and by ID, so that their paths are not already known. Each
+	// subtest loads them again, as a computed path is kept on the doc.
+	ids := []string{
+		dirID("shared/sub"),
+		fileID("shared/sub/deep.txt"),
+		fileID("shared/own.txt"),
+		fileID("readonly/ro.txt"),
+		dirID("nested/inner"),
+		fileID("inactive/inactive.txt"),
+		fileID("limited/limited.txt"),
+		fileID("foreign/foreign.txt"),
+		fileID("revoked/revoked.txt"),
+		fileID("owned/owned.txt"),
+		dirID("plain"),
+		fileID("plain/plain.txt"),
+		fileID("rwparent/rochild/rw.txt"),
+		fileID("pending/pending.txt"),
+		fileID("seen/seen.txt"),
+	}
+	loadTargets := func(t *testing.T, ids []string) []AccessTarget {
+		t.Helper()
+		targets := make([]AccessTarget, len(ids))
+		for i, id := range ids {
+			dir, file, err := fs.DirOrFileByID(id)
+			require.NoError(t, err)
+			targets[i] = AccessTarget{Dir: dir, File: file}
+		}
+		return targets
+	}
+
+	resolver := NewAccessResolver(inst)
+
+	t.Run("SameAsResolveForMember", func(t *testing.T) {
+		results, err := resolver.ResolveDocsForInstance(loadTargets(t, ids), dave)
+		require.NoError(t, err)
+		require.Len(t, results, len(ids))
+		for i, id := range ids {
+			want, err := resolver.ResolveForMember(id, &Member{Instance: daveInstance})
+			require.NoError(t, err)
+			assert.NoError(t, results[i].Err, id)
+			assert.Equal(t, want, results[i].Access, id)
+		}
+
+		deep := results[1].Access
+		assert.True(t, deep.CanRead)
+		assert.True(t, deep.CanWrite)
+		own := results[2].Access
+		assert.True(t, own.CanWrite)
+		assert.Len(t, own.SourceSharingIDs, 2)
+		ro := results[3].Access
+		assert.True(t, ro.CanRead)
+		assert.False(t, ro.CanWrite)
+		inner := results[4].Access
+		assert.True(t, inner.CanWrite)
+		assert.Len(t, inner.SourceSharingIDs, 2)
+		rw := results[12].Access
+		assert.True(t, rw.CanWrite, "the highest scope of the parents wins")
+		assert.Len(t, rw.SourceSharingIDs, 2)
+		for _, i := range []int{5, 6, 7, 8, 9, 10, 11, 13, 14} {
+			assert.False(t, results[i].Access.CanRead, ids[i])
+		}
+	})
+
+	t.Run("MissingParent", func(t *testing.T) {
+		orphan := &vfs.FileDoc{Type: consts.FileType, DocID: "orphan", DocName: "orphan.txt", DirID: "no-such-dir"}
+		underFile := &vfs.FileDoc{Type: consts.FileType, DocID: "under-file", DocName: "child.txt", DirID: fileID("plain/plain.txt")}
+		results, err := resolver.ResolveDocsForInstance([]AccessTarget{
+			{File: orphan},
+			loadTargets(t, ids[1:2])[0],
+			{File: underFile},
+		}, dave)
+		require.NoError(t, err)
+		require.Len(t, results, 3)
+		assert.ErrorIs(t, results[0].Err, vfs.ErrParentDoesNotExist)
+		assert.Nil(t, results[0].Access)
+		assert.NoError(t, results[1].Err)
+		assert.True(t, results[1].Access.CanWrite)
+		assert.ErrorIs(t, results[2].Err, vfs.ErrParentDoesNotExist)
+	})
+
+	t.Run("MatchingByDomainAlias", func(t *testing.T) {
+		moved := &instance.Instance{Domain: "dave.example.org", DomainAliases: []string{"dave.example.net"}}
+		results, err := resolver.ResolveDocsForInstance(loadTargets(t, ids[:2]), moved)
+		require.NoError(t, err)
+		assert.True(t, results[0].Access.CanRead)
+		assert.True(t, results[1].Access.CanWrite)
+	})
+
+	t.Run("NoMatchingByEmail", func(t *testing.T) {
+		emailDir := createTree(t, fs, H{"email/": H{"email.txt": nil}}, consts.RootDirID)
+		s := createActiveRecipientSharing(t, inst, emailDir.ID(), false, "https://other.example.net")
+		s.Members[1].Email = "dave@example.net"
+		require.NoError(t, couchdb.UpdateDoc(inst, s))
+		file, err := fs.FileByPath("/email/email.txt")
+		require.NoError(t, err)
+
+		ea, err := resolver.ResolveForMember(file.ID(), &Member{Email: "dave@example.net", Instance: daveInstance})
+		require.NoError(t, err)
+		assert.True(t, ea.CanRead)
+
+		results, err := resolver.ResolveDocsForInstance([]AccessTarget{{File: file}}, dave)
+		require.NoError(t, err)
+		assert.False(t, results[0].Access.CanRead)
+	})
+}
