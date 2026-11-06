@@ -804,6 +804,12 @@ func (f *aferoFileCreation) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// Abort discards an upload without publishing its document or content.
+func (f *aferoFileCreation) Abort() error {
+	f.err = vfs.ErrContentLengthMismatch
+	return f.Close()
+}
+
 func (f *aferoFileCreation) Close() (err error) {
 	defer func() {
 		if err != nil {

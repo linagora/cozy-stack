@@ -951,6 +951,12 @@ func (f *s3FileCreation) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// Abort discards an upload without publishing its document or content.
+func (f *s3FileCreation) Abort() error {
+	f.err = vfs.ErrContentLengthMismatch
+	return f.Close()
+}
+
 func (f *s3FileCreation) Close() (err error) {
 	defer func() {
 		if err != nil {
