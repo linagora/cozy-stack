@@ -146,13 +146,4 @@ func TestChatAcceptsActions(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no rag-query job")
 	}
-
-	// The reserved name is refused through the API as well
-	e.POST("/ai/chat/conversations/conversation-search-action").
-		WithHeader("Authorization", "Bearer "+token).
-		WithJSON(map[string]interface{}{
-			"q":       "Cherche",
-			"actions": []map[string]interface{}{{"name": "search", "description": "d"}},
-		}).
-		Expect().Status(400).Body().Contains(`invalid action name \"search\"`)
 }

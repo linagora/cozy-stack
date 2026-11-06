@@ -123,46 +123,47 @@ type FakeOpenRAG struct {
 	Fail func(method, path string) int
 	// SupportedTypes is what GET /indexer/supported/types answers.
 	SupportedTypes []string
-	// LLM, when set, gives the content of the completions asked without a
-	// model, the direct calls to the LLM of the chat router. Without it,
-	// the router is told the message is a search.
-	LLM func(call LLMCall) string
+	// LLM, when set, answers the completions asked without a model, the
+	// calls to the LLM alone. Without it, the answer is "fake answer".
+	LLM func(call LLMCall) Reply
 	// RAG, when set, answers the completions of a partition in place of
-	// the canned non-streamed answer.
+	// the canned answer.
 	RAG http.HandlerFunc
-	// Fill, when set, gives the JSON of the completions of a partition with
-	// a JSON schema: the params of an action filled with the documents.
-	// Without it, the params are empty.
-	Fill func(call LLMCall) string
-	// FillSources are the sources openRAG gives with the params it fills.
-	FillSources []map[string]interface{}
+	// Answer, when set, answers the completions of a partition, from the
+	// documents. Without it, the answer is "fake answer".
+	Answer func(call LLMCall) Reply
+	// Sources are the sources openRAG gives with the answers of a partition.
+	Sources []map[string]interface{}
 	// NoPartition, when set, makes the completions of the partition answer
 	// 404 until the partition is created.
 	NoPartition bool
 }
 
-// LLMCall is a direct call to the LLM: the JSON schema its answer must
-// follow tells which step of the chat router made it ("route", or the name
-// of the action whose params are filled).
+// LLMCall is a chat completion asked to openRAG: without a model, it is for
+// the LLM alone; with the partition of the instance, for an answer from the
+// documents.
 type LLMCall struct {
 	Model    string          `json:"model"`
+	Stream   bool            `json:"stream"`
 	Metadata json.RawMessage `json:"metadata"`
 	Messages []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role       string          `json:"role"`
+		Content    string          `json:"content"`
+		ToolCalls  json.RawMessage `json:"tool_calls"`
+		ToolCallID string          `json:"tool_call_id"`
 	} `json:"messages"`
-	ResponseFormat struct {
-		JSONSchema struct {
-			Name   string          `json:"name"`
-			Schema json.RawMessage `json:"schema"`
-		} `json:"json_schema"`
-	} `json:"response_format"`
+	Tools []struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		} `json:"function"`
+	} `json:"tools"`
+	ToolChoice string `json:"tool_choice"`
 }
 
-// Step is the name of the JSON schema of the call.
-func (c LLMCall) Step() string { return c.ResponseFormat.JSONSchema.Name }
-
-// Prompt is the system and user messages of the call, joined.
+// Prompt is the content of the messages of the call, joined.
 func (c LLMCall) Prompt() string {
 	var parts []string
 	for _, m := range c.Messages {
@@ -170,6 +171,32 @@ func (c LLMCall) Prompt() string {
 	}
 	return strings.Join(parts, "\n")
 }
+
+// ToolNames are the names of the tools given to the LLM.
+func (c LLMCall) ToolNames() []string {
+	names := make([]string, len(c.Tools))
+	for i, tool := range c.Tools {
+		names[i] = tool.Function.Name
+	}
+	return names
+}
+
+// Reply is what the fake LLM answers: a text, or the call of a tool.
+type Reply struct {
+	Content string
+	// Tool is the name of the tool called, with its arguments as JSON.
+	Tool      string
+	Arguments string
+}
+
+// Text is a reply with a text.
+func Text(content string) Reply { return Reply{Content: content} }
+
+// Call is a reply calling a tool.
+func Call(tool, arguments string) Reply { return Reply{Tool: tool, Arguments: arguments} }
+
+// FakeCallID is the id the fake LLM gives to its tool calls.
+const FakeCallID = "call_fake_1"
 
 // DefaultSupportedTypes is a subset of openRAG's default loaders.
 var DefaultSupportedTypes = []string{"txt", "md", "pdf", "docx", "pptx", "doc", "eml", "html", "png", "jpeg", "mp3"}
@@ -535,120 +562,106 @@ func (f *FakeOpenRAG) handle(w http.ResponseWriter, req *http.Request) {
 func (f *FakeOpenRAG) handleCompletion(w http.ResponseWriter, req *http.Request) {
 	body, _ := io.ReadAll(req.Body)
 	req.Body = io.NopCloser(bytes.NewReader(body))
-	var payload struct {
-		Model  string   `json:"model"`
-		Stream bool     `json:"stream"`
-		TopP   *float64 `json:"top_p"`
-	}
-	_ = json.Unmarshal(body, &payload)
+	var call LLMCall
+	_ = json.Unmarshal(body, &call)
 	f.mu.Lock()
 	noPartition := f.NoPartition
 	f.mu.Unlock()
-	if payload.Model != "" && noPartition {
+	if call.Model != "" && noPartition {
 		writeJSON(w, 404, map[string]string{"detail": "Partition not found"})
 		return
 	}
-	// Only the chat completion without the documents sets top_p: the router
-	// and the params of an action do not.
-	if payload.Model == "" && payload.TopP != nil {
-		if payload.Stream {
-			WriteStreamedCompletion(w, "fake answer")
-			return
-		}
-		writeJSON(w, 200, map[string]interface{}{
-			"object": "chat.completion",
-			"choices": []map[string]interface{}{{
-				"index":         0,
-				"finish_reason": "stop",
-				"message":       map[string]string{"role": "assistant", "content": "fake answer"},
-			}},
-		})
-		return
-	}
-	var call LLMCall
-	_ = json.Unmarshal(body, &call)
-	if payload.Model == "" {
-		content := `{"intent": "search"}`
+	reply := Text("fake answer")
+	var extra interface{}
+	if call.Model == "" {
 		if f.LLM != nil {
-			content = f.LLM(call)
+			reply = f.LLM(call)
 		}
-		if payload.Stream {
-			WriteStreamedCompletion(w, content)
+	} else {
+		if f.RAG != nil {
+			f.RAG(w, req)
 			return
 		}
-		writeJSON(w, 200, map[string]interface{}{
-			"object": "chat.completion",
-			"choices": []map[string]interface{}{{
-				"index":         0,
-				"finish_reason": "stop",
-				"message":       map[string]string{"role": "assistant", "content": content},
-			}},
-		})
-		return
-	}
-	if call.Step() != "" {
-		content := "{}"
-		if f.Fill != nil {
-			content = f.Fill(call)
+		if f.Answer != nil {
+			reply = f.Answer(call)
 		}
-		sources := []map[string]interface{}{}
-		if f.FillSources != nil {
-			sources = f.FillSources
+		// The legacy extra of openRAG <= v2.2.0, a JSON-encoded string
+		extra = `{"sources": []}`
+		if f.Sources != nil {
+			extra = map[string]interface{}{"sources": f.Sources}
 		}
-		writeJSON(w, 200, map[string]interface{}{
-			"object": "chat.completion",
-			"choices": []map[string]interface{}{{
-				"index":         0,
-				"finish_reason": "stop",
-				"message":       map[string]string{"role": "assistant", "content": content},
-			}},
-			"extra": map[string]interface{}{"sources": sources},
-		})
+	}
+	if call.Stream {
+		WriteStreamedReply(w, reply, extra)
 		return
 	}
-	if f.RAG != nil {
-		f.RAG(w, req)
-		return
+	WriteReply(w, reply, extra)
+}
+
+// toolCallsOf is the tool_calls of a reply, as the OpenAI API gives them.
+func toolCallsOf(reply Reply, arguments string) []map[string]interface{} {
+	return []map[string]interface{}{{
+		"index":    0,
+		"id":       FakeCallID,
+		"type":     "function",
+		"function": map[string]string{"name": reply.Tool, "arguments": arguments},
+	}}
+}
+
+// WriteStreamedReply answers a streamed completion: the text in one chunk, or
+// the tool call with its arguments in two pieces.
+func WriteStreamedReply(w http.ResponseWriter, reply Reply, extra interface{}) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	chunk := func(delta map[string]interface{}, finish string) {
+		choice := map[string]interface{}{"delta": delta}
+		if finish != "" {
+			choice["finish_reason"] = finish
+		}
+		event := map[string]interface{}{"object": "chat.completion.chunk", "choices": []map[string]interface{}{choice}}
+		if extra != nil {
+			event["extra"] = extra
+		}
+		raw, _ := json.Marshal(event)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", raw)
 	}
-	if payload.Stream {
-		WriteStreamedCompletion(w, "fake answer")
-		return
+	if reply.Tool != "" {
+		half := len(reply.Arguments) / 2
+		chunk(map[string]interface{}{"role": "assistant", "content": nil, "tool_calls": toolCallsOf(reply, reply.Arguments[:half])}, "")
+		chunk(map[string]interface{}{"tool_calls": []map[string]interface{}{{"index": 0, "function": map[string]string{"arguments": reply.Arguments[half:]}}}}, "")
+		chunk(map[string]interface{}{}, "tool_calls")
+	} else {
+		chunk(map[string]interface{}{"content": reply.Content}, "")
+		chunk(map[string]interface{}{}, "stop")
 	}
-	// A non-streamed completion, enough for the stack to save an answer.
-	writeJSON(w, 200, map[string]interface{}{
-		"object": "chat.completion",
-		"choices": []map[string]interface{}{{
-			"index":         0,
-			"finish_reason": "stop",
-			"message":       map[string]string{"role": "assistant", "content": "fake answer"},
-		}},
-		"extra": `{"sources": []}`,
-	})
+	_, _ = io.WriteString(w, "data: [DONE]\n\n")
+}
+
+// WriteReply answers a completion that is not streamed.
+func WriteReply(w http.ResponseWriter, reply Reply, extra interface{}) {
+	message := map[string]interface{}{"role": "assistant", "content": reply.Content}
+	finish := "stop"
+	if reply.Tool != "" {
+		message["content"] = nil
+		message["tool_calls"] = toolCallsOf(reply, reply.Arguments)
+		finish = "tool_calls"
+	}
+	event := map[string]interface{}{
+		"object":  "chat.completion",
+		"choices": []map[string]interface{}{{"index": 0, "finish_reason": finish, "message": message}},
+	}
+	if extra != nil {
+		event["extra"] = extra
+	}
+	writeJSON(w, 200, event)
 }
 
 // WriteStreamedCompletion answers a streamed completion with the content in
 // one chunk.
 func WriteStreamedCompletion(w http.ResponseWriter, content string) {
-	chunk, _ := json.Marshal(map[string]interface{}{
-		"object":  "chat.completion.chunk",
-		"choices": []map[string]interface{}{{"delta": map[string]string{"content": content}}},
-		"extra":   map[string]interface{}{},
-	})
-	w.Header().Set("Content-Type", "text/event-stream")
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk)
-	_, _ = io.WriteString(w, `data: {"object": "chat.completion.chunk", "choices": [{"delta": {}, "finish_reason": "stop"}], "extra": {}}`+"\n\n")
-	_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	WriteStreamedReply(w, Text(content), map[string]interface{}{})
 }
 
 // WriteCompletion answers a completion that is not streamed.
 func WriteCompletion(w http.ResponseWriter, content string) {
-	writeJSON(w, 200, map[string]interface{}{
-		"object": "chat.completion",
-		"choices": []map[string]interface{}{{
-			"index":         0,
-			"finish_reason": "stop",
-			"message":       map[string]string{"role": "assistant", "content": content},
-		}},
-		"extra": map[string]interface{}{"sources": []interface{}{}},
-	})
+	WriteReply(w, Text(content), map[string]interface{}{"sources": []interface{}{}})
 }
