@@ -253,6 +253,9 @@ func (s *memScheduler) schedule(t Trigger) {
 			}
 			if d == 0 {
 				s.pushJob(t, req)
+				if _, once := t.(*AtTrigger); once {
+					s.forgetFired(t)
+				}
 			} else if debounced == nil {
 				debounced = time.After(d)
 				combinedReq = combineRequests(t, req, nil)
@@ -282,6 +285,17 @@ func combineRequests(t Trigger, req1, req2 *JobRequest) *JobRequest {
 		return t.Infos().JobRequest()
 	default: // keepOriginalRequest
 		return req1
+	}
+}
+
+// forgetFired deletes a fired @at or @in trigger, like the Redis scheduler. It
+// does not unschedule it again, as a shutdown may already have done so.
+func (s *memScheduler) forgetFired(t Trigger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.ts, t.DBPrefix()+"/"+t.Infos().TID)
+	if err := couchdb.DeleteDoc(t, t.Infos()); err != nil {
+		s.log.Warnf("trigger %s: cannot delete fired trigger: %s", t.Infos().TID, err)
 	}
 }
 

@@ -106,13 +106,18 @@ func (h *CommonContactsHandler) Handle(ctx context.Context, d amqp.Delivery) err
 		return upsertCommonContact(inst, msg.Path, msg.Payload)
 	case "DELETE":
 		c, err := contact.FindByCardDAVPath(inst, msg.Path)
-		if errors.Is(err, contact.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
+		if err != nil && !errors.Is(err, contact.ErrNotFound) {
 			return err
 		}
-		return couchdb.DeleteDoc(inst, c)
+		if err == nil {
+			if err := couchdb.DeleteDoc(inst, c); err != nil {
+				return err
+			}
+		}
+		if inst.IsOrganizationInstance() && inst.HasCentralizedOrgDirectory() {
+			return orgdirectory.QueueGroupPropagation(ctx, inst.OrgID, inst.OrgDomain)
+		}
+		return nil
 	default:
 		log.Warnf("contacts.common: dropping unknown action %q for %s", msg.Action, msg.Path)
 		return nil

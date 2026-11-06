@@ -1433,10 +1433,10 @@ func (s *Sharing) DelegateRevokeRecipient(inst *instance.Instance, index int) er
 
 // RevokeMember revoke the access granted to a member and contact it
 func (s *Sharing) RevokeMember(inst *instance.Instance, index int) error {
-	return s.revokeMember(inst, index, nil)
+	return s.revokeMember(inst, index)
 }
 
-func (s *Sharing) revokeMember(inst *instance.Instance, index int, removedGroupIndex *int) error {
+func (s *Sharing) revokeMember(inst *instance.Instance, index int) error {
 	m := &s.Members[index]
 
 	// skip if member is already revoked
@@ -1469,9 +1469,8 @@ func (s *Sharing) revokeMember(inst *instance.Instance, index int, removedGroupI
 	// operation several times.
 	leftRetries := 3
 	for {
-		if removedGroupIndex != nil {
-			removeGroupFromMember(m, *removedGroupIndex)
-		}
+		// Keep the group until revokeRecipient finishes cleanup, so a retry
+		// still finds a member whose credentials have already been revoked.
 		m.Status = MemberStatusRevoked
 		// Do not remove the credentials from the array to preserve the members /
 		// credentials order, just empty them
@@ -1615,6 +1614,17 @@ func (s *Sharing) NotifyRecipients(inst *instance.Instance, except *Member) {
 	// XXX Wait a bit to avoid pressure on recipients cozy after delegated operations
 	time.Sleep(3 * time.Second)
 
+	if err := s.notifyRecipients(inst, except); err != nil {
+		inst.Logger().WithNamespace("sharing").Debugf("Cannot notify recipients: %s", err)
+	}
+}
+
+// notifyRecipients lets workers retry a failed notification without the async delay.
+func (s *Sharing) notifyRecipients(inst *instance.Instance, except *Member) error {
+	if !s.Owner || len(s.Members) != len(s.Credentials)+1 {
+		return nil
+	}
+
 	active := false
 	for i := range s.Members {
 		if shouldNotifyMember(s, i, except) {
@@ -1623,7 +1633,7 @@ func (s *Sharing) NotifyRecipients(inst *instance.Instance, except *Member) {
 		}
 	}
 	if !active {
-		return
+		return nil
 	}
 
 	var params PutRecipientsParams
@@ -1641,11 +1651,10 @@ func (s *Sharing) NotifyRecipients(inst *instance.Instance, except *Member) {
 	copy(params.Groups, s.Groups)
 	body, err := json.Marshal(params)
 	if err != nil {
-		inst.Logger().WithNamespace("sharing").
-			Warnf("Can't serialize the updated members list for %s: %s", s.SID, err)
-		return
+		return err
 	}
 
+	var errs []error
 	for i, m := range s.Members {
 		if !shouldNotifyMember(s, i, except) {
 			continue
@@ -1659,6 +1668,9 @@ func (s *Sharing) NotifyRecipients(inst *instance.Instance, except *Member) {
 		c := &s.Credentials[i-1]
 		var token string
 		if m.Status == MemberStatusReady {
+			if c.AccessToken == nil {
+				continue
+			}
 			token = c.AccessToken.AccessToken
 		} else {
 			perms, err := permission.GetForSharePreview(inst, s.SID)
@@ -1687,12 +1699,12 @@ func (s *Sharing) NotifyRecipients(inst *instance.Instance, except *Member) {
 			res, err = RefreshToken(inst, res, err, s, &s.Members[i], c, opts, body)
 		}
 		if err != nil {
-			inst.Logger().WithNamespace("sharing").
-				Debugf("Can't notify %#v about the updated members list: %s", m, err)
+			errs = append(errs, err)
 			continue
 		}
 		res.Body.Close()
 	}
+	return errors.Join(errs...)
 }
 
 func shouldNotifyMember(s *Sharing, i int, except *Member) bool {

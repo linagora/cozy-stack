@@ -7,11 +7,21 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/orgdirectory"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 )
 
 func init() {
+	job.AddWorker(&job.WorkerConfig{
+		WorkerType:   job.OrgGroupsWorker,
+		Concurrency:  runtime.NumCPU(),
+		MaxExecCount: 5,
+		Reserved:     true,
+		RetryDelay:   time.Second,
+		Timeout:      5 * time.Minute,
+		WorkerFunc:   WorkerOrgGroups,
+	})
 	job.AddWorker(&job.WorkerConfig{
 		WorkerType:   "share-group",
 		Concurrency:  runtime.NumCPU(),
@@ -82,6 +92,23 @@ func init() {
 		Timeout:      30 * time.Second,
 		WorkerFunc:   WorkerCollectedContacts,
 	})
+}
+
+// WorkerOrgGroups fans out to member instances, enumerates affected sharings,
+// or reconciles one sharing.
+func WorkerOrgGroups(ctx *job.TaskContext) error {
+	var msg job.OrgGroupsMessage
+	if err := ctx.UnmarshalMessage(&msg); err != nil {
+		return err
+	}
+	switch {
+	case msg.FanOut:
+		return orgdirectory.FanOutGroupPropagation(ctx, ctx.Instance, msg.OrganizationID)
+	case msg.SharingID == "":
+		return sharing.QueueOrgGroupSharings(ctx, ctx.Instance, msg, job.System())
+	default:
+		return sharing.ReconcileOrgGroups(ctx, ctx.Instance, msg, ctx.ExecCount() > 0)
+	}
 }
 
 // WorkerGroup is used to update the list of members of sharings for a group
