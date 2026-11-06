@@ -518,10 +518,9 @@ server > {"event": "CREATED",
 
 When the stack proposes a [chat action](#chat-actions), an `action` event
 comes before the `done` one. `message_id` is the id of the assistant message
-the action is saved on. The message is saved right after the `done` event, as
-without an action: a client that does not find it in the conversation yet
-waits for the conversation to be updated. The events of a message are, in
-order:
+the action is saved on. The message is saved before the `action` event: a
+result posted on this event finds it in the conversation. The events of a
+message are, in order:
 
 - an answer: `reasoning` events if any, `delta` events, `sources` if any, `done`;
 - an action: `reasoning` events if any, `sources` if any, when the documents

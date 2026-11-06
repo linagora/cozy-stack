@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,7 @@ func newActionsConversation(t *testing.T, r *ragTest, id, question string, actio
 		Messages:     []rag.ChatMessage{{ID: id + "-q", Role: rag.UserRole, Content: question, CreatedAt: time.Now()}},
 		CozyMetadata: metadata.New(),
 	}
+	r.chatID = id
 	require.NoError(t, couchdb.CreateNamedDocWithDB(r.inst, &chat))
 	return rag.QueryMessage{Task: "chat-completion", DocID: id, Actions: actions}
 }
@@ -56,6 +58,12 @@ func subscribeEvents(t *testing.T, r *ragTest) func() []map[string]interface{} {
 			select {
 			case e := <-sub.Channel:
 				doc := e.Doc.(*couchdb.JSONDoc)
+				if doc.M["object"] == "action" {
+					// Whether the message of the action is already saved
+					var chat rag.ChatConversation
+					require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, r.chatID, &chat))
+					doc.M["saved"] = slices.ContainsFunc(chat.Messages, func(m rag.ChatMessage) bool { return m.ID == doc.M["message_id"] })
+				}
 				events = append(events, doc.M)
 				if doc.M["object"] == "done" || doc.M["object"] == "error" {
 					return events
@@ -190,6 +198,7 @@ func TestQueryProposesTheActionTheLLMCalls(t *testing.T) {
 
 	answer := lastMessage(t, r, query.DocID)
 	assert.Equal(t, answer.ID, published[0]["message_id"], "the client knows where to write the outcome")
+	assert.True(t, published[0]["saved"].(bool), "the message is saved when the action is published")
 	assert.Equal(t, rag.AssistantRole, answer.Role)
 	assert.Equal(t, "", answer.Content)
 	require.NotNil(t, answer.Action)
@@ -371,6 +380,7 @@ func newConversationWithResult(t *testing.T, r *ragTest, id, callID string, acti
 		},
 		CozyMetadata: metadata.New(),
 	}
+	r.chatID = id
 	require.NoError(t, couchdb.CreateNamedDocWithDB(r.inst, &chat))
 	return rag.QueryMessage{Task: "chat-completion", DocID: id, Actions: actions}
 }
@@ -436,6 +446,7 @@ func TestQueryAnswersWithoutToolsAfterTheLastStep(t *testing.T) {
 				Result: &rag.ActionResult{MessageID: answerID, OK: true}})
 	}
 	require.NoError(t, couchdb.CreateNamedDocWithDB(r.inst, &rag.ChatConversation{DocID: id, Messages: messages, CozyMetadata: metadata.New()}))
+	r.chatID = id
 	var call rag.LLMCall
 	r.fake.Answer = func(c rag.LLMCall) rag.Reply {
 		call = c
@@ -548,6 +559,7 @@ func newConversationWithAction(t *testing.T, r *ragTest, id string, actions []ra
 		},
 		CozyMetadata: metadata.New(),
 	}
+	r.chatID = id
 	require.NoError(t, couchdb.CreateNamedDocWithDB(r.inst, &chat))
 	return rag.QueryMessage{Task: "chat-completion", DocID: id, Actions: actions}
 }
