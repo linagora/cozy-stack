@@ -280,6 +280,29 @@ func TestLifecycle(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
+	t.Run("ResetRecreatedRecents", func(t *testing.T) {
+		i, err := lifecycle.GetInstance("test.cozycloud.cc")
+		require.NoError(t, err)
+
+		// An activity recorded while the databases are deleted recreates the
+		// recents database before the reset does.
+		row := &couchdb.JSONDoc{
+			Type: consts.FilesRecents,
+			M:    map[string]interface{}{"_id": "source:file", "last_activity_at": "2026-01-01T00:00:00Z"},
+		}
+		require.NoError(t, couchdb.CreateNamedDocWithDB(i, row))
+
+		require.NoError(t, lifecycle.ResetRecentsDB(i))
+		var docs []couchdb.JSONDoc
+		require.NoError(t, couchdb.GetAllDocs(i, consts.FilesRecents, &couchdb.AllDocsRequest{}, &docs))
+		assert.Empty(t, docs)
+
+		require.NoError(t, couchdb.DeleteDB(i, consts.FilesRecents))
+		require.NoError(t, lifecycle.ResetRecentsDB(i))
+		_, err = couchdb.DBStatus(i, consts.FilesRecents)
+		assert.NoError(t, err)
+	})
+
 	t.Run("RegisterPassphrase", func(t *testing.T) {
 		i, err := lifecycle.GetInstance("test.cozycloud.cc")
 		if !assert.NoError(t, err, "cant fetch i") {

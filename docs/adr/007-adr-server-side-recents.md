@@ -105,7 +105,8 @@ the item and of which the user is a ready member, the drives where the user can
 write come first, then the outermost one. Drive shows an item with the rights
 of the member in the drive of the item, so this drive gives the highest rights;
 among drives with the same rights, the outermost one does not change when a
-drive is created inside it. `path` is relative to the root of that drive.
+drive is created inside it. `path` is relative to the root of that drive, and
+empty for the root itself.
 
 Sort by `last_activity_at` descending, then `_id` descending. Use the time of
 the successful edit or open, not the time the row was written. Another
