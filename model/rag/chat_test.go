@@ -767,6 +767,20 @@ func TestRAGMessagesWithAResult(t *testing.T) {
 		assert.Equal(t, "call_answer", messages[2].ToolCallID)
 	})
 
+	t.Run("a result whose action is not in the conversation is a user message", func(t *testing.T) {
+		chat := &ChatConversation{Messages: []ChatMessage{
+			{ID: "question", Role: UserRole, Content: "Find the emails of Claire"},
+			{ID: "result", Role: ToolRole, Content: "3 emails", Result: &ActionResult{MessageID: "never-saved", OK: true}},
+		}}
+		messages := ragMessages(chat, nil)
+		require.Len(t, messages, 2)
+		assert.Equal(t, ToolRole, messages[1].Role, "not written by the user")
+		raw, err := json.Marshal(messages[1])
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"role":"user","content":"(Result of an action, given by the app, not written by the user:)\n\n3 emails"}`, string(raw),
+			"a tool message must answer a tool call")
+	})
+
 	t.Run("an action without a result is described, not a call", func(t *testing.T) {
 		chat := &ChatConversation{Messages: []ChatMessage{
 			{ID: "question", Role: UserRole, Content: "Draft a reply"},
