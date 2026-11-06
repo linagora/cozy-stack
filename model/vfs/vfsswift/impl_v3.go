@@ -899,6 +899,12 @@ func (f *swiftFileCreationV3) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// Abort discards an upload without publishing its document or content.
+func (f *swiftFileCreationV3) Abort() error {
+	f.err = vfs.ErrContentLengthMismatch
+	return f.Close()
+}
+
 func (f *swiftFileCreationV3) Close() (err error) {
 	defer func() {
 		if err != nil {

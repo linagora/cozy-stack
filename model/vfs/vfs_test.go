@@ -70,6 +70,20 @@ func TestVfs(t *testing.T) {
 		fs := tt.fs
 
 		t.Run(tt.name, func(t *testing.T) {
+			t.Run("AbortCompleteUpload", func(t *testing.T) {
+				doc, err := vfs.NewFileDoc("aborted.txt", "", 8, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+				require.NoError(t, err)
+				doc.DocID = "aborted-" + tt.name
+				upload, err := fs.CreateFile(doc, nil)
+				require.NoError(t, err)
+				_, err = io.WriteString(upload, "complete")
+				require.NoError(t, err)
+				abort, ok := upload.(interface{ Abort() error })
+				require.True(t, ok)
+				require.ErrorIs(t, abort.Abort(), vfs.ErrContentLengthMismatch)
+				_, err = fs.FileByID(doc.ID())
+				require.True(t, os.IsNotExist(err), "aborted complete upload must not publish")
+			})
 			t.Run("DiskUsageIsInitiallyZero", func(t *testing.T) {
 				used, err := fs.DiskUsage()
 				assert.NoError(t, err)
