@@ -89,6 +89,11 @@ const (
 	LongRun
 )
 
+// BelongsTo reports whether the session was loaded for the given instance.
+func (s *Session) BelongsTo(inst *instance.Instance) bool {
+	return s.instance != nil && inst != nil && s.instance.Domain == inst.Domain
+}
+
 // Duration returns the session duration for the its cookie.
 func (s *Session) Duration() Duration {
 	if s.LongRun {

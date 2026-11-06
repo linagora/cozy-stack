@@ -30,6 +30,10 @@ func TestSharedDrivePublicDownloadVisitorIdentity(t *testing.T) {
 	require.NoError(t, err)
 	ownerCookie, err := ownerSession.ToCookie()
 	require.NoError(t, err)
+	recipientSession, err := session.New(f.env.betty, session.LongRun, "")
+	require.NoError(t, err)
+	recipientCookie, err := recipientSession.ToCookie()
+	require.NoError(t, err)
 
 	for _, kind := range []string{"file", "archive"} {
 		t.Run(kind, func(t *testing.T) {
@@ -67,10 +71,10 @@ func TestSharedDrivePublicDownloadVisitorIdentity(t *testing.T) {
 			}
 			require.Empty(t, readDownloads(), "preparing a secret is not a download")
 
-			for _, visitor := range []string{"anonymous-owner", "anonymous-http-proxy", "anonymous-same-stack", "owner-token", "owner-session"} {
+			for _, visitor := range []string{"anonymous-owner", "anonymous-http-proxy", "anonymous-same-stack", "recipient-session-same-stack", "owner-token", "owner-session"} {
 				t.Run(visitor, func(t *testing.T) {
 					base := f.env.tsA.URL
-					if visitor == "anonymous-http-proxy" || visitor == "anonymous-same-stack" {
+					if visitor == "anonymous-http-proxy" || visitor == "anonymous-same-stack" || visitor == "recipient-session-same-stack" {
 						base = f.env.tsB.URL
 						recipient, err := sharing.FindSharing(f.env.betty, f.sharingID)
 						require.NoError(t, err)
@@ -104,6 +108,8 @@ func TestSharedDrivePublicDownloadVisitorIdentity(t *testing.T) {
 					} else if visitor == "owner-session" {
 						req.AddCookie(ownerCookie)
 						wantIdentity = f.env.acme.Domain
+					} else if visitor == "recipient-session-same-stack" {
+						req.AddCookie(recipientCookie)
 					} else {
 						require.Empty(t, req.Header.Get("Authorization"))
 						require.Empty(t, req.Header.Get("Cookie"))

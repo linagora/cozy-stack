@@ -7,7 +7,6 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/publiclink"
-	"github.com/cozy/cozy-stack/model/session"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/utils"
@@ -40,7 +39,7 @@ func Record(c echo.Context, inst *instance.Instance, perm *permission.Permission
 	}
 	if actor, ok := middlewares.GetActor(c); ok && actor.Domain != "" && !isTransportActor {
 		event.Identity = actor.Domain
-	} else if _, err := session.FromCookie(c, inst); err == nil {
+	} else if sess, ok := middlewares.GetSession(c); ok && sess.BelongsTo(inst) {
 		event.Identity = inst.Domain
 	}
 	if err := couchdb.CreateDoc(inst, event); err != nil {

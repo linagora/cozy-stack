@@ -271,6 +271,15 @@ func TestApps(t *testing.T) {
 				}
 			}
 			require.Equal(t, 1, identified, "only an authenticated Cozy session establishes identity")
+			eAnon.GET("/public").WithQuery("sharecode", code).WithCookie("cozysessid", "invalid").WithHost(slug + "." + testInstance.Domain).Expect().Status(200)
+			require.Eventually(t, func() bool { return len(readEvents()) == 5 }, 5*time.Second, 10*time.Millisecond)
+			identified = 0
+			for _, event := range readEvents() {
+				if event.Identity != "" {
+					identified++
+				}
+			}
+			require.Equal(t, 1, identified, "an invalid cookie does not establish identity")
 
 			protectedCode := createShareCode("protected-event", "password")
 			protected, err := permission.GetForShareCode(testInstance, protectedCode)
