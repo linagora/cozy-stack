@@ -202,6 +202,43 @@ func TestRevsTreeInsertChainStartingBefore(t *testing.T) {
 	assert.Len(t, sub.Branches, 0)
 }
 
+func TestRevsTreeInsertChainPastMaxDepthPreservesParent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start int
+	}{
+		{name: "ParentIsFork", start: 1},
+		{name: "ParentHasDescendants", start: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := &RevsTree{Rev: "1-a", Branches: []RevsTree{
+				{Rev: "2-a", Branches: []RevsTree{
+					{Rev: "3-a", Branches: []RevsTree{{Rev: "4-a"}}},
+				}},
+				{Rev: "2-b"},
+			}}
+			var chain []string
+			for generation := tc.start; generation <= MaxDepth+2; generation++ {
+				chain = append(chain, fmt.Sprintf("%d-a", generation))
+			}
+
+			tree.InsertChain(chain)
+
+			sibling, _ := tree.Find("2-b")
+			assert.Equal(t, &RevsTree{Rev: "2-b"}, sibling,
+				"the unrelated conflict branch must survive trimming")
+			parent, _ := tree.Find(chain[0])
+			require.NotNil(t, parent, "the insertion parent must survive trimming")
+			for _, rev := range chain[1:] {
+				child, depth := parent.Find(rev)
+				require.NotNil(t, child, "revision %s must be in the tree", rev)
+				assert.Equal(t, 2, depth, "%s must be a direct child of %s", rev, parent.Rev)
+				parent = child
+			}
+		})
+	}
+}
+
 func TestRevsStructToChain(t *testing.T) {
 	input := RevsStruct{
 		Start: 3,
