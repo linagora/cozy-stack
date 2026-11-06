@@ -1426,8 +1426,8 @@ func ValidateSharedDrivePermissionPatch(patch permission.Permission) error {
 	if len(patch.Codes) > 0 {
 		return jsonapi.BadRequest(errors.New("codes cannot be modified"))
 	}
-	if patch.Password == nil && patch.ExpiresAt == nil && len(patch.Permissions) == 0 {
-		return jsonapi.BadRequest(errors.New("password, expires_at, or permissions must be provided"))
+	if patch.Password == nil && patch.ExpiresAt == nil && len(patch.Permissions) == 0 && patch.ActivityReportEnabled == nil {
+		return jsonapi.BadRequest(errors.New("password, expires_at, permissions, or activity_report_enabled must be provided"))
 	}
 	if patch.Password != nil {
 		if _, ok := patch.Password.(string); !ok {
@@ -1478,9 +1478,13 @@ func ValidateSharedDrivePermissionSetPatch(
 	return nil
 }
 
-// ApplySharedDrivePermissionPatch applies password, expires_at, and permission
+// ApplySharedDrivePermissionPatch applies report, password, expires_at, and permission
 // updates for a shared-drive share-by-link permission.
 func ApplySharedDrivePermissionPatch(perm *permission.Permission, patch permission.Permission) error {
+	if patch.ActivityReportEnabled != nil {
+		value := *patch.ActivityReportEnabled
+		perm.ActivityReportEnabled = &value
+	}
 	// Apply password change
 	if patch.Password != nil {
 		pass := patch.Password.(string)

@@ -26,20 +26,21 @@ import (
 
 // DocTypeVersion represents the doctype version. Each time this document
 // structure is modified, update this value
-const DocTypeVersion = "1"
+const DocTypeVersion = "2"
 
 // Permission is a storable object containing a set of rules and
 // several codes
 type Permission struct {
-	PID         string            `json:"_id,omitempty"`
-	PRev        string            `json:"_rev,omitempty"`
-	Type        string            `json:"type,omitempty"`
-	SourceID    string            `json:"source_id,omitempty"`
-	Permissions Set               `json:"permissions,omitempty"`
-	ExpiresAt   interface{}       `json:"expires_at,omitempty"`
-	Codes       map[string]string `json:"codes,omitempty"`
-	ShortCodes  map[string]string `json:"shortcodes,omitempty"`
-	Password    interface{}       `json:"password,omitempty"`
+	PID                   string            `json:"_id,omitempty"`
+	PRev                  string            `json:"_rev,omitempty"`
+	Type                  string            `json:"type,omitempty"`
+	SourceID              string            `json:"source_id,omitempty"`
+	Permissions           Set               `json:"permissions,omitempty"`
+	ExpiresAt             interface{}       `json:"expires_at,omitempty"`
+	ActivityReportEnabled *bool             `json:"activity_report_enabled,omitempty"`
+	Codes                 map[string]string `json:"codes,omitempty"`
+	ShortCodes            map[string]string `json:"shortcodes,omitempty"`
+	Password              interface{}       `json:"password,omitempty"`
 
 	Client   interface{}            `json:"-"` // Contains the *oauth.Client client pointer for Oauth permission type
 	Metadata *metadata.CozyMetadata `json:"cozyMetadata,omitempty"`
@@ -86,6 +87,10 @@ func (p *Permission) DocType() string { return consts.Permissions }
 // Clone implements couchdb.Doc
 func (p *Permission) Clone() couchdb.Doc {
 	cloned := *p
+	if p.ActivityReportEnabled != nil {
+		enabled := *p.ActivityReportEnabled
+		cloned.ActivityReportEnabled = &enabled
+	}
 	cloned.Codes = make(map[string]string)
 	cloned.ShortCodes = make(map[string]string)
 	if p.Metadata != nil {
@@ -785,14 +790,15 @@ func CreateShareSet(
 	}
 	// SourceID stays the same, allow quick destruction of all children permissions
 	doc := &Permission{
-		PID:         subdoc.PID,
-		Type:        TypeShareByLink,
-		SourceID:    sourceID,
-		Permissions: set,
-		Codes:       codes,
-		ShortCodes:  shortcodes,
-		ExpiresAt:   expiresAt,
-		Metadata:    subdoc.Metadata,
+		PID:                   subdoc.PID,
+		Type:                  TypeShareByLink,
+		SourceID:              sourceID,
+		Permissions:           set,
+		Codes:                 codes,
+		ShortCodes:            shortcodes,
+		ExpiresAt:             expiresAt,
+		ActivityReportEnabled: subdoc.ActivityReportEnabled,
+		Metadata:              subdoc.Metadata,
 	}
 
 	if pass, ok := subdoc.Password.(string); ok && len(pass) > 0 {

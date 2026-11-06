@@ -349,6 +349,7 @@ func (i *Instance) ThumbsFS() vfs.Thumbser {
 var magicFolders = map[string]string{
 	consts.Apps + "/" + consts.NotesSlug: "Tree Notes",
 	consts.Apps + "/mail":                "Tree Mail",
+	consts.Apps + "/reports":             "Tree Reports",
 }
 
 // ResolveDirID resolves a known magic folder to its concrete directory ID.

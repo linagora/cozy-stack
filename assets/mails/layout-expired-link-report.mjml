@@ -1,0 +1,15 @@
+<mjml>
+  <mj-head>
+    <mj-defaults></mj-defaults>
+  </mj-head>
+  <mj-body background-color="#f3f6f9">
+    <mj-wrapper background-color="#fff" border-radius="8px" padding="0">
+      <mj-section padding="24px 0 8px">
+        <mj-column>
+          <mj-text mj-class="title-h2 content-xlarge"><span style="color:#111">Twake</span> <span style="color:#ff4559">Drive</span></mj-text>
+          {{template `content` .}}
+        </mj-column>
+      </mj-section>
+    </mj-wrapper>
+  </mj-body>
+</mjml>

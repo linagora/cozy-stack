@@ -44,20 +44,23 @@ type Attachment struct {
 // content: body and body content-type. It is used as the input of the
 // "sendmail" worker.
 type Options struct {
-	Mode           string                 `json:"mode"`
-	Subject        string                 `json:"subject"`
-	From           *Address               `json:"from,omitempty"`
-	To             []*Address             `json:"to,omitempty"`
-	ReplyTo        *Address               `json:"reply_to,omitempty"`
-	Dialer         *gomail.DialerOptions  `json:"dialer,omitempty"`
-	Date           *time.Time             `json:"date,omitempty"`
-	Parts          []*Part                `json:"parts,omitempty"`
-	RecipientName  string                 `json:"recipient_name,omitempty"`
-	TemplateName   string                 `json:"template_name,omitempty"`
-	TemplateValues map[string]interface{} `json:"template_values,omitempty"`
-	Attachments    []*Attachment          `json:"attachments,omitempty"`
-	Locale         string                 `json:"locale,omitempty"`
-	Layout         string                 `json:"layout,omitempty"`
+	// Internal delivery requirements cannot be set by API callers.
+	RequireDelivery bool                   `json:"-"`
+	MessageID       string                 `json:"-"`
+	Mode            string                 `json:"mode"`
+	Subject         string                 `json:"subject"`
+	From            *Address               `json:"from,omitempty"`
+	To              []*Address             `json:"to,omitempty"`
+	ReplyTo         *Address               `json:"reply_to,omitempty"`
+	Dialer          *gomail.DialerOptions  `json:"dialer,omitempty"`
+	Date            *time.Time             `json:"date,omitempty"`
+	Parts           []*Part                `json:"parts,omitempty"`
+	RecipientName   string                 `json:"recipient_name,omitempty"`
+	TemplateName    string                 `json:"template_name,omitempty"`
+	TemplateValues  map[string]interface{} `json:"template_values,omitempty"`
+	Attachments     []*Attachment          `json:"attachments,omitempty"`
+	Locale          string                 `json:"locale,omitempty"`
+	Layout          string                 `json:"layout,omitempty"`
 }
 
 // Part represent a part of the content of the mail. It has a type

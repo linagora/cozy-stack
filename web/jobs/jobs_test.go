@@ -97,7 +97,7 @@ func TestJobs(t *testing.T) {
 		appToken, err := testInstance.MakeJWT(consts.AppAudience, "trigger-test", "", "", time.Now())
 		require.NoError(t, err)
 		e := testutils.CreateTestClient(t, ts.URL)
-		for _, args := range []string{consts.PublicLinkEvents, "io.cozy.foos:CREATED " + consts.PublicLinkEvents + ":UPDATED", consts.FilesRecents} {
+		for _, args := range []string{consts.PublicLinkEvents, "io.cozy.foos:CREATED " + consts.PublicLinkEvents + ":UPDATED", consts.PublicLinkReports, "io.cozy.foos:CREATED " + consts.PublicLinkReports + ":UPDATED", consts.FilesRecents} {
 			e.POST("/jobs/triggers").WithHeader("Authorization", "Bearer "+appToken).
 				WithJSON(map[string]interface{}{"data": map[string]interface{}{"attributes": map[string]interface{}{
 					"type": "@event", "arguments": args, "worker": "print",

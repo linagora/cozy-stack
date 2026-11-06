@@ -120,11 +120,13 @@ func TestRealtime(t *testing.T) {
 		defer ws.Disconnect()
 		ws.WriteText(fmt.Sprintf(`{"method":"AUTH","payload":"%s"}`, adminToken))
 		ws.WriteText(`{"method":"SUBSCRIBE","payload":{"type":"io.cozy.foos"}}`)
-		for _, id := range []string{"", `,"id":"event-id"`} {
-			obj := ws.WriteText(fmt.Sprintf(`{"method":"SUBSCRIBE","payload":{"type":"%s"%s}}`, consts.PublicLinkEvents, id)).
-				Expect().TextMessage().JSON().Object()
-			obj.ValueEqual("event", "error")
-			obj.Value("payload").Object().ValueEqual("status", "403 Forbidden")
+		for _, doctype := range []string{consts.PublicLinkEvents, consts.PublicLinkReports} {
+			for _, id := range []string{"", `,"id":"event-id"`} {
+				obj := ws.WriteText(fmt.Sprintf(`{"method":"SUBSCRIBE","payload":{"type":"%s"%s}}`, doctype, id)).
+					Expect().TextMessage().JSON().Object()
+				obj.ValueEqual("event", "error")
+				obj.Value("payload").Object().ValueEqual("status", "403 Forbidden")
+			}
 		}
 		realtime.GetHub().Publish(inst, realtime.EventCreate, &testDoc{doctype: "io.cozy.foos", id: "control"}, nil)
 		obj := ws.Expect().TextMessage().JSON().Object()

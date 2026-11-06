@@ -459,7 +459,7 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 			return err
 		}
 
-		if !patchSet && !current.CanUpdateShareByLink(toPatch) {
+		if (!patchSet || patch.ActivityReportEnabled != nil) && !current.CanUpdateShareByLink(toPatch) {
 			return permission.ErrNotParent
 		}
 
@@ -467,9 +467,13 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 			if patchSet {
 				return ErrPatchCodeOrSet
 			}
-			if patch.Password == nil && patch.ExpiresAt == nil {
+			if patch.Password == nil && patch.ExpiresAt == nil && patch.ActivityReportEnabled == nil {
 				return ErrPatchCodeOrSet
 			}
+		}
+
+		if patch.ActivityReportEnabled != nil {
+			toPatch.ActivityReportEnabled = patch.ActivityReportEnabled
 		}
 
 		if pass, ok := patch.Password.(string); ok {

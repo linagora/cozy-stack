@@ -1354,3 +1354,69 @@ msgstr "AI Assistant"
 
 msgid "Banners Quota Exceeded Text"
 msgstr "You have reached your storage limit."
+
+msgid "Tree Reports"
+msgstr "Reports"
+
+msgid "Mail Link Report Subject"
+msgstr "Link activity report"
+
+msgid "Mail Link Report Intro"
+msgstr "Here is the activity report for your expired public link."
+
+msgid "Mail Link Report Scope"
+msgstr "The CSV contains all retained link events up to expiration, including activity before reports were enabled."
+
+msgid "Mail Link Report Last Events"
+msgstr "Last three recorded events (UTC | IP | identity | action):"
+
+msgid "Mail Link Report No Activity"
+msgstr "No activity recorded."
+
+msgid "Mail Link Report Authentication"
+msgstr "Sign in to the hosting Twake instance to open the report."
+
+msgid "Mail Link Report Open"
+msgstr "Open CSV file"
+
+msgid "Mail Link Report Activity"
+msgstr "Activity"
+
+msgid "Mail Link Report Time"
+msgstr "Time (UTC)"
+
+msgid "Mail Link Report IP"
+msgstr "IP address"
+
+msgid "Mail Link Report User"
+msgstr "User"
+
+msgid "Mail Link Report Action"
+msgstr "Action"
+
+msgid "Mail Link Report Action Created"
+msgstr "Link created"
+
+msgid "Mail Link Report Action Updated"
+msgstr "Link edited"
+
+msgid "Mail Link Report Action Opened"
+msgstr "Opened"
+
+msgid "Mail Link Report Action Downloaded"
+msgstr "Downloaded"
+
+msgid "Mail Link Report Context Title"
+msgstr "Open file in Drive"
+
+msgid "Mail Link Report Context"
+msgstr "See link statistics in the file"
+
+msgid "Mail Link Report Expiry"
+msgstr "Expiration date: %s"
+
+msgid "Mail Link Report CTA Title"
+msgstr "Open link statistics file in Drive"
+
+msgid "Mail Link Report Automatic"
+msgstr "This is an automatic report from Drive because activity reporting is enabled for your public link."

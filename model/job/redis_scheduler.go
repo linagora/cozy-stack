@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,7 @@ type redisScheduler struct {
 	thumb   *ThumbnailTrigger
 	share   *ShareGroupTrigger
 	av      *AntivirusTrigger
+	reports *ExpiredLinksTrigger
 	closed  chan struct{}
 	stopped chan struct{}
 	log     *logger.Entry
@@ -105,6 +107,12 @@ func (s *redisScheduler) StartScheduler(b Broker) error {
 	go s.share.Schedule()
 	s.av = NewAntivirusTrigger(s.broker)
 	go s.av.Schedule()
+	s.reports = NewExpiredLinksTrigger(s.broker)
+	reportCtx, cancel := context.WithCancel(context.Background())
+	s.reports.cancel = cancel
+	if _, skip := os.LookupEnv("COZY_SKIP_LOADING_TRIGGERS"); !skip {
+		go s.reports.Schedule(reportCtx)
+	}
 	go s.pollLoop()
 	return nil
 }
@@ -260,6 +268,7 @@ func (s *redisScheduler) ShutdownScheduler(ctx context.Context) error {
 	s.thumb.Unschedule()
 	s.share.Unschedule()
 	s.av.Unschedule()
+	s.reports.cancel()
 	select {
 	case <-ctx.Done():
 		fmt.Println("failed: ", ctx.Err())

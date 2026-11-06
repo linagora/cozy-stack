@@ -965,7 +965,7 @@ func TestPermissions(t *testing.T) {
 			// Assert a cozyMetadata has been added
 		meta := obj.Path("$.data.attributes.cozyMetadata").Object()
 		meta.ValueEqual("createdByApp", "drive")
-		meta.ValueEqual("doctypeVersion", "1")
+		meta.ValueEqual("doctypeVersion", permission.DocTypeVersion)
 		meta.ValueEqual("metadataVersion", 1)
 		meta.Value("createdAt").String().AsDateTime(time.RFC3339).
 			InRange(time.Now().Add(-5*time.Second), time.Now().Add(5*time.Second))
@@ -1031,7 +1031,7 @@ func TestPermissions(t *testing.T) {
 		// Assert a cozyMetadata has been added
 		meta := obj.Path("$.data.attributes.cozyMetadata").Object()
 		meta.ValueEqual("createdByApp", "foobar")
-		meta.ValueEqual("doctypeVersion", "1")
+		meta.ValueEqual("doctypeVersion", permission.DocTypeVersion)
 		meta.ValueEqual("metadataVersion", 1)
 
 		// Clean

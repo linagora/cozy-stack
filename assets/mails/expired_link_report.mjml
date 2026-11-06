@@ -1,0 +1,28 @@
+{{define "action"}}{{if eq . "created"}}{{t "Mail Link Report Action Created"}}{{else if eq . "updated"}}{{t "Mail Link Report Action Updated"}}{{else if eq . "opened"}}{{t "Mail Link Report Action Opened"}}{{else if eq . "downloaded"}}{{t "Mail Link Report Action Downloaded"}}{{else}}{{.}}{{end}}{{end}}
+{{define "content"}}
+<mj-text mj-class="title-h2 content-small">{{t "Mail Link Report Subject"}}</mj-text>
+<mj-text mj-class="content-large">{{t "Mail Link Report Intro"}}</mj-text>
+<mj-table padding="0 24px 20px" font-size="12px" line-height="18px" color="#555" container-background-color="#fff">
+  <tr><td style="background:#f1f4f7;border-radius:10px;padding:18px;">
+    <table role="presentation" style="width:100%;table-layout:fixed;border-collapse:collapse;overflow-wrap:anywhere;word-break:break-word;">
+      <tr><th colspan="4" style="text-align:left;font-size:14px;padding-bottom:12px;">{{t "Mail Link Report Activity"}}</th></tr>
+      {{if .Events}}
+      <tr style="text-align:left;"><th style="width:25%;font-weight:normal;padding:0 4px 6px 0;">{{t "Mail Link Report Time"}}</th><th style="width:25%;font-weight:normal;padding:0 4px 6px 0;">{{t "Mail Link Report IP"}}</th><th style="width:25%;font-weight:normal;padding:0 4px 6px 0;">{{t "Mail Link Report User"}}</th><th style="width:25%;font-weight:normal;padding:0 0 6px;">{{t "Mail Link Report Action"}}</th></tr>
+      {{range .Events}}<tr style="border-top:1px solid #d8dde3;vertical-align:top;"><td style="padding:12px 4px 12px 0;">{{index . 0}}</td><td style="padding:12px 4px 12px 0;">{{index . 1}}</td><td style="padding:12px 4px 12px 0;">{{index . 2}}</td><td style="padding:12px 0;">{{template "action" (index . 3)}}</td></tr>{{end}}
+      {{else}}<tr><td colspan="4">{{t "Mail Link Report No Activity"}}</td></tr>{{end}}
+    </table>
+  </td></tr>
+</mj-table>
+<mj-table padding="0 24px 24px" font-size="12px" line-height="20px" color="#555">
+  <tr><td style="background:#f1f4f7;border-radius:10px;padding:18px;overflow-wrap:anywhere;word-break:break-word;">
+    <strong style="font-size:14px;">{{t "Mail Link Report Context Title"}}</strong><br /><br />
+    {{t "Mail Link Report Context"}}<br />
+    <a href="{{.ReportURL}}" style="color:#297ef2;">{{.ReportURL}}</a><br />
+    {{t "Mail Link Report Expiry" .Expiry}}
+  </td></tr>
+</mj-table>
+<mj-text mj-class="title-h2 content-medium">{{t "Mail Link Report CTA Title"}}</mj-text>
+<mj-button href="{{.ReportURL}}" align="center" mj-class="primary-button content-large">{{t "Mail Link Report Open"}}</mj-button>
+<mj-text align="center" mj-class="content-medium" font-size="12px">{{t "Mail Link Report Authentication"}}<br /><a href="{{.ReportURL}}" style="color:#297ef2;overflow-wrap:anywhere;word-break:break-all;">{{.ReportURL}}</a></mj-text>
+<mj-text mj-class="content-medium" font-size="11px">{{t "Mail Link Report Scope"}}<br /><br />{{t "Mail Link Report Automatic"}}</mj-text>
+{{end}}

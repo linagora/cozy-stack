@@ -410,6 +410,70 @@ Content-Type: application/vnd.api+json
 }
 ```
 
+### Expiration activity reports for public file links
+
+On `POST /permissions?codes=email` and `PATCH /permissions/:id`, the optional
+boolean `activity_report_enabled` enables an expiration report. It defaults to
+false; omitting it on PATCH preserves the current setting, while explicit false
+disables it. Null, strings and other non-booleans are rejected. Changing the
+setting requires permission to manage the link (including the shared-drive
+owner/member API); possession of its public sharecode is insufficient.
+A report-only PATCH does not change the password, expiry or file rules:
+
+```json
+{"data":{"type":"io.cozy.permissions","attributes":{"activity_report_enabled":true}}}
+```
+
+Only opted-in file links with a valid expired `expires_at` and a remaining
+public code are processed. A reconciliation runs at startup and every five
+minutes across all instances, including inactive instances and deadlines missed
+during downtime. Changing the expiry to a distinct instant creates a new report;
+equivalent timezone spellings do not. Revocation, disabling or changing the
+deadline cancels stale work.
+
+The recipient is the owner of the **instance hosting the permission**, even if a
+shared-drive recipient created the link. A CSV in the new
+`io.cozy.apps/reports` magic folder (initially `/Reports`) contains all retained
+events for this link through expiration, oldest first, including events before
+report activation. CSV escaping/columns match the interactive export. Collection
+is independently gated by `drive.public_link_events.enabled` (disabled by default);
+opting into a report does not enable collection. Without collection, the report
+still includes any retained events and is sent even if no events are available.
+Download events describe a prepared-download intent (possibly unused) or the
+start of a direct download, not proof of successful completion.
+The email contains the last three recorded events, with their IP and identity,
+and is also sent for an empty activity history. This preview contains personal
+data; no activity is not proof of no visits.
+
+The email uses the ordinary authenticated Drive file URL, with no public token
+or automatic login. The CSV is an ordinary file whose access follows the file
+permissions and sharing of its destination. Generation and delivery do not check
+whether the Reports folder (or its ancestors) is private: reports are generated
+and emailed even when that destination is shared publicly or by replication.
+The link owner is responsible for keeping `/Reports` private to protect the
+visitor IP addresses and identities it contains. Renaming/moving the magic
+folder is supported; a trashed folder is recreated by the magic-folder resolver.
+Moving, editing, trashing or deleting an already published report cancels its
+pending mail. Destination trash and link-validity checks still apply; they do
+not enforce confidentiality or prevent the owner from sharing a report.
+
+If the hosting instance has no email when processing first begins, the file is
+created but no mail is sent, including after an address is subsequently added.
+The private `io.cozy.public_links.reports` checkpoint survives instance moves and
+is inaccessible through the data API or realtime subscriptions. Jobs contain
+only the permission ID and canonical expiry, never sharecodes or event data.
+
+Failures retry through reconciliation at most eight times, with exponential
+backoff capped at six hours. Quota/export/upload failures never publish a partial
+report. SMTP-disabled mode is not considered a successful send. A published file
+is reused after a crash. Completion is recorded only after SMTP accepts the
+message; a crash after acceptance but before the checkpoint can still duplicate
+mail. A stable Message-ID helps mail systems deduplicate but is not an
+exactly-once guarantee.
+
+The Stack API and worker do not enable this automatically in Drive: the
+cozy-sharing/Drive settings UI must separately expose and persist the opt-in.
+
 ### GET /permissions/:id/statistics
 
 Download the retained events for one public file link as CSV. The permission ID
