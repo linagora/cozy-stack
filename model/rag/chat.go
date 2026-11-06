@@ -641,6 +641,18 @@ type ragMessage struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
+// MarshalJSON sends a result whose action is not in the conversation, like
+// an answer that was never saved, as a user message: a tool message must
+// answer a tool call, or the LLM refuses the conversation.
+func (m ragMessage) MarshalJSON() ([]byte, error) {
+	type plain ragMessage
+	if m.Role == ToolRole && m.ToolCallID == "" {
+		m.Role = UserRole
+		m.Content = "(Result of an action, given by the app, not written by the user:)\n\n" + m.Content
+	}
+	return json.Marshal(plain(m))
+}
+
 // ragMessages builds the messages sent to openRAG: the assistant's prompt as
 // a leading system message (openRAG pins it as a custom instruction), then
 // the conversation turns. The prompt is read on every query so an edit of the
@@ -883,7 +895,8 @@ func (q *chatQuery) answer(ctx context.Context) error {
 
 // answerWithTools answers the message, or proposes the action the LLM calls.
 // A call the stack cannot make an action of, unknown or with params that fail
-// their checks, is dropped: the message is answered without the tools.
+// their checks, is dropped: the message is answered without the tools, unless
+// the LLM wrote a text with its call, already published, which is the answer.
 func (q *chatQuery) answerWithTools(ctx context.Context, actions []ActionDefinition) error {
 	body, err := q.body(actions)
 	if err != nil {
@@ -899,6 +912,9 @@ func (q *chatQuery) answerWithTools(ctx context.Context, actions []ActionDefinit
 	action, err := actionFromCall(actions, answer.ToolCalls[0], userText(q.messages))
 	if err != nil {
 		q.logger.Warnf("chat tools: %s, answering the message instead", err)
+		if answer.Content != "" {
+			return q.finish(answer, nil)
+		}
 		return q.answer(ctx)
 	}
 	return q.finish(answer, action)
@@ -1208,7 +1224,7 @@ func addToolCallDeltas(calls []toolCall, raw interface{}) []toolCall {
 	for _, p := range parts {
 		part, _ := p.(map[string]interface{})
 		index := len(calls)
-		if i, ok := part["index"].(float64); ok {
+		if i, ok := part["index"].(float64); ok && i >= 0 {
 			index = int(i)
 		}
 		for len(calls) <= index {

@@ -664,7 +664,7 @@ flowchart TD
     CHECK -- ok --> ACT[sources event if any, then action event]
     CHECK -- no --> ANS
     ACT --> SAVE
-    SAVE[done event, then save the message<br>on a fresh read of the conversation]
+    SAVE[save the message on a fresh read of the conversation,<br>then the done event]
 ```
 
 Below, "openRAG" means `POST /v1/chat/completions` with the partition of the
@@ -691,7 +691,7 @@ searched.
 
 | Failure | Result |
 |---|---|
-| The LLM calls an unknown tool, with arguments that are not JSON, or with a required param empty or not written by the user | The message is answered again, without the tools |
+| The LLM calls an unknown tool, with arguments that are not JSON, or with a required param empty or not written by the user | The message is answered again, without the tools; when the LLM wrote a text with its call, already published, that text is the answer |
 | The conversation changed while the answer was made, like the outcome of an action written by the client | The answer is saved on a fresh read of the conversation, in 3 attempts at most |
 
 The answer made without the tools is a new query: the `reasoning` events of
@@ -815,8 +815,12 @@ arguments, and the result is a `tool` message with the `tool_call_id` of the
 call. Its content is the content of the result; `Done.` when it is empty, and
 `Error: ` and the content, or `Error: the app could not run the action.`, when
 `ok` is false. An action proposed before the ids of the calls were kept gets
-`call_` and the id of its message as the id of its call. The LLM then calls
-the next action the request of the user needs, or answers from the results.
+`call_` and the id of its message as the id of its call. A result whose
+action is not in the conversation, like an answer that was never saved, is a
+user message, `(Result of an action, given by the app, not written by the
+user:)` and the content: a `tool` message must answer a tool call. The LLM
+then calls the next action the request of the user needs, or answers from the
+results.
 After 5 results since the last message of the user, the tools are not given:
 the LLM answers.
 
