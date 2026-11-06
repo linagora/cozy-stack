@@ -1,8 +1,6 @@
 package rag
 
 import (
-	"time"
-
 	"github.com/cozy/cozy-stack/model/instance"
 )
 
@@ -40,12 +38,4 @@ func SetUpdateConversationForTest(fn func(inst *instance.Instance, chat *ChatCon
 	old := updateConversation
 	updateConversation = fn
 	return func() { updateConversation = old }
-}
-
-// SetRouterTimeoutForTest shortens the wait for the chat router; it returns
-// a function restoring the real one.
-func SetRouterTimeoutForTest(d time.Duration) func() {
-	old := routerTimeout
-	routerTimeout = d
-	return func() { routerTimeout = old }
 }
