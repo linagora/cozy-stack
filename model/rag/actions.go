@@ -342,11 +342,16 @@ func checkValue(prop ParamSchema, value, written string) string {
 // describeAction is how a proposed action appears in the history sent to the
 // LLM, so that a follow-up message ("change the title") has its context.
 func describeAction(action *ChatAction) string {
+	return fmt.Sprintf("(Proposed to the user: %s %s)", action.Name, encodeParams(action.Params))
+}
+
+// encodeParams is the JSON of the params, as the LLM reads them.
+func encodeParams(params map[string]interface{}) string {
 	var raw bytes.Buffer
 	encoder := json.NewEncoder(&raw)
 	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(action.Params)
-	return fmt.Sprintf("(Proposed to the user: %s %s)", action.Name, strings.TrimSpace(raw.String()))
+	_ = encoder.Encode(params)
+	return strings.TrimSpace(raw.String())
 }
 
 // decodeJSONObject decodes the JSON object of an LLM answer, which may be
@@ -470,11 +475,7 @@ func toolCallOf(msg ChatMessage) toolCall {
 		call.ID = "call_" + msg.ID
 	}
 	call.Function.Name = msg.Action.Name
-	var raw bytes.Buffer
-	encoder := json.NewEncoder(&raw)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(msg.Action.Params)
-	call.Function.Arguments = strings.TrimSpace(raw.String())
+	call.Function.Arguments = encodeParams(msg.Action.Params)
 	return call
 }
 
