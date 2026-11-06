@@ -17,6 +17,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/intent"
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/model/session"
 	csettings "github.com/cozy/cozy-stack/model/settings"
 	"github.com/cozy/cozy-stack/model/sharing"
@@ -30,6 +31,7 @@ import (
 	"github.com/cozy/cozy-stack/web/auth"
 	"github.com/cozy/cozy-stack/web/intents"
 	"github.com/cozy/cozy-stack/web/middlewares"
+	webpubliclink "github.com/cozy/cozy-stack/web/publiclink"
 	"github.com/cozy/cozy-stack/web/settings"
 	"github.com/cozy/cozy-stack/web/statik"
 	"github.com/labstack/echo/v4"
@@ -200,7 +202,7 @@ func allowExternalIntentServicesFrame(c echo.Context, i *instance.Instance) {
 // application that is not installed on the user's instance. However this
 // procedure should not be used for standard applications, use the Serve method
 // for that.
-func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, webapp *app.WebappManifest) error {
+func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, webapp *app.WebappManifest) (serveErr error) {
 	slug := webapp.Slug()
 	route, file := webapp.FindRoute(path.Clean(c.Request().URL.Path))
 	if route.NotFound() {
@@ -300,6 +302,7 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 
 	// For share by link, show the password page if it is password protected.
 	var og *openGraph
+	var publicLink *permission.Permission
 	code := c.QueryParam("sharecode")
 	token, err := middlewares.TransformShortcodeToJWT(i, code)
 	if err == nil {
@@ -312,8 +315,17 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 			if err == nil && pdoc.Password != nil && !middlewares.HasCookieForPassword(c, i, pdoc.ID()) {
 				return renderPasswordPage(c, i, pdoc.ID())
 			}
+			if err == nil {
+				publicLink = pdoc
+			}
 		}
 	}
+
+	defer func() {
+		if serveErr == nil && c.Request().Method == http.MethodGet && c.Response().Committed && c.Response().Status == http.StatusOK {
+			webpubliclink.Record(c, i, publicLink, publiclink.Opened)
+		}
+	}()
 
 	allowExternalIntentServicesFrame(c, i)
 

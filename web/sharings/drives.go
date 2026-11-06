@@ -18,6 +18,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -31,6 +32,7 @@ import (
 	"github.com/cozy/cozy-stack/web/notes"
 	"github.com/cozy/cozy-stack/web/office"
 	webperm "github.com/cozy/cozy-stack/web/permissions"
+	webpubliclink "github.com/cozy/cozy-stack/web/publiclink"
 	"github.com/cozy/cozy-stack/web/shortcuts"
 	"github.com/labstack/echo/v4"
 )
@@ -1587,6 +1589,8 @@ func PatchSharedDrivePermissionHandler(c echo.Context, inst *instance.Instance, 
 	if err := couchdb.UpdateDoc(inst, ctx.mutation.existingPerm); err != nil {
 		return err
 	}
+
+	webpubliclink.Record(c, inst, ctx.mutation.existingPerm, publiclink.Updated)
 
 	// Don't send the password hash to the client
 	if ctx.mutation.existingPerm.Password != nil {
