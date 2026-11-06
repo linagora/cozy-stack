@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -632,23 +631,14 @@ func buildLLMOverride(inst *instance.Instance, assistant *chatAssistant) map[str
 	return override
 }
 
-// ragMessage is one entry of the messages array sent to openRAG.
+// ragMessage is one entry of the messages array sent to openRAG, as in the
+// OpenAI API: an assistant message may carry the tool call of its action, and
+// a tool message answers one.
 type ragMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// MarshalJSON sends the result of an action as a user message: it is not the
-// answer to a tool call of the LLM, which openRAG and the LLM would refuse
-func (m ragMessage) MarshalJSON() ([]byte, error) {
-	role := m.Role
-	if role == ToolRole {
-		role = UserRole
-	}
-	return json.Marshal(struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}{role, m.Content})
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // ragMessages builds the messages sent to openRAG: the assistant's prompt as
@@ -658,6 +648,11 @@ func (m ragMessage) MarshalJSON() ([]byte, error) {
 // in the conversation are skipped, so the current prompt replaces them. A
 // question without an answer, stopped by the user or failed, is skipped too:
 // the LLM would answer it along with the next one.
+//
+// An action whose result the client gave is a tool call answered by a tool
+// message. An action without a result, confirmed or not by the user, is
+// described in the content of its message: a tool call must have its
+// answer.
 func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage {
 	messages := make([]ragMessage, 0, len(chat.Messages)+1)
 	if assistant != nil {
@@ -669,21 +664,32 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 	for len(turns) > 0 && turns[0].Role == SystemRole {
 		turns = turns[1:]
 	}
-	// The names of the actions proposed so far, for their results
-	actions := map[string]string{}
+	// The tool calls of the actions that got their result, by message id
+	calls := map[string]toolCall{}
+	for _, msg := range turns {
+		if msg.Result != nil {
+			for _, m := range turns {
+				if m.ID == msg.Result.MessageID && m.Action != nil {
+					calls[m.ID] = toolCallOf(m)
+				}
+			}
+		}
+	}
 	for i, msg := range turns {
 		if msg.Role == UserRole && i+1 < len(turns) && turns[i+1].Role == UserRole {
 			continue
 		}
-		content := msg.Content
-		if msg.Action != nil {
-			actions[msg.ID] = msg.Action.Name
-			content = strings.TrimSpace(describeAction(msg.Action) + "\n\n" + content)
+		out := ragMessage{Role: msg.Role, Content: msg.Content}
+		if call, ok := calls[msg.ID]; ok {
+			out.ToolCalls = []toolCall{call}
+		} else if msg.Action != nil {
+			out.Content = strings.TrimSpace(describeAction(msg.Action) + "\n\n" + msg.Content)
 		}
 		if msg.Result != nil {
-			content = describeResult(actions[msg.Result.MessageID], msg.Result.OK, content)
+			out.ToolCallID = calls[msg.Result.MessageID].ID
+			out.Content = resultContent(msg.Result.OK, msg.Content)
 		}
-		messages = append(messages, ragMessage{Role: msg.Role, Content: content})
+		messages = append(messages, out)
 	}
 	return messages
 }
@@ -710,7 +716,7 @@ func withInstructions(messages []ragMessage, instructions string) []ragMessage {
 // openRAG takes a request without a partition as its model as one for the LLM
 // itself: it gets the messages as they are, with no retrieval and no system
 // prompt of openRAG.
-func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]interface{}) map[string]interface{} {
+func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]interface{}, actions []ActionDefinition) map[string]interface{} {
 	payload := map[string]interface{}{
 		"messages":    messages,
 		"stream":      stream,
@@ -718,6 +724,7 @@ func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]in
 		"top_p":       TopP,
 		"logprobs":    LogProbs,
 	}
+	withTools(payload, actions)
 	kept := map[string]interface{}{}
 	if override, ok := metadata["llm_override"]; ok {
 		kept["llm_override"] = override
@@ -729,6 +736,27 @@ func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]in
 		payload["metadata"] = kept
 	}
 	return payload
+}
+
+// withTools gives the LLM the actions as its tools. The client runs one
+// action per message: of several calls, the first one is kept, and the LLM
+// asks the others again after its result. parallel_tool_calls is not sent:
+// some gateways refuse it.
+func withTools(payload map[string]interface{}, actions []ActionDefinition) {
+	if len(actions) == 0 {
+		return
+	}
+	payload["tools"] = tools(actions)
+	payload["tool_choice"] = "auto"
+}
+
+// toolsPrompt is the system message that goes with the tools: when to call
+// one, and how to fill its arguments.
+func toolsPrompt(fromDocuments bool, now time.Time) string {
+	return renderPrompt("tools.txt", map[string]interface{}{
+		"FromDocuments": fromDocuments,
+		"Today":         promptDate(now),
+	})
 }
 
 // chatQuery is a query of the assistant: the message it answers, what the
@@ -817,99 +845,59 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 	if len(query.Actions) == 0 || actionSteps(chat.Messages) >= maxActionSteps {
 		return q.answer(ctx)
 	}
-	return q.answerWithActions(ctx, query.Actions)
+	return q.answerWithTools(ctx, query.Actions)
 }
 
-// override is the LLM override of the assistant, for the calls to the LLM
-// alone.
-func (q *chatQuery) override() map[string]interface{} {
-	override, _ := q.metadata["llm_override"].(map[string]interface{})
-	return override
-}
-
-// answerBody is the body of the query for the answer to the message: from
-// the documents with openRAG, or, when the client asks for an answer without
-// them, from the LLM behind it.
-func (q *chatQuery) answerBody() ([]byte, error) {
+// body is the body of the query for the answer to the message: from the
+// documents with openRAG, or, when the client asks for an answer without
+// them, from the LLM behind it. With actions, the LLM gets them as its
+// tools, and the rules of their use as a last leading system message.
+func (q *chatQuery) body(actions []ActionDefinition) ([]byte, error) {
+	messages := q.messages
+	if len(actions) > 0 {
+		messages = withInstructions(messages, toolsPrompt(!q.direct, q.now))
+	}
 	if q.direct {
-		return json.Marshal(directLLMPayload(q.messages, q.stream, q.metadata))
+		return json.Marshal(directLLMPayload(messages, q.stream, q.metadata, actions))
 	}
-	return ragRequest(q.inst, q.messages, q.stream, q.metadata)
+	return ragRequest(q.inst, messages, q.stream, q.metadata, actions)
 }
 
+// answer asks openRAG for the answer to the message, published as it comes,
+// and saves it.
 func (q *chatQuery) answer(ctx context.Context) error {
-	body, err := q.answerBody()
+	body, err := q.body(nil)
 	if err != nil {
 		return q.fail(err)
 	}
-	return q.giveAnswer(ctx, body)
-}
-
-// giveAnswer asks openRAG for the answer to the message, published as it
-// comes, and saves it.
-func (q *chatQuery) giveAnswer(ctx context.Context, body []byte) error {
-	answer, err := q.askRAG(ctx, body, nil)
+	answer, err := q.askRAG(ctx, body)
 	if err != nil {
 		return q.fail(err)
 	}
 	return q.finish(answer, nil)
 }
 
-// answerWithActions answers the message or proposes an action. The router
-// and the answer start together; the answer is held back until the router
-// decides, and cancelled when an action replaces it, which stops openRAG.
-func (q *chatQuery) answerWithActions(ctx context.Context, actions []ActionDefinition) error {
-	body, err := q.answerBody()
+// answerWithTools answers the message, or proposes the action the LLM calls.
+// A call the stack cannot make an action of, unknown or with params that fail
+// their checks, is dropped: the message is answered without the tools.
+func (q *chatQuery) answerWithTools(ctx context.Context, actions []ActionDefinition) error {
+	body, err := q.body(actions)
 	if err != nil {
 		return q.fail(err)
 	}
-	ragCtx, cancelRAG := context.WithCancel(ctx)
-	defer cancelRAG()
-	var action string
-	decided := make(chan struct{})
-	go func() {
-		defer close(decided)
-		defer func() {
-			// Not recovered by the job, which only covers its own goroutine
-			if r := recover(); r != nil {
-				q.logger.Errorf("chat router: %v\n%s", r, debug.Stack())
-				action = ""
-			}
-		}()
-		action = q.decide(ctx, actions)
-		if action != "" {
-			cancelRAG()
-		}
-	}()
-	decision := func() string {
-		<-decided
-		return action
-	}
-	answerAllowed := func() bool { return decision() == "" }
-
-	answer, err := q.askRAG(ragCtx, body, answerAllowed)
-	if def := actionFor(actions, decision()); def != nil {
-		return q.proposeAction(ctx, def, body)
-	}
+	answer, err := q.askRAG(ctx, body)
 	if err != nil {
 		return q.fail(err)
 	}
-	return q.finish(answer, nil)
-}
-
-// proposeAction proposes an action with its params filled, and the sources
-// of the documents they were filled with. When they cannot be, the message
-// is answered instead.
-func (q *chatQuery) proposeAction(ctx context.Context, def *ActionDefinition, body []byte) error {
-	action, sources, err := q.fillAction(ctx, def)
-	if err == nil {
-		if sources != nil {
-			publishSources(q.inst, q.msg.ID, sources)
-		}
-		return q.finish(ragAnswer{Sources: sources}, action)
+	if len(answer.ToolCalls) == 0 {
+		return q.finish(answer, nil)
 	}
-	q.logger.Warnf("chat router: cannot prepare %s, answering the message instead: %s", def.Name, err)
-	return q.giveAnswer(ctx, body)
+	action, err := actionFromCall(actions, answer.ToolCalls[0], userText(q.messages))
+	if err != nil {
+		q.logger.Warnf("chat tools: %s, answering the message instead", err)
+		return q.answer(ctx)
+	}
+	return q.finish(answer, action)
 }
 
 // finish ends the query: the action proposed, if any, is published before
@@ -946,7 +934,7 @@ func (q *chatQuery) fail(err error) error {
 
 // ragRequest is the body of a query to openRAG for an answer from the
 // documents.
-func ragRequest(inst *instance.Instance, messages []ragMessage, stream bool, metadata map[string]interface{}) ([]byte, error) {
+func ragRequest(inst *instance.Instance, messages []ragMessage, stream bool, metadata map[string]interface{}, actions []ActionDefinition) ([]byte, error) {
 	payload := map[string]interface{}{
 		"model":       fmt.Sprintf("ragondin-%s", inst.Domain),
 		"messages":    messages,
@@ -956,21 +944,21 @@ func ragRequest(inst *instance.Instance, messages []ragMessage, stream bool, met
 		"top_p":       TopP,
 		"logprobs":    LogProbs,
 	}
+	withTools(payload, actions)
 	return json.Marshal(payload)
 }
 
 // ragAnswer is the answer of openRAG to a query: its content, the reasoning
-// of the LLM and its sources.
+// of the LLM, its sources, and the tools it calls instead of answering.
 type ragAnswer struct {
 	Content   string
 	Reasoning string
 	Sources   []Source
+	ToolCalls []toolCall
 }
 
 // askRAG asks openRAG for an answer, published on the realtime as it comes.
-// allowed, when set, is called before the first event is published: when it
-// returns false, nothing is published.
-func (q *chatQuery) askRAG(ctx context.Context, body []byte, allowed func() bool) (ragAnswer, error) {
+func (q *chatQuery) askRAG(ctx context.Context, body []byte) (ragAnswer, error) {
 	res, err := q.postCompletion(ctx, body)
 	if err != nil {
 		return ragAnswer{}, err
@@ -979,11 +967,10 @@ func (q *chatQuery) askRAG(ctx context.Context, body []byte, allowed func() bool
 	if res.StatusCode != 200 {
 		return ragAnswer{}, fmt.Errorf("POST status code: %d", res.StatusCode)
 	}
-	gate := &publishGate{allowed: allowed}
 	if q.stream {
-		return handleStreamResponse(q.inst, q.msg, res.Body, gate)
+		return handleStreamResponse(q.inst, q.msg, res.Body)
 	}
-	return handleNonStreamResponse(q.inst, q.msg, res.Body, gate)
+	return handleNonStreamResponse(q.inst, q.msg, res.Body)
 }
 
 // postCompletion asks openRAG for a completion. An instance that has never
@@ -1134,30 +1121,15 @@ func publishDone(inst *instance.Instance, msgID string) {
 	realtime.GetHub().Publish(inst, realtime.EventCreate, &doc, nil)
 }
 
-// publishGate tells whether the events of an answer can be published:
-// allowed, when set, is asked once, before the first event.
-type publishGate struct {
-	allowed func() bool
-	asked   bool
-	publish bool
-}
-
-func (g *publishGate) canPublish() bool {
-	if !g.asked {
-		g.asked = true
-		g.publish = g.allowed == nil || g.allowed()
-	}
-	return g.publish
-}
-
-// handleStreamResponse publishes the answer streamed by openRAG, when the
-// gate allows it, and returns it with its sources. The `done` event is left
-// to the caller, which may send an action before it.
-func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader, gate *publishGate) (ragAnswer, error) {
+// handleStreamResponse publishes the answer streamed by openRAG, and returns
+// it with its sources and the tool calls of the LLM. The `done` event is
+// left to the caller, which may send an action before it.
+func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (ragAnswer, error) {
 	position := 0
 	reasoningPosition := 0
 	var completion, reasoning string
 	var sources []Source
+	var calls []toolCall
 	var sseErr error
 
 	// Realtime messages are sent to the client during the response stream
@@ -1176,31 +1148,25 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 
 			if reason, ok := choice["finish_reason"].(string); ok && reason != "" {
 				// openRAG may give the sources with the last chunk only
-				if last, err := getSources(event); sources == nil && completion != "" && err == nil && last != nil {
+				if last, err := getSources(event); sources == nil && (completion != "" || len(calls) > 0) && err == nil && last != nil {
 					sources = last
-					if gate.canPublish() {
-						publishSources(inst, msg.ID, sources)
-					}
+					publishSources(inst, msg.ID, sources)
 				}
 				return
 			} else if delta, ok := choice["delta"].(map[string]interface{}); ok {
 				if chunk, _ := delta["reasoning_content"].(string); chunk != "" {
-					if gate.canPublish() {
-						publishDelta(inst, msg.ID, "reasoning", chunk, reasoningPosition)
-					}
+					publishDelta(inst, msg.ID, "reasoning", chunk, reasoningPosition)
 					reasoning += chunk
 					reasoningPosition++
 				}
+				calls = addToolCallDeltas(calls, delta["tool_calls"])
 				// The content is progressively received through a delta stream.
-				// A stream opens with an empty delta: nothing to publish, and
-				// the gate is only asked for the first token.
+				// A stream opens with an empty delta: nothing to publish.
 				content, ok := delta["content"].(string)
 				if !ok || content == "" {
 					return
 				}
-				if gate.canPublish() {
-					publishDelta(inst, msg.ID, "delta", content, position)
-				}
+				publishDelta(inst, msg.ID, "delta", content, position)
 				completion += content
 				position++
 
@@ -1210,7 +1176,7 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 					if sseErr != nil {
 						return
 					}
-					if sources != nil && gate.canPublish() {
+					if sources != nil {
 						publishSources(inst, msg.ID, sources)
 					}
 				}
@@ -1224,26 +1190,62 @@ func handleStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Read
 	if sseErr != nil {
 		return ragAnswer{}, sseErr
 	}
-	return ragAnswer{Content: completion, Reasoning: reasoning, Sources: sources}, nil
+	return ragAnswer{Content: completion, Reasoning: reasoning, Sources: sources, ToolCalls: calls}, nil
+}
+
+// addToolCallDeltas adds the tool_calls of a delta to the calls, as the
+// OpenAI API streams them: each has the index of its call, its id, name and
+// type in its first part, and a piece of its arguments.
+func addToolCallDeltas(calls []toolCall, raw interface{}) []toolCall {
+	parts, _ := raw.([]interface{})
+	for _, p := range parts {
+		part, _ := p.(map[string]interface{})
+		index := len(calls)
+		if i, ok := part["index"].(float64); ok {
+			index = int(i)
+		}
+		for len(calls) <= index {
+			calls = append(calls, toolCall{})
+		}
+		call := &calls[index]
+		if id, _ := part["id"].(string); id != "" {
+			call.ID = id
+		}
+		if kind, _ := part["type"].(string); kind != "" {
+			call.Type = kind
+		}
+		if fn, ok := part["function"].(map[string]interface{}); ok {
+			if name, _ := fn["name"].(string); name != "" && call.Function.Name == "" {
+				call.Function.Name = name
+			}
+			args, _ := fn["arguments"].(string)
+			call.Function.Arguments += args
+		}
+	}
+	return calls
 }
 
 // handleNonStreamResponse is handleStreamResponse for an answer that openRAG
 // sends in one piece.
-func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader, gate *publishGate) (ragAnswer, error) {
+func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.Reader) (ragAnswer, error) {
 	var event map[string]interface{}
 	if err := json.NewDecoder(body).Decode(&event); err != nil {
 		return ragAnswer{}, err
 	}
 
 	var completion string
+	var calls []toolCall
 	if choices, ok := event["choices"].([]interface{}); ok && len(choices) > 0 {
 		if choice, ok := choices[0].(map[string]interface{}); ok {
 			if message, ok := choice["message"].(map[string]interface{}); ok {
 				completion, _ = message["content"].(string)
+				if raw, err := json.Marshal(message["tool_calls"]); err == nil {
+					_ = json.Unmarshal(raw, &calls)
+				}
 			}
 		}
 	}
-	if completion == "" {
+	if completion == "" && len(calls) == 0 {
 		return ragAnswer{}, errors.New("invalid RAG response: no completion content")
 	}
 
@@ -1252,13 +1254,13 @@ func handleNonStreamResponse(inst *instance.Instance, msg ChatMessage, body io.R
 		return ragAnswer{}, err
 	}
 
-	if gate.canPublish() {
+	if completion != "" {
 		publishDelta(inst, msg.ID, "delta", completion, 0)
-		if sources != nil {
-			publishSources(inst, msg.ID, sources)
-		}
 	}
-	return ragAnswer{Content: completion, Sources: sources}, nil
+	if sources != nil {
+		publishSources(inst, msg.ID, sources)
+	}
+	return ragAnswer{Content: completion, Sources: sources, ToolCalls: calls}, nil
 }
 
 // ragHTTPClient is the HTTP client used for the openRAG calls. It has no
