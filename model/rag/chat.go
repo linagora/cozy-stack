@@ -665,13 +665,17 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 		turns = turns[1:]
 	}
 	// The tool calls of the actions that got their result, by message id
+	actions := map[string]ChatMessage{}
+	for _, m := range turns {
+		if m.Action != nil {
+			actions[m.ID] = m
+		}
+	}
 	calls := map[string]toolCall{}
 	for _, msg := range turns {
 		if msg.Result != nil {
-			for _, m := range turns {
-				if m.ID == msg.Result.MessageID && m.Action != nil {
-					calls[m.ID] = toolCallOf(m)
-				}
+			if m, ok := actions[msg.Result.MessageID]; ok {
+				calls[m.ID] = toolCallOf(m)
 			}
 		}
 	}
