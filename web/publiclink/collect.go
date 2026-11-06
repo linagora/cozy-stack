@@ -43,6 +43,11 @@ func Record(c echo.Context, inst *instance.Instance, perm *permission.Permission
 		event.Identity = inst.Domain
 	}
 	if err := couchdb.CreateDoc(inst, event); err != nil {
-		inst.Logger().WithNamespace("publiclink").Error("Could not store public link event")
+		log := inst.Logger().WithNamespace("publiclink")
+		if couchErr, ok := couchdb.IsCouchError(err); ok {
+			log.Errorf("Could not store public link event: CouchDB status %d", couchErr.StatusCode)
+		} else {
+			log.Error("Could not store public link event: unexpected storage error")
+		}
 	}
 }
