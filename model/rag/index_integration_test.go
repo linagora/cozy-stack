@@ -37,6 +37,8 @@ type ragTest struct {
 	// reconciles records the reconcile jobs the worker pushed: the no-op
 	// test worker runs a pushed job at once, so the queue cannot be read.
 	reconciles []string
+	// chatID is the conversation of the chat tests
+	chatID string
 }
 
 func newRAGTest(t *testing.T) *ragTest {
