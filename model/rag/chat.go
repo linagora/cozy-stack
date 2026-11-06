@@ -432,6 +432,22 @@ func awaitsResult(messages []ChatMessage, msgID string) bool {
 	return proposed
 }
 
+// maxActionSteps bounds the actions run in a row for a message of the user,
+// so that the LLM cannot propose actions without end.
+const maxActionSteps = 5
+
+// actionSteps counts the results of the actions given since the last message
+// of the user.
+func actionSteps(messages []ChatMessage) int {
+	steps := 0
+	for i := len(messages) - 1; i >= 0 && messages[i].Role != UserRole; i-- {
+		if messages[i].Role == ToolRole {
+			steps++
+		}
+	}
+	return steps
+}
+
 // decodeExtra returns the extra payload of an openRAG response. It is a JSON
 // object, or a JSON-encoded string for openRAG <= v2.2.0 (legacy).
 func decodeExtra(raw interface{}) (map[string]interface{}, error) {
@@ -622,6 +638,19 @@ type ragMessage struct {
 	Content string `json:"content"`
 }
 
+// MarshalJSON sends the result of an action as a user message: it is not the
+// answer to a tool call of the LLM, which openRAG and the LLM would refuse
+func (m ragMessage) MarshalJSON() ([]byte, error) {
+	role := m.Role
+	if role == ToolRole {
+		role = UserRole
+	}
+	return json.Marshal(struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}{role, m.Content})
+}
+
 // ragMessages builds the messages sent to openRAG: the assistant's prompt as
 // a leading system message (openRAG pins it as a custom instruction), then
 // the conversation turns. The prompt is read on every query so an edit of the
@@ -640,13 +669,19 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 	for len(turns) > 0 && turns[0].Role == SystemRole {
 		turns = turns[1:]
 	}
+	// The names of the actions proposed so far, for their results
+	actions := map[string]string{}
 	for i, msg := range turns {
 		if msg.Role == UserRole && i+1 < len(turns) && turns[i+1].Role == UserRole {
 			continue
 		}
 		content := msg.Content
 		if msg.Action != nil {
+			actions[msg.ID] = msg.Action.Name
 			content = strings.TrimSpace(describeAction(msg.Action) + "\n\n" + content)
+		}
+		if msg.Result != nil {
+			content = describeResult(actions[msg.Result.MessageID], msg.Result.OK, content)
 		}
 		messages = append(messages, ragMessage{Role: msg.Role, Content: content})
 	}
@@ -778,7 +813,8 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 		now:            time.Now().UTC(),
 		watcher:        watcher,
 	}
-	if len(query.Actions) == 0 {
+	// After the last step, the LLM answers from the results it has
+	if len(query.Actions) == 0 || actionSteps(chat.Messages) >= maxActionSteps {
 		return q.answer(ctx)
 	}
 	return q.answerWithActions(ctx, query.Actions)
