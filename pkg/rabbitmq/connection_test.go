@@ -30,6 +30,21 @@ func TestRabbitMQConnection_Connect_InvalidURL(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to connect after 3 attempts")
 }
 
+func TestRabbitMQConnection_Connect_ErrorShowsHostOnly(t *testing.T) {
+	cm := NewRabbitMQConnection("amqp://cozy:abc123@127.0.0.1:1/vhost")
+
+	_, err := cm.Connect(context.Background(), 1)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "127.0.0.1:1")
+	assert.NotContains(t, err.Error(), "cozy")
+	assert.NotContains(t, err.Error(), "abc123")
+
+	cm = NewRabbitMQConnection("cozy:abc123@127.0.0.1:1")
+	_, err = cm.Connect(context.Background(), 1)
+	assert.Error(t, err)
+	assert.NotContains(t, err.Error(), "abc123")
+}
+
 func TestRabbitMQConnection_Connect_ContextCancelled(t *testing.T) {
 	cm := NewRabbitMQConnection("amqp://test:test@localhost:5672/")
 	ctx, cancel := context.WithCancel(context.Background())

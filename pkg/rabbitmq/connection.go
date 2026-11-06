@@ -81,7 +81,15 @@ func (cm *RabbitMQConnection) Connect(ctx context.Context, maxRetries int) (*amq
 		return cm.conn, nil
 	}
 
-	return nil, fmt.Errorf("failed to connect after %d attempts with urls: %s", maxRetries, cm.url)
+	return nil, fmt.Errorf("failed to connect after %d attempts with urls: %s", maxRetries, connectTarget(cm.url))
+}
+
+func connectTarget(u string) string {
+	parsed, err := neturl.Parse(u)
+	if err != nil || parsed.Host == "" {
+		return "(invalid url)"
+	}
+	return parsed.Host
 }
 
 func (cm *RabbitMQConnection) MonitorConnection() <-chan *amqp.Error {
