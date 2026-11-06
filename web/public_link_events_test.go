@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/model/stack"
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -35,6 +36,8 @@ func TestPublicLinkEvents(t *testing.T) {
 	testutils.NeedCouchdb(t)
 	setup := testutils.NewSetup(t, t.Name())
 	inst := setup.GetTestInstance()
+	inst.FeatureFlags = map[string]interface{}{publiclink.FlagEnabled: true}
+	require.NoError(t, instance.Update(inst))
 	_, ownerToken := setup.GetTestClient(consts.Files)
 	require.NoError(t, couchdb.CreateDB(inst, consts.PublicLinkEvents))
 	done := make(chan struct{}, 100)

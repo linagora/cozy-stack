@@ -192,6 +192,8 @@ func TestApps(t *testing.T) {
 			return code
 		}
 
+		testInstance.FeatureFlags = map[string]interface{}{publiclink.FlagEnabled: true}
+		require.NoError(t, instance.Update(testInstance))
 		require.NoError(t, couchdb.CreateDB(testInstance, consts.PublicLinkEvents))
 		code := createShareCode("public", nil)
 		t.Run("VisitorIPThroughProxy", func(t *testing.T) {

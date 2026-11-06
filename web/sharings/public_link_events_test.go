@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/model/sharing"
@@ -18,6 +19,8 @@ import (
 
 func TestSharedDrivePublicLinkEvents(t *testing.T) {
 	f := setupSharedDrivePermissionFixture(t)
+	f.env.acme.FeatureFlags = map[string]interface{}{publiclink.FlagEnabled: true}
+	require.NoError(t, instance.Update(f.env.acme))
 	eBetty, token := f.newBettyClient(t)
 	// The fixture's owner URL is not an instance domain: exercise the real
 	// HTTP reverse proxy, not the in-process same-stack shortcut.

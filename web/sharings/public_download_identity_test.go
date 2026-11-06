@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/model/session"
@@ -22,6 +23,8 @@ import (
 
 func TestSharedDrivePublicDownloadVisitorIdentity(t *testing.T) {
 	f := setupSharedDrivePermissionFixture(t)
+	f.env.acme.FeatureFlags = map[string]interface{}{publiclink.FlagEnabled: true}
+	require.NoError(t, instance.Update(f.env.acme))
 	require.NoError(t, couchdb.CreateDB(f.env.acme, consts.PublicLinkEvents))
 	require.NoError(t, couchdb.CreateDB(f.env.betty, consts.PublicLinkEvents))
 	folderID := createDirectory(t, f.eOwner, f.productID, "archive-identity", f.ownerAppToken)

@@ -8,6 +8,9 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 )
 
+// FlagEnabled enables collection of public-link events for an instance or context.
+const FlagEnabled = "drive.public_link_events.enabled"
+
 // Action identifies an action on the link itself, not on an individual item.
 type Action string
 
