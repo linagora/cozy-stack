@@ -3422,16 +3422,9 @@ func TestSharedDriveDeletedRecipientAddedGroup(t *testing.T) {
 		betty := findSharingMemberByEmail(t, env.acme, sharingID, "betty@example.net")
 		require.NotEqual(t, sharing.MemberStatusRevoked, betty.Status)
 
-		// Replaying the deletion event is a no-op.
-		require.NoError(t, sharing.UpdateGroups(env.betty, job.ShareGroupMessage{
-			DeletedGroupID: group.ID(),
-		}))
-		ownerSharing, err = sharing.FindSharing(env.acme, sharingID)
-		require.NoError(t, err)
-		assert.True(t, ownerSharing.Groups[groupIndex].Revoked)
-		assert.Equal(t, sharing.MemberStatusRevoked, carol.Status)
-
-		// The revocation is propagated to Betty's copy of the sharing.
+		// The share-group worker marks the group revoked on Betty's copy of the
+		// sharing once the owner has answered. Wait for it: a replay overlapping
+		// the worker would write the same revision of the sharing and conflict.
 		require.Eventually(t, func() bool {
 			recipientSharing, err := sharing.FindSharing(env.betty, sharingID)
 			if err != nil {
@@ -3442,6 +3435,15 @@ func TestSharedDriveDeletedRecipientAddedGroup(t *testing.T) {
 			}
 			return recipientSharing.Groups[groupIndex].Revoked
 		}, 10*time.Second, 100*time.Millisecond, "revocation should be propagated to Betty")
+
+		// Replaying the deletion event is a no-op.
+		require.NoError(t, sharing.UpdateGroups(env.betty, job.ShareGroupMessage{
+			DeletedGroupID: group.ID(),
+		}))
+		ownerSharing, err = sharing.FindSharing(env.acme, sharingID)
+		require.NoError(t, err)
+		assert.True(t, ownerSharing.Groups[groupIndex].Revoked)
+		assert.Equal(t, sharing.MemberStatusRevoked, carol.Status)
 	})
 
 	t.Run("GroupAddedByAnotherRecipientCanBeRevoked", func(t *testing.T) {
