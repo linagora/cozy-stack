@@ -8,10 +8,13 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/recents"
+	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/realtime"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
@@ -132,42 +135,202 @@ func TestRealtime(t *testing.T) {
 		obj.Value("payload").Object().ValueEqual("id", "control")
 	})
 
-	t.Run("WSForbiddenForRecents", func(t *testing.T) {
-		e := testutils.CreateTestClient(t, ts.URL)
-		_, recentsToken := setup.GetTestClient("io.cozy.files.recents io.cozy.foos")
+	recentsAppToken := func(t *testing.T, slug string, set permission.Set) string {
+		_, err := permission.CreateWebappSet(inst, slug, set, "1.0.0")
+		require.NoError(t, err)
+		tok, err := inst.MakeJWT(consts.AppAudience, slug, "", "", time.Now())
+		require.NoError(t, err)
+		return tok
+	}
 
+	t.Run("WSRecentsWithPermission", func(t *testing.T) {
+		tok := recentsAppToken(t, "recents-reader", permission.Set{
+			{Type: consts.FilesRecents, Verbs: permission.Verbs(permission.GET)},
+		})
+		e := testutils.CreateTestClient(t, ts.URL)
 		ws := e.GET("/realtime/").
 			WithWebsocketUpgrade().
 			Expect().Status(http.StatusSwitchingProtocols).
 			Websocket()
 		defer ws.Disconnect()
+		ws.WithReadTimeout(5 * time.Second)
 
-		ws.WriteText(fmt.Sprintf(`{"method": "AUTH", "payload": "%s"}`, recentsToken))
-
-		ws.WriteText(`{"method": "SUBSCRIBE", "payload": { "type": "io.cozy.foos" }}`)
+		ws.WriteText(fmt.Sprintf(`{"method": "AUTH", "payload": "%s"}`, tok))
 		ws.WriteText(`{"method": "SUBSCRIBE", "payload": { "type": "io.cozy.files.recents" }}`)
 		time.Sleep(30 * time.Millisecond)
 
-		h := realtime.GetHub()
-		h.Publish(inst, realtime.EventCreate, &testDoc{
-			doctype: "io.cozy.files.recents",
-			id:      "recents-one",
-		}, nil)
-		h.Publish(inst, realtime.EventCreate, &testDoc{
-			doctype: "io.cozy.foos",
-			id:      "foo-three",
-		}, nil)
+		row := &recents.FileDirActivity{
+			DocID:          "recents-row",
+			LastActivityAt: "2026-11-06T10:00:00Z",
+			Name:           "report.odt",
+			Type:           "file",
+			UpdatedAt:      "2026-11-06T10:00:00Z",
+			DirID:          "dir-id",
+			Path:           "/report.odt",
+			SchemaVersion:  recents.SchemaVersion,
+		}
+		require.NoError(t, couchdb.CreateNamedDoc(inst, row))
 
 		obj := ws.Expect().TextMessage().JSON().Object()
-		obj.ValueEqual("event", "error")
+		obj.ValueEqual("event", "CREATED")
 		payload := obj.Value("payload").Object()
-		payload.ValueEqual("status", "403 Forbidden")
-		payload.ValueEqual("code", "forbidden")
-		payload.ValueEqual("title", "The application can't subscribe to io.cozy.files.recents")
+		payload.ValueEqual("type", consts.FilesRecents)
+		payload.ValueEqual("id", "recents-row")
+		payload.Value("doc").Object().ValueEqual("name", "report.odt")
+
+		// The event of another instance must not reach this subscription: the
+		// next message is the update of the row of this instance.
+		other := prefixer.NewPrefixer(0, "other.example.net", "other-prefix")
+		realtime.GetHub().Publish(other, realtime.EventUpdate, &testDoc{
+			doctype: consts.FilesRecents,
+			id:      "other-instance-row",
+		}, nil)
+
+		row.Name = "renamed.odt"
+		require.NoError(t, couchdb.UpdateDoc(inst, row))
 
 		obj = ws.Expect().TextMessage().JSON().Object()
-		obj.ValueEqual("event", "CREATED")
-		obj.Value("payload").Object().ValueEqual("id", "foo-three")
+		obj.ValueEqual("event", "UPDATED")
+		payload = obj.Value("payload").Object()
+		payload.ValueEqual("type", consts.FilesRecents)
+		payload.ValueEqual("id", "recents-row")
+		payload.Value("doc").Object().ValueEqual("name", "renamed.odt")
+	})
+
+	t.Run("WSRecentsWithoutPermission", func(t *testing.T) {
+		foos := permission.Rule{Type: "io.cozy.foos", Verbs: permission.Verbs(permission.GET)}
+		cases := []struct {
+			name string
+			set  permission.Set
+		}{
+			{"OtherDoctype", permission.Set{foos}},
+			{"WholeFiles", permission.Set{foos, {Type: consts.Files, Verbs: permission.ALL}}},
+			{"NoRead", permission.Set{foos, {Type: consts.FilesRecents, Verbs: permission.Verbs(permission.POST)}}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				tok := recentsAppToken(t, "recents-denied-"+strings.ToLower(tc.name), tc.set)
+				e := testutils.CreateTestClient(t, ts.URL)
+				ws := e.GET("/realtime/").
+					WithWebsocketUpgrade().
+					Expect().Status(http.StatusSwitchingProtocols).
+					Websocket()
+				defer ws.Disconnect()
+				ws.WithReadTimeout(5 * time.Second)
+
+				ws.WriteText(fmt.Sprintf(`{"method": "AUTH", "payload": "%s"}`, tok))
+				ws.WriteText(`{"method": "SUBSCRIBE", "payload": { "type": "io.cozy.foos" }}`)
+				for _, id := range []string{"", `, "id": "recents-row"`} {
+					obj := ws.WriteText(fmt.Sprintf(`{"method": "SUBSCRIBE", "payload": { "type": "io.cozy.files.recents"%s }}`, id)).
+						Expect().TextMessage().JSON().Object()
+					obj.ValueEqual("event", "error")
+					payload := obj.Value("payload").Object()
+					payload.ValueEqual("status", "403 Forbidden")
+					payload.ValueEqual("title", "The application can't subscribe to io.cozy.files.recents")
+				}
+
+				h := realtime.GetHub()
+				h.Publish(inst, realtime.EventUpdate, &testDoc{doctype: consts.FilesRecents, id: "recents-row"}, nil)
+				h.Publish(inst, realtime.EventCreate, &testDoc{doctype: "io.cozy.foos", id: "control"}, nil)
+				obj := ws.Expect().TextMessage().JSON().Object()
+				obj.ValueEqual("event", "CREATED")
+				obj.Value("payload").Object().ValueEqual("id", "control")
+			})
+		}
+	})
+
+	t.Run("WSRecentsWithShareCode", func(t *testing.T) {
+		shared, err := vfs.Mkdir(inst.VFS(), "/recents-shared", nil)
+		require.NoError(t, err)
+		s := &sharing.Sharing{
+			Active: true,
+			Owner:  true,
+			Rules: []sharing.Rule{
+				{Title: "recents-shared", DocType: consts.Files, Values: []string{shared.ID()}},
+			},
+			Members: []sharing.Member{
+				{Status: sharing.MemberStatusOwner, Email: "owner@example.net"},
+				{Status: sharing.MemberStatusReady, Email: "bob@example.net"},
+			},
+		}
+		require.NoError(t, couchdb.CreateDoc(inst, s))
+
+		preview, err := s.CreatePreviewPermissions(inst)
+		require.NoError(t, err)
+		interact, err := s.GetInteractCode(inst, &s.Members[1], 1)
+		require.NoError(t, err)
+		linkApp := &couchdb.JSONDoc{Type: consts.Apps, M: map[string]interface{}{"slug": "recents-link-app"}}
+		linkApp.SetID(consts.Apps + "/recents-link-app")
+		require.NoError(t, couchdb.CreateNamedDoc(inst, linkApp))
+		parent := &permission.Permission{
+			Type:     permission.TypeWebapp,
+			SourceID: consts.Apps + "/recents-link-app",
+			Permissions: permission.Set{
+				{Type: consts.Files, Verbs: permission.ALL},
+			},
+		}
+		link, err := inst.CreateShareCode("recents-link", "recents-link-perm")
+		require.NoError(t, err)
+		_, err = permission.CreateShareSet(inst, parent, parent.SourceID, map[string]string{"link": link}, nil, permission.Permission{
+			PID: "recents-link-perm",
+			Permissions: permission.Set{
+				{Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: []string{shared.ID()}},
+			},
+		}, nil, false)
+		require.NoError(t, err)
+
+		cases := []struct {
+			name string
+			code string
+		}{
+			{"SharePreview", preview.Codes["bob@example.net"]},
+			{"ShareInteract", interact},
+			{"ShareByLink", link},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				require.NotEmpty(t, tc.code)
+				e := testutils.CreateTestClient(t, ts.URL)
+				ws := e.GET("/realtime/").
+					WithWebsocketUpgrade().
+					Expect().Status(http.StatusSwitchingProtocols).
+					Websocket()
+				defer ws.Disconnect()
+				ws.WithReadTimeout(5 * time.Second)
+
+				ws.WriteText(fmt.Sprintf(`{"method": "AUTH", "payload": "%s"}`, tc.code))
+				ws.WriteText(fmt.Sprintf(`{"method": "SUBSCRIBE", "payload": { "type": "io.cozy.files", "id": "%s" }}`, shared.ID()))
+				for _, id := range []string{"", `, "id": "recents-row"`} {
+					obj := ws.WriteText(fmt.Sprintf(`{"method": "SUBSCRIBE", "payload": { "type": "io.cozy.files.recents"%s }}`, id)).
+						Expect().TextMessage().JSON().Object()
+					obj.ValueEqual("event", "error")
+					payload := obj.Value("payload").Object()
+					payload.ValueEqual("status", "403 Forbidden")
+					payload.ValueEqual("title", "The application can't subscribe to io.cozy.files.recents")
+				}
+
+				// The code is valid: it still receives the events of its files,
+				// and these events are the only ones it receives.
+				h := realtime.GetHub()
+				h.Publish(inst, realtime.EventUpdate, &testDoc{doctype: consts.FilesRecents, id: "recents-row"}, nil)
+				h.Publish(inst, realtime.EventUpdate, &testDoc{doctype: consts.Files, id: shared.ID()}, nil)
+				obj := ws.Expect().TextMessage().JSON().Object()
+				obj.ValueEqual("event", "UPDATED")
+				payload := obj.Value("payload").Object()
+				payload.ValueEqual("type", consts.Files)
+				payload.ValueEqual("id", shared.ID())
+			})
+		}
+	})
+
+	t.Run("NotifyOnRecentsStaysClosed", func(t *testing.T) {
+		_, tok := setup.GetTestClient(consts.FilesRecents)
+		e := testutils.CreateTestClient(t, ts.URL)
+		e.POST("/realtime/"+consts.FilesRecents+"/recents-row").
+			WithHeader("Content-Type", "application/json").
+			WithHeader("Authorization", "Bearer "+tok).
+			WithBytes([]byte(`{"name":"forged"}`)).
+			Expect().Status(http.StatusBadRequest)
 	})
 
 	t.Run("WSSuccess", func(t *testing.T) {
