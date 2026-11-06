@@ -18,13 +18,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The end-to-end tests of the chat actions run against a real openRAG and
-// the LLM behind it, when COZY_RAG_E2E_URL and COZY_RAG_E2E_KEY are set:
+// The end-to-end tests run against a real openRAG and its LLM, when
+// COZY_RAG_E2E_URL and COZY_RAG_E2E_KEY are set, on the agentic loop of a
+// mail app: a request that needs a search of the emails, then a draft.
 //
 //	COZY_RAG_E2E_URL=http://127.0.0.1:8193 COZY_RAG_E2E_KEY=... go test ./model/rag -run TestE2E -v -timeout 30m
-//
-// They are the scenario of the agentic loop of a mail app: a request that
-// needs a search of the emails, then a draft, then an answer.
 
 func newE2E(t *testing.T) *ragTest {
 	t.Helper()
@@ -75,8 +73,7 @@ func e2eMailActions(t *testing.T) []rag.ActionDefinition {
 
 // e2eStep runs the query of the last message of the conversation and returns
 // the events published and the answer saved. The events are read as they
-// come: a real LLM publishes more of them than the hub buffers, and a
-// subscriber nobody reads blocks the query.
+// come: a subscriber nobody reads blocks the query once the hub buffer is full.
 func e2eStep(t *testing.T, r *ragTest, query rag.QueryMessage) ([]map[string]interface{}, rag.ChatMessage) {
 	t.Helper()
 	sub := realtime.GetHub().Subscriber(r.inst)

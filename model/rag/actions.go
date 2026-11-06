@@ -27,8 +27,8 @@ type ActionDefinition struct {
 	Description string `json:"description"`
 	// Examples are messages for which the LLM calls the action.
 	Examples []string `json:"examples,omitempty"`
-	// Parameters is the JSON schema of the params the LLM fills, the
-	// parameters of the tool. Without it, the action has no params.
+	// Parameters is the JSON schema of the params the LLM fills. Without
+	// it, the action has no params.
 	Parameters *ParametersSchema `json:"parameters,omitempty"`
 	// Instructions tell the LLM how to fill the params.
 	Instructions string `json:"instructions,omitempty"`

@@ -661,10 +661,9 @@ func (m ragMessage) MarshalJSON() ([]byte, error) {
 // question without an answer, stopped by the user or failed, is skipped too:
 // the LLM would answer it along with the next one.
 //
-// An action whose result the client gave is a tool call answered by a tool
-// message. An action without a result, confirmed or not by the user, is
-// described in the content of its message: a tool call must have its
-// answer.
+// An action with a result is a tool call answered by a tool message. An
+// action without one is described in the content of its message: a tool
+// call must have its answer.
 func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage {
 	messages := make([]ragMessage, 0, len(chat.Messages)+1)
 	if assistant != nil {
@@ -750,10 +749,9 @@ func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]in
 	return payload
 }
 
-// withTools gives the LLM the actions as its tools. The client runs one
-// action per message: of several calls, the first one is kept, and the LLM
-// asks the others again after its result. parallel_tool_calls is not sent:
-// some gateways refuse it.
+// withTools gives the LLM the actions as its tools. One action per message:
+// of several calls, the first is kept, the LLM asks the others again after
+// its result. parallel_tool_calls is not sent, some gateways refuse it.
 func withTools(payload map[string]interface{}, actions []ActionDefinition) {
 	if len(actions) == 0 {
 		return
@@ -860,10 +858,9 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 	return q.answerWithTools(ctx, query.Actions)
 }
 
-// body is the body of the query for the answer to the message: from the
-// documents with openRAG, or, when the client asks for an answer without
-// them, from the LLM behind it. With actions, the LLM gets them as its
-// tools, and the rules of their use as a last leading system message.
+// body is the body of the query: from the documents with openRAG, or from
+// the LLM behind it when the client asks for an answer without them. With
+// actions, the LLM gets them as its tools, with the rules of their use.
 func (q *chatQuery) body(actions []ActionDefinition) ([]byte, error) {
 	messages := q.messages
 	if len(actions) > 0 {
@@ -890,9 +887,8 @@ func (q *chatQuery) answer(ctx context.Context) error {
 }
 
 // answerWithTools answers the message, or proposes the action the LLM calls.
-// A call the stack cannot make an action of, unknown or with params that fail
-// their checks, is dropped: the message is answered without the tools, unless
-// the LLM wrote a text with its call, already published, which is the answer.
+// A call the stack cannot make an action of is dropped: the message is
+// answered without the tools, unless the LLM wrote a text with its call.
 func (q *chatQuery) answerWithTools(ctx context.Context, actions []ActionDefinition) error {
 	body, err := q.body(actions)
 	if err != nil {
@@ -916,10 +912,9 @@ func (q *chatQuery) answerWithTools(ctx context.Context, actions []ActionDefinit
 	return q.finish(answer, action)
 }
 
-// finish ends the query: the answer is saved on the conversation, then the
-// action proposed, if any, is published before the `done` event. Saved first,
-// so that a result the client posts on the `action` event finds its message;
-// the client has the answer even when the save fails.
+// finish ends the query: the answer is saved, then the action proposed, if
+// any, is published before the `done` event. Saved first, so that a result
+// the client posts on the `action` event finds its message.
 func (q *chatQuery) finish(answer ragAnswer, action *ChatAction) error {
 	if q.watcher.Cancelled() {
 		return endCancelled(q.inst, q.logger, q.msg)
