@@ -900,18 +900,16 @@ func (q *chatQuery) answerWithTools(ctx context.Context, actions []ActionDefinit
 	return q.finish(answer, action)
 }
 
-// finish ends the query: the action proposed, if any, is published before
-// the `done` event, and the answer is saved on the conversation.
+// finish ends the query: the answer is saved on the conversation, then the
+// action proposed, if any, is published before the `done` event. Saved first,
+// so that a result the client posts on the `action` event finds its message;
+// the client has the answer even when the save fails.
 func (q *chatQuery) finish(answer ragAnswer, action *ChatAction) error {
 	if q.watcher.Cancelled() {
 		return endCancelled(q.inst, q.logger, q.msg)
 	}
 	id := newMessageID()
-	if action != nil {
-		publishAction(q.inst, q.msg.ID, id, action)
-	}
-	publishDone(q.inst, q.msg.ID)
-	return saveAnswer(q.inst, q.conversationID, q.msg.ID, ChatMessage{
+	err := saveAnswer(q.inst, q.conversationID, q.msg.ID, ChatMessage{
 		ID:        id,
 		Role:      AssistantRole,
 		Content:   answer.Content,
@@ -920,6 +918,11 @@ func (q *chatQuery) finish(answer ragAnswer, action *ChatAction) error {
 		Action:    action,
 		CreatedAt: time.Now().UTC(),
 	})
+	if action != nil {
+		publishAction(q.inst, q.msg.ID, id, action)
+	}
+	publishDone(q.inst, q.msg.ID)
+	return err
 }
 
 // fail ends the query on an error, told to the client, unless it comes from
