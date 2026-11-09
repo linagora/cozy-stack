@@ -105,4 +105,6 @@ func Routes(router *echo.Group) {
 	router.POST("/v1/chat/completions", OpenAICompletion)
 	router.POST("/v1/tools/execute", ExecuteTool)
 	router.POST("/index/status", IndexStatus)
+	router.GET("/index/files/:file-id", IndexFileState)
+	router.GET("/index/files/:file-id/content", IndexFileContent)
 }

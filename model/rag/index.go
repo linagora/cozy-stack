@@ -24,6 +24,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/logger"
+	"github.com/cozy/cozy-stack/pkg/messaging"
 	"github.com/labstack/echo/v4"
 )
 
@@ -51,8 +52,10 @@ type IndexMessage struct {
 	ReconcileDirID string `json:"reconcile_dir_id,omitempty"`
 }
 
-// Index is the entry point of the rag-index worker.
-func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) error {
+// Index is the entry point of the rag-index worker. The files go through the
+// indexer when pub is given and the broker is configured for the instance
+// (see broker.go), straight to openRAG otherwise.
+func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage, pub messaging.Publisher) error {
 	if msg.Doctype != consts.Files {
 		return errors.New("Only file can be indexed for the moment")
 	}
@@ -78,13 +81,19 @@ func Index(inst *instance.Instance, logger logger.Logger, msg IndexMessage) erro
 	}
 
 	ctx := &indexContext{inst: inst, logger: logger, server: server}
+	if pub != nil && brokerEnabled(inst.ContextName) {
+		ctx.pub = pub
+	}
 	// An error only means some sources were unreachable, the flags are usable.
 	ctx.flags, _ = feature.GetFlags(inst)
-	// Read once per run, never cached: openRAG's config can change. Optional.
-	if types, err := supportedTypes(server); err != nil {
-		logger.Warnf("cannot read the file formats openRAG indexes: %s (every file will be sent)", err)
-	} else {
-		ctx.types = types
+	// Read once per run, never cached: openRAG's config can change. Optional,
+	// and left to the indexer when the files go through it.
+	if ctx.pub == nil {
+		if types, err := supportedTypes(server); err != nil {
+			logger.Warnf("cannot read the file formats openRAG indexes: %s (every file will be sent)", err)
+		} else {
+			ctx.types = types
+		}
 	}
 	sc, err := loadScopes(inst, logger)
 	if err != nil {
@@ -140,6 +149,8 @@ type indexContext struct {
 	scopes *scopes
 	// types is nil when openRAG did not answer: every file is then sent.
 	types *ragTypes
+	// pub is set when the files go through the indexer.
+	pub messaging.Publisher
 }
 
 // runBatch processes the (at most BatchSize) changes of the feed loaded after
@@ -210,7 +221,7 @@ func (ctx *indexContext) handleChange(change couchdb.Change) error {
 	}
 	if change.Deleted || change.Doc.Get("trashed") == true {
 		ctx.logger.Debugf("file %s deleted or trashed: removing it from openRAG", change.DocID)
-		return deleteFromRAG(ctx.inst, change.DocID)
+		return ctx.remove(change.DocID)
 	}
 	return ctx.handleFile(fileInfoFromChange(change))
 }
@@ -276,7 +287,20 @@ func (ctx *indexContext) handleFile(f fileInfo) error {
 		return nil
 	}
 	ctx.logger.Debugf("file %s is outside every knowledge base folder: removing it from openRAG", f.ID)
-	return deleteFromRAG(ctx.inst, f.ID)
+	return ctx.remove(f.ID)
+}
+
+// remove takes the file off openRAG. Through the indexer, the message only
+// asks for a synchronization: the indexer deletes the file once the stack
+// confirms it must not be on openRAG.
+func (ctx *indexContext) remove(fileID string) error {
+	if ctx.pub == nil {
+		return deleteFromRAG(ctx.inst, fileID)
+	}
+	if err := ctx.publish(fileID); err != nil {
+		return err
+	}
+	return DeleteIndexStatus(ctx.inst, fileID)
 }
 
 // indexFile sends the file to the indexer when openRAG does not hold its
@@ -286,6 +310,10 @@ func (ctx *indexContext) indexFile(f fileInfo, desired []string) error {
 	if !isClassAllowed(ctx.flags, f.Class) {
 		ctx.logger.Debugf("file %s (%s) has the class %q, not enabled for indexing: skipped", f.ID, f.Name, f.Class)
 		return SetIndexStatus(ctx.inst, f.ID, StatusNotSupported, f.Rev)
+	}
+	if ctx.pub != nil {
+		// The indexer checks the format and the md5sum, and uploads.
+		return ctx.publish(f.ID)
 	}
 	// Before needsIndexation, to save its GET too. A file indexed before
 	// openRAG stopped accepting its format stays there: not worth that GET.

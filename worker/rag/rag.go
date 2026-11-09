@@ -35,7 +35,7 @@ func WorkerIndex(ctx *job.TaskContext) error {
 		return err
 	}
 	logger.Debugf("RAG: index %s", msg.Doctype)
-	return rag.Index(ctx.Instance, logger, msg)
+	return rag.Index(ctx.Instance, logger, msg, ctx.Publisher)
 }
 
 func WorkerQuery(ctx *job.TaskContext) error {

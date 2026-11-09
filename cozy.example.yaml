@@ -854,3 +854,10 @@ rabbitmq:
           delivery_limit: 5
           bindings:
             - drive.org_drive.ensure
+    # With this exchange, the rag-index jobs hand the files over to the RAG
+    # indexer (github.com/linagora/rag-indexer), which owns its topology,
+    # instead of sending them to openRAG themselves. See docs/ai.md.
+    - name: rag.index.topic
+      kind: topic
+      durable: true
+      declare_exchange: false

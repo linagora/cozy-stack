@@ -113,6 +113,39 @@ purge the instance on the old server, then switch, then reset (see below), or
 the old server keeps the instance's data and the new one only gets the files
 changed after the switch.
 
+### Through the RAG indexer
+
+When the `rag.index.topic` exchange is in the `rabbitmq` section of the config
+file and a RabbitMQ node serves the context of the instance, the rag-index job
+does not upload the files to openRAG: it publishes a message per file on that
+exchange, with the `rag.index.file` routing key, for the
+[RAG indexer](https://github.com/linagora/rag-indexer). The indexer owns the
+topology (queues, retries, dead letters): the stack does not declare the
+exchange, and a message no queue is bound to is an error that keeps the
+checkpoint where it is.
+
+```json
+{
+  "partition": "alice.example.net",
+  "file_id": "e21dce8058b9013d800a18c04daba326",
+  "file_url": "https://alice.example.net/ai/index/files/e21dce8058b9013d800a18c04daba326",
+  "file_token": "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9...",
+  "callback_url": "https://alice.example.net/ai/index/status",
+  "rag": { "base_url": "http://openrag-a:8000", "api_key": "$3cr3t" }
+}
+```
+
+The message carries no state: it asks the indexer to make openRAG match what
+the stack answers on `file_url` when the indexer processes it. A message that
+is retried after a newer one cannot undo it, and a deleted, trashed or moved
+out file is a message like any other, whose state is a `404`. The
+`file_token` gives access to that file only, for 7 days.
+
+The stack keeps creating and removing the workspaces of the knowledge base
+folders, and still sets the `notsupported` status of the media files whose
+class is not enabled. The indexer does the rest: the supported formats, the
+md5sum comparison, the upload, the duplicates and the memberships.
+
 ### Operator tools
 
 The admin API exposes them (see [admin.md](admin.md) for the details):
@@ -158,6 +191,56 @@ $ COZY=cozy.localhost:8080
 $ TOKEN=$(cozy-stack instances token-cli $COZY io.cozy.triggers)
 $ curl "http://${COZY}/jobs/triggers" -H "Authorization: Bearer $TOKEN" -d '{ "data": { "attributes": { "type": "@event", "arguments": "io.cozy.files", "debounce": "30s", "worker": "rag-index", "message": {"doctype": "io.cozy.files"} } } }'
 ```
+
+### GET /ai/index/files/:file-id
+
+The RAG indexer reads on this route what openRAG must hold for a file. It is
+authenticated by the `file_token` of the message, given as a bearer token.
+
+#### Request
+
+```http
+GET /ai/index/files/e21dce8058b9013d800a18c04daba326 HTTP/1.1
+Host: alice.example.net
+Authorization: Bearer eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9...
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "meeting.md",
+  "dir_id": "e21dce8058b9013d800a18c04dab9e44",
+  "md5sum": "6f8db599de986fab7a21625b7916589c",
+  "workspace_ids": ["e21dce8058b9013d800a18c04dab9e44"],
+  "metadata": {
+    "md5sum": "6f8db599de986fab7a21625b7916589c",
+    "datetime": "2026-08-20T08:12:00.000Z",
+    "created_at": "2026-08-20T08:12:03.512Z",
+    "doctype": "io.cozy.files",
+    "doc_rev": "3-6a1b0b8a51a4e0e0a3b7f0f1d2c3b4a5"
+  }
+}
+```
+
+The `name` is the one to give openRAG: a note is sent as markdown. The
+`workspace_ids` are those of the knowledge base folders containing the file,
+and the `metadata` is what openRAG stores with it.
+
+A `404 Not Found` means the file must not be on openRAG: it was deleted,
+trashed, or is outside every knowledge base folder. A token that was not made
+for this file, or has expired, is answered with a `401 Unauthorized`.
+
+### GET /ai/index/files/:file-id/content
+
+The RAG indexer downloads on this route the content it uploads to openRAG: the
+file itself, or the markdown a note renders to. It is authenticated like the
+previous route, and answers a `404 Not Found` for a deleted or trashed file.
 
 ### POST /ai/index/status
 
