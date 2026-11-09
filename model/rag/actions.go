@@ -62,9 +62,9 @@ type ItemsSchema struct {
 type ChatAction struct {
 	Name   string                 `json:"name"`
 	Params map[string]interface{} `json:"params"`
-	// CallID is the id the LLM gave to its tool call: the result of the
+	// ToolCallID is the id the LLM gave to its tool call: the result of the
 	// action answers it.
-	CallID string `json:"callId,omitempty"`
+	ToolCallID string `json:"toolCallId,omitempty"`
 	// Status and URL are written by the client once the user has handled
 	// the action: "done", with the URL of what it created, or "cancelled".
 	Status string `json:"status,omitempty"`
@@ -463,14 +463,14 @@ func actionFromCall(actions []ActionDefinition, call toolCall, written string) (
 			return nil, fmt.Errorf("%s: %w", def.Name, err)
 		}
 	}
-	return &ChatAction{Name: def.Name, Params: params, CallID: call.ID}, nil
+	return &ChatAction{Name: def.Name, Params: params, ToolCallID: call.ID}, nil
 }
 
 // toolCallOf is the tool call of a proposed action, for the history: the id
 // the LLM gave, or one made of the message id for an action proposed before
 // the ids were kept.
 func toolCallOf(msg ChatMessage) toolCall {
-	call := toolCall{ID: msg.Action.CallID, Type: "function"}
+	call := toolCall{ID: msg.Action.ToolCallID, Type: "function"}
 	if call.ID == "" {
 		call.ID = "call_" + msg.ID
 	}

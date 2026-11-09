@@ -730,7 +730,7 @@ func TestAwaitsResult(t *testing.T) {
 }
 
 func TestRAGMessagesWithAResult(t *testing.T) {
-	action := &ChatAction{Name: "search_emails", Params: map[string]interface{}{"from": "Claire"}, CallID: "call_1"}
+	action := &ChatAction{Name: "search_emails", Params: map[string]interface{}{"from": "Claire"}, ToolCallID: "call_1"}
 	chat := &ChatConversation{Messages: []ChatMessage{
 		{ID: "question", Role: UserRole, Content: "Find the emails of Claire"},
 		{ID: "answer", Role: AssistantRole, Action: action},
@@ -767,7 +767,7 @@ func TestRAGMessagesWithAResult(t *testing.T) {
 	})
 
 	t.Run("an action proposed before the ids of the calls were kept", func(t *testing.T) {
-		action.CallID = ""
+		action.ToolCallID = ""
 		messages := ragMessages(chat, nil)
 		assert.Equal(t, "call_answer", messages[1].ToolCalls[0].ID)
 		assert.Equal(t, "call_answer", messages[2].ToolCallID)
@@ -790,7 +790,7 @@ func TestRAGMessagesWithAResult(t *testing.T) {
 	t.Run("an action without a result is described, not a call", func(t *testing.T) {
 		chat := &ChatConversation{Messages: []ChatMessage{
 			{ID: "question", Role: UserRole, Content: "Draft a reply"},
-			{ID: "answer", Role: AssistantRole, Action: &ChatAction{Name: "create_draft", Params: map[string]interface{}{"subject": "Re"}, CallID: "call_2"}},
+			{ID: "answer", Role: AssistantRole, Action: &ChatAction{Name: "create_draft", Params: map[string]interface{}{"subject": "Re"}, ToolCallID: "call_2"}},
 			{ID: "next", Role: UserRole, Content: "Thanks"},
 		}}
 		messages := ragMessages(chat, nil)

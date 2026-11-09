@@ -399,10 +399,10 @@ Content-Type: application/json
   conversation: editing it on the assistant applies to its existing
   conversations as well.
 - `attachmentIDs` (optional) array of ids, specifying which documents should be leveraged by the RAG.
-- `actions` (optional) the definitions of the [chat actions](#chat-actions)
+- `tools` (optional) the definitions of the [chat actions](#chat-actions)
   the client can run: the tools of the LLM. Without it, the message is
   answered as usual, without tools. Invalid definitions are rejected with a
-  `400 Bad Request`.
+  `400 Bad Request`. `actions` is the former name of this field, still read.
 - `result` (optional), instead of `q`, the result of the action proposed by
   an answer, once the client has run it: see
   [results of the actions](#results-of-the-actions).
@@ -531,8 +531,8 @@ message are, in order:
 - an action: `reasoning` events if any, `sources` if any, when the documents
   were retrieved for it, then `action`, `done`.
 
-The `callId` of the action is the id the LLM gave to its tool call, kept
-with the saved action. The client gives the
+The `toolCallId` of the action is the id the LLM gave to its tool call,
+kept with the saved action. The client gives the
 [result](#results-of-the-actions) of the action with the `message_id` of the
 event.
 
@@ -544,7 +544,7 @@ server > {"event": "CREATED",
                               "message_id": "0192f0a5-4d8b-7c1e-9a3f-1b2c3d4e5f60",
                               "action": {"name": "draft_email",
                                          "params": {"to": ["Paul"], "subject": "Groceries", "body": "Hi Paul, ..."},
-                                         "callId": "chatcmpl-tool-9a566b83978331f4"}}}}
+                                         "toolCallId": "chatcmpl-tool-9a566b83978331f4"}}}}
 server > {"event": "CREATED",
           "payload": {"id": "eb17c3205bf1013ddea018c04daba326",
                       "type": "io.cozy.ai.chat.events",
@@ -566,15 +566,16 @@ server > {"event": "CREATED",
 ### Chat actions
 
 The assistant can propose an action of the client instead of a plain answer,
-like writing a note or drafting an email. The client defines its actions in
-the request; the stack gives them to the LLM as its tools, as in the OpenAI
-API, and the LLM calls one instead of answering when the user asks for it.
+like writing a note or drafting an email. The client defines them as the
+`tools` of the request; the stack gives them to the LLM as its tools, as in
+the OpenAI API, and the LLM calls one instead of answering when the user asks
+for it.
 The stack never runs an action: the client shows it to the user, who can edit
 it, and runs it once the user has confirmed it. An action can give its
 [result](#results-of-the-actions) back to the LLM, which goes on from it:
 the next action, or the answer.
 
-An action definition has:
+A tool definition has:
 
 - `name` (required): the identifier of the action, the name of its tool for
   the LLM: 1 to 64 letters, digits, `_` or `-`, the rule of the OpenAI API
@@ -634,7 +635,7 @@ message gets an `error` event.
 
 #### How a message is answered
 
-Two things decide what happens to a message with `actions`, and nothing else
+Two things decide what happens to a message with `tools`, and nothing else
 is guessed:
 
 - **The user chooses the documents.** `documents` (`true` by default) says
@@ -642,7 +643,7 @@ is guessed:
   through openRAG, which retrieves what the conversation needs, or nothing
   when its query step finds the turn conversational. Without them, it asks
   the LLM behind openRAG alone.
-- **The LLM chooses the tool.** The query carries the actions as `tools`,
+- **The LLM chooses the tool.** The query carries the tools as they are,
   with `tool_choice: "auto"`: the LLM answers in text, or calls a tool with
   its arguments, in the same completion. The client runs one action per
   message: of several calls, the first one is kept, and the LLM asks the
@@ -662,10 +663,10 @@ action before the `done` event.
 
 ```mermaid
 flowchart TD
-    Q[Query of the rag-query job] --> HAS{actions in the request,<br>fewer than 5 results since the last message of the user?}
+    Q[Query of the rag-query job] --> HAS{tools in the request,<br>fewer than 5 results since the last message of the user?}
     HAS -- No --> ANS[Answer: openRAG with the documents,<br>or the LLM alone without them]
     ANS --> SAVE
-    HAS -- Yes --> TOOLS[The same query, with the actions as tools<br>and the rules of the tools as a system message]
+    HAS -- Yes --> TOOLS[The same query, with the tools<br>and the rules of the tools as a system message]
     TOOLS -- text --> SAVE
     TOOLS -- tool call --> CHECK{known tool, arguments as JSON,<br>types, x-user-written, required params?}
     CHECK -- ok --> ACT[sources event if any, then action event]
@@ -684,8 +685,8 @@ of each case are listed in [Action message](#action-message).
 |---|---|---|---|
 | answers | true | The answer, by openRAG | content = the answer, its sources |
 | answers | false | The answer, by the LLM alone | content = the answer |
-| calls a tool | true | The action, from the arguments of the call; openRAG gives the sources of the documents it retrieved | content = the text of the LLM, usually empty, the sources, action = `{name, params, callId}` |
-| calls a tool | false | The action, from the arguments of the call | content = the text of the LLM, usually empty, action = `{name, params, callId}` |
+| calls a tool | true | The action, from the arguments of the call; openRAG gives the sources of the documents it retrieved | content = the text of the LLM, usually empty, the sources, action = `{name, params, toolCallId}` |
+| calls a tool | false | The action, from the arguments of the call | content = the text of the LLM, usually empty, action = `{name, params, toolCallId}` |
 
 The prompt of the assistant, the `instructions` of the client, `websearch`
 and `attachmentIDs` go with every query. When both the knowledge base of the
@@ -710,7 +711,7 @@ action, a `message_id` that never appears in the conversation.
 
 | Step | Model | Messages | Format |
 |---|---|---|---|
-| Answer, or action | partition, or none without the documents | the conversation, after the prompt of the assistant, the instructions of the client and the rules of the tools; the actions as `tools` | streamed text, or a tool call |
+| Answer, or action | partition, or none without the documents | the conversation, after the prompt of the assistant, the instructions of the client and the rules of the tools; the `tools` | streamed text, or a tool call |
 | Answer without the tools | same | the conversation, after the prompt of the assistant and the instructions of the client | streamed text |
 
 The stack sets no limit of its own on what it sends nor on what it gets:
@@ -763,7 +764,7 @@ text the LLM wrote with the call, usually empty:
   "action": {
     "name": "create_note",
     "params": { "title": "Groceries", "content": "- milk\n- bread" },
-    "callId": "chatcmpl-tool-9a566b83978331f4"
+    "toolCallId": "chatcmpl-tool-9a566b83978331f4"
   },
   "createdAt": "2024-09-24T13:24:09.123Z"
 }
@@ -787,7 +788,7 @@ conversation, instead of `q`:
     "ok": true,
     "content": "3 emails: ..."
   },
-  "actions": [...]
+  "tools": [...]
 }
 ```
 
@@ -798,8 +799,8 @@ conversation, instead of `q`:
   its error. The content is cut at 8,000 characters: it goes to the LLM with
   every later answer.
 - `q` and `attachmentIDs` cannot go with a result. The other fields apply as
-  for a message of the user; `actions` is sent again, so that the LLM can
-  call the next one.
+  for a message of the user; `tools` is sent again, so that the LLM can call
+  the next one.
 
 The result is saved as a message of the `tool` role:
 
@@ -816,7 +817,7 @@ The result is saved as a message of the `tool` role:
 It is answered like a message of the user: the events have the id of the
 result, the last message of the conversation in the response, and the answer
 can be cancelled. The LLM gets the conversation as in the OpenAI API: the
-message of the action carries the tool call, `{"id": callId, "type":
+message of the action carries the tool call, `{"id": toolCallId, "type":
 "function", "function": {"name", "arguments"}}` with the params as the
 arguments, and the result is a `tool` message with the `tool_call_id` of the
 call. Its content is the content of the result; `Done.` when it is empty, and
