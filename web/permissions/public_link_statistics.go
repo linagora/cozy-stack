@@ -15,6 +15,8 @@ import (
 )
 
 func downloadPublicLinkStatistics(c echo.Context) error {
+	const generationError = "Could not generate public link statistics"
+
 	inst := middlewares.GetInstance(c)
 	current, err := middlewares.GetPermission(c)
 	if err != nil {
@@ -37,7 +39,7 @@ func downloadPublicLinkStatistics(c echo.Context) error {
 	}
 	file, err := os.CreateTemp("", "cozy-link-statistics-*.csv")
 	if err != nil {
-		return jsonapi.NewError(http.StatusInternalServerError, "Could not generate public link statistics")
+		return jsonapi.NewError(http.StatusInternalServerError, generationError)
 	}
 	defer func() {
 		_ = file.Close()
@@ -45,17 +47,17 @@ func downloadPublicLinkStatistics(c echo.Context) error {
 	}()
 	// Unlink before writing personal data so a crash cannot leave a named report.
 	if err := os.Remove(file.Name()); err != nil {
-		return jsonapi.NewError(http.StatusInternalServerError, "Could not generate public link statistics")
+		return jsonapi.NewError(http.StatusInternalServerError, generationError)
 	}
 	if err := publiclink.WriteCSV(c.Request().Context(), file, inst, link.ID()); err != nil {
-		return jsonapi.NewError(http.StatusInternalServerError, "Could not generate public link statistics")
+		return jsonapi.NewError(http.StatusInternalServerError, generationError)
 	}
 	info, err := file.Stat()
 	if err != nil {
-		return jsonapi.NewError(http.StatusInternalServerError, "Could not generate public link statistics")
+		return jsonapi.NewError(http.StatusInternalServerError, generationError)
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return jsonapi.NewError(http.StatusInternalServerError, "Could not generate public link statistics")
+		return jsonapi.NewError(http.StatusInternalServerError, generationError)
 	}
 	response := c.Response()
 	response.Header().Set(echo.HeaderContentDisposition, `attachment; filename="public-link-statistics.csv"`)
