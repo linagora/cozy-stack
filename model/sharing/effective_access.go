@@ -1,10 +1,13 @@
 package sharing
 
 import (
+	"cmp"
+	"errors"
 	"os"
 	"path"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
@@ -12,6 +15,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
+	"github.com/cozy/cozy-stack/pkg/utils"
 )
 
 // SharingScope describes a single sharing scope that applies to a target file
@@ -356,6 +360,66 @@ func (r *AccessResolver) NearestWritableSharing(targetID string, member *Member)
 		}
 	}
 	return nearest, nil
+}
+
+// DriveForMember returns the scope of the drive to which an item belongs for
+// a member, when an item can be in several drives. It must be called on the
+// instance of the owner. Among the drives covering the target of which the
+// member is a ready member, the ones where the member can write come first,
+// then the outermost one, then the smallest sharing ID. It depends only on the
+// position of the target, not on the route or the token of a request. Returns
+// nil when no drive applies: a classic sharing does not count, and neither
+// does the owner of a drive, who is not one of its ready members.
+func (r *AccessResolver) DriveForMember(targetID string, member *Member) (*SharingScope, error) {
+	scopes, err := r.scopesMatching(targetID, func(s *Sharing) *Member {
+		if !s.Drive {
+			return nil
+		}
+		return s.MemberMatching(member)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(scopes) == 0 {
+		return nil, nil
+	}
+	drive := slices.MinFunc(scopes, compareDriveScopes)
+	return &drive, nil
+}
+
+// compareDriveScopes orders the scopes applying to a same target by preference
+// for DriveForMember. They all cover the target, so their roots are on a single
+// chain of ancestors: the shortest path is the outermost root.
+func compareDriveScopes(a, b SharingScope) int {
+	if a.Member.ReadOnly != b.Member.ReadOnly {
+		if b.Member.ReadOnly {
+			return -1
+		}
+		return 1
+	}
+	return cmp.Or(
+		cmp.Compare(len(a.RootPath), len(b.RootPath)),
+		cmp.Compare(a.Sharing.SID, b.Sharing.SID),
+	)
+}
+
+// PathFromRoot returns the path of an item from the root of the scope, given
+// its full path on the instance of the owner: dir.Fullpath or file.Path(fs).
+// It starts with a slash and does not include the name of the root, so that
+// nothing of the tree of the owner above the content of the scope is exposed:
+// /a.txt for a file at the root and /sub/a.txt for a file in a subfolder. It is
+// empty for the root itself, which is the only item of a file-root drive and has
+// no path to display. Returns an error when the item is not under the root, e.g.
+// when it has moved in the meantime.
+func (sc *SharingScope) PathFromRoot(fullpath string) (string, error) {
+	if fullpath == sc.RootPath {
+		return "", nil
+	}
+	rel, ok := strings.CutPrefix(fullpath, utils.EnsureHasSuffix(sc.RootPath, "/"))
+	if !ok {
+		return "", errors.New("sharing: the path is not under the root of the scope")
+	}
+	return "/" + rel, nil
 }
 
 // NearestRestrictiveBoundary returns the closest limited_access boundary

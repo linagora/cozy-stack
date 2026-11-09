@@ -638,6 +638,317 @@ func TestAccessResolver_NearestWritableSharingSkipsReadOnly(t *testing.T) {
 	})
 }
 
+func TestAccessResolver_DriveForMember(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	daveInstance := "https://dave.example.net"
+	otherInstance := "https://other.example.net"
+	dave := &Member{Email: "dave@example.net", Instance: daveInstance}
+	resolver := NewAccessResolver(inst)
+
+	// Every subtest has its own tree: /<name>/child/nested.txt and
+	// /<name>/top.txt, where the sharings of X are on /<name> and those of Y
+	// on /<name>/child.
+	newTree := func(t *testing.T, name string) (x, y *vfs.DirDoc, nested, top *vfs.FileDoc) {
+		t.Helper()
+		tree := H{name + "/": H{"child/": H{"nested.txt": H{}}, "top.txt": H{}}}
+		x = createTree(t, fs, tree, consts.RootDirID)
+		var err error
+		y, err = fs.DirByPath(x.Fullpath + "/child")
+		require.NoError(t, err)
+		nested, err = fs.FileByPath(y.Fullpath + "/nested.txt")
+		require.NoError(t, err)
+		top, err = fs.FileByPath(x.Fullpath + "/top.txt")
+		require.NoError(t, err)
+		return x, y, nested, top
+	}
+	// A drive where Dave is not a member has another ready member instead.
+	shareWith := func(t *testing.T, rootID, role string) *Sharing {
+		t.Helper()
+		switch role {
+		case "writer":
+			return createActiveRecipientSharing(t, inst, rootID, false, daveInstance)
+		case "reader":
+			return createActiveRecipientSharing(t, inst, rootID, true, daveInstance)
+		default:
+			return createActiveRecipientSharing(t, inst, rootID, false, otherInstance)
+		}
+	}
+	makeClassic := func(t *testing.T, s *Sharing) {
+		t.Helper()
+		s.Drive = false
+		require.NoError(t, couchdb.UpdateDoc(inst, s))
+	}
+
+	rules := []struct {
+		name, x, y, want string
+	}{
+		{"WriterOnBothGivesOuter", "writer", "writer", "x"},
+		{"ReaderOnOuterWriterOnNestedGivesNested", "reader", "writer", "y"},
+		{"WriterOnOuterReaderOnNestedGivesOuter", "writer", "reader", "x"},
+		{"ReaderOnBothGivesOuter", "reader", "reader", "x"},
+		{"MemberOfNestedOnlyGivesNested", "none", "writer", "y"},
+		{"MemberOfOuterOnlyGivesOuter", "writer", "none", "x"},
+	}
+	for _, tt := range rules {
+		t.Run(tt.name, func(t *testing.T) {
+			x, y, nested, _ := newTree(t, tt.name)
+			sX := shareWith(t, x.ID(), tt.x)
+			sY := shareWith(t, y.ID(), tt.y)
+
+			wantSharing, wantRoot := sX, x
+			if tt.want == "y" {
+				wantSharing, wantRoot = sY, y
+			}
+			sc, err := resolver.DriveForMember(nested.ID(), dave)
+			require.NoError(t, err)
+			require.NotNil(t, sc)
+			assert.Equal(t, wantSharing.SID, sc.Sharing.SID)
+			assert.Equal(t, wantRoot.ID(), sc.RootID)
+			assert.Equal(t, wantRoot.Fullpath, sc.RootPath)
+			// The member entry is the one inside the returned sharing.
+			assert.Same(t, &sc.Sharing.Members[1], sc.Member)
+		})
+	}
+
+	t.Run("OutsideTheOnlyDriveOfTheMember", func(t *testing.T) {
+		x, y, _, top := newTree(t, "OutsideNested")
+		shareWith(t, x.ID(), "none")
+		shareWith(t, y.ID(), "writer")
+
+		sc, err := resolver.DriveForMember(top.ID(), dave)
+		require.NoError(t, err)
+		assert.Nil(t, sc)
+	})
+
+	t.Run("NoSharing", func(t *testing.T) {
+		_, _, nested, _ := newTree(t, "NoSharing")
+
+		sc, err := resolver.DriveForMember(nested.ID(), dave)
+		require.NoError(t, err)
+		assert.Nil(t, sc)
+	})
+
+	t.Run("ClassicSharingAlone", func(t *testing.T) {
+		x, _, nested, _ := newTree(t, "ClassicAlone")
+		makeClassic(t, shareWith(t, x.ID(), "writer"))
+
+		sc, err := resolver.DriveForMember(nested.ID(), dave)
+		require.NoError(t, err)
+		assert.Nil(t, sc)
+	})
+
+	t.Run("ClassicWritableNestedInDriveWhereMemberIsReader", func(t *testing.T) {
+		x, y, nested, _ := newTree(t, "ClassicNested")
+		sDrive := shareWith(t, x.ID(), "reader")
+		makeClassic(t, shareWith(t, y.ID(), "writer"))
+
+		sc, err := resolver.DriveForMember(nested.ID(), dave)
+		require.NoError(t, err)
+		require.NotNil(t, sc)
+		assert.Equal(t, sDrive.SID, sc.Sharing.SID)
+		assert.True(t, sc.Member.ReadOnly)
+	})
+
+	for _, status := range []string{MemberStatusPendingInvitation, MemberStatusRevoked} {
+		t.Run("MemberNotReady/"+status, func(t *testing.T) {
+			x, _, nested, _ := newTree(t, "NotReady-"+status)
+			s := shareWith(t, x.ID(), "writer")
+			s.Members[1].Status = status
+			require.NoError(t, couchdb.UpdateDoc(inst, s))
+
+			sc, err := resolver.DriveForMember(nested.ID(), dave)
+			require.NoError(t, err)
+			assert.Nil(t, sc)
+		})
+	}
+
+	t.Run("NilMember", func(t *testing.T) {
+		x, _, nested, _ := newTree(t, "NilMember")
+		shareWith(t, x.ID(), "writer")
+
+		sc, err := resolver.DriveForMember(nested.ID(), nil)
+		require.NoError(t, err)
+		assert.Nil(t, sc)
+	})
+
+	t.Run("ResolverError", func(t *testing.T) {
+		sc, err := resolver.DriveForMember("no-such-id", dave)
+		assert.True(t, os.IsNotExist(err), "unexpected error: %v", err)
+		assert.Nil(t, sc)
+	})
+
+	t.Run("SameRootGivesSmallestSharingID", func(t *testing.T) {
+		x, _, nested, _ := newTree(t, "SameRoot")
+		s1 := shareWith(t, x.ID(), "writer")
+		s2 := shareWith(t, x.ID(), "writer")
+		want := min(s1.SID, s2.SID)
+
+		sc, err := resolver.DriveForMember(nested.ID(), dave)
+		require.NoError(t, err)
+		require.NotNil(t, sc)
+		assert.Equal(t, want, sc.Sharing.SID)
+	})
+
+	t.Run("PathOfDirectoryRootDrive", func(t *testing.T) {
+		x, y, nested, top := newTree(t, "PathDirRoot")
+		shareWith(t, x.ID(), "writer")
+		nestedPath, err := nested.Path(fs)
+		require.NoError(t, err)
+		topPath, err := top.Path(fs)
+		require.NoError(t, err)
+
+		targets := []struct {
+			id, fullpath, want string
+		}{
+			{x.ID(), x.Fullpath, ""},
+			{y.ID(), y.Fullpath, "/child"},
+			{top.ID(), topPath, "/top.txt"},
+			{nested.ID(), nestedPath, "/child/nested.txt"},
+		}
+		for _, target := range targets {
+			sc, err := resolver.DriveForMember(target.id, dave)
+			require.NoError(t, err)
+			require.NotNil(t, sc)
+			got, err := sc.PathFromRoot(target.fullpath)
+			require.NoError(t, err)
+			assert.Equal(t, target.want, got)
+		}
+	})
+
+	t.Run("PathIsRelativeToTheReturnedDrive", func(t *testing.T) {
+		x, y, nested, _ := newTree(t, "PathNested")
+		shareWith(t, x.ID(), "reader")
+		shareWith(t, y.ID(), "writer")
+		nestedPath, err := nested.Path(fs)
+		require.NoError(t, err)
+
+		sc, err := resolver.DriveForMember(nested.ID(), dave)
+		require.NoError(t, err)
+		require.NotNil(t, sc)
+		got, err := sc.PathFromRoot(nestedPath)
+		require.NoError(t, err)
+		assert.Equal(t, "/nested.txt", got)
+	})
+
+	t.Run("FileRootDrive", func(t *testing.T) {
+		_, _, nested, _ := newTree(t, "FileRoot")
+		s := createSharing(t, inst, nested.ID(), false, false, DriveRootTypeFile, daveInstance)
+		nestedPath, err := nested.Path(fs)
+		require.NoError(t, err)
+
+		sc, err := resolver.DriveForMember(nested.ID(), dave)
+		require.NoError(t, err)
+		require.NotNil(t, sc)
+		assert.Equal(t, s.SID, sc.Sharing.SID)
+		assert.Equal(t, nested.ID(), sc.RootID)
+		assert.Equal(t, nestedPath, sc.RootPath)
+		got, err := sc.PathFromRoot(nestedPath)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+
+	t.Run("FileRootDriveDoesNotCoverItsSiblings", func(t *testing.T) {
+		_, _, nested, top := newTree(t, "FileRootSiblings")
+		createSharing(t, inst, nested.ID(), false, false, DriveRootTypeFile, daveInstance)
+
+		sc, err := resolver.DriveForMember(top.ID(), dave)
+		require.NoError(t, err)
+		assert.Nil(t, sc)
+	})
+
+	t.Run("FileRootDriveNestedInDriveWhereMemberIsReader", func(t *testing.T) {
+		x, _, nested, _ := newTree(t, "FileRootInReader")
+		shareWith(t, x.ID(), "reader")
+		s := createSharing(t, inst, nested.ID(), false, false, DriveRootTypeFile, daveInstance)
+
+		sc, err := resolver.DriveForMember(nested.ID(), dave)
+		require.NoError(t, err)
+		require.NotNil(t, sc)
+		assert.Equal(t, s.SID, sc.Sharing.SID)
+	})
+
+	t.Run("FileRootDriveNestedInDriveWhereMemberIsWriter", func(t *testing.T) {
+		x, _, nested, _ := newTree(t, "FileRootInWriter")
+		sDrive := shareWith(t, x.ID(), "writer")
+		createSharing(t, inst, nested.ID(), false, false, DriveRootTypeFile, daveInstance)
+		nestedPath, err := nested.Path(fs)
+		require.NoError(t, err)
+
+		sc, err := resolver.DriveForMember(nested.ID(), dave)
+		require.NoError(t, err)
+		require.NotNil(t, sc)
+		assert.Equal(t, sDrive.SID, sc.Sharing.SID)
+		got, err := sc.PathFromRoot(nestedPath)
+		require.NoError(t, err)
+		assert.Equal(t, "/child/nested.txt", got)
+	})
+}
+
+// compareDriveScopes is tested on its own because the sharings come sorted by
+// ID from the resolver: the tie-break cannot fail through DriveForMember.
+func TestAccessResolver_CompareDriveScopes(t *testing.T) {
+	scope := func(sid, rootPath string, readOnly bool) SharingScope {
+		return SharingScope{
+			Sharing:  &Sharing{SID: sid},
+			Member:   &Member{ReadOnly: readOnly},
+			RootPath: rootPath,
+		}
+	}
+	tests := []struct {
+		name          string
+		better, worse SharingScope
+	}{
+		{"WriterBeforeOuterReader", scope("b", "/x/y", false), scope("a", "/x", true)},
+		{"OuterBeforeNestedSameRights", scope("b", "/x", false), scope("a", "/x/y", false)},
+		{"OuterBeforeNestedAsReader", scope("b", "/x", true), scope("a", "/x/y", true)},
+		{"SmallestIDOnSameRoot", scope("a", "/x", false), scope("b", "/x", false)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Negative(t, compareDriveScopes(tt.better, tt.worse))
+			assert.Positive(t, compareDriveScopes(tt.worse, tt.better))
+		})
+	}
+}
+
+func TestAccessResolver_PathFromRoot(t *testing.T) {
+	tests := []struct {
+		name, rootPath, fullpath, want string
+		wantErr                        bool
+	}{
+		{name: "RootItself", rootPath: "/Team", fullpath: "/Team", want: ""},
+		{name: "FileAtRoot", rootPath: "/Team", fullpath: "/Team/a.txt", want: "/a.txt"},
+		{name: "FileInSubfolder", rootPath: "/Team", fullpath: "/Team/sub/a.txt", want: "/sub/a.txt"},
+		{name: "Subfolder", rootPath: "/Team", fullpath: "/Team/sub", want: "/sub"},
+		{name: "RootNotAtTopLevel", rootPath: "/Perso/Team", fullpath: "/Perso/Team/sub/a.txt", want: "/sub/a.txt"},
+		{name: "FileRoot", rootPath: "/Perso/report.pdf", fullpath: "/Perso/report.pdf", want: ""},
+		{name: "SiblingWithSamePrefix", rootPath: "/Team", fullpath: "/Team2/a.txt", wantErr: true},
+		{name: "ParentOfRoot", rootPath: "/Perso/Team", fullpath: "/Perso", wantErr: true},
+		{name: "Unrelated", rootPath: "/Team", fullpath: "/Other/a.txt", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := &SharingScope{RootPath: tt.rootPath}
+			got, err := sc.PathFromRoot(tt.fullpath)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestAccessResolver_CrossesDriveBoundary(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
