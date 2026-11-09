@@ -194,22 +194,14 @@ func (o *FileOpener) GetSharecode(memberIndex int, readOnly bool) (string, error
 			return "", ErrMemberNotFound
 		}
 		if !o.InteractToken {
-			if member.ReadOnly {
-				readOnly = true
-			} else {
-				readOnly = s.ReadOnlyRules()
-			}
+			readOnly = readOnly || member.ReadOnly || s.ReadOnlyRules()
 		}
 	} else if s.Owner {
 		member, err = s.FindMemberByInboundClientID(o.ClientID)
 		if err != nil {
 			return "", err
 		}
-		if member.ReadOnly {
-			readOnly = true
-		} else {
-			readOnly = s.ReadOnlyRules()
-		}
+		readOnly = readOnly || member.ReadOnly || s.ReadOnlyRules()
 	} else {
 		// Trust the owner
 		if memberIndex < 0 || memberIndex >= len(s.Members) {
@@ -323,7 +315,7 @@ func (o *FileOpener) PrepareOpenFileRequest(memberIndex int, readOnly bool) (*Pr
 			ReadOnly:    readOnly,
 		}, nil
 	}
-	return o.PrepareRequestForSharedFile()
+	return o.PrepareRequestForSharedFile(memberIndex, readOnly)
 }
 
 // PreparedRequest contains the parameters to make a request to another
@@ -342,9 +334,9 @@ type PreparedRequest struct {
 
 // PrepareRequestForSharedFile returns the parameters for making a request to
 // open the shared file on another instance.
-func (o *FileOpener) PrepareRequestForSharedFile() (*PreparedRequest, error) {
+func (o *FileOpener) PrepareRequestForSharedFile(memberIndex int, readOnly bool) (*PreparedRequest, error) {
 	s := o.Sharing
-	prepared := PreparedRequest{}
+	prepared := PreparedRequest{MemberIndex: memberIndex, ReadOnly: readOnly}
 
 	if s.Owner {
 		domain := o.File.CozyMetadata.CreatedOn
@@ -363,11 +355,11 @@ func (o *FileOpener) PrepareRequestForSharedFile() (*PreparedRequest, error) {
 				prepared.Creator = &s.Members[i]
 			}
 		}
-		if o.ClientID != "" && !prepared.ReadOnly {
+		if o.ClientID != "" {
 			for i, c := range s.Credentials {
 				if c.InboundClientID == o.ClientID {
 					prepared.MemberIndex = i + 1
-					prepared.ReadOnly = s.Members[i+1].ReadOnly
+					prepared.ReadOnly = prepared.ReadOnly || s.Members[i+1].ReadOnly
 				}
 			}
 		}
