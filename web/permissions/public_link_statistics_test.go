@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -20,7 +21,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPublicLinkStatistics(t *testing.T) {
+type publicLinkStatisticsSetup struct {
+	inst                                      *instance.Instance
+	link, other, sameFile, wholeType, nonLink *permission.Permission
+	token, wrongToken, code, tempDir          string
+	request                                   func(*testing.T, string, string) *http.Response
+}
+
+func setupPublicLinkStatistics(t *testing.T) publicLinkStatisticsSetup {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("requires CouchDB and an instance")
 	}
@@ -59,7 +68,8 @@ func TestPublicLinkStatistics(t *testing.T) {
 	} {
 		require.NoError(t, couchdb.CreateDoc(inst, event))
 	}
-	request := func(id, bearer string) *http.Response {
+	request := func(t *testing.T, id, bearer string) *http.Response {
+		t.Helper()
 		req, err := http.NewRequest(http.MethodGet, server.URL+"/permissions/"+id+"/statistics", nil)
 		require.NoError(t, err)
 		req.Host = inst.Domain
@@ -71,7 +81,12 @@ func TestPublicLinkStatistics(t *testing.T) {
 		t.Cleanup(func() { resp.Body.Close() })
 		return resp
 	}
-	resp := request(link.ID(), token)
+	return publicLinkStatisticsSetup{inst, link, other, sameFile, wholeType, nonLink, token, wrongToken, code, tempDir, request}
+}
+
+func TestPublicLinkStatisticsExportsOnlyRequestedLink(t *testing.T) {
+	setup := setupPublicLinkStatistics(t)
+	resp := setup.request(t, setup.link.ID(), setup.token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, "text/csv; charset=utf-8", resp.Header.Get("Content-Type"))
 	require.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
@@ -82,7 +97,7 @@ func TestPublicLinkStatistics(t *testing.T) {
 		{"2026-01-02T03:04:05Z", "192.0.2.1", "", "created"},
 		{"2026-01-02T04:04:05Z", "2001:db8::1", "'=cmd", "opened"},
 	}, rows)
-	sameFileResponse := request(sameFile.ID(), token)
+	sameFileResponse := setup.request(t, setup.sameFile.ID(), setup.token)
 	require.Equal(t, http.StatusOK, sameFileResponse.StatusCode)
 	sameFileRows, err := csv.NewReader(sameFileResponse.Body).ReadAll()
 	require.NoError(t, err)
@@ -90,34 +105,50 @@ func TestPublicLinkStatistics(t *testing.T) {
 		{"occurred_at", "IP", "identity", "action"},
 		{"2026-01-02T03:04:05Z", "192.0.2.3", "", "downloaded"},
 	}, sameFileRows)
-	for _, tc := range []struct{ id, token string }{
-		{link.ID(), wrongToken}, {other.ID(), token}, {wholeType.ID(), token}, {nonLink.ID(), token}, {link.ID(), code}, {link.ID(), ""},
-	} {
-		res := request(tc.id, tc.token)
-		require.NotEqual(t, http.StatusOK, res.StatusCode)
-		body, err := io.ReadAll(res.Body)
-		require.NoError(t, err)
-		require.NotContains(t, string(body), "192.0.2.1")
-	}
+}
 
-	t.Setenv("TMPDIR", filepath.Join(tempDir, "missing"))
-	failureToCreate := request(link.ID(), token)
+func TestPublicLinkStatisticsRejectsUnauthorizedRequests(t *testing.T) {
+	setup := setupPublicLinkStatistics(t)
+	for _, tc := range []struct{ name, id, token string }{
+		{"wrong token", setup.link.ID(), setup.wrongToken},
+		{"other file", setup.other.ID(), setup.token},
+		{"whole type", setup.wholeType.ID(), setup.token},
+		{"not a link", setup.nonLink.ID(), setup.token},
+		{"share code", setup.link.ID(), setup.code},
+		{"no token", setup.link.ID(), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := setup.request(t, tc.id, tc.token)
+			require.NotEqual(t, http.StatusOK, res.StatusCode)
+			body, err := io.ReadAll(res.Body)
+			require.NoError(t, err)
+			require.NotContains(t, string(body), "192.0.2.1")
+		})
+	}
+}
+
+func TestPublicLinkStatisticsTempFileCreationFailure(t *testing.T) {
+	setup := setupPublicLinkStatistics(t)
+	t.Setenv("TMPDIR", filepath.Join(setup.tempDir, "missing"))
+	failureToCreate := setup.request(t, setup.link.ID(), setup.token)
 	require.Equal(t, http.StatusInternalServerError, failureToCreate.StatusCode)
 	failureToCreateBody, err := io.ReadAll(failureToCreate.Body)
 	require.NoError(t, err)
 	require.NotContains(t, string(failureToCreateBody), "192.0.2.1")
-	t.Setenv("TMPDIR", tempDir)
+}
 
+func TestPublicLinkStatisticsInvalidEventFailure(t *testing.T) {
+	setup := setupPublicLinkStatistics(t)
 	invalid := &couchdb.JSONDoc{Type: consts.PublicLinkEvents, M: map[string]interface{}{
-		"_id": "invalid-event", "link_id": link.ID(), "occurred_at": "invalid", "ip": "192.0.2.1",
+		"_id": "invalid-event", "link_id": setup.link.ID(), "occurred_at": "invalid", "ip": "192.0.2.1",
 	}}
-	require.NoError(t, couchdb.CreateNamedDoc(inst, invalid))
-	failure := request(link.ID(), token)
+	require.NoError(t, couchdb.CreateNamedDoc(setup.inst, invalid))
+	failure := setup.request(t, setup.link.ID(), setup.token)
 	require.Equal(t, http.StatusInternalServerError, failure.StatusCode)
 	failureBody, err := io.ReadAll(failure.Body)
 	require.NoError(t, err)
 	require.NotContains(t, string(failureBody), "192.0.2.1")
-	remaining, err := os.ReadDir(tempDir)
+	remaining, err := os.ReadDir(setup.tempDir)
 	require.NoError(t, err)
 	require.Empty(t, remaining)
 }
