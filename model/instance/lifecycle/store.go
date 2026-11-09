@@ -16,6 +16,7 @@ import (
 type Store interface {
 	SaveMagicLinkCode(db prefixer.Prefixer, code string) error
 	CheckMagicLinkCode(db prefixer.Prefixer, code string) bool
+	ConsumeMagicLinkCode(db prefixer.Prefixer, code string) bool
 }
 
 // storeTTL is the time an entry stay alive
@@ -52,35 +53,46 @@ func newMemStore() Store {
 
 type memStore struct {
 	mu   sync.Mutex
-	vals map[string]time.Time // code -> expiration time
+	vals map[string]time.Time // instance-scoped code -> expiration time
 }
 
 func (s *memStore) cleaner() {
 	for range time.Tick(storeCleanInterval) {
 		now := time.Now()
+		s.mu.Lock()
 		for k, v := range s.vals {
 			if now.After(v) {
 				delete(s.vals, k)
 			}
 		}
+		s.mu.Unlock()
 	}
 }
 
 func (s *memStore) SaveMagicLinkCode(db prefixer.Prefixer, code string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.vals[code] = time.Now().Add(storeTTL)
+	s.vals[magicLinkCodeKey(db, code)] = time.Now().Add(storeTTL)
 	return nil
 }
 
 func (s *memStore) CheckMagicLinkCode(db prefixer.Prefixer, code string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	exp, ok := s.vals[code]
+	exp, ok := s.vals[magicLinkCodeKey(db, code)]
 	if !ok {
 		return false
 	}
 	return time.Now().Before(exp)
+}
+
+func (s *memStore) ConsumeMagicLinkCode(db prefixer.Prefixer, code string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := magicLinkCodeKey(db, code)
+	exp, ok := s.vals[key]
+	delete(s.vals, key)
+	return ok && time.Now().Before(exp)
 }
 
 type redisStore struct {
@@ -101,4 +113,9 @@ func (s *redisStore) CheckMagicLinkCode(db prefixer.Prefixer, code string) bool 
 
 func magicLinkCodeKey(db prefixer.Prefixer, suffix string) string {
 	return db.DBPrefix() + ":magic_link:" + suffix
+}
+
+func (s *redisStore) ConsumeMagicLinkCode(db prefixer.Prefixer, code string) bool {
+	r, err := s.c.GetDel(s.ctx, magicLinkCodeKey(db, code)).Result()
+	return err == nil && r == "1"
 }

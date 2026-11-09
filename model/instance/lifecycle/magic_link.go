@@ -50,7 +50,15 @@ func CreateMagicLinkCode(inst *instance.Instance) (string, error) {
 }
 
 func CheckMagicLink(inst *instance.Instance, code string) error {
-	if !GetStore().CheckMagicLinkCode(inst, code) {
+	if !inst.MagicLink || !GetStore().CheckMagicLinkCode(inst, code) {
+		return ErrInvalidMagicLink
+	}
+	return nil
+}
+
+// ConsumeMagicLink validates and spends a code once all authentication factors pass.
+func ConsumeMagicLink(inst *instance.Instance, code string) error {
+	if !inst.MagicLink || !GetStore().ConsumeMagicLinkCode(inst, code) {
 		return ErrInvalidMagicLink
 	}
 	return nil
