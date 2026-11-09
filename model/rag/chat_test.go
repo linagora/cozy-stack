@@ -646,9 +646,9 @@ func TestRAGRequest(t *testing.T) {
 	assert.NotContains(t, string(body), "max_tokens", "the default of openRAG")
 	assert.NotContains(t, string(body), "tools", "no actions, no tools")
 
-	visio := ActionDefinition{Name: "start_visio", Description: "start a video call"}
+	visio := ToolDefinition{Name: "start_visio", Description: "start a video call"}
 	payload := ragPayload(inst, messages, true, map[string]interface{}{})
-	withTools(payload, []ActionDefinition{visio}, config.RAGServer{})
+	withTools(payload, []ToolDefinition{visio}, config.RAGServer{})
 	body, err = json.Marshal(payload)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"tools":[{"function":{"description":"start a video call","name":"start_visio","parameters":{"properties":{},"type":"object"}},"type":"function"}]`)
@@ -656,7 +656,7 @@ func TestRAGRequest(t *testing.T) {
 	assert.NotContains(t, string(body), "parallel_tool_calls", "refused by some gateways")
 
 	direct := directLLMPayload(messages, false, map[string]interface{}{})
-	withTools(direct, []ActionDefinition{visio}, config.RAGServer{SingleToolCall: true})
+	withTools(direct, []ToolDefinition{visio}, config.RAGServer{SingleToolCall: true})
 	body, err = json.Marshal(direct)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"tools":[{"function"`, "the LLM alone gets the tools too")
