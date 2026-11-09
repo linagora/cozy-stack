@@ -14,9 +14,11 @@ func ForEachEvent(ctx context.Context, db prefixer.Prefixer, linkID string, visi
 	const pageSize = 500
 	req := &couchdb.ViewRequest{
 		StartKey: []interface{}{linkID}, EndKey: []interface{}{linkID, map[string]interface{}{}},
-		Limit: pageSize + 1, IncludeDocs: true,
+		IncludeDocs: true,
 	}
-	for {
+	cursor := couchdb.NewKeyCursor(pageSize, nil, "")
+	for cursor.HasMore() {
+		cursor.ApplyTo(req)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -46,14 +48,13 @@ func ForEachEvent(ctx context.Context, db prefixer.Prefixer, linkID string, visi
 				return err
 			}
 		}
-		if len(result.Rows) <= pageSize {
-			return nil
+		if len(result.Rows) > pageSize {
+			next := result.Rows[pageSize]
+			if next.ID == "" || next.ID == req.StartKeyDocID {
+				return errors.New("invalid public link events cursor")
+			}
 		}
-		next := result.Rows[pageSize]
-		if next.ID == "" || next.ID == req.StartKeyDocID {
-			return errors.New("invalid public link events cursor")
-		}
-		req.StartKey = next.Key
-		req.StartKeyDocID = next.ID
+		cursor.UpdateFrom(&result)
 	}
+	return nil
 }
