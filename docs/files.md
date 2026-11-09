@@ -1866,6 +1866,216 @@ HTTP/1.1 204 No Content
 ```
 
 
+## Recents
+
+The recents are the personal activity of the user: one row per file or folder
+that they edited or opened, whoever owns it. The rows are stored in the
+`io.cozy.files.recents` doctype of the instance of the user, with the metadata
+needed to display the item. See the
+[ADR](./adr/007-adr-server-side-recents.md) for the rules.
+
+The recents are behind the `drive.recents.enabled` feature flag, which is off
+by default.
+
+### GET /files/recents
+
+List the recents of the user, sorted by `last_activity_at` then `id`, both
+descending. It's paginated.
+
+Each resource is a row of the recents: the dates of the activity of the user on
+an item, and the last name they knew for it. It points to its item with a
+`file` relationship, and the `io.cozy.files` document of the item, read when
+the list is requested, is given in `included`, as the files routes give it:
+same attributes (with `path`), same relationships, same thumbnail links.
+
+What the list gives depends on what is found for the item:
+
+- an item that is found, in the trash or not, has a `file` relationship and an
+  included document (a trashed file has `trashed: true`, and a trashed folder
+  has its path under the trash)
+- an item that is not found was destroyed: it has no resource at all
+- an item that the user cannot read has an empty `file` relationship
+  (`"data": null`) and no included document; it is listed with the name the
+  user knew, and cannot be opened. For now, this is the case of every item of
+  a shared drive owned by another instance (those with an `owner_domain`).
+
+The route never writes or deletes rows.
+
+#### Query-String
+
+| Parameter    | Description                                                    |
+| ------------ | -------------------------------------------------------------- |
+| page[cursor] | the cursor of the `links.next` of the previous page            |
+| page[limit]  | the number of entries (50 by default, brought down to 100 max) |
+
+#### Request
+
+```http
+GET /files/recents?page[limit]=2 HTTP/1.1
+Accept: application/vnd.api+json
+```
+
+#### Status codes
+
+- 200 OK, with the page in the response
+- 403 Forbidden, when the token has no permission for `GET` on the whole
+  `io.cozy.files` doctype, or is a share code (share by link, sharing preview
+  or interaction)
+- 404 Not Found, when the feature flag is off for the instance
+- 422 Unprocessable Entity, when `page[limit]` is not a positive integer or
+  `page[cursor]` is not a valid cursor
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/vnd.api+json
+```
+
+```json
+{
+  "data": [
+    {
+      "type": "io.cozy.files.recents",
+      "id": "9152d568-7e7c-11e6-a377-37cbfb190b4b",
+      "meta": {
+        "rev": "2-0c2f8d1e"
+      },
+      "attributes": {
+        "last_edited_at": "2026-11-05T09:12:45Z",
+        "last_viewed_at": "2026-11-05T10:03:27Z",
+        "last_activity_at": "2026-11-05T10:03:27Z",
+        "name": "hello.jpg",
+        "type": "file",
+        "mime": "image/jpeg",
+        "class": "image"
+      },
+      "relationships": {
+        "file": {
+          "data": {
+            "type": "io.cozy.files",
+            "id": "9152d568-7e7c-11e6-a377-37cbfb190b4b"
+          }
+        }
+      }
+    },
+    {
+      "type": "io.cozy.files.recents",
+      "id": "0c1116b0-6f7a-11e6-8b77-86f30ca893d3",
+      "meta": {
+        "rev": "1-ff3beeb4"
+      },
+      "attributes": {
+        "owner_domain": "alice.example.net",
+        "last_viewed_at": "2026-11-04T16:20:11Z",
+        "last_activity_at": "2026-11-04T16:20:11Z",
+        "name": "Meeting notes.cozy-note",
+        "type": "file",
+        "mime": "text/vnd.cozy.note+markdown",
+        "class": "text"
+      },
+      "relationships": {
+        "file": {
+          "data": null
+        }
+      }
+    }
+  ],
+  "meta": {
+    "count": 2
+  },
+  "links": {
+    "next": "/files/recents?page%5Bcursor%5D=eyJsYXN0X2FjdGl2aXR5X2F0IjoiMjAyNi0xMS0wNFQxNjoyMDoxMVoiLCJpZCI6IjBjMTExNmIwLTZmN2EtMTFlNi04Yjc3LTg2ZjMwY2E4OTNkMyJ9&page%5Blimit%5D=2"
+  },
+  "included": [
+    {
+      "type": "io.cozy.files",
+      "id": "9152d568-7e7c-11e6-a377-37cbfb190b4b",
+      "meta": {
+        "rev": "3-0e6d5b72"
+      },
+      "attributes": {
+        "type": "file",
+        "name": "sunset.jpg",
+        "dir_id": "fce1a6c0-dfc5-11e5-8d1a-1f854d4aaf81",
+        "path": "/Photos/sunset.jpg",
+        "trashed": false,
+        "md5sum": "ODZmYjI2OWQxOTBkMmM4NQo=",
+        "created_at": "2026-11-02T08:30:00Z",
+        "updated_at": "2026-11-05T09:12:45Z",
+        "tags": [],
+        "size": "12345",
+        "executable": false,
+        "class": "image",
+        "mime": "image/jpeg"
+      },
+      "relationships": {
+        "parent": {
+          "links": {
+            "related": "/files/fce1a6c0-dfc5-11e5-8d1a-1f854d4aaf81"
+          },
+          "data": {
+            "type": "io.cozy.files",
+            "id": "fce1a6c0-dfc5-11e5-8d1a-1f854d4aaf81"
+          }
+        },
+        "referenced_by": {
+          "links": {
+            "self": "/files/9152d568-7e7c-11e6-a377-37cbfb190b4b/relationships/references"
+          },
+          "data": null
+        }
+      },
+      "links": {
+        "self": "/files/9152d568-7e7c-11e6-a377-37cbfb190b4b",
+        "tiny": "/files/9152d568-7e7c-11e6-a377-37cbfb190b4b/thumbnails/0f9cda56674282ac/tiny",
+        "small": "/files/9152d568-7e7c-11e6-a377-37cbfb190b4b/thumbnails/0f9cda56674282ac/small",
+        "medium": "/files/9152d568-7e7c-11e6-a377-37cbfb190b4b/thumbnails/0f9cda56674282ac/medium",
+        "large": "/files/9152d568-7e7c-11e6-a377-37cbfb190b4b/thumbnails/0f9cda56674282ac/large"
+      }
+    }
+  ]
+}
+```
+
+In this example, the file was renamed since the last activity of the user: the
+resource keeps the name they knew, and the included document has the current
+one.
+
+The attributes of a resource are the stored fields of its row:
+
+- `last_edited_at`, `last_viewed_at`: the latest edit and the latest open of
+  the item by the user, when there is one
+- `last_activity_at`: the latest of these two dates, used for sorting
+- `name`, `type`, `mime`, `class`: what the item was at the last recorded
+  activity of the user (`mime` and `class` are for files only). They are not
+  kept up to date otherwise: the current values are in the included document.
+- `owner_domain`: for an item of a shared drive that the user does not own,
+  the domain of the instance of its owner
+
+`meta.count` is the number of resources of the page. A page can hold fewer
+resources than `page[limit]`, and even none, when rows are left out: the route
+does not read more rows to fill it. `links.next` is present when rows follow
+those read for the page, whatever the number of resources given: it keeps the
+page size, and its cursor is the position of the last row read, so a traversal
+goes on after it whatever activity happens meanwhile. The traversal is over
+when a page has no `links.next`.
+
+### Write paths that do not record an activity
+
+Only the edits and the opens of a person are recorded. The following never
+add or move a row in the recents:
+
+- writes made with the token of a konnector or of an application, other than
+  the flagship app and the OAuth clients of the `desktop` kind
+- background saves and workers
+- the automatic writes of the flagship app: the photo backup, the konnector
+  folders, and the konnector traces and support logs
+- renaming, moving, copying or trashing an item, and changing its permissions
+- downloading or previewing a file, and reading its metadata
+- any activity on the root, the trash and the other folders with a fixed ID
+- any activity on a file whose owner's instance lives on another stack
+
 ## Trash
 
 When a file is deleted, it is first moved to the trash. In the trash, it can be
