@@ -56,6 +56,10 @@ behavior.
 Create a new directory. The `dir-id` parameter is optional. When it's not given,
 the directory is created at the root of the virtual file system.
 
+Alternatively, `Path` creates a directory by absolute path, with `Recursive=true`
+to create missing parents. This requires `POST` permission on all `io.cozy.files`.
+Shared-drive routes do not accept `Path`; use the parent directory ID and `Name`.
+
 #### Query-String
 
 | Parameter  | Description                         |

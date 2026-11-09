@@ -234,6 +234,13 @@ func createDirHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing) 
 
 	var doc *vfs.DirDoc
 	if path != "" {
+		// Absolute paths address the whole VFS; scoped callers must use a parent ID.
+		if err := middlewares.AllowWholeType(c, permission.POST, consts.Files); err != nil {
+			return nil, err
+		}
+		if sharedDrive != nil {
+			return nil, jsonapi.InvalidParameter("Path", errors.New("use a parent directory ID in shared drives"))
+		}
 		if c.QueryParam("Recursive") == "true" {
 			doc, err = vfs.MkdirAll(fs, path)
 		} else {
