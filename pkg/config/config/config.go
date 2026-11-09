@@ -308,6 +308,9 @@ type Office struct {
 type RAGServer struct {
 	URL    string
 	APIKey string
+	// SingleToolCall asks the LLM for one tool call at a time, with
+	// parallel_tool_calls: false. Off by default: some gateways refuse it.
+	SingleToolCall bool
 }
 
 // CommonSettings contains the configuration for common settings for a context
@@ -1430,9 +1433,11 @@ func makeRAGServers(v *viper.Viper) (map[string]RAGServer, error) {
 		}
 		url, _ := m["url"].(string)
 		key, _ := m["api_key"].(string)
+		single, _ := m["single_tool_call"].(bool)
 		servers[k] = RAGServer{
-			URL:    url,
-			APIKey: key,
+			URL:            url,
+			APIKey:         key,
+			SingleToolCall: single,
 		}
 	}
 	return servers, nil

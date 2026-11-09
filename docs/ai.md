@@ -101,7 +101,12 @@ rag:
   beta:
     url: http://openrag-b:8000
     api_key: $3cr3t
+    single_tool_call: true
 ```
+
+`single_tool_call` (off by default) asks the LLM behind the server for one
+tool call at a time, with `parallel_tool_calls: false`, for the [chat
+actions](#chat-actions). Some LLM gateways refuse the parameter.
 
 ```sh
 $ cozy-stack features flags --domain alice.cozy.localhost '{"rag.server": "beta"}'
@@ -641,7 +646,9 @@ is guessed:
   with `tool_choice: "auto"`: the LLM answers in text, or calls a tool with
   its arguments, in the same completion. The client runs one action per
   message: of several calls, the first one is kept, and the LLM asks the
-  others again after its result. The rules of the tools go as a last leading system message,
+  others again after its result. The `single_tool_call` option of the
+  [RAG server](#choosing-the-rag-server) asks the LLM for one call at a
+  time. The rules of the tools go as a last leading system message,
   after the prompt of the assistant and the instructions of the client: call
   a tool only when the user explicitly asks for what it does, or when the
   request needs its result; fill the arguments from the conversation, the

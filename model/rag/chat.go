@@ -727,7 +727,7 @@ func withInstructions(messages []ragMessage, instructions string) []ragMessage {
 // openRAG takes a request without a partition as its model as one for the LLM
 // itself: it gets the messages as they are, with no retrieval and no system
 // prompt of openRAG.
-func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]interface{}, actions []ActionDefinition) map[string]interface{} {
+func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]interface{}) map[string]interface{} {
 	payload := map[string]interface{}{
 		"messages":    messages,
 		"stream":      stream,
@@ -735,7 +735,6 @@ func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]in
 		"top_p":       TopP,
 		"logprobs":    LogProbs,
 	}
-	withTools(payload, actions)
 	kept := map[string]interface{}{}
 	if override, ok := metadata["llm_override"]; ok {
 		kept["llm_override"] = override
@@ -751,13 +750,17 @@ func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]in
 
 // withTools gives the LLM the actions as its tools. One action per message:
 // of several calls, the first is kept, the LLM asks the others again after
-// its result. parallel_tool_calls is not sent, some gateways refuse it.
-func withTools(payload map[string]interface{}, actions []ActionDefinition) {
+// its result. The single_tool_call option of the RAG server asks the LLM for
+// one call at a time; off by default, as some gateways refuse the parameter.
+func withTools(payload map[string]interface{}, actions []ActionDefinition, server config.RAGServer) {
 	if len(actions) == 0 {
 		return
 	}
 	payload["tools"] = tools(actions)
 	payload["tool_choice"] = "auto"
+	if server.SingleToolCall {
+		payload["parallel_tool_calls"] = false
+	}
 }
 
 // toolsPrompt is the system message that goes with the tools: when to call
@@ -866,10 +869,12 @@ func (q *chatQuery) body(actions []ActionDefinition) ([]byte, error) {
 	if len(actions) > 0 {
 		messages = withInstructions(messages, toolsPrompt(!q.direct, q.now))
 	}
+	payload := ragPayload(q.inst, messages, q.stream, q.metadata)
 	if q.direct {
-		return json.Marshal(directLLMPayload(messages, q.stream, q.metadata, actions))
+		payload = directLLMPayload(messages, q.stream, q.metadata)
 	}
-	return ragRequest(q.inst, messages, q.stream, q.metadata, actions)
+	withTools(payload, actions, q.inst.RAGServer())
+	return json.Marshal(payload)
 }
 
 // answer asks openRAG for the answer to the message, published as it comes,
@@ -946,10 +951,10 @@ func (q *chatQuery) fail(err error) error {
 	return err
 }
 
-// ragRequest is the body of a query to openRAG for an answer from the
+// ragPayload is the body of a query to openRAG for an answer from the
 // documents.
-func ragRequest(inst *instance.Instance, messages []ragMessage, stream bool, metadata map[string]interface{}, actions []ActionDefinition) ([]byte, error) {
-	payload := map[string]interface{}{
+func ragPayload(inst *instance.Instance, messages []ragMessage, stream bool, metadata map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{
 		"model":       fmt.Sprintf("ragondin-%s", inst.Domain),
 		"messages":    messages,
 		"stream":      stream,
@@ -958,8 +963,6 @@ func ragRequest(inst *instance.Instance, messages []ragMessage, stream bool, met
 		"top_p":       TopP,
 		"logprobs":    LogProbs,
 	}
-	withTools(payload, actions)
-	return json.Marshal(payload)
 }
 
 // ragAnswer is the answer of openRAG to a query: its content, the reasoning
