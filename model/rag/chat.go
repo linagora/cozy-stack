@@ -47,8 +47,10 @@ type ChatPayload struct {
 	// like the instructions of the OpenAI Responses API.
 	Instructions string `json:"instructions,omitempty"`
 	// Tools are the definitions of the actions the client can run, given to
-	// the LLM as its tools. Actions is their former name, still read.
-	Tools   []ToolDefinition `json:"tools,omitempty"`
+	// the LLM as its tools.
+	Tools []ToolDefinition `json:"tools,omitempty"`
+	// Deprecated: the former name of Tools, still read for the clients
+	// deployed with it. Ignored when Tools is given.
 	Actions []ToolDefinition `json:"actions,omitempty"`
 	// Result, instead of q, is the result of the action proposed by an
 	// answer, once the client has run it: the LLM goes on from it.
