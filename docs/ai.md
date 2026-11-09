@@ -402,7 +402,9 @@ Content-Type: application/json
 - `tools` (optional) the definitions of the [chat actions](#chat-actions)
   the client can run: the tools of the LLM. Without it, the message is
   answered as usual, without tools. Invalid definitions are rejected with a
-  `400 Bad Request`. `actions` is the former name of this field, still read.
+  `400 Bad Request`. `actions`, the former name of this field, is deprecated:
+  still read when `tools` is absent, it will be removed once the clients
+  send `tools`.
 - `result` (optional), instead of `q`, the result of the action proposed by
   an answer, once the client has run it: see
   [results of the actions](#results-of-the-actions).
