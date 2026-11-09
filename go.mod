@@ -40,7 +40,7 @@ require (
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/pquerna/otp v1.4.0
 	github.com/prometheus/client_golang v1.18.0
-	github.com/rabbitmq/amqp091-go v1.9.0
+	github.com/rabbitmq/amqp091-go v1.14.0
 	github.com/redis/go-redis/v9 v9.17.3
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sideshow/apns2 v0.25.0
