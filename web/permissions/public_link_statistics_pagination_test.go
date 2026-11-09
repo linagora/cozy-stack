@@ -91,18 +91,13 @@ func TestPublicLinkStatisticsConcurrentPages(t *testing.T) {
 		"_id": "late-invalid", "link_id": link.ID(), "occurred_at": "2026-01-02T04:04:05Z", "ip": 123,
 	}}
 	require.NoError(t, couchdb.CreateNamedDoc(inst, invalid))
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/permissions/"+link.ID()+"/statistics", nil)
-	require.NoError(t, err)
-	req.Host = inst.Domain
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.NotContains(t, string(body), "192.0.2.")
-	require.NotContains(t, string(body), "occurred_at,IP,identity,action")
+	body := testutils.CreateTestClient(t, server.URL).
+		GET("/permissions/"+link.ID()+"/statistics").
+		WithHost(inst.Domain).
+		WithHeader("Authorization", "Bearer "+token).
+		Expect().Status(http.StatusInternalServerError).Body()
+	body.NotContains("192.0.2.")
+	body.NotContains("occurred_at,IP,identity,action")
 	remaining, err := os.ReadDir(tempDir)
 	require.NoError(t, err)
 	require.Empty(t, remaining)
