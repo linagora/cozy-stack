@@ -12,6 +12,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/rag"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/metadata"
@@ -161,6 +162,7 @@ func TestQueryGivesTheActionsAsTools(t *testing.T) {
 	assert.Equal(t, "ragondin-"+r.inst.Domain, call.Model)
 	assert.Equal(t, []string{"create_note", "create_document", "draft_email"}, call.ToolNames())
 	assert.Equal(t, "auto", call.ToolChoice, "the LLM decides")
+	assert.Nil(t, call.ParallelToolCalls, "parallel_tool_calls is not sent by default")
 	email := call.Tools[2].Function
 	assert.Equal(t, "function", call.Tools[2].Type)
 	assert.Contains(t, email.Description, "prepare an email for the user to review and send")
@@ -176,6 +178,17 @@ func TestQueryGivesTheActionsAsTools(t *testing.T) {
 	answer := lastMessage(t, r, query.DocID)
 	assert.Equal(t, "fake answer", answer.Content)
 	assert.Nil(t, answer.Action)
+
+	t.Run("one tool call at a time when the server asks for it", func(t *testing.T) {
+		server := r.fake.Server
+		server.SingleToolCall = true
+		config.GetConfig().RAGServers = map[string]config.RAGServer{config.DefaultInstanceContext: server}
+		t.Cleanup(func() { config.GetConfig().RAGServers[config.DefaultInstanceContext] = r.fake.Server })
+		require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
+		call := lastLLMCall(t, r.fake)
+		require.NotNil(t, call.ParallelToolCalls)
+		assert.False(t, *call.ParallelToolCalls)
+	})
 }
 
 func TestQueryProposesTheActionTheLLMCalls(t *testing.T) {

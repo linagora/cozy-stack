@@ -224,6 +224,9 @@ rag:
   default:
     url: http://localhost:8000
     api_key: $3cr3t
+    # Ask the LLM for one tool call at a time (parallel_tool_calls: false).
+    # Off by default: some LLM gateways refuse the parameter.
+    single_tool_call: false
   beta:
     url: http://localhost:8001
     api_key: $3cr3t

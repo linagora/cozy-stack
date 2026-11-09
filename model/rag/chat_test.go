@@ -638,7 +638,7 @@ func TestHandleNonStreamResponseToolCall(t *testing.T) {
 func TestRAGRequest(t *testing.T) {
 	inst := &instance.Instance{Domain: "rag-request.example.net"}
 	messages := []ragMessage{{Role: UserRole, Content: "Hello"}}
-	body, err := ragRequest(inst, messages, true, map[string]interface{}{"workspace": "ws-1"}, nil)
+	body, err := json.Marshal(ragPayload(inst, messages, true, map[string]interface{}{"workspace": "ws-1"}))
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"model":"ragondin-rag-request.example.net"`)
 	assert.Contains(t, string(body), `"metadata":{"workspace":"ws-1"}`)
@@ -647,14 +647,20 @@ func TestRAGRequest(t *testing.T) {
 	assert.NotContains(t, string(body), "tools", "no actions, no tools")
 
 	visio := ActionDefinition{Name: "start_visio", Description: "start a video call"}
-	body, err = ragRequest(inst, messages, true, map[string]interface{}{}, []ActionDefinition{visio})
+	payload := ragPayload(inst, messages, true, map[string]interface{}{})
+	withTools(payload, []ActionDefinition{visio}, config.RAGServer{})
+	body, err = json.Marshal(payload)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"tools":[{"function":{"description":"start a video call","name":"start_visio","parameters":{"properties":{},"type":"object"}},"type":"function"}]`)
 	assert.Contains(t, string(body), `"tool_choice":"auto"`)
 	assert.NotContains(t, string(body), "parallel_tool_calls", "refused by some gateways")
-	direct, err := json.Marshal(directLLMPayload(messages, false, map[string]interface{}{}, []ActionDefinition{visio}))
+
+	direct := directLLMPayload(messages, false, map[string]interface{}{})
+	withTools(direct, []ActionDefinition{visio}, config.RAGServer{SingleToolCall: true})
+	body, err = json.Marshal(direct)
 	require.NoError(t, err)
-	assert.Contains(t, string(direct), `"tools":[{"function"`, "the LLM alone gets the tools too")
+	assert.Contains(t, string(body), `"tools":[{"function"`, "the LLM alone gets the tools too")
+	assert.Contains(t, string(body), `"parallel_tool_calls":false`, "one call at a time when the server asks for it")
 }
 
 func TestChatConversationJSON(t *testing.T) {
