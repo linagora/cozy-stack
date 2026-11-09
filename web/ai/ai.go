@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -72,6 +73,32 @@ func callAI(c echo.Context, path string) (*http.Response, error) {
 		return nil, echo.NewHTTPError(http.StatusBadRequest, "Unable to read request body")
 	}
 	contentType := c.Request().Header.Get("Content-Type")
+	if path == "v1/chat/completions" {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+			return nil, echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON body")
+		}
+		var model string
+		if raw, ok := payload["model"]; ok {
+			if err := json.Unmarshal(raw, &model); err != nil {
+				return nil, echo.NewHTTPError(http.StatusBadRequest, "Invalid model")
+			}
+		}
+		if model != "" {
+			if model != "ragondin-"+inst.Domain && model != "openrag-"+inst.Domain {
+				return nil, echo.NewHTTPError(http.StatusForbidden, "Invalid model")
+			}
+			if err := middlewares.AllowWholeType(c, permission.GET, consts.Files); err != nil {
+				return nil, err
+			}
+		}
+		delete(payload, "metadata")
+		body, err = json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		contentType = "application/json"
+	}
 	// TODO: handle streaming response
 	res, err := rag.CallRAGQuery(inst, http.MethodPost, body, path, contentType)
 	if err != nil {

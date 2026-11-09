@@ -226,6 +226,11 @@ Note the JSON-API format is not used here as we follow the openRAG format.
 
 This route directly follows the [openAI chat completion AI](https://platform.openai.com/docs/api-reference/chat/create).
 
+Omit `model` (or leave it empty) to use the LLM without retrieval. For retrieval,
+only `openrag-<instance-domain>` and `ragondin-<instance-domain>` are accepted,
+and the caller also needs `GET` permission on all `io.cozy.files`. Client-supplied
+`metadata` is not forwarded.
+
 #### Request
 
 ```http
