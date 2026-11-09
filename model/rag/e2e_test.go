@@ -43,11 +43,11 @@ func newE2E(t *testing.T) *ragTest {
 	return &ragTest{t: t, inst: inst}
 }
 
-// e2eMailActions are the actions of a mail app: a search that gives its
+// e2eMailTools are the actions of a mail app: a search that gives its
 // result to the LLM, and a draft the user confirms.
-func e2eMailActions(t *testing.T) []rag.ActionDefinition {
+func e2eMailTools(t *testing.T) []rag.ToolDefinition {
 	t.Helper()
-	actions := []rag.ActionDefinition{
+	actions := []rag.ToolDefinition{
 		{
 			Name:        "search_emails",
 			Description: "search the emails of the user. It returns the id, sender, subject, date and a snippet of the emails found.",
@@ -67,7 +67,7 @@ func e2eMailActions(t *testing.T) []rag.ActionDefinition {
 			}, Required: []string{"subject", "body"}},
 		},
 	}
-	require.NoError(t, rag.ValidateActions(actions))
+	require.NoError(t, rag.ValidateTools(actions))
 	return actions
 }
 
@@ -121,7 +121,7 @@ const e2eEmailsFound = `2 emails from Claire Martin <claire.martin@example.com>:
 // the last email of Claire, which needs a search, then a draft, then the
 // answer. direct tells whether the LLM is asked alone, without the documents.
 func runMailScenario(t *testing.T, r *ragTest, id string, direct bool) {
-	actions := e2eMailActions(t)
+	actions := e2eMailTools(t)
 	documents := !direct
 	_, err := rag.Chat(r.inst, rag.ChatPayload{
 		ChatConversationID: id,
@@ -187,7 +187,7 @@ func TestE2EMailScenarioWithTheDocuments(t *testing.T) {
 
 func TestE2EAPlainQuestionIsAnswered(t *testing.T) {
 	r := newE2E(t)
-	actions := e2eMailActions(t)
+	actions := e2eMailTools(t)
 	documents := false
 	_, err := rag.Chat(r.inst, rag.ChatPayload{
 		ChatConversationID: "e2e-plain-question",

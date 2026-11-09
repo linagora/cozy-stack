@@ -21,20 +21,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testActions are the definitions of the actions of the assistant of the
+// testTools are the definitions of the actions of the assistant of the
 // Twake apps.
-func testActions(t *testing.T) []rag.ActionDefinition {
+func testTools(t *testing.T) []rag.ToolDefinition {
 	t.Helper()
 	raw, err := os.ReadFile("testdata/chat_actions.json")
 	require.NoError(t, err)
-	var actions []rag.ActionDefinition
+	var actions []rag.ToolDefinition
 	require.NoError(t, json.Unmarshal(raw, &actions))
 	return actions
 }
 
 // newActionsConversation saves a conversation with one user message, and
 // returns the query of the rag-query job for it, not streamed.
-func newActionsConversation(t *testing.T, r *ragTest, id, question string, actions []rag.ActionDefinition) rag.QueryMessage {
+func newActionsConversation(t *testing.T, r *ragTest, id, question string, actions []rag.ToolDefinition) rag.QueryMessage {
 	t.Helper()
 	chat := rag.ChatConversation{
 		DocID:        id,
@@ -152,7 +152,7 @@ func TestQueryWithoutActionsGivesNoTools(t *testing.T) {
 
 func TestQueryGivesTheActionsAsTools(t *testing.T) {
 	r := newRAGTest(t)
-	query := newActionsConversation(t, r, "conversation-tools", "What is the refund policy?", testActions(t))
+	query := newActionsConversation(t, r, "conversation-tools", "What is the refund policy?", testTools(t))
 	events := subscribeEvents(t, r)
 
 	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
@@ -196,7 +196,7 @@ func TestQueryProposesTheActionTheLLMCalls(t *testing.T) {
 	r.fake.Answer = func(call rag.LLMCall) rag.Reply {
 		return rag.Call("draft_email", `{"to": ["Paul"], "subject": "Point", "body": "Bonjour Paul", "cc": "dropped"}`)
 	}
-	query := newActionsConversation(t, r, "conversation-action", "Écris un mail à Paul pour faire le point", testActions(t))
+	query := newActionsConversation(t, r, "conversation-action", "Écris un mail à Paul pour faire le point", testTools(t))
 	query.Stream = true
 	events := subscribeEvents(t, r)
 
@@ -232,7 +232,7 @@ func TestQueryProposesAnActionWithoutTheDocuments(t *testing.T) {
 		t.Error("the documents are not used")
 		return rag.Text("")
 	}
-	query := newActionsConversation(t, r, "conversation-direct-action", "Écris un mail à Paul pour faire le point", testActions(t))
+	query := newActionsConversation(t, r, "conversation-direct-action", "Écris un mail à Paul pour faire le point", testTools(t))
 	query.DirectLLM = true
 	events := subscribeEvents(t, r)
 
@@ -254,7 +254,7 @@ func TestQueryProposesAnActionOfTheApp(t *testing.T) {
 		call = c
 		return rag.Call("create_task", `{"title": "Relancer Acme", "due": "2026-10-03", "assignee": "Marc"}`)
 	}
-	task := rag.ActionDefinition{
+	task := rag.ToolDefinition{
 		Name:        "create_task",
 		Description: "create a task in the user's task list",
 		Parameters: &rag.ParametersSchema{Type: "object", Properties: map[string]rag.ParamSchema{
@@ -264,8 +264,8 @@ func TestQueryProposesAnActionOfTheApp(t *testing.T) {
 		}, Required: []string{"title"}},
 		Instructions: "The title starts with a verb.",
 	}
-	require.NoError(t, rag.ValidateActions([]rag.ActionDefinition{task}))
-	query := newActionsConversation(t, r, "conversation-task", "Ajoute une tâche pour relancer Acme demain", []rag.ActionDefinition{task})
+	require.NoError(t, rag.ValidateTools([]rag.ToolDefinition{task}))
+	query := newActionsConversation(t, r, "conversation-task", "Ajoute une tâche pour relancer Acme demain", []rag.ToolDefinition{task})
 	events := subscribeEvents(t, r)
 
 	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
@@ -294,7 +294,7 @@ func TestQueryAnswersWhenTheCallCannotBeMadeAnAction(t *testing.T) {
 				}
 				return rag.Text("fake answer")
 			}
-			query := newActionsConversation(t, r, "conversation-invalid-call", "Écris un mail à Paul", testActions(t))
+			query := newActionsConversation(t, r, "conversation-invalid-call", "Écris un mail à Paul", testTools(t))
 			events := subscribeEvents(t, r)
 
 			require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
@@ -312,13 +312,13 @@ func TestQueryAnswersWhenTheCallCannotBeMadeAnAction(t *testing.T) {
 func TestQueryProposesAnActionWithoutParams(t *testing.T) {
 	r := newRAGTest(t)
 	r.fake.Answer = func(call rag.LLMCall) rag.Reply { return rag.Call("start_visio", "") }
-	visio := rag.ActionDefinition{
+	visio := rag.ToolDefinition{
 		Name:        "start_visio",
 		Description: "start a video call",
 		Parameters:  &rag.ParametersSchema{Type: "object"},
 	}
-	require.NoError(t, rag.ValidateActions([]rag.ActionDefinition{visio}))
-	query := newActionsConversation(t, r, "conversation-visio", "Lance une visio", []rag.ActionDefinition{visio})
+	require.NoError(t, rag.ValidateTools([]rag.ToolDefinition{visio}))
+	query := newActionsConversation(t, r, "conversation-visio", "Lance une visio", []rag.ToolDefinition{visio})
 	events := subscribeEvents(t, r)
 
 	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
@@ -335,7 +335,7 @@ func TestQuerySavesTheSourcesWithTheAction(t *testing.T) {
 	r.fake.Sources = []map[string]interface{}{
 		{"source_type": "document", "chunk": map[string]interface{}{"file_id": "file-1", "filename": "teletravail.pdf"}},
 	}
-	query := newActionsConversation(t, r, "conversation-note", "Fais une note avec les points à retenir de la politique de télétravail", testActions(t))
+	query := newActionsConversation(t, r, "conversation-note", "Fais une note avec les points à retenir de la politique de télétravail", testTools(t))
 	query.Stream = true
 	events := subscribeEvents(t, r)
 
@@ -350,11 +350,11 @@ func TestQuerySavesTheSourcesWithTheAction(t *testing.T) {
 	assert.Equal(t, map[string]interface{}{"title": "Politique de télétravail", "content": "## Principes\n- 3 jours par semaine"}, answer.Action.Params)
 }
 
-// mailActions are the actions of a mail app, with a search that gives its
+// mailTools are the actions of a mail app, with a search that gives its
 // result to the LLM.
-func mailActions(t *testing.T) []rag.ActionDefinition {
+func mailTools(t *testing.T) []rag.ToolDefinition {
 	t.Helper()
-	actions := []rag.ActionDefinition{
+	actions := []rag.ToolDefinition{
 		{
 			Name:        "search_emails",
 			Description: "search the emails of the user",
@@ -373,14 +373,14 @@ func mailActions(t *testing.T) []rag.ActionDefinition {
 			}, Required: []string{"subject", "body"}},
 		},
 	}
-	require.NoError(t, rag.ValidateActions(actions))
+	require.NoError(t, rag.ValidateTools(actions))
 	return actions
 }
 
 // newConversationWithResult saves a conversation where a search of emails
 // was proposed and run by the client, which gave its result, and returns the
 // query answering the result.
-func newConversationWithResult(t *testing.T, r *ragTest, id, callID string, actions []rag.ActionDefinition) rag.QueryMessage {
+func newConversationWithResult(t *testing.T, r *ragTest, id, callID string, actions []rag.ToolDefinition) rag.QueryMessage {
 	t.Helper()
 	chat := rag.ChatConversation{
 		DocID: id,
@@ -405,7 +405,7 @@ func TestQueryGivesTheResultOfAnActionToTheLLM(t *testing.T) {
 		call = c
 		return rag.Call("create_draft", `{"to": ["mallory@evil.example"], "inReplyTo": "m41", "subject": "Re: files", "body": "Here they are"}`)
 	}
-	query := newConversationWithResult(t, r, "conversation-result", "chatcmpl-tool-1", mailActions(t))
+	query := newConversationWithResult(t, r, "conversation-result", "chatcmpl-tool-1", mailTools(t))
 	events := subscribeEvents(t, r)
 
 	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
@@ -436,7 +436,7 @@ func TestQueryAnswersAResultOfAnActionProposedWithoutACallID(t *testing.T) {
 		call = c
 		return rag.Text("Claire sent 2 emails.")
 	}
-	query := newConversationWithResult(t, r, "conversation-legacy-result", "", mailActions(t))
+	query := newConversationWithResult(t, r, "conversation-legacy-result", "", mailTools(t))
 	events := subscribeEvents(t, r)
 
 	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
@@ -467,7 +467,7 @@ func TestQueryAnswersWithoutToolsAfterTheLastStep(t *testing.T) {
 	}
 	events := subscribeEvents(t, r)
 
-	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), rag.QueryMessage{Task: "chat-completion", DocID: id, Tools: mailActions(t)}))
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), rag.QueryMessage{Task: "chat-completion", DocID: id, Tools: mailTools(t)}))
 	assert.Equal(t, []string{"delta", "done"}, objects(events()))
 	assert.Empty(t, call.Tools, "after 5 results, the LLM answers from them")
 	assert.Equal(t, rag.UserRole, call.Messages[0].Role, "no rules of the tools")
@@ -479,7 +479,7 @@ func TestQueryKeepsTheOutcomeOfAnAction(t *testing.T) {
 	r.fake.Answer = func(call rag.LLMCall) rag.Reply {
 		return rag.Call("create_note", `{"title": "Courses", "content": "- lait"}`)
 	}
-	query := newActionsConversation(t, r, "conversation-outcome", "Fais-en une note", testActions(t))
+	query := newActionsConversation(t, r, "conversation-outcome", "Fais-en une note", testTools(t))
 	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
 
 	// The client writes the outcome on the message, as a plain document.
@@ -519,7 +519,7 @@ func TestQueryGivesTheAttachmentsWithTheTools(t *testing.T) {
 		call = c
 		return rag.Call("draft_email", `{"to": [], "subject": "Compte rendu", "body": "Le document dit..."}`)
 	}
-	query := newActionsConversation(t, r, "conversation-attachment-params", "Fais un mail avec le compte rendu de ce document", testActions(t))
+	query := newActionsConversation(t, r, "conversation-attachment-params", "Fais un mail avec le compte rendu de ce document", testTools(t))
 	query.AttachmentIDs = []string{"file-1"}
 	events := subscribeEvents(t, r)
 
@@ -560,7 +560,7 @@ func TestQuerySavesTheAnswerOnTheConversationChangedMeanwhile(t *testing.T) {
 
 // newConversationWithAction saves a conversation where a note was proposed,
 // then a new question asked, and returns the query answering it.
-func newConversationWithAction(t *testing.T, r *ragTest, id string, actions []rag.ActionDefinition) rag.QueryMessage {
+func newConversationWithAction(t *testing.T, r *ragTest, id string, actions []rag.ToolDefinition) rag.QueryMessage {
 	t.Helper()
 	chat := rag.ChatConversation{
 		DocID: id,
@@ -640,7 +640,7 @@ func TestQueryGivesUpTheSaveAfterThreeConflicts(t *testing.T) {
 func TestQueryStreamsTheAnswerWithTheTools(t *testing.T) {
 	r := newRAGTest(t)
 	r.fake.Answer = func(call rag.LLMCall) rag.Reply { return rag.Text("Hello") }
-	query := newActionsConversation(t, r, "conversation-streamed", "What is the refund policy?", testActions(t))
+	query := newActionsConversation(t, r, "conversation-streamed", "What is the refund policy?", testTools(t))
 	query.Stream = true
 	events := subscribeEvents(t, r)
 
@@ -655,7 +655,7 @@ func TestQueryStreamsTheAnswerWithTheTools(t *testing.T) {
 func TestQueryFailsWhenTheAnswerFails(t *testing.T) {
 	r := newRAGTest(t)
 	r.fake.RAG = func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusBadGateway) }
-	query := newActionsConversation(t, r, "conversation-answer-fails", "What is the refund policy?", testActions(t))
+	query := newActionsConversation(t, r, "conversation-answer-fails", "What is the refund policy?", testTools(t))
 	events := subscribeEvents(t, r)
 
 	assert.EqualError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query), "POST status code: 502")
@@ -669,7 +669,7 @@ func TestQueryFailsWhenTheAnswerFails(t *testing.T) {
 
 func TestQueryAnswersWithoutTheDocuments(t *testing.T) {
 	r := newRAGTest(t)
-	query := newActionsConversation(t, r, "conversation-direct-search", "Traduis en anglais : bonjour", testActions(t))
+	query := newActionsConversation(t, r, "conversation-direct-search", "Traduis en anglais : bonjour", testTools(t))
 	query.DirectLLM = true
 	events := subscribeEvents(t, r)
 
@@ -690,7 +690,7 @@ func TestQueryCreatesThePartitionForTheTools(t *testing.T) {
 	r.fake.Answer = func(call rag.LLMCall) rag.Reply {
 		return rag.Call("draft_email", `{"to": ["Paul"], "subject": "Point", "body": "Bonjour Paul"}`)
 	}
-	query := newActionsConversation(t, r, "conversation-no-partition", "Écris un mail à Paul pour faire le point", testActions(t))
+	query := newActionsConversation(t, r, "conversation-no-partition", "Écris un mail à Paul pour faire le point", testTools(t))
 	events := subscribeEvents(t, r)
 
 	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))

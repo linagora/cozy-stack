@@ -11,21 +11,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testActions are the definitions of the actions of the assistant of the
+// testTools are the definitions of the actions of the assistant of the
 // Twake apps.
-func testActions(t *testing.T) []ActionDefinition {
+func testTools(t *testing.T) []ToolDefinition {
 	t.Helper()
 	raw, err := os.ReadFile("testdata/chat_actions.json")
 	require.NoError(t, err)
-	var actions []ActionDefinition
+	var actions []ToolDefinition
 	require.NoError(t, json.Unmarshal(raw, &actions))
-	require.NoError(t, ValidateActions(actions))
+	require.NoError(t, ValidateTools(actions))
 	return actions
 }
 
-func testAction(t *testing.T, name string) *ActionDefinition {
+func testAction(t *testing.T, name string) *ToolDefinition {
 	t.Helper()
-	a := actionFor(testActions(t), name)
+	a := toolFor(testTools(t), name)
 	require.NotNil(t, a, "no action %s", name)
 	return a
 }
@@ -226,23 +226,23 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestValidateActions(t *testing.T) {
-	assert.NoError(t, ValidateActions(nil))
-	assert.NoError(t, ValidateActions([]ActionDefinition{}))
+	assert.NoError(t, ValidateTools(nil))
+	assert.NoError(t, ValidateTools([]ToolDefinition{}))
 	note := *testAction(t, "create_note")
 	email := *testAction(t, "draft_email")
 
-	withEmailParameters := func(change func(p *ParametersSchema)) []ActionDefinition {
+	withEmailParameters := func(change func(p *ParametersSchema)) []ToolDefinition {
 		raw, err := json.Marshal(email)
 		require.NoError(t, err)
-		var a ActionDefinition
+		var a ToolDefinition
 		require.NoError(t, json.Unmarshal(raw, &a))
 		change(a.Parameters)
-		return []ActionDefinition{a}
+		return []ToolDefinition{a}
 	}
-	plain := func(name string) ActionDefinition {
-		return ActionDefinition{Name: name, Description: "d"}
+	plain := func(name string) ToolDefinition {
+		return ToolDefinition{Name: name, Description: "d"}
 	}
-	many := make([]ActionDefinition, 50)
+	many := make([]ToolDefinition, 50)
 	for i := range many {
 		many[i] = plain(fmt.Sprintf("action_%d", i))
 	}
@@ -250,8 +250,8 @@ func TestValidateActions(t *testing.T) {
 	for i := range examples {
 		examples[i] = strings.Repeat("é", 2000)
 	}
-	valid := map[string][]ActionDefinition{
-		"the actions of the apps":   testActions(t),
+	valid := map[string][]ToolDefinition{
+		"the actions of the apps":   testTools(t),
 		"a 64 characters name":      {plain(strings.Repeat("a", 64))},
 		"a name like a tool":        {plain("Create-Note_2")},
 		"many actions":              many,
@@ -275,22 +275,22 @@ func TestValidateActions(t *testing.T) {
 	}
 	for name, actions := range valid {
 		t.Run(name, func(t *testing.T) {
-			assert.NoError(t, ValidateActions(actions))
+			assert.NoError(t, ValidateTools(actions))
 		})
 	}
 
 	invalid := map[string]struct {
-		actions []ActionDefinition
+		actions []ToolDefinition
 		err     string
 	}{
-		"a name with spaces":   {[]ActionDefinition{plain("delete everything")}, `invalid action name "delete everything"`},
-		"a name with a dot":    {[]ActionDefinition{plain("note.create")}, "invalid action name"},
-		"an empty name":        {[]ActionDefinition{plain("")}, "invalid action name"},
-		"a 65 characters name": {[]ActionDefinition{plain(strings.Repeat("a", 65))}, "invalid action name"},
-		"a duplicate":          {[]ActionDefinition{note, note}, `duplicate action "create_note"`},
-		"no description":       {[]ActionDefinition{{Name: "a"}}, "the description is empty"},
-		"a blank description":  {[]ActionDefinition{{Name: "a", Description: " \n"}}, "the description is empty"},
-		"a blank example":      {[]ActionDefinition{{Name: "a", Description: "d", Examples: []string{"ok", " "}}}, "an example is empty"},
+		"a name with spaces":   {[]ToolDefinition{plain("delete everything")}, `invalid action name "delete everything"`},
+		"a name with a dot":    {[]ToolDefinition{plain("note.create")}, "invalid action name"},
+		"an empty name":        {[]ToolDefinition{plain("")}, "invalid action name"},
+		"a 65 characters name": {[]ToolDefinition{plain(strings.Repeat("a", 65))}, "invalid action name"},
+		"a duplicate":          {[]ToolDefinition{note, note}, `duplicate action "create_note"`},
+		"no description":       {[]ToolDefinition{{Name: "a"}}, "the description is empty"},
+		"a blank description":  {[]ToolDefinition{{Name: "a", Description: " \n"}}, "the description is empty"},
+		"a blank example":      {[]ToolDefinition{{Name: "a", Description: "d", Examples: []string{"ok", " "}}}, "an example is empty"},
 		"a nested param": {withEmailParameters(func(p *ParametersSchema) {
 			p.Properties["to"] = ParamSchema{Type: "object"}
 		}), "param to must be a string, a number, an integer, a boolean or a list of strings"},
@@ -319,7 +319,7 @@ func TestValidateActions(t *testing.T) {
 	}
 	for name, c := range invalid {
 		t.Run(name, func(t *testing.T) {
-			assert.ErrorContains(t, ValidateActions(c.actions), c.err)
+			assert.ErrorContains(t, ValidateTools(c.actions), c.err)
 		})
 	}
 }
@@ -337,7 +337,7 @@ func TestDescribeAction(t *testing.T) {
 
 func TestTools(t *testing.T) {
 	email := testAction(t, "draft_email")
-	defs := tools([]ActionDefinition{*email, {Name: "start_visio", Description: " start a video call "}})
+	defs := tools([]ToolDefinition{*email, {Name: "start_visio", Description: " start a video call "}})
 	require.Len(t, defs, 2)
 	assert.Equal(t, "function", defs[0]["type"])
 	fn := defs[0]["function"].(map[string]interface{})
@@ -360,7 +360,7 @@ func TestTools(t *testing.T) {
 }
 
 func TestActionFromCall(t *testing.T) {
-	actions := testActions(t)
+	actions := testTools(t)
 	written := userText([]ragMessage{{Role: UserRole, Content: "Écris un mail à Paul pour faire le point"}})
 	call := func(name, arguments string) toolCall {
 		c := toolCall{ID: "call_1", Type: "function"}
@@ -379,7 +379,7 @@ func TestActionFromCall(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Point", action.Params["subject"], "arguments in a code block")
 
-	visio := append(actions, ActionDefinition{Name: "start_visio", Description: "start a video call"})
+	visio := append(actions, ToolDefinition{Name: "start_visio", Description: "start a video call"})
 	action, err = actionFromCall(visio, call("start_visio", ""), written)
 	require.NoError(t, err)
 	assert.Equal(t, &ChatAction{Name: "start_visio", ToolCallID: "call_1", Params: map[string]interface{}{}}, action, "no params to fill")
