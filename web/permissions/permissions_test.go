@@ -517,6 +517,24 @@ func TestPermissions(t *testing.T) {
 		perms.Path("$.otherperm.type").String().Equal("io.cozy.contacts")
 	})
 
+	t.Run("PatchAppOnlyAddsOwnedRules", func(t *testing.T) {
+		doc, err := permission.CreateWebappSet(testInstance, "intent-target",
+			permission.Set{{Title: "files", Type: consts.Files}}, "1.0.0")
+		require.NoError(t, err)
+		e := testutils.CreateTestClient(t, ts.URL)
+		e.PATCH("/permissions/apps/intent-target").WithHeader("Authorization", "Bearer "+token).
+			WithJSON(map[string]interface{}{"data": map[string]interface{}{"attributes": map[string]interface{}{
+				"permissions": map[string]interface{}{"contacts": map[string]string{"type": consts.Contacts}},
+			}}}).Expect().Status(200)
+		updated, err := permission.GetByID(testInstance, doc.ID())
+		require.NoError(t, err)
+		assert.Len(t, updated.Permissions, 2)
+		e.PATCH("/permissions/apps/intent-target").WithHeader("Authorization", "Bearer "+token).
+			WithJSON(map[string]interface{}{"data": map[string]interface{}{"attributes": map[string]interface{}{
+				"permissions": map[string]interface{}{"files": map[string]string{}},
+			}}}).Expect().Status(403)
+	})
+
 	t.Run("PatchRemoveRule", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

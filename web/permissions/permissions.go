@@ -455,7 +455,12 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 			return err
 		}
 
-		if !patchSet && !current.CanUpdateShareByLink(toPatch) {
+		switch current.Type {
+		case permission.TypeShareByLink, permission.TypeSharePreview, permission.TypeShareInteract:
+			return middlewares.ErrForbidden
+		}
+		canManage := current.CanUpdateShareByLink(toPatch) || current.Permissions.IsMaximal()
+		if (!patchSet || patch.Password != nil || patch.ExpiresAt != nil || patch.Metadata != nil) && !canManage {
 			return permission.ErrNotParent
 		}
 
@@ -498,6 +503,9 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 		if patchSet {
 			for _, r := range patch.Permissions {
 				if r.Type == "" {
+					if !canManage {
+						return permission.ErrNotParent
+					}
 					toPatch.RemoveRule(r)
 					continue
 				}
