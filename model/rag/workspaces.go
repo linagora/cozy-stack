@@ -75,7 +75,7 @@ func workspaceDisplayName(dirID, fullpath string) string {
 // folder's workspace would strand that folder: nothing pushes its reconcile
 // job any more, its files did not change so the feed carries nothing about
 // them, and checkWorkspace already reports it as indexed.
-func reconcileWorkspaces(inst *instance.Instance, logger logger.Logger, server config.RAGServer, sc *scopes, own string, pushReconcile func(dirID string) error) error {
+func reconcileWorkspaces(inst *instance.Instance, logger logger.Logger, server config.RAGServer, sc *scopes, own string, pushReconcile func(dirID string) error, detach detachFunc) error {
 	existing, err := listWorkspaces(server, inst.Domain)
 	if err != nil {
 		return err
@@ -117,7 +117,7 @@ func reconcileWorkspaces(inst *instance.Instance, logger logger.Logger, server c
 	var errj error
 	for _, dirID := range toRemove {
 		logger.Infof("folder %s is in no knowledge base any more: removing its workspace", dirID)
-		if err := removeWorkspace(inst, logger, server, workspaceIDForDir(dirID)); err != nil {
+		if err := removeWorkspace(inst, logger, server, workspaceIDForDir(dirID), detach); err != nil {
 			logger.Warnf("cannot remove the workspace of folder %s: %s", dirID, err)
 			errj = errors.Join(errj, err)
 		}
@@ -130,7 +130,7 @@ func reconcileWorkspaces(inst *instance.Instance, logger logger.Logger, server c
 // deletes the workspace. It takes a workspace id; the folder it stands for
 // is resolved with dirIDForWorkspace. A folder gone from the VFS only loses
 // its workspace: its files were deleted through the changes feed.
-func removeWorkspace(inst *instance.Instance, logger logger.Logger, server config.RAGServer, workspaceID string) error {
+func removeWorkspace(inst *instance.Instance, logger logger.Logger, server config.RAGServer, workspaceID string, detach detachFunc) error {
 	dirID := dirIDForWorkspace(workspaceID)
 	dir, err := inst.VFS().DirByID(dirID)
 	switch {
@@ -139,16 +139,20 @@ func removeWorkspace(inst *instance.Instance, logger logger.Logger, server confi
 	case err != nil:
 		return retryable(err)
 	default:
-		if err := detachFolderFiles(inst, logger, dir, workspaceID); err != nil {
+		if err := detachFolderFiles(inst, dir, workspaceID, detach); err != nil {
 			return err
 		}
 	}
 	return deleteWorkspace(server, inst.Domain, workspaceID)
 }
 
+// detachFunc takes a live file of a folder leaving the knowledge bases out of
+// the folder's workspace: detachFile, or a sync message through the indexer.
+type detachFunc func(file *vfs.FileDoc, workspaceID string) error
+
 // detachFolderFiles detaches every live file of the folder's subtree from
 // the workspace, and reports the files that could not be.
-func detachFolderFiles(inst *instance.Instance, logger logger.Logger, dir *vfs.DirDoc, workspaceID string) error {
+func detachFolderFiles(inst *instance.Instance, dir *vfs.DirDoc, workspaceID string, detach detachFunc) error {
 	var errj error
 	err := vfs.WalkAlreadyLocked(inst.VFS(), dir, func(_ string, _ *vfs.DirDoc, file *vfs.FileDoc, err error) error {
 		if err != nil {
@@ -157,7 +161,7 @@ func detachFolderFiles(inst *instance.Instance, logger logger.Logger, dir *vfs.D
 		if file == nil || file.Trashed {
 			return nil
 		}
-		if err := detachFile(inst, file.DocID, workspaceID, logger); err != nil {
+		if err := detach(file, workspaceID); err != nil {
 			errj = errors.Join(errj, err)
 		}
 		return nil
