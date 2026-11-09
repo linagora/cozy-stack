@@ -1852,7 +1852,9 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	// resolver cannot see them. Restore and destroy are authorized against
 	// the effective write access on the folder the file would be restored
 	// to (which is also where destroy removes it from, logically).
-	if strings.Contains(reqPath, "/trash/") {
+	// Match the route pattern: a :file-id holding "%2Ftrash%2F" must not
+	// look like a trash route.
+	if strings.HasPrefix(c.Path(), "/sharings/drives/:id/trash/") {
 		if shouldCheck, requireWrite := sharedDrivePermissionCheck(method, reqPath); !shouldCheck || !requireWrite {
 			return nil
 		}
@@ -1886,7 +1888,9 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	// Copy needs effective read on the source and effective write on the
 	// destination folder. File-root drives do not support copy: let the
 	// handler answer 422.
-	if method == http.MethodPost && strings.HasSuffix(reqPath, "/copy") {
+	// Match the route pattern, not the decoded URL: a :file-id ending in
+	// "%2Fcopy", or equal to "copy", is not a copy.
+	if method == http.MethodPost && c.Path() == "/sharings/drives/:id/:file-id/copy" {
 		if s.HasFileDriveRoot() {
 			return nil
 		}
