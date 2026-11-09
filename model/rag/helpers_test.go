@@ -160,7 +160,8 @@ type LLMCall struct {
 			Parameters  json.RawMessage `json:"parameters"`
 		} `json:"function"`
 	} `json:"tools"`
-	ToolChoice string `json:"tool_choice"`
+	ToolChoice        string `json:"tool_choice"`
+	ParallelToolCalls *bool  `json:"parallel_tool_calls"`
 }
 
 // Prompt is the content of the messages of the call, joined.
