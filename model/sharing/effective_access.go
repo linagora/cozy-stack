@@ -310,7 +310,9 @@ func mergeScopes(scopes []SharingScope) *EffectiveAccess {
 	for _, sc := range scopes {
 		ea.SourceSharingIDs = append(ea.SourceSharingIDs, sc.Sharing.SID)
 		ea.CanRead = true
-		if !sc.Member.ReadOnly {
+		// A one-way sharing (ReadOnlyRules) syncs no change back, so its
+		// member has no write access through it, whatever the ReadOnly flag.
+		if !sc.Member.ReadOnly && !sc.Sharing.ReadOnlyRules() {
 			ea.CanWrite = true
 		}
 	}
@@ -560,7 +562,8 @@ func (r *AccessResolver) NearestWritableSharing(targetID string, member *Member)
 	var nearest *SharingScope
 	for i := range scopes {
 		sc := &scopes[i]
-		if sc.Member.ReadOnly {
+		// A one-way sharing grants no write, like a read-only member.
+		if sc.Member.ReadOnly || sc.Sharing.ReadOnlyRules() {
 			continue
 		}
 		if nearest == nil || len(sc.RootPath) > len(nearest.RootPath) {

@@ -491,6 +491,51 @@ func createSharing(t *testing.T, inst *instance.Instance, rootID string, owner b
 	return s
 }
 
+func TestAccessResolver_OneWaySharingGrantsNoWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	tree := H{"folder/": H{"note.txt": H{}}}
+	folder := createTree(t, fs, tree, consts.RootDirID)
+
+	daveInstance := "https://dave.example.net"
+	dave := &Member{Email: "dave@example.net", Instance: daveInstance}
+
+	// A one-way (push) classic sharing: no rule syncs a change back, so
+	// ReadOnlyRules() is true although the member has no ReadOnly flag.
+	s := &Sharing{
+		Active:     true,
+		Owner:      true,
+		Drive:      false,
+		AccessMode: AccessModeAdditive,
+		AppSlug:    "test",
+		Members: []Member{
+			{Status: MemberStatusOwner, Name: "Alice", Email: "alice@cozy.tools", Instance: "https://" + inst.Domain},
+			{Status: MemberStatusReady, Name: "Dave", Email: "dave@example.net", Instance: daveInstance},
+		},
+		Rules: []Rule{{Title: "one-way", DocType: consts.Files, Values: []string{folder.ID()}}},
+	}
+	require.NoError(t, couchdb.CreateDoc(inst, s))
+	require.NoError(t, s.AddReferenceForSharing(inst, &s.Rules[0]))
+	require.True(t, s.ReadOnlyRules())
+
+	resolver := NewAccessResolver(inst)
+	ea, err := resolver.ResolveForMember(folder.ID(), dave)
+	require.NoError(t, err)
+	assert.True(t, ea.CanRead)
+	assert.False(t, ea.CanWrite, "a one-way sharing grants no write")
+
+	sc, err := resolver.NearestWritableSharing(folder.ID(), dave)
+	require.NoError(t, err)
+	assert.Nil(t, sc, "no writable sharing for a one-way member")
+}
+
 func TestAccessResolver_ResolveForMember(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
