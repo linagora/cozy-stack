@@ -22,6 +22,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/recents"
 	"github.com/cozy/cozy-stack/model/session"
 	"github.com/cozy/cozy-stack/model/stack"
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -659,6 +660,19 @@ func WithFlag(t *testing.T, inst *instance.Instance, name string, value interfac
 		inst.FeatureFlags = flags
 		require.NoError(t, instance.Update(inst))
 	})
+}
+
+// FindRecentsRow returns the personal recents row of an item on an instance,
+// or nil when the instance has no row for it.
+func FindRecentsRow(t *testing.T, inst *instance.Instance, id string) *recents.FileDirActivity {
+	t.Helper()
+	var doc recents.FileDirActivity
+	err := couchdb.GetDoc(inst, consts.FilesRecents, id, &doc)
+	if couchdb.IsNotFoundError(err) || couchdb.IsNoDatabaseError(err) {
+		return nil
+	}
+	require.NoError(t, err)
+	return &doc
 }
 
 func WaitForOrFail(t testing.TB, timeout time.Duration, condition func() bool) {
