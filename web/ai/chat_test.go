@@ -70,7 +70,7 @@ func TestChatRejectsInvalidActions(t *testing.T) {
 		WithHeader("Authorization", "Bearer "+token).
 		WithJSON(map[string]interface{}{
 			"q": "Crée une tâche pour demain",
-			"actions": []map[string]interface{}{{
+			"tools": []map[string]interface{}{{
 				"name":        "create_task",
 				"description": "create a task in the user's tasks",
 				"parameters": map[string]interface{}{
@@ -128,7 +128,7 @@ func TestChatAcceptsActions(t *testing.T) {
 	e := testutils.CreateTestClient(t, ts.URL)
 	e.POST("/ai/chat/conversations/conversation-with-actions").
 		WithHeader("Authorization", "Bearer "+token).
-		WithJSON(map[string]interface{}{"q": "Fais-en une note", "actions": actions}).
+		WithJSON(map[string]interface{}{"q": "Fais-en une note", "tools": actions}).
 		Expect().Status(202)
 
 	var chat rag.ChatConversation
@@ -139,10 +139,22 @@ func TestChatAcceptsActions(t *testing.T) {
 	select {
 	case query := <-ragQueries:
 		assert.Equal(t, "conversation-with-actions", query.DocID)
-		require.Len(t, query.Actions, 3, "the query job carries the actions")
-		assert.Equal(t, "create_note", query.Actions[0].Name)
-		assert.Equal(t, "string", query.Actions[0].Parameters.Properties["content"].Type)
-		assert.True(t, query.Actions[2].Parameters.Properties["to"].UserWritten)
+		require.Len(t, query.Tools, 3, "the query job carries the actions")
+		assert.Equal(t, "create_note", query.Tools[0].Name)
+		assert.Equal(t, "string", query.Tools[0].Parameters.Properties["content"].Type)
+		assert.True(t, query.Tools[2].Parameters.Properties["to"].UserWritten)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no rag-query job")
+	}
+
+	// The former name of the tools is still read
+	e.POST("/ai/chat/conversations/conversation-with-legacy-actions").
+		WithHeader("Authorization", "Bearer "+token).
+		WithJSON(map[string]interface{}{"q": "Fais-en une note", "actions": actions}).
+		Expect().Status(202)
+	select {
+	case query := <-ragQueries:
+		require.Len(t, query.Tools, 3, "the actions are the tools")
 	case <-time.After(5 * time.Second):
 		t.Fatal("no rag-query job")
 	}

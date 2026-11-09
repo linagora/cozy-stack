@@ -46,7 +46,9 @@ type ChatPayload struct {
 	// answer is put in a document as it is: a system message of the answer,
 	// like the instructions of the OpenAI Responses API.
 	Instructions string `json:"instructions,omitempty"`
-	// Actions are the definitions of the chat actions the client can run.
+	// Tools are the definitions of the chat actions the client can run, the
+	// tools of the LLM. Actions is their former name, still read.
+	Tools   []ActionDefinition `json:"tools,omitempty"`
 	Actions []ActionDefinition `json:"actions,omitempty"`
 	// Result, instead of q, is the result of the action proposed by an
 	// answer, once the client has run it: the LLM goes on from it.
@@ -94,7 +96,16 @@ func (p ChatPayload) Validate() error {
 	if n := utf8.RuneCountInString(p.Instructions); n > maxInstructionsChars {
 		return fmt.Errorf("instructions too long: %d characters, at most %d", n, maxInstructionsChars)
 	}
-	return ValidateActions(p.Actions)
+	return ValidateActions(p.tools())
+}
+
+// tools are the definitions of the actions, under their current or their
+// former name.
+func (p ChatPayload) tools() []ActionDefinition {
+	if len(p.Tools) > 0 {
+		return p.Tools
+	}
+	return p.Actions
 }
 
 type ChatConversation struct {
@@ -211,7 +222,7 @@ type QueryMessage struct {
 	Stream        bool               `json:"stream"`
 	WebSearch     bool               `json:"websearch"`
 	AttachmentIDs []string           `json:"attachmentIDs,omitempty"`
-	Actions       []ActionDefinition `json:"actions,omitempty"`
+	Tools         []ActionDefinition `json:"tools,omitempty"`
 	// DirectLLM is the answer of the LLM alone, without the user's documents.
 	DirectLLM bool `json:"directLLM,omitempty"`
 	// Instructions are those of the client on how to answer.
@@ -399,7 +410,7 @@ func Chat(inst *instance.Instance, payload ChatPayload) (*ChatConversation, erro
 		Stream:        stream,
 		WebSearch:     websearch,
 		AttachmentIDs: payload.AttachmentIDs,
-		Actions:       payload.Actions,
+		Tools:         payload.tools(),
 		DirectLLM:     payload.directLLM(),
 		Instructions:  strings.TrimSpace(payload.Instructions),
 	})
@@ -855,10 +866,10 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 		watcher:        watcher,
 	}
 	// After the last step, the LLM answers from the results it has
-	if len(query.Actions) == 0 || actionSteps(chat.Messages) >= maxActionSteps {
+	if len(query.Tools) == 0 || actionSteps(chat.Messages) >= maxActionSteps {
 		return q.answer(ctx)
 	}
-	return q.answerWithTools(ctx, query.Actions)
+	return q.answerWithTools(ctx, query.Tools)
 }
 
 // body is the body of the query: from the documents with openRAG, or from
