@@ -6,7 +6,7 @@ require (
 	firebase.google.com/go/v4 v4.14.1
 	github.com/Masterminds/semver/v3 v3.2.1
 	github.com/adrg/xdg v0.5.3
-	github.com/andybalholm/brotli v1.1.0
+	github.com/andybalholm/brotli v1.2.7
 	github.com/bradfitz/latlong v0.0.0-20170410180902-f3db6d0dff40
 	github.com/cozy/goexif2 v1.3.2
 	github.com/cozy/gomail v0.0.0-20170313100128-1395d9a6a6c0
