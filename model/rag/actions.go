@@ -20,8 +20,9 @@ import (
 // actionNameRegexp is the rule of the name of a function in the OpenAI API.
 var actionNameRegexp = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
-// ActionDefinition is an action the client can run, as it describes it.
-type ActionDefinition struct {
+// ToolDefinition is an action the client can run, as it describes it to
+// the LLM: a tool.
+type ToolDefinition struct {
 	Name string `json:"name"`
 	// Description tells the LLM what the action does, and when to call it.
 	Description string `json:"description"`
@@ -71,10 +72,10 @@ type ChatAction struct {
 	URL    string `json:"url,omitempty"`
 }
 
-// ValidateActions checks the action definitions a client sends.
-func ValidateActions(actions []ActionDefinition) error {
+// ValidateTools checks the tool definitions a client sends.
+func ValidateTools(defs []ToolDefinition) error {
 	names := map[string]bool{}
-	for _, a := range actions {
+	for _, a := range defs {
 		if !actionNameRegexp.MatchString(a.Name) {
 			return fmt.Errorf("invalid action name %q", a.Name)
 		}
@@ -89,7 +90,7 @@ func ValidateActions(actions []ActionDefinition) error {
 	return nil
 }
 
-func (a ActionDefinition) validate() error {
+func (a ToolDefinition) validate() error {
 	if strings.TrimSpace(a.Description) == "" {
 		return errors.New("the description is empty")
 	}
@@ -155,10 +156,10 @@ func (p ParametersSchema) isRequired(name string) bool {
 	return false
 }
 
-func actionFor(actions []ActionDefinition, name string) *ActionDefinition {
-	for i := range actions {
-		if actions[i].Name == name {
-			return &actions[i]
+func toolFor(defs []ToolDefinition, name string) *ToolDefinition {
+	for i := range defs {
+		if defs[i].Name == name {
+			return &defs[i]
 		}
 	}
 	return nil
@@ -264,7 +265,7 @@ func runeAt(text []rune, i int) rune {
 // checkParams keeps the params of the action with the types of its schema,
 // drops the values of the user-written params the user did not write, and
 // checks the required ones.
-func checkParams(a *ActionDefinition, raw map[string]interface{}, written string) (map[string]interface{}, error) {
+func checkParams(a *ToolDefinition, raw map[string]interface{}, written string) (map[string]interface{}, error) {
 	params := map[string]interface{}{}
 	for _, name := range a.Parameters.paramNames() {
 		prop := a.Parameters.Properties[name]
@@ -377,9 +378,9 @@ type toolCall struct {
 }
 
 // tools are the definitions of the actions as the tools of the OpenAI API.
-func tools(actions []ActionDefinition) []map[string]interface{} {
-	out := make([]map[string]interface{}, 0, len(actions))
-	for _, a := range actions {
+func tools(defs []ToolDefinition) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(defs))
+	for _, a := range defs {
 		out = append(out, map[string]interface{}{
 			"type": "function",
 			"function": map[string]interface{}{
@@ -394,7 +395,7 @@ func tools(actions []ActionDefinition) []map[string]interface{} {
 
 // toolDescription is the description of the tool: what the action does, how
 // to fill its params, and the requests it is for.
-func toolDescription(a ActionDefinition) string {
+func toolDescription(a ToolDefinition) string {
 	parts := []string{strings.TrimSpace(a.Description)}
 	if s := strings.TrimSpace(a.Instructions); s != "" {
 		parts = append(parts, s)
@@ -415,7 +416,7 @@ const userWrittenNote = "(as the user wrote it: only what the user typed in thei
 
 // toolParameters is the JSON schema of the params for the LLM, without the
 // keywords of the stack.
-func toolParameters(a ActionDefinition) map[string]interface{} {
+func toolParameters(a ToolDefinition) map[string]interface{} {
 	properties := map[string]interface{}{}
 	schema := map[string]interface{}{"type": "object", "properties": properties}
 	if a.Parameters == nil {
@@ -445,8 +446,8 @@ func toolParameters(a ActionDefinition) map[string]interface{} {
 // actionFromCall makes the action of a tool call: its params checked against
 // the schema of the action, the user-written ones kept to what the user
 // wrote.
-func actionFromCall(actions []ActionDefinition, call toolCall, written string) (*ChatAction, error) {
-	def := actionFor(actions, call.Function.Name)
+func actionFromCall(defs []ToolDefinition, call toolCall, written string) (*ChatAction, error) {
+	def := toolFor(defs, call.Function.Name)
 	if def == nil {
 		return nil, fmt.Errorf("unknown tool %q", call.Function.Name)
 	}

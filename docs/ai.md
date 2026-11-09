@@ -347,7 +347,7 @@ Content-Type: application/json
   "instructions": "The answer is put in a document as it is: no introduction, no comment.",
   "assistantID": "abc123",
   "attachmentIDs": ["827f0fbb928b375cc457c732a4013aa7", "9a3b1c2d3e4f5a6b7c8d9e0f1a2b3c4d"],
-  "actions": [
+  "tools": [
     {
       "name": "create_note",
       "description": "write a note in the user's Notes app: a summary of the conversation, a list of tasks, a short text on a subject.",

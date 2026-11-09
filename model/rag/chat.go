@@ -46,10 +46,10 @@ type ChatPayload struct {
 	// answer is put in a document as it is: a system message of the answer,
 	// like the instructions of the OpenAI Responses API.
 	Instructions string `json:"instructions,omitempty"`
-	// Tools are the definitions of the chat actions the client can run, the
-	// tools of the LLM. Actions is their former name, still read.
-	Tools   []ActionDefinition `json:"tools,omitempty"`
-	Actions []ActionDefinition `json:"actions,omitempty"`
+	// Tools are the definitions of the actions the client can run, given to
+	// the LLM as its tools. Actions is their former name, still read.
+	Tools   []ToolDefinition `json:"tools,omitempty"`
+	Actions []ToolDefinition `json:"actions,omitempty"`
 	// Result, instead of q, is the result of the action proposed by an
 	// answer, once the client has run it: the LLM goes on from it.
 	Result *ActionResult `json:"result,omitempty"`
@@ -96,12 +96,12 @@ func (p ChatPayload) Validate() error {
 	if n := utf8.RuneCountInString(p.Instructions); n > maxInstructionsChars {
 		return fmt.Errorf("instructions too long: %d characters, at most %d", n, maxInstructionsChars)
 	}
-	return ValidateActions(p.tools())
+	return ValidateTools(p.tools())
 }
 
 // tools are the definitions of the actions, under their current or their
 // former name.
-func (p ChatPayload) tools() []ActionDefinition {
+func (p ChatPayload) tools() []ToolDefinition {
 	if len(p.Tools) > 0 {
 		return p.Tools
 	}
@@ -217,12 +217,12 @@ func (c *ChatConversation) Links() *jsonapi.LinksList              { return nil 
 var _ jsonapi.Object = (*ChatConversation)(nil)
 
 type QueryMessage struct {
-	Task          string             `json:"task"`
-	DocID         string             `json:"doc_id"`
-	Stream        bool               `json:"stream"`
-	WebSearch     bool               `json:"websearch"`
-	AttachmentIDs []string           `json:"attachmentIDs,omitempty"`
-	Tools         []ActionDefinition `json:"tools,omitempty"`
+	Task          string           `json:"task"`
+	DocID         string           `json:"doc_id"`
+	Stream        bool             `json:"stream"`
+	WebSearch     bool             `json:"websearch"`
+	AttachmentIDs []string         `json:"attachmentIDs,omitempty"`
+	Tools         []ToolDefinition `json:"tools,omitempty"`
 	// DirectLLM is the answer of the LLM alone, without the user's documents.
 	DirectLLM bool `json:"directLLM,omitempty"`
 	// Instructions are those of the client on how to answer.
@@ -763,11 +763,11 @@ func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]in
 // of several calls, the first is kept, the LLM asks the others again after
 // its result. The single_tool_call option of the RAG server asks the LLM for
 // one call at a time; off by default, as some gateways refuse the parameter.
-func withTools(payload map[string]interface{}, actions []ActionDefinition, server config.RAGServer) {
-	if len(actions) == 0 {
+func withTools(payload map[string]interface{}, defs []ToolDefinition, server config.RAGServer) {
+	if len(defs) == 0 {
 		return
 	}
-	payload["tools"] = tools(actions)
+	payload["tools"] = tools(defs)
 	payload["tool_choice"] = "auto"
 	if server.SingleToolCall {
 		payload["parallel_tool_calls"] = false
@@ -875,16 +875,16 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 // body is the body of the query: from the documents with openRAG, or from
 // the LLM behind it when the client asks for an answer without them. With
 // actions, the LLM gets them as its tools, with the rules of their use.
-func (q *chatQuery) body(actions []ActionDefinition) ([]byte, error) {
+func (q *chatQuery) body(defs []ToolDefinition) ([]byte, error) {
 	messages := q.messages
-	if len(actions) > 0 {
+	if len(defs) > 0 {
 		messages = withInstructions(messages, toolsPrompt(!q.direct, q.now))
 	}
 	payload := ragPayload(q.inst, messages, q.stream, q.metadata)
 	if q.direct {
 		payload = directLLMPayload(messages, q.stream, q.metadata)
 	}
-	withTools(payload, actions, q.inst.RAGServer())
+	withTools(payload, defs, q.inst.RAGServer())
 	return json.Marshal(payload)
 }
 
@@ -905,8 +905,8 @@ func (q *chatQuery) answer(ctx context.Context) error {
 // answerWithTools answers the message, or proposes the action the LLM calls.
 // A call the stack cannot make an action of is dropped: the message is
 // answered without the tools, unless the LLM wrote a text with its call.
-func (q *chatQuery) answerWithTools(ctx context.Context, actions []ActionDefinition) error {
-	body, err := q.body(actions)
+func (q *chatQuery) answerWithTools(ctx context.Context, defs []ToolDefinition) error {
+	body, err := q.body(defs)
 	if err != nil {
 		return q.fail(err)
 	}
@@ -917,7 +917,7 @@ func (q *chatQuery) answerWithTools(ctx context.Context, actions []ActionDefinit
 	if len(answer.ToolCalls) == 0 {
 		return q.finish(answer, nil)
 	}
-	action, err := actionFromCall(actions, answer.ToolCalls[0], userText(q.messages))
+	action, err := actionFromCall(defs, answer.ToolCalls[0], userText(q.messages))
 	if err != nil {
 		q.logger.Warnf("chat tools: %s, answering the message instead", err)
 		if answer.Content != "" {
