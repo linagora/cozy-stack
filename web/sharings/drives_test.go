@@ -634,8 +634,14 @@ func newDriveOwnerTestServerWithOptions(
 			g.Use(middlewares.LoadSession)
 			auth.Routes(g)
 		},
-		"/files":    files.Routes,
-		"/sharings": sharings.Routes,
+		"/files": func(g *echo.Group) {
+			g.Use(middlewares.LoadSession)
+			files.Routes(g)
+		},
+		"/sharings": func(g *echo.Group) {
+			g.Use(middlewares.LoadSession)
+			sharings.Routes(g)
+		},
 	}, extraRoutes)
 	ts := setup.GetTestServerMultipleRoutes(routes)
 	ts.Config.Handler.(*echo.Echo).Renderer = render
@@ -670,8 +676,14 @@ func newDriveRecipientTestServer(
 			g.Use(middlewares.LoadSession)
 			auth.Routes(g)
 		},
-		"/files":    files.Routes,
-		"/sharings": sharings.Routes,
+		"/files": func(g *echo.Group) {
+			g.Use(middlewares.LoadSession)
+			files.Routes(g)
+		},
+		"/sharings": func(g *echo.Group) {
+			g.Use(middlewares.LoadSession)
+			sharings.Routes(g)
+		},
 	}, extraRoutes)
 	ts := setup.GetTestServerMultipleRoutes(routes)
 	ts.Config.Handler.(*echo.Echo).Renderer = render

@@ -8,13 +8,18 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 )
 
+// FlagEnabled enables collection of public-link events for an instance or context.
+const FlagEnabled = "drive.public_link_events.enabled"
+
 // Action identifies an action on the link itself, not on an individual item.
 type Action string
 
 const (
-	Created    Action = "created"
-	Updated    Action = "updated"
-	Opened     Action = "opened"
+	Created Action = "created"
+	Updated Action = "updated"
+	Opened  Action = "opened"
+	// Downloaded records a download intent, not a completed transfer: once at
+	// secret preparation (even if unused), or per direct download request.
 	Downloaded Action = "downloaded"
 )
 

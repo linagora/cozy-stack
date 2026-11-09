@@ -38,6 +38,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/web/middlewares"
+	"github.com/cozy/cozy-stack/web/publiclinkevents"
 	"github.com/cozy/cozy-stack/worker/thumbnail"
 	"github.com/labstack/echo/v4"
 	"github.com/ncw/swift/v2"
@@ -1074,6 +1075,7 @@ func ReadFileContentFromIDHandler(c echo.Context) error {
 		disposition = "attachment"
 	}
 
+	publiclinkevents.TrackFile(c, instance, doc.ID())
 	if page := c.QueryParam("Page"); page != "" {
 		p, errp := strconv.Atoi(page)
 		if errp != nil {
@@ -1259,6 +1261,7 @@ func SendFileFromDoc(instance *instance.Instance, c echo.Context, doc *vfs.FileD
 		addCSPRuleForDirectLink(c, doc.Class, doc.Mime)
 	}
 
+	publiclinkevents.TrackFile(c, instance, doc.ID())
 	if page := c.QueryParam("Page"); page != "" {
 		p, errp := strconv.Atoi(page)
 		if errp != nil {
@@ -1345,6 +1348,7 @@ func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 
 	// if accept header is application/zip, send the archive immediately
 	if c.Request().Header.Get(echo.HeaderAccept) == "application/zip" {
+		publiclinkevents.TrackArchive(c, instance, entries, archive.Pages)
 		return archive.Serve(instance.VFS(), c.Response())
 	}
 
@@ -1352,6 +1356,7 @@ func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 	if err != nil {
 		return WrapVfsError(err)
 	}
+	publiclinkevents.TrackArchive(c, instance, entries, archive.Pages)
 	archive.Secret = secret
 
 	fakeName := url.PathEscape(archive.Name)
@@ -1423,6 +1428,10 @@ func FileDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 	}
 	if err != nil {
 		return WrapVfsError(err)
+	}
+
+	if versionID == "" {
+		publiclinkevents.TrackPreparedFile(c, instance, doc.ID())
 	}
 
 	filename := c.QueryParam("Filename")

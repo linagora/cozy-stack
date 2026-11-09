@@ -29,6 +29,7 @@ import (
 	"github.com/cozy/cozy-stack/model/intent"
 	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/model/session"
 	"github.com/cozy/cozy-stack/model/stack"
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -38,6 +39,8 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
+	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/filetype"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/tests/testutils"
@@ -189,6 +192,9 @@ func TestApps(t *testing.T) {
 			return code
 		}
 
+		testInstance.FeatureFlags = map[string]interface{}{publiclink.FlagEnabled: true}
+		require.NoError(t, instance.Update(testInstance))
+		require.NoError(t, couchdb.CreateDB(testInstance, consts.PublicLinkEvents))
 		code := createShareCode("public", nil)
 		t.Run("VisitorIPThroughProxy", func(t *testing.T) {
 			type observedRequest struct{ clientIP, remoteAddr string }
@@ -229,6 +235,69 @@ func TestApps(t *testing.T) {
 			proxyIP, _, err := net.SplitHostPort(seen.remoteAddr)
 			require.NoError(t, err)
 			assert.Equal(t, "127.0.0.2", proxyIP)
+		})
+
+		t.Run("EventCollection", func(t *testing.T) {
+			code := createShareCode("event", nil)
+			perm, err := permission.GetForShareCode(testInstance, code)
+			require.NoError(t, err)
+			readEvents := func() []publiclink.Event {
+				var events []publiclink.Event
+				require.NoError(t, couchdb.FindDocsUnoptimized(testInstance, consts.PublicLinkEvents, &couchdb.FindRequest{Selector: mango.Equal("link_id", perm.ID())}, &events))
+				return events
+			}
+			for n := 0; n < 2; n++ {
+				eAnon.GET("/public").WithQuery("sharecode", code).WithHost(slug+"."+testInstance.Domain).
+					WithHeader("X-Forwarded-For", "2001:db8::123, 192.0.2.1").WithHeader("User-Agent", "preview-bot").Expect().Status(200)
+			}
+			require.Eventually(t, func() bool { return len(readEvents()) == 2 }, 5*time.Second, 10*time.Millisecond)
+			for _, event := range readEvents() {
+				require.Equal(t, publiclink.Opened, event.Action)
+				require.Equal(t, "2001:db8::123", event.IP)
+				require.Empty(t, event.Identity)
+				require.WithinDuration(t, time.Now(), event.OccurredAt, 5*time.Second)
+			}
+			eAnon.HEAD("/public").WithQuery("sharecode", code).WithHost(slug + "." + testInstance.Domain).Expect().Status(200)
+			eAnon.GET("/public/index.html").WithQuery("sharecode", code).WithHost(slug + "." + testInstance.Domain).Expect().Status(200)
+			require.Eventually(t, func() bool { return len(readEvents()) == 3 }, 5*time.Second, 10*time.Millisecond)
+			eAnon.GET("/public/hello.html").WithQuery("sharecode", code).WithHost(slug + "." + testInstance.Domain).Expect().Status(404)
+			require.Len(t, readEvents(), 3)
+			eAnon.GET("/foo/hello.html").WithQuery("sharecode", code).WithCookie("cozysessid", cozysessID).WithHost(slug + "." + testInstance.Domain).Expect().Status(200)
+			require.Len(t, readEvents(), 3, "serving an asset is not an opening")
+			eAnon.GET("/public").WithQuery("sharecode", code).WithCookie("cozysessid", cozysessID).WithHost(slug + "." + testInstance.Domain).Expect().Status(200)
+			require.Eventually(t, func() bool { return len(readEvents()) == 4 }, 5*time.Second, 10*time.Millisecond)
+			var identified int
+			for _, event := range readEvents() {
+				if event.Identity == testInstance.Domain {
+					identified++
+				}
+			}
+			require.Equal(t, 1, identified, "only an authenticated Cozy session establishes identity")
+			eAnon.GET("/public").WithQuery("sharecode", code).WithCookie("cozysessid", "invalid").WithHost(slug + "." + testInstance.Domain).Expect().Status(200)
+			require.Eventually(t, func() bool { return len(readEvents()) == 5 }, 5*time.Second, 10*time.Millisecond)
+			identified = 0
+			for _, event := range readEvents() {
+				if event.Identity != "" {
+					identified++
+				}
+			}
+			require.Equal(t, 1, identified, "an invalid cookie does not establish identity")
+
+			protectedCode := createShareCode("protected-event", "password")
+			protected, err := permission.GetForShareCode(testInstance, protectedCode)
+			require.NoError(t, err)
+			eAnon.GET("/public").WithQuery("sharecode", protectedCode).WithHost(slug + "." + testInstance.Domain).Expect().Status(401)
+			var protectedEvents []publiclink.Event
+			require.NoError(t, couchdb.FindDocsUnoptimized(testInstance, consts.PublicLinkEvents, &couchdb.FindRequest{Selector: mango.Equal("link_id", protected.ID())}, &protectedEvents))
+			require.Empty(t, protectedEvents)
+			cookieName := "pass" + protected.ID()
+			cookie, err := crypto.EncodeAuthMessage(crypto.MACConfig{Name: cookieName, MaxLen: 256}, testInstance.SessionSecret(), []byte(protected.ID()), nil)
+			require.NoError(t, err)
+			eAnon.GET("/public").WithQuery("sharecode", protectedCode).WithCookie(cookieName, string(cookie)).WithHost(slug + "." + testInstance.Domain).Expect().Status(200)
+			require.Eventually(t, func() bool {
+				require.NoError(t, couchdb.FindDocsUnoptimized(testInstance, consts.PublicLinkEvents, &couchdb.FindRequest{Selector: mango.Equal("link_id", protected.ID())}, &protectedEvents))
+				return len(protectedEvents) == 1
+			}, 5*time.Second, 10*time.Millisecond)
 		})
 
 		body := eAnon.GET("/public").
