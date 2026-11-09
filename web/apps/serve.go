@@ -31,7 +31,7 @@ import (
 	"github.com/cozy/cozy-stack/web/auth"
 	"github.com/cozy/cozy-stack/web/intents"
 	"github.com/cozy/cozy-stack/web/middlewares"
-	webpubliclink "github.com/cozy/cozy-stack/web/publiclink"
+	"github.com/cozy/cozy-stack/web/publiclinkevents"
 	"github.com/cozy/cozy-stack/web/settings"
 	"github.com/cozy/cozy-stack/web/statik"
 	"github.com/labstack/echo/v4"
@@ -323,7 +323,7 @@ func ServeAppFile(c echo.Context, i *instance.Instance, fs appfs.FileServer, web
 
 	defer func() {
 		if serveErr == nil && c.Request().Method == http.MethodGet && c.Response().Committed && c.Response().Status == http.StatusOK {
-			webpubliclink.Record(c, i, publicLink, publiclink.Opened)
+			publiclinkevents.Record(c, i, publicLink, publiclink.Opened)
 		}
 	}()
 

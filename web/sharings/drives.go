@@ -32,7 +32,7 @@ import (
 	"github.com/cozy/cozy-stack/web/notes"
 	"github.com/cozy/cozy-stack/web/office"
 	webperm "github.com/cozy/cozy-stack/web/permissions"
-	webpubliclink "github.com/cozy/cozy-stack/web/publiclink"
+	"github.com/cozy/cozy-stack/web/publiclinkevents"
 	"github.com/cozy/cozy-stack/web/shortcuts"
 	"github.com/labstack/echo/v4"
 )
@@ -1590,7 +1590,7 @@ func PatchSharedDrivePermissionHandler(c echo.Context, inst *instance.Instance, 
 		return err
 	}
 
-	webpubliclink.Record(c, inst, ctx.mutation.existingPerm, publiclink.Updated)
+	publiclinkevents.Record(c, inst, ctx.mutation.existingPerm, publiclink.Updated)
 
 	// Don't send the password hash to the client
 	if ctx.mutation.existingPerm.Password != nil {

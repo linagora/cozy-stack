@@ -23,7 +23,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/web/middlewares"
-	webpubliclink "github.com/cozy/cozy-stack/web/publiclink"
+	"github.com/cozy/cozy-stack/web/publiclinkevents"
 	"github.com/gofrs/uuid/v5"
 	"github.com/justincampbell/bigduration"
 	"github.com/labstack/echo/v4"
@@ -289,7 +289,7 @@ func HandleCreateShareByLink(c echo.Context, inst *instance.Instance, opts Creat
 		return err
 	}
 
-	webpubliclink.Record(c, inst, pdoc, publiclink.Created)
+	publiclinkevents.Record(c, inst, pdoc, publiclink.Created)
 
 	// Don't send the password hash to the client
 	if pdoc.Password != nil {
@@ -536,7 +536,7 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 			return err
 		}
 
-		webpubliclink.Record(c, instance, toPatch, publiclink.Updated)
+		publiclinkevents.Record(c, instance, toPatch, publiclink.Updated)
 
 		// Don't send the password hash to the client
 		if toPatch.Password != nil {

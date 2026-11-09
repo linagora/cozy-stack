@@ -1,4 +1,4 @@
-package publiclink
+package publiclinkevents
 
 import (
 	"net/http"

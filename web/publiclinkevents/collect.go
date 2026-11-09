@@ -1,5 +1,5 @@
-// Package publiclink collects private public-link activity.
-package publiclink
+// Package publiclinkevents collects private public-link activity.
+package publiclinkevents
 
 import (
 	"time"
