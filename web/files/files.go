@@ -96,6 +96,7 @@ func Create(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) 
 	instance := middlewares.GetInstance(c)
 	var doc jsonapi.Object
 	var created *vfs.FileDoc
+	var createdDir *vfs.DirDoc
 	var err error
 	switch c.QueryParam("Type") {
 	case consts.FileType:
@@ -105,7 +106,11 @@ func Create(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) 
 			doc, created = f, f.doc
 		}
 	case consts.DirType:
-		doc, err = createDirHandler(c, instance.VFS(), sharedDrive)
+		var d *dir
+		d, err = createDirHandler(c, instance.VFS(), sharedDrive)
+		if err == nil {
+			doc, createdDir = d, d.doc
+		}
 	default:
 		err = ErrDocTypeInvalid
 	}
@@ -114,6 +119,7 @@ func Create(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) 
 		return nil, WrapVfsError(err)
 	}
 
+	recordEdit(c, createdDir, created)
 	return created, jsonapi.Data(c, http.StatusCreated, doc, nil)
 }
 
@@ -365,6 +371,7 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 				Infof("Cannot import note: %s", err)
 			return nil, WrapVfsError(err)
 		}
+		recordEdit(c, nil, newdoc)
 		return newdoc, FileData(c, http.StatusOK, newdoc, true, nil, sharedDrive)
 	}
 
@@ -379,6 +386,7 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 	if err != nil {
 		return nil, WrapVfsError(err)
 	}
+	recordEdit(c, nil, newdoc)
 	return newdoc, FileData(c, http.StatusOK, newdoc, true, nil, sharedDrive)
 }
 
@@ -1150,6 +1158,12 @@ func RevertFileVersion(c echo.Context) error {
 		return WrapVfsError(err)
 	}
 
+	// The VFS writes a copy of the doc: the row needs the metadata of the
+	// version, read again.
+	if reverted, err := inst.VFS().FileByID(doc.ID()); err == nil {
+		recordEdit(c, nil, reverted)
+	}
+
 	return FileData(c, http.StatusOK, doc, true, nil, nil)
 }
 
@@ -1657,6 +1671,7 @@ func Restore(c echo.Context, sharedDrive *sharing.Sharing) error {
 		if errt != nil {
 			return WrapVfsError(errt)
 		}
+		recordEdit(c, doc, nil)
 		return DirData(c, http.StatusOK, doc, nil)
 	}
 
@@ -1665,6 +1680,7 @@ func Restore(c echo.Context, sharedDrive *sharing.Sharing) error {
 	if errt != nil {
 		return WrapVfsError(errt)
 	}
+	recordEdit(c, nil, doc)
 	return FileData(c, http.StatusOK, doc, false, nil, nil)
 }
 
