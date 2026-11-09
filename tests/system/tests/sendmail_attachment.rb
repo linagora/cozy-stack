@@ -38,7 +38,7 @@ describe "Sending a mail" do
     assert_equal mail.subject, args[:subject]
     assert mail.parts.length > 2
     disposition = mail.parts.dig 1, "Headers", "Content-Disposition", 0
-    assert_equal "attachment; filename=\"wet.jpg\"", disposition
+    assert_equal "attachment; filename=wet.jpg", disposition
     encoding = mail.parts.dig 1, "Headers", "Content-Transfer-Encoding", 0
     assert_equal encoding, "base64"
     ctype = mail.parts.dig(1, "Headers", "Content-Type", 0).split(";")[0]

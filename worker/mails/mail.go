@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -255,10 +257,7 @@ func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
 	}
 
 	for _, attachment := range opts.Attachments {
-		email.Attach(attachment.Filename, gomail.SetCopyFunc(func(w io.Writer) error {
-			_, err := w.Write(attachment.Content)
-			return err
-		}))
+		addAttachment(email, attachment)
 	}
 
 	dialer := gomail.NewDialer(dialerOptions)
@@ -266,6 +265,23 @@ func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
 		dialer.SetDeadline(deadline)
 	}
 	return dialer.DialAndSend(email)
+}
+
+func addAttachment(email *gomail.Message, attachment *mail.Attachment) {
+	name := filepath.Base(attachment.Filename)
+	contentType, params, err := mime.ParseMediaType(mime.TypeByExtension(filepath.Ext(name)))
+	if err != nil {
+		contentType, params = "application/octet-stream", make(map[string]string)
+	}
+	params["name"] = name
+	headers := map[string][]string{
+		"Content-Type":        {mime.FormatMediaType(contentType, params)},
+		"Content-Disposition": {mime.FormatMediaType("attachment", map[string]string{"filename": name})},
+	}
+	email.Attach(name, gomail.SetHeader(headers), gomail.SetCopyFunc(func(w io.Writer) error {
+		_, err := w.Write(attachment.Content)
+		return err
+	}))
 }
 
 func addPart(mail *gomail.Message, part *mail.Part) error {
