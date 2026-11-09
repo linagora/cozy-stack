@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSharedDrivePublicDownloadVisitorIdentity(t *testing.T) {
+func TestSharedDrivePublicDownloadPreparationIdentity(t *testing.T) {
 	f := setupSharedDrivePermissionFixture(t)
 	f.env.acme.FeatureFlags = map[string]interface{}{publiclink.FlagEnabled: true}
 	require.NoError(t, instance.Update(f.env.acme))
@@ -63,6 +63,7 @@ func TestSharedDrivePublicDownloadVisitorIdentity(t *testing.T) {
 			} else {
 				path = f.eOwner.POST("/sharings/drives/"+f.sharingID+"/archive").
 					WithHeader("Authorization", "Bearer "+code).WithHeader("Content-Type", jsonAPIContentType).
+					WithHeader("Cookie", ownerCookie.String()).WithHeader("X-Forwarded-For", "192.0.2.77").
 					WithBytes(mustJSON(t, map[string]interface{}{"data": map[string]interface{}{"type": consts.Archives, "attributes": map[string]interface{}{"name": "identity", "ids": []string{targetID}}}})).
 					Expect().Status(200).JSON(httpexpect.ContentOpts{MediaType: jsonAPIContentType}).
 					Object().Path("$.links.related").String().Raw()
@@ -72,7 +73,13 @@ func TestSharedDrivePublicDownloadVisitorIdentity(t *testing.T) {
 				require.NoError(t, couchdb.FindDocsUnoptimized(f.env.acme, consts.PublicLinkEvents, &couchdb.FindRequest{Selector: mango.And(mango.Equal("link_id", id), mango.Equal("action", string(publiclink.Downloaded)))}, &events))
 				return events
 			}
-			require.Empty(t, readDownloads(), "preparing a secret is not a download")
+			require.Eventually(t, func() bool { return len(readDownloads()) == 1 }, 5*time.Second, 10*time.Millisecond)
+			if kind == "file" {
+				require.Empty(t, readDownloads()[0].Identity, "the anonymous preparer owns the intent, not subsequent visitors")
+			} else {
+				require.Equal(t, f.env.acme.Domain, readDownloads()[0].Identity)
+				require.Equal(t, "192.0.2.77", readDownloads()[0].IP)
+			}
 
 			for _, visitor := range []string{"anonymous-owner", "anonymous-http-proxy", "anonymous-same-stack", "recipient-session-same-stack", "owner-token", "owner-session"} {
 				t.Run(visitor, func(t *testing.T) {
@@ -98,19 +105,12 @@ func TestSharedDrivePublicDownloadVisitorIdentity(t *testing.T) {
 					}
 
 					before := readDownloads()
-					seen := make(map[string]bool, len(before))
-					for _, event := range before {
-						seen[event.ID()] = true
-					}
 					req, err := http.NewRequest(http.MethodGet, base+path+"?Dl=1", nil)
 					require.NoError(t, err)
-					wantIdentity := ""
 					if visitor == "owner-token" {
 						req.Header.Set("Authorization", "Bearer "+f.ownerAppToken)
-						wantIdentity = f.env.acme.Domain
 					} else if visitor == "owner-session" {
 						req.AddCookie(ownerCookie)
-						wantIdentity = f.env.acme.Domain
 					} else if visitor == "recipient-session-same-stack" {
 						req.AddCookie(recipientCookie)
 					} else {
@@ -144,17 +144,15 @@ func TestSharedDrivePublicDownloadVisitorIdentity(t *testing.T) {
 						require.Equal(t, []string{"foo"}, contents)
 					}
 
-					var events []publiclink.Event
-					require.Eventually(t, func() bool {
-						events = readDownloads()
-						return len(events) == len(before)+1
-					}, 5*time.Second, 10*time.Millisecond)
-					for _, event := range events {
-						if !seen[event.ID()] {
-							require.Equal(t, wantIdentity, event.Identity, "the proxy credential must not identify an anonymous visitor")
-						}
-					}
+					require.Equal(t, before, readDownloads(), "secret consumption must not create an event or change its identity")
 				})
+			}
+			if kind == "file" {
+				f.eOwner.GET("/sharings/drives/"+f.sharingID+"/download/"+targetID).
+					WithQuery("Dl", "1").WithHeader("Authorization", "Bearer "+code).
+					Expect().Status(200).Body().IsEqual("foo")
+				require.Eventually(t, func() bool { return len(readDownloads()) == 2 }, 5*time.Second, 10*time.Millisecond,
+					"direct shared-drive downloads must still count")
 			}
 		})
 	}

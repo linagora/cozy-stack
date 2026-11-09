@@ -15,9 +15,11 @@ const FlagEnabled = "drive.public_link_events.enabled"
 type Action string
 
 const (
-	Created    Action = "created"
-	Updated    Action = "updated"
-	Opened     Action = "opened"
+	Created Action = "created"
+	Updated Action = "updated"
+	Opened  Action = "opened"
+	// Downloaded records a download intent, not a completed transfer: once at
+	// secret preparation (even if unused), or per direct download request.
 	Downloaded Action = "downloaded"
 )
 

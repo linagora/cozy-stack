@@ -154,9 +154,10 @@ func TestPublicLinkEvents(t *testing.T) {
 		return p.Links.Related
 	}
 	fileURL := related(request("POST", "/files/downloads?Id="+rootID, token, nil, nil, 200))
-	require.Len(t, events(), 5, "preparing a secret does not start a download")
-	request("GET", fileURL+"?Dl=1", "", nil, nil, 200)
-	require.Len(t, events(), 6)
+	require.Len(t, events(), 6, "preparing a secret records the intent even without a GET")
+	require.Equal(t, "public link content", string(request("GET", fileURL+"?Dl=1", "", nil, nil, 200)))
+	require.Equal(t, "public link content", string(request("GET", fileURL+"?Dl=1&sharecode="+token, "", nil, nil, 200)))
+	require.Len(t, events(), 6, "reusing a secret with a sharecode must not count again")
 	legacy, err := vfs.GetStore().AddFile(inst, "/root.txt")
 	require.NoError(t, err)
 	request("GET", "/files/downloads/"+legacy+"/file?Dl=1", token, nil, nil, 200)
@@ -164,7 +165,7 @@ func TestPublicLinkEvents(t *testing.T) {
 
 	archiveBody := []byte(`{"data":{"type":"io.cozy.files.archives","attributes":{"name":"shared","ids":["` + dir.ID() + `"]}}}`)
 	archiveURL := related(request("POST", "/files/archive", dirToken, archiveBody, nil, 200))
-	require.Len(t, events(), 6)
+	require.Len(t, events(), 7, "archive preparation counts before consumption")
 	b := request("GET", archiveURL, "", nil, nil, 200)
 	zr, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
 	require.NoError(t, err)
@@ -189,9 +190,9 @@ func TestPublicLinkEvents(t *testing.T) {
 	}
 	require.Equal(t, map[string]int{linkID: 5, dirLinkID: 3}, counts)
 	// Existing capabilities keep their old access semantics after revocation.
-	// Attribute the download attempt to the link that authorized the secret.
+	// Reusing them does not record another intent.
 	request("GET", fileURL+"?Dl=1", "", nil, nil, 200)
-	require.Len(t, events(), 9)
+	require.Len(t, events(), 8)
 
 	t.Run("EmptyDirectory", func(t *testing.T) {
 		empty, err := vfs.Mkdir(inst.VFS(), "/empty", nil)
@@ -210,6 +211,46 @@ func TestPublicLinkEvents(t *testing.T) {
 			}
 		}
 		require.ElementsMatch(t, []publiclink.Action{publiclink.Created, publiclink.Downloaded}, actions)
+	})
+
+	t.Run("PreparationScopeAndFlag", func(t *testing.T) {
+		id, code := link(rootID)
+		downloads := func() []publiclink.Event {
+			var result []publiclink.Event
+			for _, event := range events() {
+				if event.LinkID == id && event.Action == publiclink.Downloaded {
+					result = append(result, event)
+				}
+			}
+			return result
+		}
+		before := len(events())
+		request("POST", "/files/downloads?Id="+rootID, "", nil, nil, 401)
+		request("POST", "/files/downloads?Id=missing", code, nil, nil, 404)
+		request("POST", "/files/downloads?VersionId="+rootID+"/old", code, nil, nil, 200)
+		request("POST", "/files/downloads?Id="+childID, dirToken, nil, nil, 200)
+		require.Len(t, events(), before, "failed, version and child preparations are excluded")
+
+		inst.FeatureFlags[publiclink.FlagEnabled] = false
+		require.NoError(t, instance.Update(inst))
+		path := related(request("POST", "/files/downloads?Id="+rootID, code, nil, nil, 200))
+		require.Empty(t, downloads())
+		inst.FeatureFlags[publiclink.FlagEnabled] = true
+		require.NoError(t, instance.Update(inst))
+		require.Equal(t, "public link content", string(request("GET", path+"?Dl=1", code, nil, nil, 200)))
+		require.Empty(t, downloads(), "enabling later must not catch up an unrecorded preparation")
+
+		path = related(request("POST", "/files/downloads?Id="+rootID, code, nil, map[string]string{"X-Forwarded-For": "192.0.2.77"}, 200))
+		require.Len(t, downloads(), 1)
+		require.Equal(t, "192.0.2.77", downloads()[0].IP)
+		require.Empty(t, downloads()[0].Identity)
+		inst.FeatureFlags[publiclink.FlagEnabled] = false
+		require.NoError(t, instance.Update(inst))
+		request("GET", path+"?Dl=1", code, nil, map[string]string{"X-Forwarded-For": "192.0.2.88"}, 200)
+		require.Len(t, downloads(), 1)
+		require.Equal(t, "192.0.2.77", downloads()[0].IP, "identity and IP belong to preparation")
+		inst.FeatureFlags[publiclink.FlagEnabled] = true
+		require.NoError(t, instance.Update(inst))
 	})
 
 	t.Run("ConditionalDownloadAttempt", func(t *testing.T) {
@@ -310,7 +351,7 @@ func TestPublicLinkEvents(t *testing.T) {
 				case <-time.After(5 * time.Second):
 					t.Fatal("archive handler did not finish")
 				}
-				require.Equal(t, archiveBefore+1, countDownloads(archiveID))
+				require.Equal(t, archiveBefore, countDownloads(archiveID))
 
 				res = fetch(archivePath, "")
 				_, err = io.CopyN(io.Discard, res.Body, 65536)
@@ -321,7 +362,7 @@ func TestPublicLinkEvents(t *testing.T) {
 				case <-time.After(5 * time.Second):
 					t.Fatal("aborted archive handler did not finish")
 				}
-				require.Equal(t, archiveBefore+2, countDownloads(archiveID), "an aborted archive download was started")
+				require.Equal(t, archiveBefore, countDownloads(archiveID), "aborting a prepared archive does not record another intent")
 			})
 		}
 	})

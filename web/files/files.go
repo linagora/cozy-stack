@@ -1356,7 +1356,7 @@ func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 	if err != nil {
 		return WrapVfsError(err)
 	}
-	webpubliclink.AttributeSecret(c, instance, secret)
+	webpubliclink.TrackArchive(c, instance, entries, archive.Pages)
 	archive.Secret = secret
 
 	fakeName := url.PathEscape(archive.Name)
@@ -1431,7 +1431,7 @@ func FileDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 	}
 
 	if versionID == "" {
-		webpubliclink.AttributeSecret(c, instance, secret)
+		webpubliclink.TrackPreparedFile(c, instance, doc.ID())
 	}
 
 	filename := c.QueryParam("Filename")
@@ -1479,8 +1479,6 @@ func ArchiveDownloadHandler(c echo.Context) error {
 		}
 	}
 
-	webpubliclink.ResolveSecret(c, instance, secret)
-	webpubliclink.TrackArchive(c, instance, entries, archive.Pages)
 	if err := archive.Serve(instance.VFS(), c.Response()); err != nil {
 		return WrapVfsError(err)
 	}
@@ -1499,7 +1497,6 @@ func FileDownloadHandler(c echo.Context) error {
 	if err != nil {
 		return WrapVfsError(err)
 	}
-	webpubliclink.ResolveSecret(c, instance, secret)
 	return sendFileFromPath(c, path, false)
 }
 

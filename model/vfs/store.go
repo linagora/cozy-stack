@@ -29,16 +29,6 @@ type Store interface {
 	GetVersion(db prefixer.Prefixer, key string) (string, error)
 	GetArchive(db prefixer.Prefixer, key string) (*Archive, error)
 	GetMetadata(db prefixer.Prefixer, key string) (*Metadata, error)
-	// Download attribution is server-only metadata, never an authorization grant.
-	SetDownloadLink(db prefixer.Prefixer, key string, link DownloadLink) error
-	GetDownloadLink(db prefixer.Prefixer, key string) (*DownloadLink, error)
-}
-
-// DownloadLink is server-only provenance of an already authorized download.
-// It contains neither a sharecode nor an identity, and grants no access.
-type DownloadLink struct {
-	PermissionID string `json:"permission_id"`
-	RootID       string `json:"root_id"`
 }
 
 // storeTTL is time after which the data in the store will be considered stale.
@@ -388,60 +378,6 @@ func (s *redisStore) GetMetadata(db prefixer.Prefixer, key string) (*Metadata, e
 		return nil, err
 	}
 	return meta, nil
-}
-
-func (s *memStore) SetDownloadLink(db prefixer.Prefixer, key string, link DownloadLink) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ref := s.vals[db.DBPrefix()+":"+key]
-	if ref == nil || !time.Now().Before(ref.exp) {
-		return ErrWrongToken
-	}
-	s.vals[db.DBPrefix()+":download-link:"+key] = &memRef{val: link, exp: ref.exp}
-	return nil
-}
-
-func (s *memStore) GetDownloadLink(db prefixer.Prefixer, key string) (*DownloadLink, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ref := s.vals[db.DBPrefix()+":download-link:"+key]
-	if ref == nil || !time.Now().Before(ref.exp) {
-		return nil, ErrWrongToken
-	}
-	link, ok := ref.val.(DownloadLink)
-	if !ok {
-		return nil, ErrWrongToken
-	}
-	return &link, nil
-}
-
-func (s *redisStore) SetDownloadLink(db prefixer.Prefixer, key string, link DownloadLink) error {
-	// Keep the legacy value unchanged, including for mixed-version stacks.
-	// Readers must validate the original secret before using this attribution.
-	ttl, err := s.c.PTTL(s.ctx, db.DBPrefix()+":"+key).Result()
-	if err != nil {
-		return err
-	}
-	if ttl <= 0 {
-		return ErrWrongToken
-	}
-	data, err := json.Marshal(link)
-	if err != nil {
-		return err
-	}
-	return s.c.Set(s.ctx, db.DBPrefix()+":download-link:"+key, data, ttl).Err()
-}
-
-func (s *redisStore) GetDownloadLink(db prefixer.Prefixer, key string) (*DownloadLink, error) {
-	data, err := s.GetFile(db, "download-link:"+key)
-	if err != nil {
-		return nil, err
-	}
-	var link DownloadLink
-	if err = json.Unmarshal([]byte(data), &link); err != nil {
-		return nil, err
-	}
-	return &link, nil
 }
 
 func makeSecret() string {
