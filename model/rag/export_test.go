@@ -2,6 +2,7 @@ package rag
 
 import (
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/vfs"
 )
 
 // RootWorkspaceID is the openRAG workspace id of the root folder.
@@ -15,7 +16,10 @@ func ReconcileWorkspacesForTest(inst *instance.Instance, own string, push func(d
 	if err != nil {
 		return err
 	}
-	return reconcileWorkspaces(inst, TestingLogger(), inst.RAGServer(), sc, own, push)
+	detach := func(file *vfs.FileDoc, workspaceID string) error {
+		return detachFile(inst, file.DocID, workspaceID, TestingLogger())
+	}
+	return reconcileWorkspaces(inst, TestingLogger(), inst.RAGServer(), sc, own, push, detach)
 }
 
 // SetReconcilePushForTest replaces the reconcile job push; it returns a

@@ -859,3 +859,7 @@ rabbitmq:
           delivery_limit: 5
           bindings:
             - drive.org_drive.ensure
+    - name: rag.index.topic
+      kind: topic
+      durable: true
+      declare_exchange: false

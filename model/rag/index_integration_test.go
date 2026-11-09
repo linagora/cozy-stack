@@ -1,6 +1,7 @@
 package rag_test
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -96,7 +97,7 @@ func (r *ragTest) rewriteFile(path, content string) *vfs.FileDoc {
 }
 
 func (r *ragTest) index() error {
-	return rag.Index(r.inst, rag.TestingLogger(), rag.IndexMessage{Doctype: consts.Files})
+	return rag.Index(context.Background(), r.inst, rag.TestingLogger(), rag.IndexMessage{Doctype: consts.Files}, nil)
 }
 
 // drainReconcileJobs returns the reconcile jobs pushed so far, and forgets
@@ -113,7 +114,7 @@ func (r *ragTest) runUntilSettled() {
 	r.t.Helper()
 	require.NoError(r.t, r.index())
 	for _, dirID := range r.drainReconcileJobs() {
-		require.NoError(r.t, rag.Index(r.inst, rag.TestingLogger(), rag.IndexMessage{Doctype: consts.Files, ReconcileDirID: dirID}))
+		require.NoError(r.t, rag.Index(context.Background(), r.inst, rag.TestingLogger(), rag.IndexMessage{Doctype: consts.Files, ReconcileDirID: dirID}, nil))
 	}
 	assert.Empty(r.t, r.reconciles, "a reconcile job must not push reconcile jobs")
 }
@@ -697,11 +698,15 @@ func TestIndexNotSupportedClassStatus(t *testing.T) {
 	assert.Equal(t, rag.StatusNotSupported, status.Status)
 }
 
+// The knowledge base is indexed before the file is written: the files of a
+// new folder are left to its reconcile job, these tests are about the feed.
 func TestIndexKeepsCheckpointOnRetryableError(t *testing.T) {
 	r := newRAGTest(t)
 	kb := r.mkdir("/KB")
-	doc := r.writeFile("/KB/a.txt", "alpha")
 	r.addAssistant("KB assistant", kb.DocID)
+	r.runUntilSettled()
+	before, _ := r.checkpoint()
+	doc := r.writeFile("/KB/a.txt", "alpha")
 
 	r.fake.Fail = func(method, path string) int {
 		if method == http.MethodPost && path == "/indexer/partition/"+r.inst.Domain+"/file/"+doc.DocID {
@@ -712,7 +717,7 @@ func TestIndexKeepsCheckpointOnRetryableError(t *testing.T) {
 	err := r.index()
 	require.Error(t, err)
 	lastSeq, retries := r.checkpoint()
-	assert.Empty(t, lastSeq, "checkpoint not advanced")
+	assert.Equal(t, before, lastSeq, "checkpoint not advanced")
 	assert.Equal(t, 1, retries, "the retryable error counts as an attempt")
 
 	r.fake.Fail = nil
@@ -720,15 +725,16 @@ func TestIndexKeepsCheckpointOnRetryableError(t *testing.T) {
 	_, ok := r.fake.File(doc.DocID)
 	assert.True(t, ok)
 	lastSeq, retries = r.checkpoint()
-	assert.NotEmpty(t, lastSeq)
+	assert.NotEqual(t, before, lastSeq)
 	assert.Equal(t, 0, retries)
 }
 
 func TestIndexGivesUpAfterMaxRetries(t *testing.T) {
 	r := newRAGTest(t)
 	kb := r.mkdir("/KB")
-	doc := r.writeFile("/KB/a.txt", "alpha")
 	r.addAssistant("KB assistant", kb.DocID)
+	r.runUntilSettled()
+	doc := r.writeFile("/KB/a.txt", "alpha")
 	r.seedCheckpoint("", rag.MaxBatchRetries)
 
 	r.fake.Fail = func(method, path string) int {
@@ -747,9 +753,10 @@ func TestIndexGivesUpAfterMaxRetries(t *testing.T) {
 func TestIndexNonRetryableErrorIsSkipped(t *testing.T) {
 	r := newRAGTest(t)
 	kb := r.mkdir("/KB")
+	r.addAssistant("KB assistant", kb.DocID)
+	r.runUntilSettled()
 	bad := r.writeFile("/KB/bad.txt", "bad")
 	good := r.writeFile("/KB/good.txt", "good")
-	r.addAssistant("KB assistant", kb.DocID)
 	r.fake.Fail = func(method, path string) int {
 		if method == http.MethodPost && path == "/indexer/partition/"+r.inst.Domain+"/file/"+bad.DocID {
 			return 415
@@ -781,9 +788,9 @@ func TestReconcileJobStaysOnItsOwnFolder(t *testing.T) {
 	r.addAssistant("B", dirB.DocID)
 
 	// The reconcile job of /A, running before any feed job.
-	require.NoError(t, rag.Index(r.inst, rag.TestingLogger(), rag.IndexMessage{
+	require.NoError(t, rag.Index(context.Background(), r.inst, rag.TestingLogger(), rag.IndexMessage{
 		Doctype: consts.Files, ReconcileDirID: dirA.DocID,
-	}))
+	}, nil))
 
 	assert.True(t, r.fake.HasWorkspace(dirA.DocID), "its own workspace is created")
 	assert.False(t, r.fake.HasWorkspace(dirB.DocID), "another folder's workspace is left to a feed job")
@@ -815,9 +822,9 @@ func TestReconcileJobDoesNotRemoveWorkspaces(t *testing.T) {
 	r.fake.AddWorkspace("stale")
 	r.fake.AddFile("ghost", "x", "stale")
 
-	require.NoError(t, rag.Index(r.inst, rag.TestingLogger(), rag.IndexMessage{
+	require.NoError(t, rag.Index(context.Background(), r.inst, rag.TestingLogger(), rag.IndexMessage{
 		Doctype: consts.Files, ReconcileDirID: kb.DocID,
-	}))
+	}, nil))
 
 	assert.True(t, r.fake.HasWorkspace("stale"), "a reconcile job removes no workspace")
 	_, ok := r.fake.File("ghost")
@@ -833,9 +840,10 @@ func TestReconcileJobDoesNotRemoveWorkspaces(t *testing.T) {
 func TestReconcileSkipsFileRefusedByIndexer(t *testing.T) {
 	r := newRAGTest(t)
 	kb := r.mkdir("/KB")
+	r.addAssistant("KB assistant", kb.DocID)
+	r.runUntilSettled()
 	bad := r.writeFile("/KB/bad.txt", "bad")
 	good := r.writeFile("/KB/good.txt", "good")
-	r.addAssistant("KB assistant", kb.DocID)
 	r.fake.Fail = func(method, path string) int {
 		if method == http.MethodPost && path == "/indexer/partition/"+r.inst.Domain+"/file/"+bad.DocID {
 			return http.StatusUnsupportedMediaType
@@ -843,9 +851,9 @@ func TestReconcileSkipsFileRefusedByIndexer(t *testing.T) {
 		return 0
 	}
 
-	require.NoError(t, rag.Index(r.inst, rag.TestingLogger(), rag.IndexMessage{
+	require.NoError(t, rag.Index(context.Background(), r.inst, rag.TestingLogger(), rag.IndexMessage{
 		Doctype: consts.Files, ReconcileDirID: kb.DocID,
-	}), "a 4xx on one file does not fail the job")
+	}, nil), "a 4xx on one file does not fail the job")
 
 	_, ok := r.fake.File(good.DocID)
 	assert.True(t, ok, "the walk continued past the refused file")
@@ -877,9 +885,9 @@ func TestReconcileRetryableFileErrorFailsTheJob(t *testing.T) {
 		return 0
 	}
 
-	err := rag.Index(r.inst, rag.TestingLogger(), rag.IndexMessage{
+	err := rag.Index(context.Background(), r.inst, rag.TestingLogger(), rag.IndexMessage{
 		Doctype: consts.Files, ReconcileDirID: kb.DocID,
-	})
+	}, nil)
 
 	require.Error(t, err)
 	assert.True(t, rag.IsRetryableForTest(err), "a 5xx on one file asks for another walk")
@@ -960,9 +968,9 @@ func TestReconcileSkipsDuplicateContent(t *testing.T) {
 	other := r.writeFile("/KB/c.txt", "something else")
 	r.addAssistant("KB assistant", kb.DocID)
 
-	err := rag.Index(r.inst, rag.TestingLogger(), rag.IndexMessage{
+	err := rag.Index(context.Background(), r.inst, rag.TestingLogger(), rag.IndexMessage{
 		Doctype: consts.Files, ReconcileDirID: kb.DocID,
-	})
+	}, nil)
 	require.NoError(t, err, "a content duplicate does not fail the reconcile job")
 
 	indexed := r.fake.FileIDs()
@@ -1003,9 +1011,9 @@ func TestReconcileSkipsFileWithMissingContent(t *testing.T) {
 	// document: exactly what a lost storage write leaves behind.
 	require.NoError(t, vfsafero.GetMemFS(r.inst.Domain).Remove("/KB/broken.txt"))
 
-	err := rag.Index(r.inst, rag.TestingLogger(), rag.IndexMessage{
+	err := rag.Index(context.Background(), r.inst, rag.TestingLogger(), rag.IndexMessage{
 		Doctype: consts.Files, ReconcileDirID: kb.DocID,
-	})
+	}, nil)
 
 	require.NoError(t, err, "content missing on disk is a definitive skip, not a retry")
 	_, ok := r.fake.File(good.DocID)
@@ -1196,9 +1204,9 @@ func TestReconcileCountsUnsupportedFilesApart(t *testing.T) {
 	r.addAssistant("KB assistant", kb.DocID)
 
 	log, entries := capturingLogger(t)
-	require.NoError(t, rag.Index(r.inst, log, rag.IndexMessage{
+	require.NoError(t, rag.Index(context.Background(), r.inst, log, rag.IndexMessage{
 		Doctype: consts.Files, ReconcileDirID: kb.DocID,
-	}))
+	}, nil))
 
 	summary := findLog(t, entries(), "reconcile: folder "+kb.DocID+" walked")
 	assert.Contains(t, summary, "1 file(s) indexed or up to date")
