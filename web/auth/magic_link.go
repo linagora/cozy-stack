@@ -90,6 +90,9 @@ func loginWithMagicLink(c echo.Context) error {
 		})
 	}
 
+	if err := lifecycle.ConsumeMagicLink(inst, code); err != nil {
+		return renderError(c, http.StatusBadRequest, "Error Invalid magic link")
+	}
 	err = newSession(c, inst, redirect, session.NormalRun, "magic_link")
 	if err != nil {
 		return err
@@ -130,6 +133,9 @@ func loginWithMagicLinkAndPassword(c echo.Context) error {
 	redirect, err := checkRedirectParam(c, inst.DefaultRedirection())
 	if err != nil {
 		return err
+	}
+	if err := lifecycle.ConsumeMagicLink(inst, code); err != nil {
+		return c.JSON(http.StatusUnauthorized, echo.Map{"error": inst.Translate("Error Invalid magic link")})
 	}
 	err = newSession(c, inst, redirect, session.NormalRun, "magic_link")
 	if err != nil {
@@ -194,6 +200,9 @@ func magicLinkFlagship(c echo.Context) error {
 		})
 	}
 
+	if err := lifecycle.ConsumeMagicLink(inst, args.Code); err != nil {
+		return c.JSON(http.StatusUnauthorized, echo.Map{"error": "invalid magic code"})
+	}
 	if !client.Flagship {
 		return ReturnSessionCode(c, http.StatusAccepted, inst, SessionCodeSourcePassword)
 	}

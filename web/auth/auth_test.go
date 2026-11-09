@@ -2100,6 +2100,9 @@ func TestAuth(t *testing.T) {
 				WithQuery("code", code).
 				Expect().Status(303).
 				Header("Location").Equal("https://home." + d + "/")
+			assert.ErrorIs(t, lifecycle.CheckMagicLink(inst, code), lifecycle.ErrInvalidMagicLink)
+			testutils.CreateTestClient(t, ts.URL).GET("/auth/magic_link").
+				WithHost(d).WithQuery("code", code).Expect().Status(400)
 		})
 
 		t.Run("Flagship", func(t *testing.T) {
@@ -2135,6 +2138,29 @@ func TestAuth(t *testing.T) {
 			obj.Value("refresh_token").String().NotEmpty()
 			obj.ValueEqual("scope", "*")
 			obj.ValueEqual("token_type", "bearer")
+			assert.ErrorIs(t, lifecycle.CheckMagicLink(inst, code), lifecycle.ErrInvalidMagicLink)
+		})
+
+		t.Run("TwoFactor", func(t *testing.T) {
+			require.NoError(t, lifecycle.ForceUpdatePassphrase(inst, []byte("magic-link-password"),
+				lifecycle.PassParameters{Pass: []byte("magic-link-password"), Iterations: 5000}))
+			require.NoError(t, lifecycle.UpdateAuthMode(inst, instance.TwoFactorMail))
+			code, err := lifecycle.CreateMagicLinkCode(inst)
+			require.NoError(t, err)
+			client := testutils.CreateTestClient(t, ts.URL)
+			csrf := client.GET("/auth/magic_link").WithHost(d).WithQuery("code", code).
+				Expect().Status(200).Cookie("_csrf").Value().Raw()
+			require.NoError(t, lifecycle.CheckMagicLink(inst, code))
+			client.POST("/auth/magic_link/twofactor").WithHost(d).
+				WithCookie("_csrf", csrf).WithFormField("csrf_token", csrf).
+				WithFormField("magic_code", code).WithFormField("passphrase", "wrong").
+				Expect().Status(401)
+			require.NoError(t, lifecycle.CheckMagicLink(inst, code))
+			client.POST("/auth/magic_link/twofactor").WithHost(d).
+				WithCookie("_csrf", csrf).WithFormField("csrf_token", csrf).
+				WithFormField("magic_code", code).WithFormField("passphrase", "magic-link-password").
+				Expect().Status(200)
+			assert.ErrorIs(t, lifecycle.CheckMagicLink(inst, code), lifecycle.ErrInvalidMagicLink)
 		})
 	})
 }
