@@ -106,7 +106,7 @@ func e2eStep(t *testing.T, r *ragTest, query rag.QueryMessage) ([]map[string]int
 	t.Logf("%s: events %v, in %s", query.DocID, objects(published), time.Since(started).Round(time.Second))
 	oneline := func(v interface{}) string { return strings.ReplaceAll(fmt.Sprint(v), "\n", "\\n") }
 	if answer.Action != nil {
-		t.Logf("  action %s %s (call %s)", answer.Action.Name, oneline(answer.Action.Params), answer.Action.CallID)
+		t.Logf("  action %s %s (call %s)", answer.Action.Name, oneline(answer.Action.Params), answer.Action.ToolCallID)
 	} else {
 		t.Logf("  answer: %s", oneline(answer.Content))
 	}
@@ -127,15 +127,15 @@ func runMailScenario(t *testing.T, r *ragTest, id string, direct bool) {
 		ChatConversationID: id,
 		Query:              "Reply to Claire Martin's last email to confirm the training on November 18",
 		Documents:          &documents,
-		Actions:            actions,
+		Tools:              actions,
 	})
 	require.NoError(t, err)
-	query := rag.QueryMessage{Task: "chat-completion", DocID: id, Actions: actions, DirectLLM: direct, Stream: true}
+	query := rag.QueryMessage{Task: "chat-completion", DocID: id, Tools: actions, DirectLLM: direct, Stream: true}
 
 	published, answer := e2eStep(t, r, query)
 	require.NotNil(t, answer.Action, "the LLM searches the emails first, it answered: %s", answer.Content)
 	require.Equal(t, "search_emails", answer.Action.Name)
-	assert.NotEmpty(t, answer.Action.CallID, "the id of the tool call")
+	assert.NotEmpty(t, answer.Action.ToolCallID, "the id of the tool call")
 	assert.Equal(t, "action", objects(published)[len(published)-2])
 
 	result := func(msgID, content string) {
@@ -143,7 +143,7 @@ func runMailScenario(t *testing.T, r *ragTest, id string, direct bool) {
 			ChatConversationID: id,
 			Result:             &rag.ActionResult{MessageID: msgID, OK: true, Content: content},
 			Documents:          &documents,
-			Actions:            actions,
+			Tools:              actions,
 		})
 		require.NoError(t, err)
 	}
@@ -193,10 +193,10 @@ func TestE2EAPlainQuestionIsAnswered(t *testing.T) {
 		ChatConversationID: "e2e-plain-question",
 		Query:              "How do I archive an email?",
 		Documents:          &documents,
-		Actions:            actions,
+		Tools:              actions,
 	})
 	require.NoError(t, err)
-	published, answer := e2eStep(t, r, rag.QueryMessage{Task: "chat-completion", DocID: "e2e-plain-question", Actions: actions, DirectLLM: true, Stream: true})
+	published, answer := e2eStep(t, r, rag.QueryMessage{Task: "chat-completion", DocID: "e2e-plain-question", Tools: actions, DirectLLM: true, Stream: true})
 	assert.Nil(t, answer.Action, "a question about how to do something is answered, not an action")
 	assert.Contains(t, objects(published), "delta")
 }

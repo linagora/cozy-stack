@@ -371,7 +371,7 @@ func TestActionFromCall(t *testing.T) {
 
 	action, err := actionFromCall(actions, call("draft_email", `{"to": ["Paul", "mallory@example.com"], "subject": "Point", "body": "Bonjour Paul", "cc": "dropped"}`), written)
 	require.NoError(t, err)
-	assert.Equal(t, &ChatAction{Name: "draft_email", CallID: "call_1", Params: map[string]interface{}{
+	assert.Equal(t, &ChatAction{Name: "draft_email", ToolCallID: "call_1", Params: map[string]interface{}{
 		"to": []string{"Paul"}, "subject": "Point", "body": "Bonjour Paul",
 	}}, action, "the params checked: unknown ones dropped, user-written ones kept to what the user wrote")
 
@@ -382,7 +382,7 @@ func TestActionFromCall(t *testing.T) {
 	visio := append(actions, ActionDefinition{Name: "start_visio", Description: "start a video call"})
 	action, err = actionFromCall(visio, call("start_visio", ""), written)
 	require.NoError(t, err)
-	assert.Equal(t, &ChatAction{Name: "start_visio", CallID: "call_1", Params: map[string]interface{}{}}, action, "no params to fill")
+	assert.Equal(t, &ChatAction{Name: "start_visio", ToolCallID: "call_1", Params: map[string]interface{}{}}, action, "no params to fill")
 
 	_, err = actionFromCall(actions, call("delete_everything", "{}"), written)
 	assert.EqualError(t, err, `unknown tool "delete_everything"`)
@@ -393,13 +393,13 @@ func TestActionFromCall(t *testing.T) {
 }
 
 func TestToolCallOf(t *testing.T) {
-	msg := ChatMessage{ID: "answer", Action: &ChatAction{Name: "draft_email", CallID: "chatcmpl-tool-1", Status: "done",
+	msg := ChatMessage{ID: "answer", Action: &ChatAction{Name: "draft_email", ToolCallID: "chatcmpl-tool-1", Status: "done",
 		Params: map[string]interface{}{"subject": "Point <urgent>", "to": []interface{}{"Paul"}}}}
 	call := toolCallOf(msg)
 	assert.Equal(t, "chatcmpl-tool-1", call.ID)
 	assert.Equal(t, "function", call.Type)
 	assert.Equal(t, "draft_email", call.Function.Name)
 	assert.Equal(t, `{"subject":"Point <urgent>","to":["Paul"]}`, call.Function.Arguments, "the params as they are, without the outcome")
-	msg.Action.CallID = ""
+	msg.Action.ToolCallID = ""
 	assert.Equal(t, "call_answer", toolCallOf(msg).ID, "an action proposed before the ids were kept")
 }
