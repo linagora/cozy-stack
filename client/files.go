@@ -193,6 +193,19 @@ func (c *FilesClient) Mkdir(name string) (*Dir, error) {
 	return c.mkdir(name, "")
 }
 
+// MkdirByID creates a directory under the specified parent directory.
+func (c *FilesClient) MkdirByID(parentID, name string) (*Dir, error) {
+	res, err := c.Req(&request.Options{
+		Method:  "POST",
+		Path:    c.filesPath("/" + url.PathEscape(parentID)),
+		Queries: url.Values{"Name": {name}, "Type": {"directory"}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return readDir(res)
+}
+
 // Mkdirall creates a directory with the specified path. If the directory's
 // parent does not exist, all intermediary parents are created.
 func (c *FilesClient) Mkdirall(name string) (*Dir, error) {

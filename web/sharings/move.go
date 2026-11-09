@@ -1184,10 +1184,9 @@ func createLocalDir(v vfs.VFS, newDir *vfs.DirDoc) error {
 }
 
 // ensureRemoteChildDir creates (or reuses) a child dir under the given parent remote dir.
-// It tries Mkdir first, falling back to GetDirByPath if it already exists.
+// It tries MkdirByID first, falling back to GetDirByPath if it already exists.
 func ensureRemoteChildDir(c *client.FilesClient, parent *client.Dir, name string) (string, error) {
-	targetPath := parent.Attrs.Fullpath + "/" + name
-	newDir, err := c.Mkdir(targetPath)
+	newDir, err := c.MkdirByID(parent.ID, name)
 	if err == nil {
 		return newDir.ID, nil
 	}
@@ -1197,7 +1196,7 @@ func ensureRemoteChildDir(c *client.FilesClient, parent *client.Dir, name string
 		return "", err
 	}
 	uniquePath := parent.Attrs.Fullpath + "/" + uniqueName
-	newDir, e3 := c.Mkdir(uniquePath)
+	newDir, e3 := c.MkdirByID(parent.ID, uniqueName)
 	if e3 == nil {
 		return newDir.ID, nil
 	}
