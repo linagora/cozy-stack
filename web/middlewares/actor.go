@@ -32,6 +32,14 @@ type Actor struct {
 	// when the actor is first resolved, so it is kept when the shared drive
 	// proxy swaps the token of the request.
 	Person bool
+	// Flagship tells that the original token of the request is the flagship
+	// app's: a certified OAuth client, or the "*" scope granted to the flagship
+	// app when its context skips the certification. Like Person, it is computed
+	// when the actor is first resolved, so it survives the token swap of the
+	// shared drive proxy: a consumer must read it rather than inspect the token
+	// of the request, which the proxy has replaced with the sharing key. It is
+	// false for every other actor.
+	Flagship bool
 }
 
 // GetActor returns the actor associated with the request context.
@@ -62,6 +70,7 @@ func ResolveRequestActor(c echo.Context, inst *instance.Instance, pdoc *permissi
 	case permission.TypeOauth, permission.TypeCLI, permission.TypeWebapp, permission.TypeKonnector:
 		actor := actorFromInstance(inst)
 		actor.Person = isPersonToken(c, pdoc)
+		actor.Flagship = isFlagshipToken(c, pdoc)
 		SetActor(c, actor)
 		return nil
 
@@ -138,6 +147,22 @@ func isPersonToken(c echo.Context, pdoc *permission.Permission) bool {
 	default:
 		return false
 	}
+}
+
+// isFlagshipToken tells if a token is the flagship app's: a certified OAuth
+// client, or the "*" scope granted to any OAuth client sending a PKCE
+// challenge in a context that skips the certification. It is a property of the
+// token alone, so it is the same for every request of the flagship app. It is
+// the subset of isPersonToken that excludes cozy-desktop and session tokens.
+func isFlagshipToken(c echo.Context, pdoc *permission.Permission) bool {
+	if pdoc.Type != permission.TypeOauth {
+		return false
+	}
+	if client, ok := pdoc.Client.(*oauth.Client); ok && client.Flagship {
+		return true
+	}
+	claims, ok := c.Get("claims").(permission.Claims)
+	return ok && claims.Scope == "*"
 }
 
 func actorFromMember(inst *instance.Instance, member *sharing.Member) *Actor {
