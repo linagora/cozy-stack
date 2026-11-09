@@ -1861,6 +1861,143 @@ HTTP/1.1 204 No Content
 ```
 
 
+## Recents
+
+The recents are the personal activity of the user: one row per file or folder
+that they edited or opened, whoever owns it. The rows are stored in the
+`io.cozy.files.recents` doctype of the instance of the user, with the metadata
+needed to display the item. See the
+[ADR](./adr/007-adr-server-side-recents.md) for the rules.
+
+The recents are behind the `drive.recents.enabled` feature flag, which is off
+by default.
+
+### GET /files/recents
+
+List the recents of the user, sorted by `last_activity_at` then `id`, both
+descending. It's paginated.
+
+The response is built from the stored rows only: a row is listed with the last
+metadata it was given, even if its item can no longer be read by the user.
+Opening the item goes through the usual routes and their permission checks.
+
+#### Query-String
+
+| Parameter    | Description                                                    |
+| ------------ | -------------------------------------------------------------- |
+| page[cursor] | the cursor of the `links.next` of the previous page            |
+| page[limit]  | the number of entries (50 by default, brought down to 100 max) |
+
+#### Request
+
+```http
+GET /files/recents?page[limit]=2 HTTP/1.1
+Accept: application/vnd.api+json
+```
+
+#### Status codes
+
+- 200 OK, with the page in the response
+- 403 Forbidden, when the token has no permission for `GET` on the whole
+  `io.cozy.files` doctype, or is a share code (share by link, sharing preview
+  or interaction)
+- 404 Not Found, when the feature flag is off for the instance
+- 422 Unprocessable Entity, when `page[limit]` is not a positive integer or
+  `page[cursor]` is not a valid cursor
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/vnd.api+json
+```
+
+```json
+{
+  "data": [
+    {
+      "type": "io.cozy.files.recents",
+      "id": "9152d568-7e7c-11e6-a377-37cbfb190b4b",
+      "meta": {
+        "rev": "2-0c2f8d1e"
+      },
+      "attributes": {
+        "last_edited_at": "2026-11-05T09:12:45Z",
+        "last_viewed_at": "2026-11-05T10:03:27Z",
+        "last_activity_at": "2026-11-05T10:03:27Z",
+        "name": "report.txt",
+        "type": "file",
+        "mime": "text/plain",
+        "class": "text",
+        "size": "1234",
+        "updated_at": "2026-11-05T09:12:45.123456789Z",
+        "dir_id": "fce1a6c0-dfc5-11e5-8d1a-1f854d4aaf81",
+        "path": "/Reports/report.txt"
+      }
+    },
+    {
+      "type": "io.cozy.files.recents",
+      "id": "0c1116b0-6f7a-11e6-8b77-86f30ca893d3",
+      "meta": {
+        "rev": "1-ff3beeb4"
+      },
+      "attributes": {
+        "driveId": "aae62886-7e7c-11e6-9f2e-a7b1c0d2e3f4",
+        "owner_domain": "alice.example.net",
+        "last_viewed_at": "2026-11-04T16:20:11Z",
+        "last_activity_at": "2026-11-04T16:20:11Z",
+        "name": "Meeting notes.cozy-note",
+        "type": "file",
+        "mime": "text/vnd.cozy.note+markdown",
+        "class": "text",
+        "size": "342",
+        "updated_at": "2026-11-04T16:25:02.5Z",
+        "dir_id": "b1a5c2d0-6f7a-11e6-8b77-86f30ca893d3",
+        "path": "/Notes/Meeting notes.cozy-note"
+      }
+    }
+  ],
+  "meta": {
+    "count": 2
+  },
+  "links": {
+    "next": "/files/recents?page%5Bcursor%5D=eyJsYXN0X2FjdGl2aXR5X2F0IjoiMjAyNi0xMS0wNFQxNjoyMDoxMVoiLCJpZCI6IjBjMTExNmIwLTZmN2EtMTFlNi04Yjc3LTg2ZjMwY2E4OTNkMyJ9&page%5Blimit%5D=2"
+  }
+}
+```
+
+`meta.count` is the number of entries of the page. `links.next` is only
+present when rows follow the page: it keeps the page size, and its cursor is
+the position of the last row of the page, so a traversal goes on after it
+whatever activity happens meanwhile.
+
+The attributes are the stored fields of the row:
+
+- `last_edited_at`, `last_viewed_at`: the latest edit and the latest open of
+  the item by the user, when there is one
+- `last_activity_at`: the latest of these two dates, used for sorting
+- `name`, `type`, `mime`, `class`, `size`, `updated_at`, `dir_id`, `path`: the
+  metadata of the item, as last stored on the row (`mime`, `class` and `size`
+  are for files only)
+- `driveId`, `owner_domain`: for an item of a shared drive that the user does
+  not own, the ID of the sharing of the drive and the domain of the instance
+  of its owner; `path` then starts at the root of the drive
+
+### Write paths that do not record an activity
+
+Only the edits and the opens of a person are recorded. The following never
+add or move a row in the recents:
+
+- writes made with the token of a konnector or of an application, other than
+  the flagship app and the OAuth clients of the `desktop` kind
+- background saves and workers
+- the automatic writes of the flagship app: the photo backup, the konnector
+  folders, and the konnector traces and support logs
+- renaming, moving, copying or trashing an item, and changing its permissions
+- downloading or previewing a file, and reading its metadata
+- any activity on the root, the trash and the other folders with a fixed ID
+- any activity on a file whose owner's instance lives on another stack
+
 ## Trash
 
 When a file is deleted, it is first moved to the trash. In the trash, it can be
