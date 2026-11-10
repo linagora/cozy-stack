@@ -101,7 +101,6 @@ func TestTokenExchangeMatchingAppConfig(t *testing.T) {
 
 func TestTokenExchangeAudienceMatches(t *testing.T) {
 	assert.True(t, tokenExchangeAudienceMatches(jwt.MapClaims{"aud": "admin"}, "admin"))
-	assert.True(t, tokenExchangeAudienceMatches(jwt.MapClaims{"azp": "admin"}, "admin"))
 	assert.True(t, tokenExchangeAudienceMatches(jwt.MapClaims{
 		"aud": []string{"n8n", "admin"}, "azp": "admin",
 	}, "admin"))
@@ -112,5 +111,7 @@ func TestTokenExchangeAudienceMatches(t *testing.T) {
 	}, "admin"))
 	assert.False(t, tokenExchangeAudienceMatches(jwt.MapClaims{"aud": []string{"admin", "n8n"}}, "admin"))
 	assert.False(t, tokenExchangeAudienceMatches(jwt.MapClaims{"aud": "n8n"}, "admin"))
+	// A token without aud is not meant for anyone in particular
+	assert.False(t, tokenExchangeAudienceMatches(jwt.MapClaims{"azp": "admin"}, "admin"))
 	assert.False(t, tokenExchangeAudienceMatches(jwt.MapClaims{}, "admin"))
 }
