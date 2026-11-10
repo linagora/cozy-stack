@@ -44,8 +44,9 @@ func setupSharedDrivePermissionFixture(t *testing.T) *sharedDrivePermissionFixtu
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
 
-	env := setupSharedDrivesEnv(t)
+	env := setupSharedDriveRoot(t, nil)
 	eOwner, _, _ := env.createClients(t)
+	env.outsideOfShareID = createRootDirectory(t, eOwner, "Unshared directory at the root of ACME", env.acmeToken)
 
 	fileID := createFile(t, eOwner, env.firstRootDirID, "document.txt", env.acmeToken)
 	return &sharedDrivePermissionFixture{
@@ -64,7 +65,7 @@ func setupFileRootSharedDrivePermissionFixture(t *testing.T) *fileRootSharedDriv
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
 
-	env := setupSharedDrivesEnv(t)
+	env := setupSharedDriveParticipants(t, nil)
 	eOwner, _, _ := env.createClients(t)
 
 	rootFileID := createFile(t, eOwner, "", "root-document.txt", env.acmeToken)
