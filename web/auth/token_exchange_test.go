@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/app"
+	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,4 +62,39 @@ func TestTokenExchangeAssertManifestTrusted(t *testing.T) {
 
 	err = tokenExchangeAssertManifestTrusted(mk("registry://mailbox/stable"), "mail")
 	assert.EqualError(t, err, "code=400, message=mail is not the installed application")
+}
+
+func TestTokenExchangeMatchingAppConfig(t *testing.T) {
+	appConfigs := map[string]config.OIDCAppTokenExchangeAppConfig{
+		"twake-mail-web": {SoftwareID: "registry://mail"},
+		"n8n":            {SoftwareID: "registry://n8n"},
+	}
+	match := func(claims jwt.MapClaims) string {
+		appConfig, ok := tokenExchangeMatchingAppConfig(claims, appConfigs)
+		if !ok {
+			return ""
+		}
+		return appConfig.SoftwareID
+	}
+
+	// The client the token was issued to wins, whatever the order of aud
+	assert.Equal(t, "registry://n8n", match(jwt.MapClaims{
+		"aud": []string{"twake-mail-web", "n8n"}, "azp": "n8n",
+	}))
+	assert.Equal(t, "registry://mail", match(jwt.MapClaims{
+		"aud": []string{"n8n", "twake-mail-web"}, "azp": "twake-mail-web",
+	}))
+	assert.Equal(t, "registry://mail", match(jwt.MapClaims{"aud": "twake-mail-web"}))
+	assert.Equal(t, "registry://n8n", match(jwt.MapClaims{"aud": []string{"n8n"}}))
+
+	// Several audiences and no azp: nothing says which client asked
+	assert.Empty(t, match(jwt.MapClaims{"aud": []string{"twake-mail-web", "n8n"}}))
+	// azp must be one of the audiences
+	assert.Empty(t, match(jwt.MapClaims{"aud": []string{"twake-mail-web"}, "azp": "n8n"}))
+	// A mapped audience does not stand in for an unmapped azp
+	assert.Empty(t, match(jwt.MapClaims{
+		"aud": []string{"other", "twake-mail-web"}, "azp": "other",
+	}))
+	assert.Empty(t, match(jwt.MapClaims{"aud": []string{"other"}}))
+	assert.Empty(t, match(jwt.MapClaims{}))
 }

@@ -429,7 +429,8 @@ authentication:
       id_token_jwk_url: https://identity-provider/path/to/jwk
       allow_app_token_exchange: true
       app_token_exchange:
-        # OIDC id_token audience.
+        # OIDC client the id_token was issued to: its azp claim, or its single
+        # audience when it has no azp.
         twake-mail-web:
           # Must be a Cozy linked application software_id. The local OAuth
           # scope is derived from this linked app manifest.

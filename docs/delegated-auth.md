@@ -91,8 +91,9 @@ And in the `oidc` section, we have:
 - `allow_app_token_exchange` can be set to true to enable user app exchanges
   on `POST /auth/token_exchange`. The request body must set
   `exchange_type` to `app` for this exchange.
-- `app_token_exchange` maps an OIDC token audience to a trusted Cozy linked
-  app. The `software_id` must use the `registry://<slug>` format. The stack
+- `app_token_exchange` maps an OIDC client to a trusted Cozy linked app. The
+  client is the `azp` claim of the token, or its single audience when it has no
+  `azp`. The `software_id` must use the `registry://<slug>` format. The stack
   derives the Cozy OAuth scope from the linked app manifest, so the OIDC
   provider does not need to expose `registry://...` as an OIDC scope. When
   `instance_claim` is set, the claim must contain the target Cozy instance

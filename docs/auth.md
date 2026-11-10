@@ -1078,8 +1078,11 @@ For admin exchanges, the `id_token` must also:
 - contain an `org_id` claim equal to the target instance organization id
 - contain an `org_role` claim equal to `owner` or `admin`
 
-For user app exchanges, the `id_token` audience must be present in the
-`oidc.app_token_exchange` stack configuration. The token must also match the
+For user app exchanges, the client the `id_token` was issued to must be
+present in the `oidc.app_token_exchange` stack configuration. That client is
+the `azp` claim, which must also be one of the audiences of the token. A token
+without `azp` is only accepted when it has a single audience, which is then the
+client. The token must also match the
 target Cozy instance. When the matched app exchange entry sets `instance_claim`,
 that claim must contain the target instance domain. Otherwise the existing OIDC
 instance mapping is used (`sub` to `oidc_id` when `allow_custom_instance` is
