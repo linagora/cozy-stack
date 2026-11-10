@@ -209,7 +209,7 @@ In the v1 metadata model, file contents are not indexed. Sizes below were measur
 | **Large Enterprise** | 10,000,000 | ~8 GB | ~16 GB | ~50,000 | ~0.5–2.5 GB |
 | **Multi-Tenant SaaS** | 50,000,000 | ~40 GB | ~80 GB | ~200,000 | ~2–10 GB |
 
-These are index sizes after a force merge. Live indices also hold deleted documents until segments merge, and nodes need free disk for the 85% low watermark and for merges: provision about 1.45× the replicated size (the AWS OpenSearch sizing rule).
+These are index sizes after a force merge; the deleted documents that live indices hold until segments merge are not measured. As a provisional disk buffer (not validated), provision about 1.3× the replicated index size: 1 / 0.95 (OS reserve) / 0.80 (20% free for merges and the disk watermarks). This is AWS's 1.45× rule without its 10% indexing overhead: AWS applies 1.45× to raw source data, and the sizes above are already indexed.
 
 ### 5.4 Recommended Sharding Strategy
 
@@ -309,7 +309,7 @@ With content indexing, shard counts must increase to maintain the **10 GB – 30
    - Content extraction (via Apache Tika, `pdftotext`, or sidecar extractors) is CPU- and memory-intensive.
    - Text extraction must run asynchronously in background job workers (`io.cozy.jobs`) using RabbitMQ tasks, completely decoupled from the synchronous file upload HTTP request.
 2. **`_source` Exclusion vs. Snippet Highlighting**:
-   - Highlighting needs the original text, so keep `content` in `_source`. Excluding it (`"excludes": ["content"]`) would save ~9 KB per text document (~36%), but snippets come back empty (tested on OpenSearch 2.17), and `_update` / reindex would drop the content.
+   - Highlighting needs the original text, so keep `content` in `_source`. Excluding it (`"excludes": ["content"]`) makes snippets come back empty (tested on OpenSearch 2.17), and `_update` / reindex would drop the content. It also saves no disk at first: OpenSearch keeps the full source as `_recovery_source` (still ~25 KB per text document in our test) until soft-delete retention leases let merges prune it; only then would the ~9 KB saving appear.
    - To shrink the index, store offsets in the postings (`"index_options": "offsets"`) instead of `term_vector: "with_positions_offsets"`: ~19 KB instead of ~25 KB per text document (~23% less), and the Unified Highlighter still returns snippets.
 3. **JVM Heap Sizing**:
    - With 10M+ content-indexed documents, increase OpenSearch node heap allocations. Segment merging on large text fields requires healthy index buffer memory (`indices.memory.index_buffer_size: 15%`).
