@@ -91,10 +91,13 @@ func TestBrokerPublishesInsteadOfUploading(t *testing.T) {
 	assert.Len(t, pub.msgs, 1, "the feed leaves the file to the reconcile job of the new folder: one message")
 
 	msg := pub.msgs[0]
+	assert.Equal(t, "sync", msg["action"])
 	assert.Equal(t, r.inst.Domain, msg["partition"])
-	assert.Equal(t, r.inst.PageURL(rag.IndexFilesPath+inKB.DocID, nil), msg["file_url"])
+	assert.Equal(t, inKB.Rev(), msg["doc_rev"])
+	assert.Equal(t, r.inst.PageURL(rag.IndexFilesPath+inKB.DocID, nil), msg["state_url"])
 	assert.Equal(t, r.inst.PageURL(rag.IndexStatusPath, nil), msg["callback_url"])
-	assert.Equal(t, map[string]interface{}{"base_url": r.fake.Server.URL, "api_key": r.fake.Server.APIKey}, msg["rag"])
+	assert.Equal(t, r.fake.Server.URL, msg["rag_base_url"])
+	assert.NotContains(t, msg, "rag_api_key", "the indexer holds the keys")
 	token, _ := msg["file_token"].(string)
 	assert.NoError(t, rag.CheckIndexToken(r.inst, token, inKB.DocID))
 	assert.Error(t, rag.CheckIndexToken(r.inst, token, outside.DocID), "the token is only good for its file")

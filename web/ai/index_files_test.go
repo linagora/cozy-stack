@@ -57,7 +57,6 @@ func TestIndexFiles(t *testing.T) {
 		obj.Value("_id").String().IsEqual(inKB.DocID)
 		obj.Value("_rev").String().IsEqual(inKB.Rev())
 		obj.Value("name").String().IsEqual("a.txt")
-		obj.Value("dir_id").String().IsEqual(kb.DocID)
 		obj.Value("workspace_ids").Array().IsEqual([]string{kb.DocID})
 		obj.Value("metadata").Object().Value("doc_rev").String().IsEqual(inKB.Rev())
 	})

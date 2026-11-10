@@ -132,17 +132,28 @@ checkpoint where it is.
 
 ```json
 {
+  "action": "sync",
   "partition": "alice.example.net",
   "file_id": "e21dce8058b9013d800a18c04daba326",
-  "file_url": "https://alice.example.net/ai/index/files/e21dce8058b9013d800a18c04daba326",
+  "doc_rev": "3-6a1b0b8a51a4e0e0a3b7f0f1d2c3b4a5",
+  "state_url": "https://alice.example.net/ai/index/files/e21dce8058b9013d800a18c04daba326",
   "file_token": "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9...",
   "callback_url": "https://alice.example.net/ai/index/status",
-  "rag": { "base_url": "http://openrag-a:8000", "api_key": "$3cr3t" }
+  "rag_base_url": "http://openrag-a:8000"
 }
 ```
 
+The message names the openRAG server by its URL, the `url` of the server of the
+instance in the `rag` section, but does not carry its API key: the indexer is
+configured with the URL and the key of one server (`RAG_BASE_URL` and
+`RAG_API_KEY`), and refuses a message for any other server. Every instance
+whose files go through the indexer must therefore use that same server: an
+instance on another one (by its context or its `rag.server` flag) gets an
+`error` status for each of its files.
+
 The message carries no state: it asks the indexer to make openRAG match what
-the stack answers on `file_url` when the indexer processes it. A message that
+the stack answers on `state_url` when the indexer processes it. The `doc_rev`
+is only echoed on the `error` status the indexer reports when it gives up. A message that
 is retried after a newer one cannot undo it, and a deleted, trashed or moved
 out file is a message like any other, whose state is a `404`. The
 `file_token` gives access to that file only, for 7 days.
@@ -226,7 +237,6 @@ Content-Type: application/json
   "_id": "e21dce8058b9013d800a18c04daba326",
   "_rev": "3-6a1b0b8a51a4e0e0a3b7f0f1d2c3b4a5",
   "name": "meeting.md",
-  "dir_id": "e21dce8058b9013d800a18c04dab9e44",
   "md5sum": "6f8db599de986fab7a21625b7916589c",
   "workspace_ids": ["e21dce8058b9013d800a18c04dab9e44"],
   "metadata": {

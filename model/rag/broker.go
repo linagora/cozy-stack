@@ -43,19 +43,21 @@ const (
 // errInvalidIndexToken is a token that does not give access to the file.
 var errInvalidIndexToken = errors.New("invalid rag-index token")
 
-// indexerMessage is the body of the messages published for the indexer.
+// indexerMessage is the body of the sync messages published for the indexer.
 type indexerMessage struct {
-	Partition   string        `json:"partition"`
-	FileID      string        `json:"file_id"`
-	FileURL     string        `json:"file_url"`
-	FileToken   string        `json:"file_token"`
-	CallbackURL string        `json:"callback_url"`
-	RAG         indexerServer `json:"rag"`
-}
-
-type indexerServer struct {
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
+	Action    string `json:"action"`
+	Partition string `json:"partition"`
+	FileID    string `json:"file_id"`
+	// DocRev is the revision the message was published for: the indexer echoes
+	// it on the error status it reports when it gives up on the message.
+	DocRev      string `json:"doc_rev"`
+	StateURL    string `json:"state_url"`
+	FileToken   string `json:"file_token"`
+	CallbackURL string `json:"callback_url"`
+	// RAGBaseURL names the openRAG server of the instance. Its API key is
+	// not in the message: the indexer holds the keys of the servers it may
+	// call, so that reading the broker does not give access to openRAG.
+	RAGBaseURL string `json:"rag_base_url"`
 }
 
 // brokerEnabled tells whether the files of the instances of the context are
@@ -75,7 +77,7 @@ func brokerEnabled(contextName string) bool {
 }
 
 // publish asks the indexer to synchronize the file with openRAG.
-func (ctx *indexContext) publish(fileID string) error {
+func (ctx *indexContext) publish(fileID, rev string) error {
 	token, err := MakeIndexToken(ctx.inst, fileID)
 	if err != nil {
 		return err
@@ -86,12 +88,14 @@ func (ctx *indexContext) publish(fileID string) error {
 		RoutingKey:  IndexRoutingKey,
 		MessageID:   ctx.inst.Domain + "/" + fileID,
 		Payload: indexerMessage{
+			Action:      "sync",
 			Partition:   ctx.inst.Domain,
 			FileID:      fileID,
-			FileURL:     ctx.inst.PageURL(IndexFilesPath+fileID, nil),
+			DocRev:      rev,
+			StateURL:    ctx.inst.PageURL(IndexFilesPath+fileID, nil),
 			FileToken:   token,
 			CallbackURL: ctx.inst.PageURL(IndexStatusPath, nil),
-			RAG:         indexerServer{BaseURL: ctx.server.URL, APIKey: ctx.server.APIKey},
+			RAGBaseURL:  ctx.server.URL,
 		},
 	})
 	return retryable(err)
@@ -133,7 +137,6 @@ type FileState struct {
 	Rev string `json:"_rev"`
 	// Name is the filename given to openRAG (a note is sent as markdown).
 	Name   string `json:"name"`
-	DirID  string `json:"dir_id"`
 	MD5Sum string `json:"md5sum"`
 	// WorkspaceIDs are the workspaces of the knowledge base folders
 	// containing the file, sorted. Never empty.
@@ -188,7 +191,6 @@ func GetFileState(inst *instance.Instance, fileID string) (*FileState, error) {
 		ID:           doc.DocID,
 		Rev:          doc.Rev(),
 		Name:         ragFilename(f),
-		DirID:        f.DirID,
 		MD5Sum:       f.MD5,
 		WorkspaceIDs: workspaceIDsForDirs(desired),
 		Metadata:     uploadMeta(f),
