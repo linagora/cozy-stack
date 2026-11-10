@@ -373,7 +373,11 @@ type containerNamer interface {
 // opts.PurgeSource is set, Migrate runs in purge-only mode instead: see
 // purgeOnly. Without PurgeSource, opts.To == the current scheme is still an
 // error.
-func Migrate(inst *instance.Instance, opts Options) (rep *Report, err error) {
+func Migrate(inst *instance.Instance, opts Options) (*Report, error) {
+	return migrate(inst, opts, 5*time.Second)
+}
+
+func migrate(inst *instance.Instance, opts Options, quietPeriod time.Duration) (rep *Report, err error) {
 	log := inst.Logger().WithNamespace("storagemigration")
 	started := time.Now()
 	log.Infof("Starting migration: from=%s to=%s dry_run=%t flag_only=%t purge_source=%t",
@@ -451,7 +455,7 @@ func Migrate(inst *instance.Instance, opts Options) (rep *Report, err error) {
 	}()
 
 	log.Info("Waiting for the storage quiet period")
-	if err := waitForQuietStorage(inst, 5*time.Second); err != nil {
+	if err := waitForQuietStorage(inst, quietPeriod); err != nil {
 		return nil, err
 	}
 	mutex := config.Lock().LongOperation(inst, "vfs")
