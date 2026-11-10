@@ -52,25 +52,50 @@ func TestCloneDocPreservesDocType(t *testing.T) {
 	assert.Equal(t, TestDoctype, cloned.DocType())
 }
 
-func TestCreateDBConflictIsFileExists(t *testing.T) {
-	config.UseTestFile(t)
-	t.Cleanup(func() { config.UseTestFile(t) })
+func TestCreateDBRaceIsFileExists(t *testing.T) {
+	tests := []struct {
+		name      string
+		putStatus int
+		putBody   string
+		dbExists  bool
+		want      bool
+	}{
+		// CouchDB 3.3 answers this to some losers of a concurrent creation.
+		{"500 conflict, db created", http.StatusInternalServerError, `{"error":"error","reason":"conflict"}`, true, true},
+		{"409 conflict, db created", http.StatusConflict, `{"error":"conflict","reason":"Document update conflict."}`, true, true},
+		{"500 conflict, no db", http.StatusInternalServerError, `{"error":"error","reason":"conflict"}`, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config.UseTestFile(t)
+			t.Cleanup(func() { config.UseTestFile(t) })
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"error":"conflict","reason":"Document update conflict."}`))
-	}))
-	t.Cleanup(ts.Close)
-	u, err := url.Parse(ts.URL + "/")
-	require.NoError(t, err)
-	cfg := config.GetConfig()
-	cfg.CouchDB.Client = ts.Client()
-	cfg.CouchDB.Global = config.CouchDBCluster{URL: u}
-	cfg.CouchDB.Clusters = nil
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodPut:
+					w.WriteHeader(tt.putStatus)
+					_, _ = w.Write([]byte(tt.putBody))
+				case tt.dbExists:
+					_, _ = w.Write([]byte(`{"db_name":"test"}`))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = w.Write([]byte(`{"error":"not_found","reason":"Database does not exist."}`))
+				}
+			}))
+			t.Cleanup(ts.Close)
+			u, err := url.Parse(ts.URL + "/")
+			require.NoError(t, err)
+			cfg := config.GetConfig()
+			cfg.CouchDB.Client = ts.Client()
+			cfg.CouchDB.Global = config.CouchDBCluster{URL: u}
+			cfg.CouchDB.Clusters = nil
 
-	err = CreateDB(TestPrefix, TestDoctype)
-	assert.True(t, IsFileExists(err), "got %v", err)
+			err = CreateDB(TestPrefix, TestDoctype)
+			require.Error(t, err)
+			assert.Equal(t, tt.want, IsFileExists(err), "got %v", err)
+		})
+	}
 }
 
 func TestCouchdb(t *testing.T) {

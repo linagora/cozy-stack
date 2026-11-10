@@ -462,9 +462,13 @@ func CreateDB(db prefixer.Prefixer, doctype string) error {
 		query = "?q=1&n=1"
 	}
 	if err := makeRequest(db, doctype, http.MethodPut, query, nil, nil); err != nil {
-		// CouchDB answers 409 instead of 412 when it loses a race with a
-		// concurrent creation of the same database.
-		if IsConflictError(err) {
+		// A loser of a concurrent creation usually gets 412, but CouchDB 3.3
+		// can answer 500 {"error":"error","reason":"conflict"}: trust the
+		// database state rather than the shape of the error.
+		if IsFileExists(err) {
+			return err
+		}
+		if _, statusErr := DBStatus(db, doctype); statusErr == nil {
 			return &Error{
 				StatusCode: http.StatusPreconditionFailed,
 				Name:       "file_exists",
