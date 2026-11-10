@@ -66,6 +66,28 @@ func setupSharedDrivesEnv(t *testing.T) *sharedDrivesEnv {
 
 func setupSharedDrivesEnvWithOwnerOptions(t *testing.T, ownerOptions *lifecycle.Options) *sharedDrivesEnv {
 	t.Helper()
+	env := setupSharedDriveRoot(t, ownerOptions)
+	eA := newSharingExpect(t, env.tsA.URL)
+
+	env.productDirID = createDirectory(t, eA, env.firstRootDirID, "Product", env.acmeToken)
+	env.meetingsDirID = createDirectory(t, eA, env.firstRootDirID, "Meetings", env.acmeToken)
+	env.checklistID = createFile(t, eA, env.meetingsDirID, "Checklist.txt", env.acmeToken)
+	env.outsideOfShareID = createRootDirectory(t, eA, "Unshared directory at the root of ACME", env.acmeToken)
+	return env
+}
+
+func setupSharedDriveRoot(t *testing.T, ownerOptions *lifecycle.Options) *sharedDrivesEnv {
+	t.Helper()
+	env := setupSharedDriveParticipants(t, ownerOptions)
+	env.rootDirName = "One More Shared Drive " + crypto.GenerateRandomString(1000)
+	env.firstSharingID, env.firstRootDirID, _ = createSharedDrive(t, DriveCreationMethodLegacy,
+		env.acme, env.acmeToken, env.tsA.URL, env.rootDirName, "One more Shared drive description", nil)
+	acceptSharedDriveForBetty(t, env.acme, env.betty, env.tsA.URL, env.tsB.URL, env.firstSharingID)
+	return env
+}
+
+func setupSharedDriveParticipants(t *testing.T, ownerOptions *lifecycle.Options) *sharedDrivesEnv {
+	t.Helper()
 
 	config.UseTestFile(t)
 	build.BuildMode = build.ModeDev
@@ -105,31 +127,10 @@ func setupSharedDrivesEnvWithOwnerOptions(t *testing.T, ownerOptions *lifecycle.
 		nil,
 	)
 
-	// Create initial shared drive and accept as Betty; create common dirs
-	rootDirName := "One More Shared Drive " + crypto.GenerateRandomString(1000)
-	sharingID, firstRootDirID, _ := createSharedDrive(t, DriveCreationMethodLegacy, acme, acmeToken, tsA.URL,
-		rootDirName, "One more Shared drive description", nil)
-	acceptSharedDriveForBetty(t, acme, betty, tsA.URL, tsB.URL, sharingID)
-
-	// Create temporary clients for initial setup
-	eA := newSharingExpect(t, tsA.URL)
-
-	productDirID := createDirectory(t, eA, firstRootDirID, "Product", acmeToken)
-	meetingsDirID := createDirectory(t, eA, firstRootDirID, "Meetings", acmeToken)
-
-	// Create a file inside meetingsDirID for file operation tests
-	checklistID := createFile(t, eA, meetingsDirID, "Checklist.txt", acmeToken)
-
-	// Create a directory outside the share for boundary tests
-	outsideOfShareID := createRootDirectory(t, eA, "Unshared directory at the root of ACME", acmeToken)
-
 	return &sharedDrivesEnv{
 		acme: acme, betty: betty, dave: dave,
 		acmeToken: acmeToken, bettyToken: bettyToken, daveToken: daveToken,
 		tsA: tsA, tsB: tsB, tsD: tsD,
-		firstSharingID: sharingID, firstRootDirID: firstRootDirID, rootDirName: rootDirName,
-		productDirID: productDirID, meetingsDirID: meetingsDirID,
-		checklistID: checklistID, outsideOfShareID: outsideOfShareID,
 	}
 }
 

@@ -2608,7 +2608,7 @@ func TestFileRootSharedDriveAuthorizeRedirect(t *testing.T) {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
 
-	env := setupSharedDrivesEnv(t)
+	env := setupSharedDriveParticipants(t, nil)
 	eA, eB, _ := env.createClients(t)
 	rootFileID := createFile(t, eA, "", "SharedDriveRootFile.txt", env.acmeToken)
 	sharingID, _ := createFileRootSharedDrive(
@@ -3790,7 +3790,7 @@ func TestFileRootSharedDriveChanges(t *testing.T) {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
 
-	env := setupSharedDrivesEnv(t)
+	env := setupSharedDriveParticipants(t, nil)
 	eA, eB, _ := env.createClients(t)
 
 	rootFileID := createFile(t, eA, "", "FileRootChanges.txt", env.acmeToken)
@@ -4453,7 +4453,7 @@ func TestFileRootSharedDriveReadRoutes(t *testing.T) {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
 
-	env := setupSharedDrivesEnv(t)
+	env := setupSharedDriveParticipants(t, nil)
 
 	t.Run("HeadGetAndDownloadRootFile", func(t *testing.T) {
 		eA, eB, _ := env.createClients(t)
@@ -4615,7 +4615,7 @@ func TestFileRootSharedDriveMutationRoutes(t *testing.T) {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
 
-	env := setupSharedDrivesEnv(t)
+	env := setupSharedDriveParticipants(t, nil)
 
 	t.Run("MutateRootFile", func(t *testing.T) {
 		eA, eB, _ := env.createClients(t)
@@ -6048,7 +6048,7 @@ func TestFileRootSharedDriveLastRecipientRemovalCleansReference(t *testing.T) {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
 
-	env := setupSharedDrivesEnv(t)
+	env := setupSharedDriveParticipants(t, nil)
 	eA, _, _ := env.createClients(t)
 
 	rootFileID := createFile(t, eA, "", "FileRootRevocationReference.txt", env.acmeToken)
@@ -6318,7 +6318,7 @@ func TestFileRootSharedDriveOwnerDeletionRevokesRecipient(t *testing.T) {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
 
-	env := setupSharedDrivesEnv(t)
+	env := setupSharedDriveParticipants(t, nil)
 	eA, eB, _ := env.createClients(t)
 
 	rootFileID := createFile(t, eA, "", "Deleted Root File.txt", env.acmeToken)
