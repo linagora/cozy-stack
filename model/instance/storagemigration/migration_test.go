@@ -498,7 +498,7 @@ func TestMigrateHoldsVFSLock(t *testing.T) {
 			})
 			cfg.CouchDB.Client = &client
 
-			_, err := Migrate(inst, Options{To: config.SchemeS3})
+			_, err := migrate(inst, Options{To: config.SchemeS3}, time.Millisecond)
 			if tc.failCopy {
 				require.ErrorContains(t, err, "injected copy failure")
 				assert.EqualValues(t, 1, enumerations.Load())
@@ -572,7 +572,7 @@ func TestMigrateReportsBlockRestorationFailure(t *testing.T) {
 			})
 			cfg.CouchDB.Client = &client
 
-			_, err := Migrate(inst, Options{To: config.SchemeS3})
+			_, err := migrate(inst, Options{To: config.SchemeS3}, time.Millisecond)
 			require.ErrorContains(t, err, "restore instance block state")
 			assert.ErrorContains(t, err, "injected restoration failure")
 			if failCopy {
@@ -601,7 +601,7 @@ func TestMigrateReportsBlockRestorationFailure(t *testing.T) {
 func TestMigrateFlipsSchemeAfterVerify(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	rep, err := Migrate(inst, Options{To: config.SchemeS3})
+	rep, err := migrate(inst, Options{To: config.SchemeS3}, time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, rep)
 
@@ -719,13 +719,13 @@ func TestMigrateFlagOnlyRequiresForce(t *testing.T) {
 func TestMigrateFlagOnlyFlipsWhenTargetPopulated(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	_, err := Migrate(inst, Options{To: config.SchemeS3})
+	_, err := migrate(inst, Options{To: config.SchemeS3}, time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeS3, inst.FsScheme)
 
 	inst.FsScheme = ""
 
-	rep, err := Migrate(inst, Options{To: config.SchemeS3, FlagOnly: true, Force: true})
+	rep, err := migrate(inst, Options{To: config.SchemeS3, FlagOnly: true, Force: true}, time.Millisecond)
 	require.NoError(t, err)
 	require.NotNil(t, rep)
 	assert.Equal(t, config.SchemeS3, inst.FsScheme)
@@ -736,7 +736,7 @@ func TestMigrateFlagOnlyFlipsWhenTargetPopulated(t *testing.T) {
 func TestMigrateFlagOnlyFailsWhenTargetEmpty(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	_, err := Migrate(inst, Options{To: config.SchemeS3, FlagOnly: true, Force: true})
+	_, err := migrate(inst, Options{To: config.SchemeS3, FlagOnly: true, Force: true}, time.Millisecond)
 	require.Error(t, err)
 	assert.Equal(t, "", inst.FsScheme)
 }
@@ -774,7 +774,7 @@ func TestMigratePurgeSourceRemovesSourceObjects(t *testing.T) {
 
 	// Step 1: migrate mem -> swift for real, so the swift container backing
 	// this instance is genuinely populated.
-	_, err := Migrate(inst, Options{To: config.SchemeSwift})
+	_, err := migrate(inst, Options{To: config.SchemeSwift}, time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeSwift, inst.FsScheme)
 
@@ -786,7 +786,7 @@ func TestMigratePurgeSourceRemovesSourceObjects(t *testing.T) {
 
 	// Step 2: migrate swift -> S3 with PurgeSource, exercising the swift
 	// source purge implementation.
-	_, err = Migrate(inst, Options{To: config.SchemeS3, PurgeSource: true})
+	_, err = migrate(inst, Options{To: config.SchemeS3, PurgeSource: true}, time.Millisecond)
 	require.NoError(t, err)
 	assert.Equal(t, config.SchemeS3, inst.FsScheme)
 
@@ -797,7 +797,7 @@ func TestMigratePurgeSourceRemovesSourceObjects(t *testing.T) {
 	assert.True(t, errors.Is(err, swiftv2.ContainerNotFound), "expected the swift container to be gone after purge, got err=%v", err)
 
 	// Exercise the S3 source under the same VFS lock by copying back to Swift.
-	_, err = Migrate(inst, Options{To: config.SchemeSwift})
+	_, err = migrate(inst, Options{To: config.SchemeSwift}, time.Millisecond)
 	require.NoError(t, err)
 	assert.Equal(t, config.SchemeSwift, inst.FsScheme)
 }
@@ -851,7 +851,7 @@ func TestMigratePurgeOnlyReclaimsOtherBackend(t *testing.T) {
 
 	// Step 1: migrate mem -> swift for real, so the swift container backing
 	// this instance is genuinely populated.
-	_, err := Migrate(inst, Options{To: config.SchemeSwift})
+	_, err := migrate(inst, Options{To: config.SchemeSwift}, time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeSwift, inst.FsScheme)
 
@@ -860,7 +860,7 @@ func TestMigratePurgeOnlyReclaimsOtherBackend(t *testing.T) {
 	// Step 2: migrate swift -> S3 WITHOUT PurgeSource, so the instance ends
 	// on S3 while the swift source is deliberately retained, exactly as
 	// docs/s3.md's rollback window describes.
-	_, err = Migrate(inst, Options{To: config.SchemeS3})
+	_, err = migrate(inst, Options{To: config.SchemeS3}, time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeS3, inst.FsScheme)
 
@@ -900,7 +900,7 @@ func TestMigratePurgeOnlyReclaimsOtherBackend(t *testing.T) {
 func TestMigratePurgeOnlyWithoutPurgeFlagStillErrors(t *testing.T) {
 	inst := setupMigrateInstance(t)
 
-	_, err := Migrate(inst, Options{To: config.SchemeS3})
+	_, err := migrate(inst, Options{To: config.SchemeS3}, time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, config.SchemeS3, inst.FsScheme)
 
