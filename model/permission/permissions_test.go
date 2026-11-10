@@ -435,6 +435,29 @@ func TestShareSetPermissions(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestShareSetPermissionsReadAnApp(t *testing.T) {
+	parent := &Permission{Type: TypeWebapp, Permissions: Set{
+		Rule{Type: consts.Apps, Verbs: ALL},
+		Rule{Type: consts.SessionsLogins, Verbs: ALL},
+	}}
+
+	for name, rule := range map[string]Rule{
+		"by slug": {Type: consts.Apps, Verbs: Verbs(GET), Selector: "slug", Values: []string{"notes"}},
+		"by id":   {Type: consts.Apps, Verbs: Verbs(GET), Values: []string{"io.cozy.apps/notes"}},
+	} {
+		assert.NoError(t, CheckSetPermissions(Set{rule}, parent), name)
+	}
+
+	for name, rule := range map[string]Rule{
+		"write verb":     {Type: consts.Apps, Verbs: Verbs(GET, PUT), Selector: "slug", Values: []string{"notes"}},
+		"whole doctype":  {Type: consts.Apps, Verbs: Verbs(GET)},
+		"by state":       {Type: consts.Apps, Verbs: Verbs(GET), Selector: "state", Values: []string{"ready"}},
+		"other readable": {Type: consts.SessionsLogins, Verbs: Verbs(GET), Values: []string{"login-id"}},
+	} {
+		assert.Error(t, CheckSetPermissions(Set{rule}, parent), name)
+	}
+}
+
 func TestShareSetPermissionsAllVerbs(t *testing.T) {
 	for _, verbField := range []string{`"verbs":["ALL"],`, `"verbs":[],`, `"verbs":null,`, ``} {
 		t.Run(verbField, func(t *testing.T) {

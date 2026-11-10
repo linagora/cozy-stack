@@ -294,6 +294,13 @@ normal file access), so an app restricted by a selector such as
 `referenced_by` can share files it can access. The same applies when adding
 rules with `PATCH /permissions/:id`.
 
+Doctypes reserved to the stack can't be shared, except `io.cozy.files` and
+a `GET` rule on `io.cozy.apps` that names the apps, by slug
+(`"selector": "slug", "values": ["notes"]`) or by id
+(`"values": ["io.cozy.apps/notes"]`). It lets the holder of a link know
+whether these apps are installed (`GET /apps/:slug` answers `200` or `404`),
+without listing the other apps.
+
 #### Request
 
 ```http

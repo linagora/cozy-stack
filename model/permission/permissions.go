@@ -732,7 +732,7 @@ func CheckSetPermissionsWithFallback(set Set, parent *Permission, fallback func(
 	}
 	for _, rule := range set {
 		// XXX io.cozy.files is allowed and handled with specific code for sharings
-		if MatchType(rule, consts.Files) {
+		if MatchType(rule, consts.Files) || isNamedAppsRead(rule) {
 			continue
 		}
 		if err := CheckWritable(rule.Type); err != nil {
@@ -740,6 +740,14 @@ func CheckSetPermissionsWithFallback(set Set, parent *Permission, fallback func(
 		}
 	}
 	return nil
+}
+
+// isNamedAppsRead tells if the rule only reads some apps named by id or slug,
+// which lets a share link know whether an app (e.g. Notes) is installed
+// without listing every app of the instance.
+func isNamedAppsRead(rule Rule) bool {
+	return rule.Type == consts.Apps && rule.Verbs.ReadOnly() &&
+		(rule.Selector == "" || rule.Selector == "slug") && len(rule.Values) > 0
 }
 
 // isShareInteractSubset checks subset semantics for share-interact parents.
