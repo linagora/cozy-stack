@@ -459,7 +459,12 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 			return err
 		}
 
-		if !patchSet && !current.CanUpdateShareByLink(toPatch) {
+		// Adding rules to the permissions of another app is how apps cooperate,
+		// but the codes of a sharing can only be changed by their owner.
+		sharingCodes := toPatch.Type == permission.TypeShareByLink ||
+			toPatch.Type == permission.TypeSharePreview ||
+			toPatch.Type == permission.TypeShareInteract
+		if (!patchSet || sharingCodes) && !current.CanUpdateShareByLink(toPatch) {
 			return permission.ErrNotParent
 		}
 
@@ -508,9 +513,7 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 				if err := permission.CheckDoctypeName(r.Type, true); err != nil {
 					return err
 				}
-				if toPatch.Type == permission.TypeShareByLink ||
-					toPatch.Type == permission.TypeSharePreview ||
-					toPatch.Type == permission.TypeShareInteract {
+				if sharingCodes {
 					if err := permission.CheckShareableDoctypes(permission.Set{r}); err != nil {
 						return err
 					}

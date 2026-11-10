@@ -533,6 +533,72 @@ func TestPermissions(t *testing.T) {
 		}
 	})
 
+	t.Run("PatchRulesOnPermissionsOfOthers", func(t *testing.T) {
+		_, otherToken := setup.GetTestClient("io.cozy.tags")
+		tagsRule := []byte(`{"data": {"attributes": {"permissions": {"tags": {"type": "io.cozy.tags", "verbs": ["GET"]}}}}}`)
+		files := permission.Set{permission.Rule{Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: []string{"io.cozy.music"}}}
+		patch := func(t *testing.T, path, tok string) *httpexpect.Response {
+			return testutils.CreateTestClient(t, ts.URL).PATCH(path).
+				WithHeader("Authorization", "Bearer "+tok).
+				WithHeader("Content-Type", "application/json").
+				WithBytes(tagsRule).
+				Expect()
+		}
+
+		t.Run("share link of another app", func(t *testing.T) {
+			id, _, err := createTestSubPermissions(testutils.CreateTestClient(t, ts.URL), token, "link-of-other")
+			require.NoError(t, err)
+			patch(t, "/permissions/"+id, otherToken).Status(403)
+		})
+
+		t.Run("preview codes of a sharing", func(t *testing.T) {
+			preview, err := permission.CreateSharePreviewSet(testInstance, "sharing-preview-other", map[string]string{"bob": "preview-other"}, nil, permission.Permission{Permissions: files})
+			require.NoError(t, err)
+			patch(t, "/permissions/"+preview.ID(), otherToken).Status(403)
+		})
+
+		t.Run("interact codes of a sharing", func(t *testing.T) {
+			interact, err := permission.CreateShareInteractSet(testInstance, "sharing-interact-other", map[string]string{"bob": "interact-other"}, permission.Permission{Permissions: files})
+			require.NoError(t, err)
+			patch(t, "/permissions/"+interact.ID(), otherToken).Status(403)
+		})
+
+		t.Run("own share link", func(t *testing.T) {
+			_, ownToken := setup.GetTestClient("io.cozy.files:GET io.cozy.tags")
+			id, _, err := createTestSubPermissions(testutils.CreateTestClient(t, ts.URL), ownToken, "own-link")
+			require.NoError(t, err)
+			patch(t, "/permissions/"+id, ownToken).Status(200)
+		})
+
+		t.Run("permissions of another webapp", func(t *testing.T) {
+			installer, err := app.NewInstaller(testInstance, app.Copier(consts.WebappType, testInstance), &app.InstallerOptions{
+				Operation:  app.Install,
+				Type:       consts.WebappType,
+				SourceURL:  "registry://notes",
+				Slug:       "notes",
+				Registries: testInstance.Registries(),
+			})
+			require.NoError(t, err)
+			_, err = installer.RunSync()
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				uninstaller, err := app.NewInstaller(testInstance, app.Copier(consts.WebappType, testInstance), &app.InstallerOptions{
+					Operation:  app.Delete,
+					Type:       consts.WebappType,
+					Slug:       "notes",
+					SourceURL:  "registry://notes",
+					Registries: testInstance.Registries(),
+				})
+				require.NoError(t, err)
+				_, _ = uninstaller.RunSync()
+			})
+
+			// Giving another app some of its own permissions is how apps
+			// cooperate, through intents for example.
+			patch(t, "/permissions/apps/notes", otherToken).Status(200)
+		})
+	})
+
 	t.Run("PatchAddRule", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

@@ -425,6 +425,10 @@ application can send a "_pick a photo_" intent to the photos application with
 its permission id, and the photos app can then let the user choose a photo and
 give the contacts application the permissions to use it.
 
+The rules of a share by link can only be changed by the app that created it,
+or by an app that has all its permissions. The rules of the preview and
+interact codes of a sharing can't be changed with this route.
+
 This route also accepts a [document metadata](https://github.com/cozy/cozy-doctypes/#document-metadata) to update document informations.
 
 Giving an empty string for `password` or `expires_at` will remove it (while
