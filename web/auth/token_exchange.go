@@ -542,8 +542,8 @@ func tokenExchangeMatchingAppConfig(claims jwt.MapClaims, appConfigs map[string]
 // tokenExchangeAuthorizedParty returns the client the token was issued to.
 // The `aud` claim can list several clients and does not say which one asked
 // for the token, so the `azp` claim decides, and it must be one of the
-// audiences when there are some. A token without `azp` is only accepted when
-// it has a single audience.
+// audiences. A token without `azp` is only accepted when it has a single
+// audience.
 func tokenExchangeAuthorizedParty(claims jwt.MapClaims) (string, bool) {
 	audiences, err := claims.GetAudience()
 	if err != nil {
@@ -556,7 +556,7 @@ func tokenExchangeAuthorizedParty(claims jwt.MapClaims) (string, bool) {
 		}
 		return audiences[0], true
 	}
-	if len(audiences) > 0 && !slices.Contains(audiences, client) {
+	if !slices.Contains(audiences, client) {
 		return "", false
 	}
 	return client, true
