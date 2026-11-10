@@ -209,7 +209,7 @@ In the v1 metadata model, file contents are not indexed. Sizes below were measur
 | **Large Enterprise** | 10,000,000 | ~8 GB | ~16 GB | ~50,000 | ~0.5–2.5 GB |
 | **Multi-Tenant SaaS** | 50,000,000 | ~40 GB | ~80 GB | ~200,000 | ~2–10 GB |
 
-These are index sizes after a force merge; the deleted documents that live indices hold until segments merge are not measured. As a provisional disk buffer (not validated), provision about 1.3× the replicated index size: 1 / 0.95 (OS reserve) / 0.80 (20% free for merges and the disk watermarks). This is AWS's 1.45× rule without its 10% indexing overhead: AWS applies 1.45× to raw source data, and the sizes above are already indexed.
+These are index sizes after a force merge; the deleted documents that live indices hold until segments merge are not measured. As a provisional disk buffer (not validated), provision about 1.3× the replicated index size: keep disk use under OpenSearch's default 85% low watermark (`cluster.routing.allocation.disk.watermark.low`; above it no new shards are allocated to the node, and at the 95% flood stage indices become read-only), with ~10% extra for merges and deleted documents (1.1 / 0.85 ≈ 1.3).
 
 ### 5.4 Recommended Sharding Strategy
 
