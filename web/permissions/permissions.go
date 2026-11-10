@@ -508,6 +508,13 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 				if err := permission.CheckDoctypeName(r.Type, true); err != nil {
 					return err
 				}
+				if toPatch.Type == permission.TypeShareByLink ||
+					toPatch.Type == permission.TypeSharePreview ||
+					toPatch.Type == permission.TypeShareInteract {
+					if err := permission.CheckShareableDoctypes(permission.Set{r}); err != nil {
+						return err
+					}
+				}
 				if !current.Permissions.RuleInSubset(r) {
 					if err := vfs.AllowsRule(instance.VFS(), current.Permissions, r); err != nil {
 						return err
