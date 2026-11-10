@@ -25,8 +25,6 @@ func TestSharedDrivePublicDownloadPreparationIdentity(t *testing.T) {
 	f := setupSharedDrivePermissionFixture(t)
 	f.env.acme.FeatureFlags = map[string]interface{}{publiclink.FlagEnabled: true}
 	require.NoError(t, instance.Update(f.env.acme))
-	require.NoError(t, couchdb.CreateDB(f.env.acme, consts.PublicLinkEvents))
-	require.NoError(t, couchdb.CreateDB(f.env.betty, consts.PublicLinkEvents))
 	folderID := createDirectory(t, f.eOwner, f.productID, "archive-identity", f.ownerAppToken)
 	createFile(t, f.eOwner, folderID, "inside.txt", f.ownerAppToken)
 	ownerSession, err := session.New(f.env.acme, session.LongRun, "")

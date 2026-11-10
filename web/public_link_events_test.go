@@ -39,7 +39,6 @@ func TestPublicLinkEvents(t *testing.T) {
 	inst.FeatureFlags = map[string]interface{}{publiclink.FlagEnabled: true}
 	require.NoError(t, instance.Update(inst))
 	_, ownerToken := setup.GetTestClient(consts.Files)
-	require.NoError(t, couchdb.CreateDB(inst, consts.PublicLinkEvents))
 	done := make(chan struct{}, 100)
 	api := echo.New()
 	api.HTTPErrorHandler = weberrors.ErrorHandler
