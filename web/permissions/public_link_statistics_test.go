@@ -22,10 +22,10 @@ import (
 )
 
 type publicLinkStatisticsSetup struct {
-	inst                                      *instance.Instance
-	link, other, sameFile, wholeType, nonLink *permission.Permission
-	token, wrongToken, code, tempDir          string
-	request                                   func(*testing.T, string, string) *http.Response
+	inst                                                                                  *instance.Instance
+	link, other, sameFile, wholeType, nonLink                                             *permission.Permission
+	token, wrongToken, fileOnlyToken, writeEventsToken, partialEventsToken, code, tempDir string
+	request                                                                               func(*testing.T, string, string) *http.Response
 }
 
 func setupPublicLinkStatistics(t *testing.T) publicLinkStatisticsSetup {
@@ -39,9 +39,17 @@ func setupPublicLinkStatistics(t *testing.T) publicLinkStatisticsSetup {
 	testutils.NeedCouchdb(t)
 	setup := testutils.NewSetup(t, t.Name())
 	inst := setup.GetTestInstance()
-	client, token := setup.GetTestClient("io.cozy.files:GET:file-a")
-	wrongToken, err := inst.MakeJWT(consts.AccessTokenAudience, client.ClientID, "io.cozy.files:GET:file-b", "", time.Now())
-	require.NoError(t, err)
+	client, token := setup.GetTestClient("io.cozy.files:GET:file-a io.cozy.public_links.events:GET")
+	makeToken := func(scope string) string {
+		t.Helper()
+		token, err := inst.MakeJWT(consts.AccessTokenAudience, client.ClientID, scope, "", time.Now())
+		require.NoError(t, err)
+		return token
+	}
+	wrongToken := makeToken("io.cozy.files:GET:file-b io.cozy.public_links.events:GET")
+	fileOnlyToken := makeToken("io.cozy.files:GET:file-a")
+	writeEventsToken := makeToken("io.cozy.files:GET:file-a io.cozy.public_links.events:POST")
+	partialEventsToken := makeToken("io.cozy.files:GET:file-a io.cozy.public_links.events:GET:some-event")
 	server := setup.GetTestServer("/permissions", Routes)
 	server.Config.Handler.(*echo.Echo).HTTPErrorHandler = webErrors.ErrorHandler
 
@@ -81,7 +89,7 @@ func setupPublicLinkStatistics(t *testing.T) publicLinkStatisticsSetup {
 		t.Cleanup(func() { resp.Body.Close() })
 		return resp
 	}
-	return publicLinkStatisticsSetup{inst, link, other, sameFile, wholeType, nonLink, token, wrongToken, code, tempDir, request}
+	return publicLinkStatisticsSetup{inst, link, other, sameFile, wholeType, nonLink, token, wrongToken, fileOnlyToken, writeEventsToken, partialEventsToken, code, tempDir, request}
 }
 
 func TestPublicLinkStatisticsExportsOnlyRequestedLink(t *testing.T) {
@@ -111,6 +119,10 @@ func TestPublicLinkStatisticsRejectsUnauthorizedRequests(t *testing.T) {
 	setup := setupPublicLinkStatistics(t)
 	for _, tc := range []struct{ name, id, token string }{
 		{"wrong token", setup.link.ID(), setup.wrongToken},
+		{"file only", setup.link.ID(), setup.fileOnlyToken},
+		{"same file only", setup.sameFile.ID(), setup.fileOnlyToken},
+		{"events without get", setup.link.ID(), setup.writeEventsToken},
+		{"partial events", setup.link.ID(), setup.partialEventsToken},
 		{"other file", setup.other.ID(), setup.token},
 		{"whole type", setup.wholeType.ID(), setup.token},
 		{"not a link", setup.nonLink.ID(), setup.token},
@@ -119,10 +131,15 @@ func TestPublicLinkStatisticsRejectsUnauthorizedRequests(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := setup.request(t, tc.id, tc.token)
-			require.NotEqual(t, http.StatusOK, res.StatusCode)
+			if tc.token != "" && tc.token != setup.code {
+				require.Equal(t, http.StatusForbidden, res.StatusCode)
+			} else {
+				require.NotEqual(t, http.StatusOK, res.StatusCode)
+			}
 			body, err := io.ReadAll(res.Body)
 			require.NoError(t, err)
-			require.NotContains(t, string(body), "192.0.2.1")
+			require.NotContains(t, string(body), "192.0.2.")
+			require.NotContains(t, string(body), "=cmd")
 		})
 	}
 }

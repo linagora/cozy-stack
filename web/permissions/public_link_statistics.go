@@ -22,7 +22,7 @@ func downloadPublicLinkStatistics(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	if current.Type != permission.TypeWebapp && current.Type != permission.TypeOauth {
+	if (current.Type != permission.TypeWebapp && current.Type != permission.TypeOauth) || !current.Permissions.AllowWholeType(permission.GET, consts.PublicLinkEvents) {
 		return middlewares.ErrForbidden
 	}
 	link, err := permission.GetPermissionByIDIncludingExpired(inst, c.Param("permdocid"))

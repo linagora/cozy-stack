@@ -31,7 +31,7 @@ func TestPublicLinkStatisticsConcurrentPages(t *testing.T) {
 	testutils.NeedCouchdb(t)
 	setup := testutils.NewSetup(t, t.Name())
 	inst := setup.GetTestInstance()
-	_, token := setup.GetTestClient("io.cozy.files:GET:file-a")
+	_, token := setup.GetTestClient("io.cozy.files:GET:file-a io.cozy.public_links.events:GET")
 	link := &permission.Permission{Type: permission.TypeShareByLink, Permissions: permission.Set{{Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: []string{"file-a"}}}}
 	require.NoError(t, couchdb.CreateDoc(inst, link))
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)

@@ -36,7 +36,10 @@ func TestSharedDrivePublicLinkStatisticsOwner(t *testing.T) {
 		t.Cleanup(func() { resp.Body.Close() })
 		return resp
 	}
-	resp := request(f.ownerAppToken)
+	require.Equal(t, http.StatusForbidden, request(f.ownerAppToken).StatusCode)
+	statisticsToken := generateAppToken(f.env.acme, "statistics-test", "*")
+	require.NotEmpty(t, statisticsToken)
+	resp := request(statisticsToken)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	rows, err := csv.NewReader(resp.Body).ReadAll()
 	require.NoError(t, err)

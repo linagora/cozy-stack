@@ -415,7 +415,9 @@ Content-Type: application/vnd.api+json
 Download the retained events for one public file link as CSV. The permission ID
 identifies the link, not its sharecode. The request must use a webapp or OAuth
 token on the link owner's instance whose permissions cover the link's file
-rules; public and shared-drive member tokens cannot access the statistics.
+rules and grant `GET` on the whole `io.cozy.public_links.events` doctype.
+Public and shared-drive member tokens cannot access the statistics. This grant
+authorizes the export endpoint, not direct access to the private doctype.
 This also applies to public links created by a member on a shared-drive owner's
 instance. Only explicit file IDs are supported. Expired links can still be
 exported while their permission document exists.
