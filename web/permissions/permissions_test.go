@@ -487,6 +487,118 @@ func TestPermissions(t *testing.T) {
 			Expect().Status(403)
 	})
 
+	t.Run("PatchPermissionsOfAnApp", func(t *testing.T) {
+		installer, err := app.NewInstaller(testInstance, app.Copier(consts.WebappType, testInstance), &app.InstallerOptions{
+			Operation:  app.Install,
+			Type:       consts.WebappType,
+			SourceURL:  "registry://notes",
+			Slug:       "notes",
+			Registries: testInstance.Registries(),
+		})
+		require.NoError(t, err)
+		_, err = installer.RunSync()
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			uninstaller, err := app.NewInstaller(testInstance, app.Copier(consts.WebappType, testInstance), &app.InstallerOptions{
+				Operation:  app.Delete,
+				Type:       consts.WebappType,
+				Slug:       "notes",
+				SourceURL:  "registry://notes",
+				Registries: testInstance.Registries(),
+			})
+			require.NoError(t, err)
+			_, _ = uninstaller.RunSync()
+		})
+		notesToken, err := testInstance.MakeJWT(consts.AppAudience, "notes", "", "", time.Now())
+		require.NoError(t, err)
+
+		e := testutils.CreateTestClient(t, ts.URL)
+		linkID, codes, err := createTestSubPermissions(e, token, "visitor")
+		require.NoError(t, err)
+		linkCode := codes.Value("visitor").String().NotEmpty().Raw()
+		otherLinkID, _, err := createTestSubPermissions(e, token, "other")
+		require.NoError(t, err)
+		exclusiveLinkID := e.POST("/permissions").
+			WithQuery("codes", "exclusive").
+			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Content-Type", "application/json").
+			WithBytes([]byte(`{"data": {"type": "io.cozy.permissions", "attributes": {"permissions": {"exclusive": {"type": "io.cozy.files", "verbs": ["GET"], "values": ["io.cozy.music.exclusive"]}}}}}`)).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().Raw()
+		_, err = setup.InstallMiniApp()
+		require.NoError(t, err)
+		miniToken, err := testInstance.MakeJWT(consts.AppAudience, "mini", "", "", time.Now())
+		require.NoError(t, err)
+		_, err = setup.InstallMiniKonnector()
+		require.NoError(t, err)
+		konnToken, err := testInstance.MakeJWT(consts.KonnectorAudience, "mini", "", "", time.Now())
+		require.NoError(t, err)
+
+		const giveFiles = `{"type": "io.cozy.files", "verbs": ["GET"], "values": ["io.cozy.music"]}`
+		for _, tc := range []struct {
+			name, path, tok, attributes string
+			status                      int
+		}{
+			{
+				"a link code removes a rule of an app", "/permissions/apps/notes", linkCode, `{"permissions": {"contacts": {}}}`, 403,
+			},
+			{
+				"a link code expires an app", "/permissions/apps/notes", linkCode, `{"expires_at": "2000-01-01T00:00:00Z", "permissions": {"none": {}}}`, 403,
+			},
+			{
+				"a link code replaces a rule of an app", "/permissions/apps/notes", linkCode, `{"permissions": {"apps": ` + giveFiles + `}}`, 403,
+			},
+			{
+				"a link code replaces a rule of another link", "/permissions/" + exclusiveLinkID, linkCode, `{"permissions": {"exclusive": ` + giveFiles + `}}`, 403,
+			},
+			{
+				"another webapp removes a rule of an app", "/permissions/apps/notes", miniToken, `{"permissions": {"contacts": {}}}`, 403,
+			},
+			{
+				"another webapp sets the password of an app", "/permissions/apps/notes", miniToken, `{"password": "secret", "permissions": {"none": {}}}`, 403,
+			},
+			{
+				"a link code expires another link", "/permissions/" + otherLinkID, linkCode, `{"expires_at": "2000-01-01T00:00:00Z", "permissions": {"none": {}}}`, 403,
+			},
+			{
+				"an OAuth client expires an app", "/permissions/apps/notes", token, `{"expires_at": "2000-01-01T00:00:00Z", "permissions": {"given": ` + giveFiles + `}}`, 403,
+			},
+			{
+				"an OAuth client changes the metadata of an app", "/permissions/apps/notes", token, `{"cozyMetadata": {"createdByApp": "other"}, "permissions": {"given": ` + giveFiles + `}}`, 403,
+			},
+			{
+				"an OAuth client gives an app one of its own rules", "/permissions/apps/notes", token, `{"permissions": {"given": ` + giveFiles + `}}`, 200,
+			},
+			{
+				"an app removes one of its own rules", "/permissions/apps/notes", notesToken, `{"permissions": {"contacts": {}}}`, 200,
+			},
+			{
+				"an OAuth client replaces a rule it could give", "/permissions/apps/notes", token, `{"permissions": {"given": ` + giveFiles + `}}`, 200,
+			},
+			{
+				"a konnector removes one of its own rules", "/permissions/konnectors/mini", konnToken, `{"permissions": {"rule0": {}}}`, 200,
+			},
+			{
+				"the creator of a link removes one of its rules", "/permissions/" + linkID, token, `{"permissions": {"otherrule": {}}}`, 200,
+			},
+			{
+				"the creator of a link changes its metadata", "/permissions/" + linkID, token, `{"cozyMetadata": {"createdByApp": "other"}, "permissions": {"given": ` + giveFiles + `}}`, 200,
+			},
+			{
+				"the creator of a link expires it while adding a rule", "/permissions/" + linkID, token, `{"expires_at": "2100-01-01T00:00:00Z", "permissions": {"given": ` + giveFiles + `}}`, 200,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				testutils.CreateTestClient(t, ts.URL).PATCH(tc.path).
+					WithHeader("Authorization", "Bearer "+tc.tok).
+					WithHeader("Content-Type", "application/json").
+					WithBytes([]byte(`{"data": {"attributes": ` + tc.attributes + `}}`)).
+					Expect().Status(tc.status)
+			})
+		}
+	})
+
 	t.Run("PatchShareLinkReservedDoctypes", func(t *testing.T) {
 		_, appToken := setup.GetTestClient("io.cozy.files:GET io.cozy.apps:GET io.cozy.sessions.logins:GET")
 

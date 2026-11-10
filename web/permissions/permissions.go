@@ -460,13 +460,17 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 		}
 
 		// Adding rules to the permissions of another app is how apps cooperate,
-		// but the codes of a sharing can only be changed by their owner.
+		// but the codes of a sharing, the password and the expiration can only
+		// be changed by their owner.
 		sharingCodes := toPatch.Type == permission.TypeShareByLink ||
 			toPatch.Type == permission.TypeSharePreview ||
 			toPatch.Type == permission.TypeShareInteract
-		if (!patchSet || sharingCodes) && !current.CanUpdateShareByLink(toPatch) {
+		changesAccess := patch.Password != nil || patch.ExpiresAt != nil
+		if (!patchSet || sharingCodes || changesAccess) && !current.CanUpdateShareByLink(toPatch) {
 			return permission.ErrNotParent
 		}
+		// Only the owner can remove rules or change metadata.
+		owner := ownsPermission(current, toPatch)
 
 		if patchCodes == patchSet {
 			if patchSet {
@@ -507,6 +511,9 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 		if patchSet {
 			for _, r := range patch.Permissions {
 				if r.Type == "" {
+					if !owner {
+						return permission.ErrNotParent
+					}
 					toPatch.RemoveRule(r)
 					continue
 				}
@@ -523,6 +530,15 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 						return err
 					}
 				}
+				// A rule with the title of an existing one replaces it: only the
+				// owner, or a caller that could have added the replaced rule
+				// itself, can do it.
+				if !owner && toPatch.Permissions.Some(func(e permission.Rule) bool {
+					return e.Title == r.Title && !current.Permissions.RuleInSubset(e) &&
+						vfs.AllowsRule(instance.VFS(), current.Permissions, e) != nil
+				}) {
+					return permission.ErrNotParent
+				}
 				toPatch.AddRules(r)
 			}
 		}
@@ -531,6 +547,9 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 		// If the metadata has been given in the body request, just apply it to
 		// the patch
 		if patch.Metadata != nil {
+			if !owner {
+				return permission.ErrNotParent
+			}
 			toPatch.Metadata = patch.Metadata
 			patch.Metadata.EnsureCreatedFields(toPatch.Metadata)
 		} else if toPatch.Metadata != nil { // No metadata given in the request, but it does exist in the database: update it
@@ -555,6 +574,20 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 
 		return jsonapi.Data(c, http.StatusOK, &APIPermission{Permission: toPatch}, nil)
 	}
+}
+
+// ownsPermission tells if the permissions of the request are those of the
+// app that owns toPatch, or, for a share by link, of a webapp or OAuth client
+// that can update it: its creator, or any of them having all its
+// permissions. A share by link has the type and source of other links of the
+// same app, so it never owns anything.
+func ownsPermission(current, toPatch *permission.Permission) bool {
+	if current.Type == permission.TypeWebapp || current.Type == permission.TypeKonnector {
+		if current.Type == toPatch.Type && current.SourceID == toPatch.SourceID {
+			return true
+		}
+	}
+	return current.CanUpdateShareByLink(toPatch)
 }
 
 func revokePermission(c echo.Context) error {
