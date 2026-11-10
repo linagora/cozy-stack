@@ -98,3 +98,19 @@ func TestTokenExchangeMatchingAppConfig(t *testing.T) {
 	assert.Empty(t, match(jwt.MapClaims{"aud": []string{"other"}}))
 	assert.Empty(t, match(jwt.MapClaims{}))
 }
+
+func TestTokenExchangeAudienceMatches(t *testing.T) {
+	assert.True(t, tokenExchangeAudienceMatches(jwt.MapClaims{"aud": "admin"}, "admin"))
+	assert.True(t, tokenExchangeAudienceMatches(jwt.MapClaims{"azp": "admin"}, "admin"))
+	assert.True(t, tokenExchangeAudienceMatches(jwt.MapClaims{
+		"aud": []string{"n8n", "admin"}, "azp": "admin",
+	}, "admin"))
+
+	// The token was issued to another client listed in aud
+	assert.False(t, tokenExchangeAudienceMatches(jwt.MapClaims{
+		"aud": []string{"admin", "n8n"}, "azp": "n8n",
+	}, "admin"))
+	assert.False(t, tokenExchangeAudienceMatches(jwt.MapClaims{"aud": []string{"admin", "n8n"}}, "admin"))
+	assert.False(t, tokenExchangeAudienceMatches(jwt.MapClaims{"aud": "n8n"}, "admin"))
+	assert.False(t, tokenExchangeAudienceMatches(jwt.MapClaims{}, "admin"))
+}
