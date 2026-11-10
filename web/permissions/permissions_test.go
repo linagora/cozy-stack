@@ -487,6 +487,52 @@ func TestPermissions(t *testing.T) {
 			Expect().Status(403)
 	})
 
+	t.Run("PatchShareLinkReservedDoctypes", func(t *testing.T) {
+		_, appToken := setup.GetTestClient("io.cozy.files:GET io.cozy.apps:GET io.cozy.sessions.logins:GET")
+
+		for name, tc := range map[string]struct {
+			rule   string
+			status int
+		}{
+			"whole apps doctype": {`{"type": "io.cozy.apps", "verbs": ["GET"]}`, 403},
+			"sessions logins":    {`{"type": "io.cozy.sessions.logins", "verbs": ["GET"], "values": ["login-id"]}`, 403},
+			"named apps":         {`{"type": "io.cozy.apps", "verbs": ["GET"], "selector": "slug", "values": ["notes"]}`, 200},
+		} {
+			t.Run(name, func(t *testing.T) {
+				e := testutils.CreateTestClient(t, ts.URL)
+				id, _, err := createTestSubPermissions(e, appToken, "link")
+				require.NoError(t, err)
+
+				e.PATCH("/permissions/"+id).
+					WithHeader("Authorization", "Bearer "+appToken).
+					WithHeader("Content-Type", "application/json").
+					WithBytes([]byte(`{"data": {"attributes": {"permissions": {"added": ` + tc.rule + `}}}}`)).
+					Expect().Status(tc.status)
+			})
+		}
+	})
+
+	t.Run("PatchSharingCodeSetsReservedDoctypes", func(t *testing.T) {
+		_, appToken := setup.GetTestClient("io.cozy.files:GET io.cozy.apps:GET")
+		files := permission.Set{permission.Rule{Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: []string{"io.cozy.music"}}}
+
+		preview, err := permission.CreateSharePreviewSet(testInstance, "sharing-preview-reserved", map[string]string{"bob": "preview-code"}, nil, permission.Permission{Permissions: files})
+		require.NoError(t, err)
+		interact, err := permission.CreateShareInteractSet(testInstance, "sharing-interact-reserved", map[string]string{"bob": "interact-code"}, permission.Permission{Permissions: files})
+		require.NoError(t, err)
+
+		for name, id := range map[string]string{"preview": preview.ID(), "interact": interact.ID()} {
+			t.Run(name, func(t *testing.T) {
+				e := testutils.CreateTestClient(t, ts.URL)
+				e.PATCH("/permissions/"+id).
+					WithHeader("Authorization", "Bearer "+appToken).
+					WithHeader("Content-Type", "application/json").
+					WithBytes([]byte(`{"data": {"attributes": {"permissions": {"added": {"type": "io.cozy.apps", "verbs": ["GET"]}}}}}`)).
+					Expect().Status(403)
+			})
+		}
+	})
+
 	t.Run("PatchAddRule", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

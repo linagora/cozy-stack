@@ -730,6 +730,12 @@ func CheckSetPermissionsWithFallback(set Set, parent *Permission, fallback func(
 			}
 		}
 	}
+	return CheckShareableDoctypes(set)
+}
+
+// CheckShareableDoctypes checks that the rules of a share set do not target a
+// doctype reserved to the stack.
+func CheckShareableDoctypes(set Set) error {
 	for _, rule := range set {
 		// XXX io.cozy.files is allowed and handled with specific code for sharings
 		if MatchType(rule, consts.Files) || isNamedAppsRead(rule) {
