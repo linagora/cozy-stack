@@ -103,7 +103,7 @@ func StartRabbitMQ(t *testing.T, withVolume bool, enableTLS bool) *RabbitFixture
 		if container != nil {
 			_ = container.Terminate(context.Background())
 		}
-		if !strings.Contains(err.Error(), "port is already allocated") {
+		if !isPortBindingError(err.Error()) {
 			break
 		}
 	}
@@ -141,6 +141,11 @@ func StartRabbitMQ(t *testing.T, withVolume bool, enableTLS bool) *RabbitFixture
 
 	fixture.waitForAMQP(60 * time.Second)
 	return fixture
+}
+
+func isPortBindingError(message string) bool {
+	return strings.Contains(message, "port is already allocated") ||
+		strings.Contains(message, "address already in use")
 }
 
 func (f *RabbitFixture) Restart(ctx context.Context, timeout time.Duration) {
