@@ -521,36 +521,15 @@ func buildTokenExchangeResponse(inst *instance.Instance, client *oauth.Client, s
 }
 
 func tokenExchangeAudienceMatches(claims jwt.MapClaims, clientID string) bool {
-	aud, err := claims.GetAudience()
-	if err == nil && len(aud) > 0 {
-		for _, value := range aud {
-			if value == clientID {
-				return true
-			}
-		}
-		return false
-	}
-	azp, _ := tokenExchangeClaimString(claims, "azp")
-	return azp == clientID
+	client, ok := tokenExchangeAuthorizedParty(claims)
+	return ok && client == clientID
 }
 
 // tokenExchangeMatchingAppConfig returns the app exchange config of the client
-// the token was issued to. The `aud` claim can list several clients and does
-// not say which one asked for the token, so the `azp` claim decides, and it
-// must be one of the audiences. A token without `azp` is only accepted when it
-// has a single audience.
+// the token was issued to.
 func tokenExchangeMatchingAppConfig(claims jwt.MapClaims, appConfigs map[string]config.OIDCAppTokenExchangeAppConfig) (*config.OIDCAppTokenExchangeAppConfig, bool) {
-	audiences, err := claims.GetAudience()
-	if err != nil {
-		return nil, false
-	}
-	client, ok := tokenExchangeClaimString(claims, "azp")
+	client, ok := tokenExchangeAuthorizedParty(claims)
 	if !ok {
-		if len(audiences) != 1 {
-			return nil, false
-		}
-		client = audiences[0]
-	} else if !slices.Contains(audiences, client) {
 		return nil, false
 	}
 	appConfig, ok := appConfigs[client]
@@ -558,6 +537,29 @@ func tokenExchangeMatchingAppConfig(claims jwt.MapClaims, appConfigs map[string]
 		return nil, false
 	}
 	return &appConfig, true
+}
+
+// tokenExchangeAuthorizedParty returns the client the token was issued to.
+// The `aud` claim can list several clients and does not say which one asked
+// for the token, so the `azp` claim decides, and it must be one of the
+// audiences when there are some. A token without `azp` is only accepted when
+// it has a single audience.
+func tokenExchangeAuthorizedParty(claims jwt.MapClaims) (string, bool) {
+	audiences, err := claims.GetAudience()
+	if err != nil {
+		return "", false
+	}
+	client, ok := tokenExchangeClaimString(claims, "azp")
+	if !ok {
+		if len(audiences) != 1 {
+			return "", false
+		}
+		return audiences[0], true
+	}
+	if len(audiences) > 0 && !slices.Contains(audiences, client) {
+		return "", false
+	}
+	return client, true
 }
 
 func tokenExchangeAppSlugAllowed(contextName, slug string) bool {
