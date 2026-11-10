@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -533,20 +534,30 @@ func tokenExchangeAudienceMatches(claims jwt.MapClaims, clientID string) bool {
 	return azp == clientID
 }
 
-// tokenExchangeMatchingAppConfig returns the first app exchange config whose
-// configured audience appears in the token's `aud` claim. If multiple audiences
-// match, the order in the token's `aud` slice wins.
+// tokenExchangeMatchingAppConfig returns the app exchange config of the client
+// the token was issued to. The `aud` claim can list several clients and does
+// not say which one asked for the token, so the `azp` claim decides, and it
+// must be one of the audiences. A token without `azp` is only accepted when it
+// has a single audience.
 func tokenExchangeMatchingAppConfig(claims jwt.MapClaims, appConfigs map[string]config.OIDCAppTokenExchangeAppConfig) (*config.OIDCAppTokenExchangeAppConfig, bool) {
 	audiences, err := claims.GetAudience()
 	if err != nil {
 		return nil, false
 	}
-	for _, audience := range audiences {
-		if appConfig, ok := appConfigs[audience]; ok {
-			return &appConfig, true
+	client, ok := tokenExchangeClaimString(claims, "azp")
+	if !ok {
+		if len(audiences) != 1 {
+			return nil, false
 		}
+		client = audiences[0]
+	} else if !slices.Contains(audiences, client) {
+		return nil, false
 	}
-	return nil, false
+	appConfig, ok := appConfigs[client]
+	if !ok {
+		return nil, false
+	}
+	return &appConfig, true
 }
 
 func tokenExchangeAppSlugAllowed(contextName, slug string) bool {
