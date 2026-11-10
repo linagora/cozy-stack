@@ -221,7 +221,11 @@ func (ctx *indexContext) handleChange(change couchdb.Change) error {
 	}
 	if change.Deleted || change.Doc.Get("trashed") == true {
 		ctx.logger.Debugf("file %s deleted or trashed: removing it from openRAG", change.DocID)
-		return ctx.remove(change.DocID)
+		rev := change.Doc.Rev()
+		if rev == "" && len(change.Changes) > 0 {
+			rev = change.Changes[0].Rev
+		}
+		return ctx.remove(change.DocID, rev)
 	}
 	return ctx.handleFile(fileInfoFromChange(change))
 }
@@ -287,17 +291,17 @@ func (ctx *indexContext) handleFile(f fileInfo) error {
 		return nil
 	}
 	ctx.logger.Debugf("file %s is outside every knowledge base folder: removing it from openRAG", f.ID)
-	return ctx.remove(f.ID)
+	return ctx.remove(f.ID, f.Rev)
 }
 
 // remove takes the file off openRAG. Through the indexer, the message only
 // asks for a synchronization: the indexer deletes the file once the stack
 // confirms it must not be on openRAG.
-func (ctx *indexContext) remove(fileID string) error {
+func (ctx *indexContext) remove(fileID, rev string) error {
 	if ctx.pub == nil {
 		return deleteFromRAG(ctx.inst, fileID)
 	}
-	if err := ctx.publish(fileID); err != nil {
+	if err := ctx.publish(fileID, rev); err != nil {
 		return err
 	}
 	return DeleteIndexStatus(ctx.inst, fileID)
@@ -313,7 +317,7 @@ func (ctx *indexContext) indexFile(f fileInfo, desired []string) error {
 	}
 	if ctx.pub != nil {
 		// The indexer checks the format and the md5sum, and uploads.
-		return ctx.publish(f.ID)
+		return ctx.publish(f.ID, f.Rev)
 	}
 	// Before needsIndexation, to save its GET too. A file indexed before
 	// openRAG stopped accepting its format stays there: not worth that GET.

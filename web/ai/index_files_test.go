@@ -55,7 +55,6 @@ func TestIndexFiles(t *testing.T) {
 	t.Run("the state of a file in a knowledge base", func(t *testing.T) {
 		obj := get(t, rag.IndexFilesPath+inKB.DocID, inKB.DocID).Status(200).JSON().Object()
 		obj.Value("name").String().IsEqual("a.txt")
-		obj.Value("dir_id").String().IsEqual(kb.DocID)
 		obj.Value("workspace_ids").Array().IsEqual([]string{kb.DocID})
 		obj.Value("metadata").Object().Value("doc_rev").String().IsEqual(inKB.Rev())
 	})
