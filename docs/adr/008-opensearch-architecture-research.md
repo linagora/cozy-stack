@@ -184,48 +184,46 @@ A single `node_modules` directory can contain 40,000 subdirectories and 200,000 
 
 ### 5.1 Per-Document Footprint Breakdown
 
-In the v1 metadata model, file contents are not indexed. However, filename search employs character n-grams and prefix structures that expand the Lucene index relative to raw JSON source size:
+In the v1 metadata model, file contents are not indexed. Sizes below were measured on OpenSearch 2.17 (Lucene 9.11) with the mapping above: 1,000,000 synthetic documents (~480 B of JSON each, 30-char average filenames), one shard force-merged to one segment. N-gram terms repeat across filenames, so they cost little; `search_as_you_type` is the largest filename structure:
 
-| Component | Description | Raw Size | Indexed / Lucene Overhead |
-| :--- | :--- | :--- | :--- |
-| `_id` & `resource_key` | `<owner_instance_id>:<doc_id>` keyword | ~40 B | Doc values + inverted index (~50 B) |
-| System IDs | `owner_instance_id`, `doc_id`, `dir_id`, `scoped_dir_key` | ~130 B | Doc values + inverted index (~150 B) |
-| Flags & Attributes | `type`, `mime`, `class`, `updated_at`, `trashed` | ~50 B | Doc values + BKD trees (dates) (~60 B) |
-| `name` (n-gram 3–4) | 30-char avg filename yields ~55 n-gram tokens | ~35 B | Inverted index posting lists + positions (~1,200 B) |
-| `name.prefix` | `search_as_you_type` (2-gram/3-gram word shingles + FST) | — | Prefix index structures (~400 B) |
-| `name.exact` | Keyword with `LowercaseAscii` normalizer | ~35 B | Doc values + keyword terms (~40 B) |
-| Stored `_source` | JSON document compressed with LZ4 / DEFLATE | ~350 B | Compressed stored field (~160 B) |
-| **Total per document** | **Average on-disk footprint in Lucene** | — | **~2.0 KB – 3.0 KB** (avg **~2.5 KB**) |
+| Component | Description | Measured On-Disk Size |
+| :--- | :--- | :--- |
+| IDs, flags & `name.exact` | `_id`, `resource_key`, system IDs, `type`, `mime`, `class`, `updated_at`, `trashed`, plus LZ4-compressed `_source` | ~390 B |
+| `name` (n-gram 3–4) | 30-char filename yields up to ~55 n-gram tokens | ~70 B |
+| `name.prefix` | `search_as_you_type` (word shingles + edge n-gram prefixes) | ~350 B |
+| **Total per document** | **Average on-disk footprint in Lucene** | **~0.8 KB** |
 
 ### 5.2 Scope Index Footprint (`cozy_share_scopes_v1`)
 
 - Stores 1 document per active sharing root (`io.cozy.sharings`), containing authorized member principal IDs and descendant directory keys (`subtree_dir_keys`).
-- **Average size**: ~10 KB – 50 KB per document (depending on folder depth and member count).
+- **Average size**: ~10 KB – 50 KB per document (depending on folder depth and member count; each `subtree_dir_keys` entry is ~65 B, so this assumes ~150–750 subfolders per share). Not measured.
 - **Scale**: An organization with 1,000,000 files typically maintains 5,000 – 20,000 active share roots.
-- **Total storage**: **< 500 MB** even for 50,000 active shares.
+- **Total storage**: **~0.5 GB – 2.5 GB** for 50,000 active shares.
 
 ### 5.3 Sizing Projections by Workload Tier (Metadata-Only)
 
 | Workload Tier | File & Folder Count | Primary Storage (`cozy_files_v1`) | Storage with 1 Replica (HA) | Active Sharings | Scope Index Size (`cozy_share_scopes_v1`) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Small / Pilot** | 100,000 | ~250 MB | ~500 MB | ~1,000 | ~10 MB |
-| **Medium Org** | 1,000,000 | ~2.5 GB | ~5.0 GB | ~10,000 | ~50 MB |
-| **Large Enterprise** | 10,000,000 | ~25 GB | ~50 GB | ~50,000 | ~250 MB |
-| **Multi-Tenant SaaS** | 50,000,000 | ~125 GB | ~250 GB | ~200,000 | ~1.0 GB |
+| **Small / Pilot** | 100,000 | ~80 MB | ~160 MB | ~1,000 | ~10–50 MB |
+| **Medium Org** | 1,000,000 | ~0.8 GB | ~1.6 GB | ~10,000 | ~0.1–0.5 GB |
+| **Large Enterprise** | 10,000,000 | ~8 GB | ~16 GB | ~50,000 | ~0.5–2.5 GB |
+| **Multi-Tenant SaaS** | 50,000,000 | ~40 GB | ~80 GB | ~200,000 | ~2–10 GB |
+
+These are index sizes after a force merge. Live indices also hold deleted documents until segments merge, and nodes need free disk for the 85% low watermark and for merges: provision about 1.45× the replicated size (the AWS OpenSearch sizing rule).
 
 ### 5.4 Recommended Sharding Strategy
 
 OpenSearch best practice targets **10 GB – 30 GB per shard** for latency-sensitive search workloads. Over-sharding small indices introduces CPU thread contention, scatter-gather network hops, and distorted relevance scoring (BM25 term frequency skew).
 
 #### `cozy_files_v1` Sharding Rules
-- **Dev / Staging / Small (< 1M files, < 2.5 GB)**:
+- **Dev / Staging / Small (< 1M files, < 0.8 GB)**:
   - `number_of_shards`: **1**
   - `number_of_replicas`: **0** (dev) or **1** (staging)
-- **Production Medium (1M – 10M files, 2.5 GB – 25 GB)**:
-  - `number_of_shards`: **2 or 3** (yielding ~8–12 GB per primary shard at 10M files, balancing I/O across 2–3 nodes)
+- **Production Medium (1M – 10M files, 0.8 GB – 8 GB)**:
+  - `number_of_shards`: **1** (~8 GB at 10M files, still below the 10 GB floor; the replica spreads reads across 2 nodes)
   - `number_of_replicas`: **1**
-- **Production Large / Multi-Tenant (10M – 50M files, 25 GB – 125 GB)**:
-  - `number_of_shards`: **5** (yielding ~25 GB per primary shard at 50M files)
+- **Production Large / Multi-Tenant (10M – 50M files, 8 GB – 40 GB)**:
+  - `number_of_shards`: **2** (yielding ~20 GB per primary shard at 50M files)
   - `number_of_replicas`: **1** (or 2 for multi-AZ clusters)
 - **Routing Strategy**: Use default hash-routing on `_id` (`resource_key`).
   > [!IMPORTANT]
@@ -274,25 +272,26 @@ In an enterprise collaborative drive, document types are mixed:
 - **Extractable Text Documents (~40% of files)**: PDFs, DOCX, XLSX, PPTX, TXT, Markdown, HTML, CSV.
   - Average extracted text length: ~3,000 words (~18–20 KB of raw UTF-8 text).
   - Truncation ceiling: Recommended extraction cap of **1 MB** per file to prevent single giant log files or data dumps from exhausting memory.
-  - Inverted index & term vectors overhead: ~10 KB – 12 KB.
-  - Stored `_source` (compressed body text): ~6 KB – 8 KB.
-  - Total on-disk footprint per text document: **~18 KB – 25 KB** (avg **~20 KB**).
+  - Measured on OpenSearch 2.17 with the mapping in 6.1 (~1,240 documents of 18.9 KB English text, force-merged).
+  - Inverted index (~5 KB) & term vectors (~10 KB): ~15 KB.
+  - Stored `_source` (LZ4-compressed body text): ~9 KB.
+  - Total on-disk footprint per text document, with metadata: **~25 KB**.
 - **Non-Text / Metadata-Only Files (~60% of files)**: Images, audio, videos, CAD, archives, executables, binaries.
   - Content field is empty (`null`).
-  - Total on-disk footprint: **~2.5 KB** (metadata only).
+  - Total on-disk footprint: **~0.8 KB** (metadata only).
 - **Blended Drive Average**:
-  $$\text{Blended Avg} = (0.40 \times 20\text{ KB}) + (0.60 \times 2.5\text{ KB}) \approx \mathbf{9.5\text{ KB – 11.0\text{ KB per file}}}$$
+  $$\text{Blended Avg} = (0.40 \times 25\text{ KB}) + (0.60 \times 0.8\text{ KB}) \approx \mathbf{10.5\text{ KB per file}}$$
 - **Pure Document Repository (Worst-Case)**:
-  If a tenant stores exclusively text documents (legal, medical, or administrative archives), size scales at **~20 KB – 25 KB per document**.
+  If a tenant stores exclusively text documents (legal, medical, or administrative archives), size scales at **~25 KB per document**.
 
 ### 6.3 Sizing Comparison: Metadata-Only vs. Full-Text Content
 
 | Workload Tier | Total Files | Metadata-Only Primary | Metadata-Only (1 Replica) | Content-Indexed Primary (Blended) | Content-Indexed (1 Replica) | Pure Text Repository (1 Replica) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Small / Pilot** | 100,000 | ~250 MB | ~500 MB | ~1.0 GB | ~2.0 GB | ~4.5 GB |
-| **Medium Org** | 1,000,000 | ~2.5 GB | ~5.0 GB | ~10.5 GB | ~21.0 GB | ~45.0 GB |
-| **Large Enterprise** | 10,000,000 | ~25 GB | ~50 GB | ~105 GB | ~210 GB | ~450 GB |
-| **Multi-Tenant SaaS** | 50,000,000 | ~125 GB | ~250 GB | ~525 GB | ~1.05 TB | ~2.25 TB |
+| **Small / Pilot** | 100,000 | ~80 MB | ~160 MB | ~1.0 GB | ~2.0 GB | ~5.0 GB |
+| **Medium Org** | 1,000,000 | ~0.8 GB | ~1.6 GB | ~10.5 GB | ~21.0 GB | ~50 GB |
+| **Large Enterprise** | 10,000,000 | ~8 GB | ~16 GB | ~105 GB | ~210 GB | ~500 GB |
+| **Multi-Tenant SaaS** | 50,000,000 | ~40 GB | ~80 GB | ~525 GB | ~1.05 TB | ~2.5 TB |
 
 ### 6.4 Sharding Adjustments for Full-Text Content
 
@@ -310,8 +309,8 @@ With content indexing, shard counts must increase to maintain the **10 GB – 30
    - Content extraction (via Apache Tika, `pdftotext`, or sidecar extractors) is CPU- and memory-intensive.
    - Text extraction must run asynchronously in background job workers (`io.cozy.jobs`) using RabbitMQ tasks, completely decoupled from the synchronous file upload HTTP request.
 2. **`_source` Exclusion vs. Snippet Highlighting**:
-   - Storing full body text in `_source` inflates GET requests and snapshot sizes.
-   - If search only returns snippets and deep links, exclude `content` from `_source` (`"excludes": ["content"]`) and store `term_vector: "with_positions_offsets"`. This reduces primary index size by ~30% while retaining fast search highlighting.
+   - Highlighting needs the original text, so keep `content` in `_source`. Excluding it (`"excludes": ["content"]`) would save ~9 KB per text document (~36%), but snippets come back empty (tested on OpenSearch 2.17), and `_update` / reindex would drop the content.
+   - To shrink the index, store offsets in the postings (`"index_options": "offsets"`) instead of `term_vector: "with_positions_offsets"`: ~19 KB instead of ~25 KB per text document (~23% less), and the Unified Highlighter still returns snippets.
 3. **JVM Heap Sizing**:
    - With 10M+ content-indexed documents, increase OpenSearch node heap allocations. Segment merging on large text fields requires healthy index buffer memory (`indices.memory.index_buffer_size: 15%`).
    - Sizing rule of thumb: Allocate **50% of node RAM to JVM heap** (capped at 31 GB for compressed OOPs), ensuring the remaining 50% is free for OS filesystem cache (page cache) to hold Lucene segments in RAM.
