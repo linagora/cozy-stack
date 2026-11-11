@@ -348,6 +348,21 @@ func ParseJWT(c echo.Context, instance *instance.Instance, token string) (*permi
 				_ = couchdb.UpdateDoc(instance, sharingDoc)
 			}
 			c.Set(contextShareMember, member)
+
+			// The permission doc of a shared drive is common to all its
+			// members: the role of the member narrows it. The drive routes
+			// decide on the effective access of the member (a read-only member
+			// can write in a nested drive), so they keep the whole doc.
+			if pdoc.Type == permission.TypeShareInteract && member.ReadOnly &&
+				!strings.HasPrefix(c.Path(), "/sharings/drives/") {
+				readOnly := *pdoc
+				readOnly.Permissions = make(permission.Set, len(pdoc.Permissions))
+				for i, rule := range pdoc.Permissions {
+					rule.Verbs = permission.Verbs(permission.GET)
+					readOnly.Permissions[i] = rule
+				}
+				pdoc = &readOnly
+			}
 		}
 
 		return pdoc, nil
