@@ -200,6 +200,14 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 		assert.Equal(t, int32(4), oo.commands.Load())
 	})
 
+	t.Run("LaterChunkOfARangeRead", func(t *testing.T) {
+		e.GET("/files/download/"+fileID).
+			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Range", "bytes=5-10").
+			Expect().Status(http.StatusPartialContent)
+		assert.Equal(t, int32(4), oo.commands.Load())
+	})
+
 	t.Run("NotAnOfficeDocument", func(t *testing.T) {
 		image, err := vfs.NewFileDoc("photo.jpg", consts.RootDirID, -1, nil,
 			"image/jpeg", "image", time.Now(), false, false, false, nil)
