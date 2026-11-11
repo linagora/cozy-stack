@@ -32,6 +32,10 @@ const ForceSaveDebounce = 3 * time.Second
 
 const forceSavePollInterval = 100 * time.Millisecond
 
+// commandTokenTTL is how long the token of a command to OnlyOffice is valid:
+// it is sent at once, the margin is for the clocks of the two servers.
+const commandTokenTTL = time.Minute
+
 // DocumentServerParam marks the URL the document server downloads a file
 // from to open it: that download must not ask it to save the same session.
 const DocumentServerParam = "DocumentServer"
@@ -123,12 +127,12 @@ func SaveOpenSession(ctx context.Context, inst *instance.Instance, file *vfs.Fil
 
 	// The forcesave has its own deadline: a reader that leaves must not cancel
 	// it for the others.
-	flight := forceSaves.DoChan(id, func() (interface{}, error) {
+	flight := forceSaves.DoChan(id, recovered(func() (interface{}, error) {
 		flightCtx, cancel := context.WithTimeout(context.Background(), ForceSaveTimeout)
 		defer cancel()
 		defer markForceSaved(id)
 		return forceSave(flightCtx, inst, cfg, key)
-	})
+	}))
 	select {
 	case <-ctx.Done():
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -152,6 +156,19 @@ func SaveOpenSession(ctx context.Context, inst *instance.Instance, file *vfs.Fil
 		return unconfirmed(inst, file, "reread", err)
 	}
 	return updated
+}
+
+// recovered turns a panic of fn into an error: singleflight would panic again
+// in a goroutine of its own, out of reach of the recovery of the HTTP server.
+func recovered(fn func() (interface{}, error)) func() (interface{}, error) {
+	return func() (res interface{}, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("forcesave: %v", r)
+			}
+		}()
+		return fn()
+	}
 }
 
 // forceSave asks OnlyOffice to save the session of the key, and reports true
@@ -197,7 +214,14 @@ func forceSave(ctx context.Context, inst *instance.Instance, cfg *config.Office,
 func requestForceSave(ctx context.Context, cfg *config.Office, key string) (bool, error) {
 	payload := map[string]interface{}{"c": "forcesave", "key": key}
 	if cfg.InboxSecret != "" {
-		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims(payload)).
+		now := time.Now()
+		claims := jwt.MapClaims{
+			"c":   "forcesave",
+			"key": key,
+			"iat": now.Unix(),
+			"exp": now.Add(commandTokenTTL).Unix(),
+		}
+		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).
 			SignedString([]byte(cfg.InboxSecret))
 		if err != nil {
 			return false, err
