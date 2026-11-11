@@ -551,7 +551,16 @@ func TestPermissions(t *testing.T) {
 				"a link code replaces a rule of an app", "/permissions/apps/notes", linkCode, `{"permissions": {"apps": ` + giveFiles + `}}`, 403,
 			},
 			{
+				"an OAuth client replaces a rule it could not give", "/permissions/apps/notes", token, `{"permissions": {"apps": ` + giveFiles + `}}`, 403,
+			},
+			{
 				"a link code replaces a rule of another link", "/permissions/" + exclusiveLinkID, linkCode, `{"permissions": {"exclusive": ` + giveFiles + `}}`, 403,
+			},
+			{
+				"a link code adds a rule to an app", "/permissions/apps/notes", linkCode, `{"permissions": {"gift": ` + giveFiles + `}}`, 403,
+			},
+			{
+				"a link code adds a rule to another link", "/permissions/" + otherLinkID, linkCode, `{"permissions": {"gift": ` + giveFiles + `}}`, 403,
 			},
 			{
 				"another webapp removes a rule of an app", "/permissions/apps/notes", miniToken, `{"permissions": {"contacts": {}}}`, 403,

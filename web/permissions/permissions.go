@@ -445,6 +445,10 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
+		switch current.Type {
+		case permission.TypeShareByLink, permission.TypeSharePreview, permission.TypeShareInteract:
+			return middlewares.ErrForbidden
+		}
 
 		var patch permission.Permission
 		if _, err = jsonapi.Bind(c.Request().Body, &patch); err != nil {
