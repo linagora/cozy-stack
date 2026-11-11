@@ -199,6 +199,22 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 		assert.Equal(t, int32(4), oo.commands.Load())
 	})
 
+	t.Run("NotAnOfficeDocument", func(t *testing.T) {
+		image, err := vfs.NewFileDoc("photo.jpg", consts.RootDirID, -1, nil,
+			"image/jpeg", "image", time.Now(), false, false, false, nil)
+		require.NoError(t, err)
+		f, err := inst.VFS().CreateFile(image, nil)
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		_, err = office.GetStore().AddDoc(inst, office.ConflictDetector{ID: image.ID(), Rev: image.Rev(), MD5Sum: image.MD5Sum})
+		require.NoError(t, err)
+
+		e.GET("/files/download/"+image.ID()).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
+		assert.Equal(t, int32(4), oo.commands.Load())
+	})
+
 	t.Run("SequentialReadersWithinTheDebounce", func(t *testing.T) {
 		office.ForceSaveDebounce = time.Second
 		defer func() { office.ForceSaveDebounce = 0 }()

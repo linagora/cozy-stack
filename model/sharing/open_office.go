@@ -131,7 +131,7 @@ func OpenOffice(inst *instance.Instance, fileID string, user *instance.Instance)
 	}
 
 	// Check that the file is an office document
-	if !isOfficeDocument(file) {
+	if !office.IsOfficeDocument(file) {
 		return nil, office.ErrInvalidFile
 	}
 
@@ -337,15 +337,6 @@ func documentType(f *vfs.FileDoc) string {
 // fileType returns the extension expected by the OnlyOffice document config.
 func fileType(f *vfs.FileDoc) string {
 	return strings.ToLower(strings.TrimPrefix(path.Ext(f.DocName), "."))
-}
-
-func isOfficeDocument(f *vfs.FileDoc) bool {
-	switch f.Class {
-	case "pdf", "spreadsheet", "slide", "text":
-		return true
-	default:
-		return false
-	}
 }
 
 func shouldOpenANewVersion(file *vfs.FileDoc, detector *office.ConflictDetector) bool {

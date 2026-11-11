@@ -86,7 +86,7 @@ func unconfirmed(inst *instance.Instance, file *vfs.FileDoc, reason string, err 
 // ForceSaveTimeout, the file is returned as is.
 func SaveOpenSession(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc) *vfs.FileDoc {
 	cfg := GetConfig(inst.ContextName)
-	if cfg == nil || cfg.OnlyOfficeURL == "" {
+	if cfg == nil || cfg.OnlyOfficeURL == "" || !IsOfficeDocument(file) {
 		return file
 	}
 	key, err := GetStore().GetSecretByID(inst, file.ID())
