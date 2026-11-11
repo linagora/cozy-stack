@@ -16,6 +16,7 @@ import (
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/gavv/httpexpect/v2"
+	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +36,7 @@ func TestOffice(t *testing.T) {
 	config.UseTestFile(t)
 	ooURL := fakeOOServer(t)
 	config.GetConfig().Office = map[string]config.Office{
-		"default": {OnlyOfficeURL: ooURL},
+		"default": {OnlyOfficeURL: ooURL, InboxSecret: "inbox", OutboxSecret: outboxSecret},
 	}
 	testutils.NeedCouchdb(t)
 	setup := testutils.NewSetup(t, t.Name())
@@ -93,6 +94,7 @@ func TestOffice(t *testing.T) {
 		// Force save
 		obj := e.POST("/office/callback").
 			WithHeader("Content-Type", "application/json").
+			WithHeader("Authorization", "Bearer "+callbackToken(t, key, 6, ooURL+"/dl")).
 			WithBytes([]byte(fmt.Sprintf(`{
       "actions": [{"type": 0, "userid": "78e1e841"}],
       "key": "%s",
@@ -117,6 +119,7 @@ func TestOffice(t *testing.T) {
 		// Final save
 		e.POST("/office/callback").
 			WithHeader("Content-Type", "application/json").
+			WithHeader("Authorization", "Bearer "+callbackToken(t, key, 2, ooURL+"/dl")).
 			// Change "status": 6 -> "status": 2
 			WithBytes([]byte(fmt.Sprintf(`{
       "actions": [{"type": 0, "userid": "78e1e841"}],
@@ -215,6 +218,7 @@ func TestOffice(t *testing.T) {
 		// conflict file
 		e.POST("/office/callback").
 			WithHeader("Content-Type", "application/json").
+			WithHeader("Authorization", "Bearer "+callbackToken(t, key, 2, ooURL+"/dl")).
 			WithBytes([]byte(fmt.Sprintf(`{
       "actions": [{"type": 0, "userid": "78e1e841"}],
       "key": "%s",
@@ -276,6 +280,7 @@ func TestOffice(t *testing.T) {
 
 		e.POST("/office/callback").
 			WithHeader("Content-Type", "application/json").
+			WithHeader("Authorization", "Bearer "+callbackToken(t, pdfKey, 2, ooURL+"/error")).
 			WithBytes([]byte(fmt.Sprintf(`{
       "key": "%s",
       "status": 2,
@@ -301,6 +306,7 @@ func TestOffice(t *testing.T) {
 
 		e.POST("/office/callback").
 			WithHeader("Content-Type", "application/json").
+			WithHeader("Authorization", "Bearer "+callbackToken(t, pdfKey, 2, ooURL+"/pdf")).
 			WithBytes([]byte(fmt.Sprintf(`{
       "key": "%s",
       "status": 2,
@@ -316,6 +322,71 @@ func TestOffice(t *testing.T) {
 		assert.Equal(t, "onlyoffice-server", conflict.CozyMetadata.UploadedBy.Slug)
 		assert.Equal(t, []byte(updatedPDF), readFile(t, inst, conflictID))
 	})
+
+	t.Run("CallbackWithoutToken", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		pdfKey = openPDF(t, e, pdfID, token)
+		before := readFile(t, inst, pdfID)
+
+		e.POST("/office/callback").
+			WithHeader("Content-Type", "application/json").
+			WithBytes([]byte(fmt.Sprintf(`{
+      "key": "%s",
+      "status": 6,
+      "url": "%s/pdf"
+    }`, pdfKey, ooURL))).
+			Expect().Status(http.StatusBadRequest)
+
+		assert.Equal(t, before, readFile(t, inst, pdfID))
+	})
+
+	// A context with a document server URL but no outbox secret has no
+	// document server: the editor cannot be opened and the callback is
+	// refused, whatever the key.
+	withoutOutboxSecret := func(t *testing.T) {
+		configured := config.GetConfig().Office
+		config.GetConfig().Office = map[string]config.Office{
+			"default": {OnlyOfficeURL: ooURL, InboxSecret: "inbox"},
+		}
+		t.Cleanup(func() { config.GetConfig().Office = configured })
+	}
+
+	t.Run("OpenWithoutOutboxSecret", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		withoutOutboxSecret(t)
+
+		e.GET("/office/"+fileID+"/open").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(http.StatusNotFound)
+	})
+
+	t.Run("CallbackWithoutOutboxSecret", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		pdfKey = openPDF(t, e, pdfID, token)
+		before := readFile(t, inst, pdfID)
+		withoutOutboxSecret(t)
+
+		e.POST("/office/callback").
+			WithHeader("Content-Type", "application/json").
+			WithBytes([]byte(fmt.Sprintf(`{
+      "key": "%s",
+      "status": 6,
+      "url": "%s/pdf"
+    }`, pdfKey, ooURL))).
+			Expect().Status(http.StatusNotFound)
+
+		assert.Equal(t, before, readFile(t, inst, pdfID))
+	})
+}
+
+// openPDF opens the PDF in the editor and returns the key of the session.
+func openPDF(t *testing.T, e *httpexpect.Expect, pdfID, token string) string {
+	t.Helper()
+	return e.GET("/office/"+pdfID+"/open").
+		WithHeader("Authorization", "Bearer "+token).
+		Expect().Status(http.StatusOK).
+		JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+		Object().Path("$.data.attributes.onlyoffice.document.key").String().NotEmpty().Raw()
 }
 
 func createFile(t *testing.T, inst *instance.Instance) string {
@@ -396,6 +467,17 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 const updatedPDF = "%PDF-1.7\n% updated by OnlyOffice\n"
+
+const outboxSecret = "outbox"
+
+// callbackToken signs the callback parameters as the document server does.
+func callbackToken(t *testing.T, key string, status int, url string) string {
+	t.Helper()
+	claims := jwt.MapClaims{"payload": map[string]interface{}{"key": key, "status": status, "url": url}}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(outboxSecret))
+	require.NoError(t, err)
+	return token
+}
 
 func fakeOOServer(t *testing.T) string {
 	t.Helper()

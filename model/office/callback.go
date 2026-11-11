@@ -86,7 +86,7 @@ func Callback(inst *instance.Instance, params CallbackParameters) error {
 
 func checkToken(cfg *config.Office, params CallbackParameters) error {
 	if cfg == nil || cfg.OutboxSecret == "" {
-		return nil
+		return ErrNoServer
 	}
 
 	var claims callbackClaims

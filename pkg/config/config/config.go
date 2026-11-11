@@ -304,6 +304,16 @@ type Office struct {
 	OutboxSecret  string
 }
 
+// Check returns an error when a document server is configured without the
+// secret that authenticates its callbacks. Such a context has no document
+// server.
+func (o Office) Check() error {
+	if o.OnlyOfficeURL != "" && o.OutboxSecret == "" {
+		return errors.New("onlyoffice_url is set without onlyoffice_outbox_secret")
+	}
+	return nil
+}
+
 // RAGServer contains the configuration for a RAG server (AI features).
 type RAGServer struct {
 	URL    string
@@ -1357,6 +1367,13 @@ func UseViper(v *viper.Viper) error {
 
 	if err = logger.Init(loggerOpts); err != nil {
 		return err
+	}
+
+	for name, o := range office {
+		if err := o.Check(); err != nil {
+			logger.WithNamespace("office").
+				Errorf("Context %s: %s, OnlyOffice is disabled for this context", name, err)
+		}
 	}
 
 	return nil

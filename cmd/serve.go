@@ -246,7 +246,7 @@ func init() {
 	flags.String("onlyoffice-url", "", "URL for the OnlyOffice server")
 	checkNoErr(viper.BindPFlag("office.default.onlyoffice_url", flags.Lookup("onlyoffice-url")))
 
-	flags.String("onlyoffice-outbox-secret", "", "Secret used for verifying requests from the OnlyOffice server")
+	flags.String("onlyoffice-outbox-secret", "", "Secret used for verifying requests from the OnlyOffice server, required with --onlyoffice-url")
 	checkNoErr(viper.BindPFlag("office.default.onlyoffice_outbox_secret", flags.Lookup("onlyoffice-outbox-secret")))
 
 	flags.String("onlyoffice-inbox-secret", "", "Secret used for signing requests to the OnlyOffice server")
