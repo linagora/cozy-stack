@@ -24,11 +24,11 @@ import (
 // document of an open editing session, command and callback included.
 var ForceSaveTimeout = 10 * time.Second
 
-// ForceSaveDebounce is how long after a forcesave the readers of the same
-// document get the saved revision without asking OnlyOffice again. A shared
-// download link, opened by mail scanners, would otherwise make OnlyOffice
-// assemble the document on each request.
-var ForceSaveDebounce = 3 * time.Second
+// ForceSaveDebounce is how long after a command to OnlyOffice, whatever its
+// answer, the readers of the same document get the file as it is without
+// asking again. A shared download link, opened by mail scanners, would
+// otherwise send a command on each request.
+const ForceSaveDebounce = 3 * time.Second
 
 const forceSavePollInterval = 100 * time.Millisecond
 
@@ -40,13 +40,21 @@ const DocumentServerParam = "DocumentServer"
 // one forcesave instead of each asking OnlyOffice for its own.
 var forceSaves singleflight.Group
 
-// lastForceSaves keeps, by session, when the last forcesave was confirmed.
-// Each confirmation drops the entries older than ForceSaveDebounce. The entry
-// of a closed session is not read again: its next session has a new key.
+// lastForceSaves keeps, by session, when the last command ended. Each new
+// entry drops the entries older than the delay. The entry of a closed
+// session is not read again: its next session has a new key.
 var lastForceSaves = struct {
 	sync.Mutex
-	at map[string]time.Time
-}{at: make(map[string]time.Time)}
+	at    map[string]time.Time
+	delay time.Duration
+}{at: make(map[string]time.Time), delay: ForceSaveDebounce}
+
+// SetForceSaveDebounce changes the delay of ForceSaveDebounce, for the tests.
+func SetForceSaveDebounce(delay time.Duration) {
+	lastForceSaves.Lock()
+	defer lastForceSaves.Unlock()
+	lastForceSaves.delay = delay
+}
 
 func sessionID(db prefixer.Prefixer, key string) string {
 	return db.DBPrefix() + "/" + key
@@ -56,7 +64,7 @@ func recentlyForceSaved(id string) bool {
 	lastForceSaves.Lock()
 	defer lastForceSaves.Unlock()
 	at, ok := lastForceSaves.at[id]
-	return ok && time.Since(at) < ForceSaveDebounce
+	return ok && time.Since(at) < lastForceSaves.delay
 }
 
 func markForceSaved(id string) {
@@ -64,7 +72,7 @@ func markForceSaved(id string) {
 	defer lastForceSaves.Unlock()
 	now := time.Now()
 	for other, at := range lastForceSaves.at {
-		if now.Sub(at) >= ForceSaveDebounce {
+		if now.Sub(at) >= lastForceSaves.delay {
 			delete(lastForceSaves.at, other)
 		}
 	}
@@ -109,6 +117,7 @@ func SaveOpenSession(ctx context.Context, inst *instance.Instance, file *vfs.Fil
 	flight := forceSaves.DoChan(id, func() (interface{}, error) {
 		flightCtx, cancel := context.WithTimeout(context.Background(), ForceSaveTimeout)
 		defer cancel()
+		defer markForceSaved(id)
 		return forceSave(flightCtx, inst, cfg, key)
 	})
 	select {
@@ -167,7 +176,6 @@ func forceSave(ctx context.Context, inst *instance.Instance, cfg *config.Office,
 			return false, err
 		}
 		if after == nil || after.Rev != before.Rev {
-			markForceSaved(sessionID(inst, key))
 			return true, nil
 		}
 	}
