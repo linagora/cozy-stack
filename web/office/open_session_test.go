@@ -89,9 +89,8 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 	office.ForceSaveTimeout = 2 * time.Second
 	t.Cleanup(func() { office.ForceSaveTimeout = timeout })
 	// Each case asks OnlyOffice again, except the one about the debounce.
-	debounce := office.ForceSaveDebounce
-	office.ForceSaveDebounce = 0
-	t.Cleanup(func() { office.ForceSaveDebounce = debounce })
+	office.SetForceSaveDebounce(0)
+	t.Cleanup(func() { office.SetForceSaveDebounce(office.ForceSaveDebounce) })
 
 	testutils.NeedCouchdb(t)
 	setup := testutils.NewSetup(t, t.Name())
@@ -216,16 +215,38 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 	})
 
 	t.Run("SequentialReadersWithinTheDebounce", func(t *testing.T) {
-		office.ForceSaveDebounce = time.Second
-		defer func() { office.ForceSaveDebounce = 0 }()
+		const delay = time.Second
+		office.SetForceSaveDebounce(delay)
+		defer office.SetForceSaveDebounce(0)
+		// Leave the delay of the commands of the cases above
+		time.Sleep(delay)
 		for range 4 {
 			assert.Equal(t, forceSavedContent, download())
 		}
 		assert.Equal(t, int32(5), oo.commands.Load())
 
-		time.Sleep(office.ForceSaveDebounce)
+		time.Sleep(delay)
 		assert.Equal(t, forceSavedContent, download())
 		assert.Equal(t, int32(6), oo.commands.Load())
+	})
+
+	t.Run("UnsavedAnswersWithinTheDebounce", func(t *testing.T) {
+		const delay = time.Second
+		office.SetForceSaveDebounce(delay)
+		defer office.SetForceSaveDebounce(0)
+		defer oo.result.Store(0)
+		commands := oo.commands.Load()
+		// 4: nothing new to save; 1: no session for the key, as after an
+		// opening in view mode that no editor has loaded
+		for _, result := range []int32{4, 1} {
+			time.Sleep(delay)
+			oo.result.Store(result)
+			for range 4 {
+				download()
+			}
+			commands++
+			assert.Equal(t, commands, oo.commands.Load())
+		}
 	})
 
 	t.Run("ReaderLeaves", func(t *testing.T) {
@@ -250,7 +271,7 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 		// Another reader joins the forcesave, which goes on without the first.
 		saved := office.SaveOpenSession(context.Background(), inst, doc)
 		assert.NotEqual(t, doc.Rev(), saved.Rev())
-		assert.Equal(t, int32(7), oo.commands.Load())
+		assert.Equal(t, int32(9), oo.commands.Load())
 	})
 }
 
