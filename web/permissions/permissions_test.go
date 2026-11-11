@@ -2,7 +2,10 @@ package permissions
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/crypto"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/cozy/cozy-stack/web/middlewares"
@@ -740,6 +744,32 @@ func TestPermissions(t *testing.T) {
 			// cooperate, through intents for example.
 			patch(t, "/permissions/apps/notes", otherToken).Status(200)
 		})
+	})
+
+	t.Run("PatchRefusedLeavesTheSetUntouched", func(t *testing.T) {
+		current := &permission.Permission{
+			Type:        permission.TypeOauth,
+			SourceID:    clientID,
+			Permissions: permission.Set{{Type: "io.cozy.contacts", Verbs: permission.ALL}},
+		}
+		toPatch := &permission.Permission{
+			Type:        permission.TypeWebapp,
+			SourceID:    "notes",
+			Permissions: permission.Set{{Type: "io.cozy.events", Title: "events", Verbs: permission.ALL}},
+		}
+		body := `{"data": {"attributes": {"cozyMetadata": {"createdByApp": "other"}, "permissions": {"added": {"type": "io.cozy.contacts", "verbs": ["GET"]}}}}}`
+		req := httptest.NewRequest(http.MethodPatch, "/permissions/apps/notes", strings.NewReader(body))
+		req.Header.Set(echo.HeaderContentType, "application/json")
+		c := echo.New().NewContext(req, httptest.NewRecorder())
+		middlewares.SetInstance(c, testInstance)
+		c.Set("permissions_doc", current)
+
+		handler := patchPermission(func(prefixer.Prefixer, string) (*permission.Permission, error) {
+			return toPatch, nil
+		}, "slug")
+		require.ErrorIs(t, handler(c), permission.ErrNotParent)
+		assert.Len(t, toPatch.Permissions, 1)
+		assert.Equal(t, "events", toPatch.Permissions[0].Title)
 	})
 
 	t.Run("PatchAddRule", func(t *testing.T) {

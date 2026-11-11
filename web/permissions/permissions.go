@@ -485,6 +485,10 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 			}
 		}
 
+		if patch.Metadata != nil && !owner {
+			return permission.ErrNotParent
+		}
+
 		if pass, ok := patch.Password.(string); ok {
 			if pass == "" {
 				toPatch.Password = nil
@@ -551,9 +555,6 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 		// If the metadata has been given in the body request, just apply it to
 		// the patch
 		if patch.Metadata != nil {
-			if !owner {
-				return permission.ErrNotParent
-			}
 			toPatch.Metadata = patch.Metadata
 			patch.Metadata.EnsureCreatedFields(toPatch.Metadata)
 		} else if toPatch.Metadata != nil { // No metadata given in the request, but it does exist in the database: update it
