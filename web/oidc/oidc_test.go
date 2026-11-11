@@ -39,15 +39,53 @@ import (
 
 type delegatedCodeRedis struct {
 	values map[string]string
+	ttls   map[string]time.Duration
 }
 
 func (r *delegatedCodeRedis) Get(_ context.Context, key string) *redis.StringCmd {
 	return redis.NewStringResult(r.values[key], nil)
 }
 
-func (r *delegatedCodeRedis) Set(_ context.Context, key string, value interface{}, _ time.Duration) *redis.StatusCmd {
+func (r *delegatedCodeRedis) Set(_ context.Context, key string, value interface{}, ttl time.Duration) *redis.StatusCmd {
 	r.values[key] = string(value.([]byte))
+	if r.ttls == nil {
+		r.ttls = make(map[string]time.Duration)
+	}
+	r.ttls[key] = ttl
 	return redis.NewStatusResult("OK", nil)
+}
+
+func (r *delegatedCodeRedis) Del(_ context.Context, keys ...string) *redis.IntCmd {
+	var n int64
+	for _, key := range keys {
+		if _, ok := r.values[key]; ok {
+			delete(r.values, key)
+			n++
+		}
+	}
+	return redis.NewIntResult(n, nil)
+}
+
+func TestDelegatedCodeIsSingleUseAndShortLived(t *testing.T) {
+	config.UseTestFile(t)
+	previousStorage := globalStorage
+	t.Cleanup(func() { globalStorage = previousStorage })
+
+	mock := &delegatedCodeRedis{values: make(map[string]string)}
+	stores := map[string]stateStorage{
+		"memory": &memStateStorage{codes: make(map[string]*DelegatedCodeData)},
+		"redis":  &redisStateStorage{cl: mock, ctx: context.Background()},
+	}
+	for name, store := range stores {
+		t.Run(name, func(t *testing.T) {
+			code := store.CreateCodeData("sub", "sid", "ctx", oidcprovider.GenericProvider)
+			require.True(t, store.DeleteCodeData(code))
+			require.False(t, store.DeleteCodeData(code))
+			require.Nil(t, store.GetCodeData(code))
+		})
+	}
+	code := stores["redis"].CreateCodeData("sub", "sid", "ctx", oidcprovider.GenericProvider)
+	require.LessOrEqual(t, mock.ttls[code], 10*time.Minute)
 }
 
 func TestDelegatedCodeIsolation(t *testing.T) {
@@ -1783,4 +1821,42 @@ func makeBackchannelLogoutClaims(issuer, audience, sid string, extra map[string]
 		claims[key] = value
 	}
 	return claims
+}
+
+func TestDelegatedCodeCannotBeReplayed(t *testing.T) {
+	config.UseTestFile(t)
+	previousStorage := globalStorage
+	t.Cleanup(func() { globalStorage = previousStorage })
+	globalStorage = &memStateStorage{codes: make(map[string]*DelegatedCodeData)}
+
+	env := newBackchannelLogoutTestEnv(t)
+	previousAuthentication := config.GetConfig().Authentication
+	t.Cleanup(func() { config.GetConfig().Authentication = previousAuthentication })
+	_, _, jwksURL := newBackchannelSigningKey(t)
+	contextName := "replay-code-context"
+	inst := env.setup.GetTestInstance(&lifecycle.Options{
+		ContextName: contextName,
+		OIDCID:      "replay-code-sub",
+	})
+	oidcConfig := makeTestOIDCConfig("https://issuer.example/replay", "replay-client-id", jwksURL)
+	oidcConfig["allow_oauth_token"] = true
+	config.GetConfig().Authentication = map[string]interface{}{
+		contextName: map[string]interface{}{"oidc": oidcConfig},
+	}
+	client := createFlagshipOAuthClient(t, inst)
+
+	code := getStorage().CreateCodeData(inst.OIDCID, "", inst.ContextName, oidcprovider.GenericProvider)
+	issueOIDCAccessTokenWithDelegatedCode(t, env.client, inst, client, code)
+
+	env.client.POST("/oidc/access_token").
+		WithHost(inst.Domain).
+		WithJSON(map[string]string{
+			"client_id":     client.ClientID,
+			"client_secret": client.ClientSecret,
+			"scope":         "*",
+			"code":          code,
+		}).
+		Expect().
+		Status(http.StatusBadRequest).
+		JSON().Object().HasValue("error", invalidDelegatedCode)
 }

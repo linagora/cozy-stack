@@ -1082,6 +1082,14 @@ func AccessToken(c echo.Context) error {
 		}
 	}
 
+	// The code is consumed only once the request can succeed, as the two
+	// factor step calls this endpoint twice with the same code.
+	if reqBody.Code != "" && !getStorage().DeleteCodeData(reqBody.Code) {
+		return c.JSON(http.StatusBadRequest, echo.Map{
+			"error": invalidDelegatedCode,
+		})
+	}
+
 	// Prepare the scope
 	out := auth.AccessTokenReponse{
 		Type:  "bearer",

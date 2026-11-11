@@ -16,7 +16,7 @@ import (
 
 const (
 	stateTTL = 15 * time.Minute
-	codeTTL  = 3 * time.Hour
+	codeTTL  = 10 * time.Minute
 )
 
 type stateHolder struct {
@@ -73,6 +73,7 @@ type stateStorage interface {
 	Find(id string) *stateHolder
 	CreateCodeData(sub, sessionID, contextName string, provider oidcprovider.Kind) string
 	GetCodeData(code string) *DelegatedCodeData
+	DeleteCodeData(code string) bool
 }
 
 type memStateStorage struct {
@@ -108,7 +109,14 @@ func (store memStateStorage) GetCodeData(code string) *DelegatedCodeData {
 	return store.codes[code]
 }
 
+func (store memStateStorage) DeleteCodeData(code string) bool {
+	_, ok := store.codes[code]
+	delete(store.codes, code)
+	return ok
+}
+
 type subRedisInterface interface {
+	Del(ctx context.Context, keys ...string) *redis.IntCmd
 	Get(ctx context.Context, key string) *redis.StringCmd
 	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
 }
@@ -162,6 +170,11 @@ func (store *redisStateStorage) GetCodeData(code string) *DelegatedCodeData {
 		return nil
 	}
 	return &data
+}
+
+// DeleteCodeData reports whether this call is the one that removed the code.
+func (store *redisStateStorage) DeleteCodeData(code string) bool {
+	return store.cl.Del(store.ctx, code).Val() > 0
 }
 
 var globalStorage stateStorage

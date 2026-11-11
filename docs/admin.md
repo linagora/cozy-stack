@@ -1511,7 +1511,8 @@ then used by the flagship app to obtain its access_token and refresh_token. The
 
 The cloudery sends its access_token for the OIDC provider, the stack can use it
 to make a request to the userinfo endpoint of the OIDC provider. With the
-response, the stack can create a delegated code associated to the sub.
+response, the stack can create a delegated code associated to the sub. The
+code can be used only once, and it expires after 10 minutes.
 
 If an `id_token` is also provided, the stack extracts the session ID (`sid`)
 claim and stores it with the delegated code. This session ID is later used for
