@@ -3,6 +3,8 @@ package office
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -272,6 +274,36 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 		saved := office.SaveOpenSession(context.Background(), inst, doc)
 		assert.NotEqual(t, doc.Rev(), saved.Rev())
 		assert.Equal(t, int32(9), oo.commands.Load())
+	})
+
+	t.Run("WrittenWhileWaiting", func(t *testing.T) {
+		oo.noCallback.Store(true)
+		defer oo.noCallback.Store(false)
+		old, err := inst.VFS().FileByID(fileID)
+		require.NoError(t, err)
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			newdoc := old.Clone().(*vfs.FileDoc)
+			newdoc.ByteSize = -1
+			newdoc.MD5Sum = nil
+			f, err := inst.VFS().CreateFile(newdoc, old)
+			if err != nil {
+				return
+			}
+			_, _ = io.WriteString(f, "written while waiting")
+			_ = f.Close()
+		}()
+
+		res := e.GET("/files/download/"+fileID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
+		body := res.Body().Raw()
+		sum := md5.Sum([]byte(body))
+		assert.Equal(t, "written while waiting", body)
+		assert.Equal(t, `"`+base64.StdEncoding.EncodeToString(sum[:])+`"`, res.Header("Etag").Raw())
+		assert.Equal(t, int32(10), oo.commands.Load())
+		// The forcesave of this reader ends at its own bound, just after it
+		time.Sleep(500 * time.Millisecond)
 	})
 }
 
