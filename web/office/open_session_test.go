@@ -309,6 +309,37 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 		assert.Equal(t, commands, oo.commands.Load())
 	})
 
+	t.Run("SessionClosedJustBefore", func(t *testing.T) {
+		doc, err := vfs.NewFileDoc("closed.docx", consts.RootDirID, -1, nil,
+			"application/msword", "text", time.Now(), false, false, false, nil)
+		require.NoError(t, err)
+		f, err := inst.VFS().CreateFile(doc, nil)
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		read, err := inst.VFS().FileByID(doc.ID())
+		require.NoError(t, err)
+
+		// The final save writes the file and removes the session, while a
+		// reader has already read the file and found the key of the session.
+		saved := read.Clone().(*vfs.FileDoc)
+		saved.ByteSize = -1
+		saved.MD5Sum = nil
+		f, err = inst.VFS().CreateFile(saved, read)
+		require.NoError(t, err)
+		_, err = io.WriteString(f, "final save")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		require.NoError(t, office.GetStore().UpdateSecret(inst, "closed-session", "", doc.ID()))
+		current, err := inst.VFS().FileByID(doc.ID())
+		require.NoError(t, err)
+		require.NotEqual(t, read.Rev(), current.Rev())
+
+		commands := oo.commands.Load()
+		served := office.SaveOpenSession(context.Background(), inst, read)
+		assert.Equal(t, current.Rev(), served.Rev())
+		assert.Equal(t, commands, oo.commands.Load())
+	})
+
 	t.Run("ReaderLeaves", func(t *testing.T) {
 		oo.commandDelay.Store(int64(500 * time.Millisecond))
 		defer oo.commandDelay.Store(0)
@@ -363,47 +394,4 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 		// The forcesave of this reader ends at its own bound, just after it
 		time.Sleep(500 * time.Millisecond)
 	})
-}
-
-func TestSaveOpenSessionAfterTheLastEditorLeft(t *testing.T) {
-	if testing.Short() {
-		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
-	}
-
-	config.UseTestFile(t)
-	var commands atomic.Int32
-	oo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		commands.Add(1)
-		http.Error(w, "no command expected", http.StatusBadRequest)
-	}))
-	t.Cleanup(oo.Close)
-	config.GetConfig().Office = map[string]config.Office{
-		"default": {OnlyOfficeURL: oo.URL + "/"},
-	}
-	testutils.NeedCouchdb(t)
-	setup := testutils.NewSetup(t, t.Name())
-	inst := setup.GetTestInstance()
-
-	fileID := createFile(t, inst)
-	read, err := inst.VFS().FileByID(fileID)
-	require.NoError(t, err)
-
-	// The final save writes the file and removes the session, while a reader
-	// has already read the file and found the key of the session.
-	saved := read.Clone().(*vfs.FileDoc)
-	saved.ByteSize = -1
-	saved.MD5Sum = nil
-	f, err := inst.VFS().CreateFile(saved, read)
-	require.NoError(t, err)
-	_, err = io.WriteString(f, "final save")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-	require.NoError(t, office.GetStore().UpdateSecret(inst, "closed-session", "", fileID))
-	current, err := inst.VFS().FileByID(fileID)
-	require.NoError(t, err)
-	require.NotEqual(t, read.Rev(), current.Rev())
-
-	served := office.SaveOpenSession(context.Background(), inst, read)
-	assert.Equal(t, current.Rev(), served.Rev())
-	assert.Equal(t, int32(0), commands.Load())
 }
