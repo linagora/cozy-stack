@@ -693,3 +693,9 @@ func TestSafeHTTPConfig(t *testing.T) {
 		assert.Empty(t, GetConfig().SafeHTTPTrustedNetworks)
 	})
 }
+
+func TestOfficeCheck(t *testing.T) {
+	assert.NoError(t, Office{}.Check())
+	assert.NoError(t, Office{OnlyOfficeURL: "https://onlyoffice-url", InboxSecret: "inbox", OutboxSecret: "outbox"}.Check())
+	assert.Error(t, Office{OnlyOfficeURL: "https://onlyoffice-url", InboxSecret: "inbox"}.Check())
+}
