@@ -7,6 +7,16 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 )
 
+// IsOfficeDocument tells if the file is a document OnlyOffice can open.
+func IsOfficeDocument(f *vfs.FileDoc) bool {
+	switch f.Class {
+	case "pdf", "spreadsheet", "slide", "text":
+		return true
+	default:
+		return false
+	}
+}
+
 // EnsureFileForKey returns the file that will be written when OnlyOffice will
 // save a document with the given key. The general case is that is the file
 // that has been opened. But, it can also be a new file if a conflict has

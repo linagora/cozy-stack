@@ -13,7 +13,7 @@ var OfficeForceSaveUnconfirmed = prometheus.NewCounterVec(
 		Help: `Number of downloads served without a confirmed forcesave, so maybe without the
 last changes of an OnlyOffice editing session, labelled by reason: "timeout" and
 "error" for a file with a session, "reread" when the saved file cannot be read,
-"store" for any download when the session store fails.`,
+"store" for an office document when the session store fails.`,
 	},
 	[]string{"reason"},
 )
