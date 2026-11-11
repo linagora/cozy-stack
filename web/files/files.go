@@ -1237,12 +1237,18 @@ func serveThumbnailPlaceholder(res http.ResponseWriter, req *http.Request, doc *
 }
 
 // saveOpenOfficeSession serves the document of an open OnlyOffice session,
-// except to a HEAD request and to the document server loading that session.
+// except to a HEAD request, to the document server loading that session, and
+// to the chunks of a file read by ranges after the first one, which must not
+// come from another revision.
 func saveOpenOfficeSession(c echo.Context, inst *instance.Instance, doc *vfs.FileDoc) *vfs.FileDoc {
-	if c.Request().Method == http.MethodHead || c.QueryParam(office.DocumentServerParam) != "" {
+	req := c.Request()
+	if req.Method == http.MethodHead || c.QueryParam(office.DocumentServerParam) != "" {
 		return doc
 	}
-	return office.SaveOpenSession(c.Request().Context(), inst, doc)
+	if r := req.Header.Get("Range"); r != "" && !strings.HasPrefix(r, "bytes=0-") {
+		return doc
+	}
+	return office.SaveOpenSession(req.Context(), inst, doc)
 }
 
 // SendFileFromDoc sends the file content to the client.
