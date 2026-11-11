@@ -1386,3 +1386,41 @@ func TestAccessResolver_ResolveDocsForInstance(t *testing.T) {
 		assert.False(t, results[0].Access.CanRead)
 	})
 }
+
+func TestAccessResolver_OneWaySharingOwnerKeepsWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	folder := createTree(t, inst.VFS(), H{"folder/": H{"note.txt": H{}}}, consts.RootDirID)
+
+	s := &Sharing{
+		Active:     true,
+		Owner:      true,
+		AccessMode: AccessModeAdditive,
+		AppSlug:    "test",
+		Members: []Member{
+			{Status: MemberStatusOwner, Name: "Alice", Email: "alice@cozy.tools", Instance: "https://" + inst.Domain},
+			{Status: MemberStatusReady, Name: "Dave", Email: "dave@example.net", Instance: "https://dave.example.net"},
+		},
+		Rules: []Rule{{
+			Title:   "one-way",
+			DocType: consts.Files,
+			Values:  []string{folder.ID()},
+			Add:     ActionRulePush,
+			Update:  ActionRulePush,
+			Remove:  ActionRulePush,
+		}},
+	}
+	require.NoError(t, couchdb.CreateDoc(inst, s))
+	require.NoError(t, s.AddReferenceForSharing(inst, &s.Rules[0]))
+	require.True(t, s.ReadOnlyRules())
+
+	ea, err := NewAccessResolver(inst).Resolve(folder.ID())
+	require.NoError(t, err)
+	assert.True(t, ea.CanRead)
+	assert.True(t, ea.CanWrite, "the owner of a one-way sharing keeps write on its own folder")
+}

@@ -32,6 +32,16 @@ type SharingScope struct {
 	AccessMode string
 }
 
+// grantsWrite tells if the member can write through the scope. A one-way
+// sharing (ReadOnlyRules) syncs no change back, so its recipients cannot write
+// whatever their ReadOnly flag, but its owner keeps the write on the folder.
+func (sc *SharingScope) grantsWrite() bool {
+	if sc.Member.ReadOnly {
+		return false
+	}
+	return sc.Member.Status == MemberStatusOwner || !sc.Sharing.ReadOnlyRules()
+}
+
 // EffectiveAccess is the merged result of all applicable additive sharing
 // scopes for a target, from the perspective of the current instance. CanRead
 // is true if the instance is a member of at least one applicable scope;
@@ -310,9 +320,7 @@ func mergeScopes(scopes []SharingScope) *EffectiveAccess {
 	for _, sc := range scopes {
 		ea.SourceSharingIDs = append(ea.SourceSharingIDs, sc.Sharing.SID)
 		ea.CanRead = true
-		// A one-way sharing (ReadOnlyRules) syncs no change back, so its
-		// member has no write access through it, whatever the ReadOnly flag.
-		if !sc.Member.ReadOnly && !sc.Sharing.ReadOnlyRules() {
+		if sc.grantsWrite() {
 			ea.CanWrite = true
 		}
 	}
@@ -562,8 +570,7 @@ func (r *AccessResolver) NearestWritableSharing(targetID string, member *Member)
 	var nearest *SharingScope
 	for i := range scopes {
 		sc := &scopes[i]
-		// A one-way sharing grants no write, like a read-only member.
-		if sc.Member.ReadOnly || sc.Sharing.ReadOnlyRules() {
+		if !sc.grantsWrite() {
 			continue
 		}
 		if nearest == nil || len(sc.RootPath) > len(nearest.RootPath) {
