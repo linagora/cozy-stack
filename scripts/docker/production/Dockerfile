@@ -30,7 +30,7 @@ RUN BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 
 
 # Multi-stage image: the main image
-FROM node:20-bookworm-slim
+FROM node:24-trixie-slim
 
 ENV COUCHDB_PROTOCOL=http \
     COUCHDB_HOST=couchdb \
@@ -63,7 +63,6 @@ RUN set -eux \
       jq \
     && postconf inet_interfaces=loopback-only \
     && postconf mydestination='$myhostname, localhost.localdomain, localhost' \
-    && sed -ie 's,^  \(<policy domain="coder" rights="none" pattern="PDF" />\)$,  <!-- \1 -->,g' /etc/ImageMagick-6/policy.xml \
     && gosu nobody true \
     && apt-get autoremove -y && apt-get clean \
     && rm -rf /tmp/* /var/tmp /var/lib/apt/lists/* /var/cache/apt \
