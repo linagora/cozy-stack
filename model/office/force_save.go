@@ -85,6 +85,15 @@ func unconfirmed(inst *instance.Instance, file *vfs.FileDoc, reason string, err 
 	metrics.OfficeForceSaveUnconfirmed.WithLabelValues(reason).Inc()
 	inst.Logger().WithNamespace("office").
 		Warnf("Serving %s without a confirmed forcesave (%s): %s", file.ID(), reason, err)
+	return reread(inst, file)
+}
+
+// reread gives the current revision of the file: it may have been written
+// while the reader was waiting, and its metadata must match its content.
+func reread(inst *instance.Instance, file *vfs.FileDoc) *vfs.FileDoc {
+	if current, err := inst.VFS().FileByID(file.ID()); err == nil {
+		return current
+	}
 	return file
 }
 
@@ -134,7 +143,7 @@ func SaveOpenSession(ctx context.Context, inst *instance.Instance, file *vfs.Fil
 			return unconfirmed(inst, file, "error", res.Err)
 		}
 		if saved, _ := res.Val.(bool); !saved {
-			return file
+			return reread(inst, file)
 		}
 	}
 
