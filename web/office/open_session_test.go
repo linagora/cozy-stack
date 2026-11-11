@@ -251,6 +251,56 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 		}
 	})
 
+	t.Run("ConflictCopy", func(t *testing.T) {
+		doc, err := vfs.NewFileDoc("conflict.docx", consts.RootDirID, -1, nil,
+			"application/msword", "text", time.Now(), false, false, false, nil)
+		require.NoError(t, err)
+		f, err := inst.VFS().CreateFile(doc, nil)
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		e.GET("/office/"+doc.ID()+"/open").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
+		key, err := office.GetStore().GetSecretByID(inst, doc.ID())
+		require.NoError(t, err)
+
+		// Another client changes the file during the session
+		old, err := inst.VFS().FileByID(doc.ID())
+		require.NoError(t, err)
+		other := old.Clone().(*vfs.FileDoc)
+		other.ByteSize = -1
+		other.MD5Sum = nil
+		f, err = inst.VFS().CreateFile(other, old)
+		require.NoError(t, err)
+		_, err = io.WriteString(f, "uploaded by another client")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+
+		saves := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(r.URL.Path[1:]))
+		}))
+		defer saves.Close()
+		for _, content := range []string{"first-save", "second-save"} {
+			e.POST("/office/callback").
+				WithHeader("Content-Type", "application/json").
+				WithBytes([]byte(fmt.Sprintf(`{"key":%q,"status":6,"url":%q}`, key, saves.URL+"/"+content))).
+				Expect().Status(200)
+		}
+
+		copied, err := inst.VFS().FileByPath("/conflict (2).docx")
+		require.NoError(t, err)
+		assert.Equal(t, "second-save", string(readFile(t, inst, copied.ID())))
+		_, err = inst.VFS().FileByPath("/conflict (3).docx")
+		assert.Error(t, err)
+		assert.Equal(t, "uploaded by another client", string(readFile(t, inst, doc.ID())))
+
+		commands := oo.commands.Load()
+		e.GET("/files/download/"+doc.ID()).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
+		assert.Equal(t, commands, oo.commands.Load())
+	})
+
 	t.Run("ReaderLeaves", func(t *testing.T) {
 		oo.commandDelay.Store(int64(500 * time.Millisecond))
 		defer oo.commandDelay.Store(0)
