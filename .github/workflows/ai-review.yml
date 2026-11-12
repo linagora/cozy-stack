@@ -1,0 +1,179 @@
+name: AI review
+
+on:
+  # Temporary trial on chore/review-prompts; remove before merging.
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: number
+
+permissions: {}
+
+concurrency:
+  # Comments and skipped trial runs must not cancel normal reviews.
+  group: ai-review-${{ github.event_name == 'issue_comment' && format('comment-{0}', github.run_id) || github.event_name == 'pull_request' && format('trial-{0}', github.event.pull_request.number) || format('pr-{0}', github.event.pull_request.number || inputs.pr_number) }}
+  cancel-in-progress: true
+
+env:
+  CONFIG__MODEL: ${{ vars.AI_REVIEW_MODEL || 'openai/deepseek-v4-pro' }}
+  CONFIG__FALLBACK_MODELS: '[]'
+  OPENAI__API_BASE: https://ai-api.linagora.com/v1
+  CONFIG__CUSTOM_MODEL_MAX_TOKENS: '64000'
+  CONFIG__MAX_MODEL_TOKENS: '32000'
+  CONFIG__MAX_OUTPUT_TOKENS: '8192'
+  CONFIG__AI_TIMEOUT: '300'
+  CONFIG__NUM_RETRIES: '1'
+  CONFIG__RETRY_SAME_MODEL_ON_TIMEOUT: 'false'
+  CONFIG__PROPAGATE_TOOL_ERRORS: 'true'
+  CONFIG__USE_REPO_SETTINGS_FILE: 'false'
+  CONFIG__USE_GLOBAL_SETTINGS_FILE: 'false'
+  CONFIG__REPO_CONTEXT_FILES: '[]'
+  CONFIG__ENABLE_AUTO_APPROVAL: 'false'
+  CONFIG__DISABLE_AUTO_FEEDBACK: 'true'
+  CONFIG__PUBLISH_OUTPUT: 'false'
+  CONFIG__LOG_LEVEL: WARNING
+  CONFIG__VERBOSITY_LEVEL: '0'
+  CONFIG__PERSISTENT_INLINE_COMMENTS: 'true'
+  SKILLS__ENABLED: 'false'
+  LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+  PR_REVIEWER__REQUIRE_TESTS_REVIEW: 'false'
+  PR_REVIEWER__REQUIRE_ESTIMATE_EFFORT_TO_REVIEW: 'false'
+  PR_REVIEWER__REQUIRE_SECURITY_REVIEW: 'false'
+  PR_REVIEWER__REQUIRE_TICKET_ANALYSIS_REVIEW: 'false'
+  PR_REVIEWER__ENABLE_REVIEW_LABELS_SECURITY: 'false'
+  PR_REVIEWER__ENABLE_REVIEW_LABELS_EFFORT: 'false'
+  PR_REVIEWER__NUM_MAX_FINDINGS: '20'
+  PR_REVIEWER__ENABLE_INTRO_TEXT: 'false'
+  PR_REVIEWER__FINAL_UPDATE_MESSAGE: 'false'
+  PR_REVIEWER__REVIEW_HEADING: AI review
+
+jobs:
+  prepare:
+    if: >-
+      (github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'chore/review-prompts') ||
+      (github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.body == '/review') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ready: ${{ steps.gate.outputs.ready }}
+      snapshot: ${{ steps.gate.outputs.snapshot }}
+      pr: ${{ steps.gate.outputs.pr }}
+      url: ${{ steps.gate.outputs.url }}
+      prompt_sha: ${{ steps.gate.outputs.prompt_sha }}
+    steps:
+      # Only the temporary same-repository trial loads review files from the PR.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        id: gate
+        with:
+          script: await require('./.github/review/workflow.cjs').gate({github, context, core})
+
+  review:
+    needs: prepare
+    if: needs.prepare.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        direction: [security, correctness, simplicity, alternatives, tests-performance]
+    env:
+      REVIEW_SNAPSHOT: ${{ needs.prepare.outputs.snapshot }}
+      REVIEW_DIRECTION: ${{ matrix.direction }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.prompt_sha }}
+          persist-credentials: false
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: await require('./.github/review/workflow.cjs').prepare({github, context, core}, process.env.REVIEW_DIRECTION)
+      # Pin the image itself: the upstream action otherwise pulls a rolling tag.
+      - name: Review one direction with PR-Agent
+        uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe
+        with:
+          entrypoint: /app/.venv/bin/python
+          args: /app/pr_agent/cli.py --pr_url=${{ needs.prepare.outputs.url }} --json-output=review-results/${{ matrix.direction }}.json review
+        env:
+          GITHUB__USER_TOKEN: ${{ github.token }}
+          OPENAI__KEY: ${{ secrets.LINAGORA_AI_GATEWAY_KEY }}
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: await require('./.github/review/workflow.cjs').finish({github, context, core}, process.env.REVIEW_DIRECTION)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: review-${{ matrix.direction }}
+          path: review-results/${{ matrix.direction }}.json
+          retention-days: 3
+          if-no-files-found: error
+
+  verify:
+    needs: [prepare, review]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: ai-review-publish-${{ needs.prepare.outputs.pr }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      REVIEW_SNAPSHOT: ${{ needs.prepare.outputs.snapshot }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.prompt_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: review-*
+          merge-multiple: true
+          path: review-results
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: await require('./.github/review/workflow.cjs').prepare({github, context, core}, 'verify')
+      - name: Verify candidates and post the review with PR-Agent
+        uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe
+        with:
+          entrypoint: /app/.venv/bin/python
+          args: /app/pr_agent/cli.py --pr_url=${{ needs.prepare.outputs.url }} --json-output=review-results/verify.json review
+        env:
+          GITHUB__USER_TOKEN: ${{ github.token }}
+          OPENAI__KEY: ${{ secrets.LINAGORA_AI_GATEWAY_KEY }}
+          CONFIG__PUBLISH_OUTPUT: 'true'
+          PR_REVIEWER__INLINE_KEY_ISSUES: 'true'
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: await require('./.github/review/workflow.cjs').finish({github, context, core}, 'verify')
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: verified-review
+          path: review-results/verify.json
+          retention-days: 3
+          if-no-files-found: error
