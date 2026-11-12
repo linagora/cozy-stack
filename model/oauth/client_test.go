@@ -432,18 +432,17 @@ func assertClientsLimitAlertMailWasSent(t *testing.T, instance *instance.Instanc
 	var jobs []job.Job
 	couchReq := &couchdb.FindRequest{
 		UseIndex: "by-worker-and-state",
+		// Select the mail by client: sorting can't find the latest job, as the
+		// index orders the jobs by their state, which changes on retries.
 		Selector: mango.And(
 			mango.Equal("worker", "sendmail"),
 			mango.Exists("state"),
+			mango.Equal("message.template_values.ClientName", clientName),
 		),
-		Sort: mango.SortBy{
-			mango.SortByField{Field: "worker", Direction: "desc"},
-		},
-		Limit: 1,
 	}
 	err := couchdb.FindDocs(instance, consts.Jobs, couchReq, &jobs)
-	assert.NoError(t, err)
-	assert.Len(t, jobs, 1)
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
 
 	var msg map[string]interface{}
 	err = json.Unmarshal(jobs[0].Message, &msg)
