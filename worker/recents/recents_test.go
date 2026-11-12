@@ -282,6 +282,25 @@ func TestWorkerSync(t *testing.T) {
 		assertUntouched(t, carol, row)
 	})
 
+	t.Run("ADestructionDeletesTheRowsThroughTheTrigger", func(t *testing.T) {
+		// The real trigger of the stack, with its real delay.
+		root := mkdir(t, owner, "/Trigger")
+		newDrive(t, owner, root.ID(), writer(bob))
+		file := newFile(t, owner, root, "a.txt", "a")
+		for _, inst := range both {
+			putRow(t, inst, file.ID())
+		}
+
+		require.NoError(t, owner.VFS().DestroyFile(file))
+		gone := func(inst *instance.Instance) bool {
+			err := couchdb.GetDoc(inst, consts.FilesRecents, file.ID(), &recents.FileDirActivity{})
+			return couchdb.IsNotFoundError(err)
+		}
+		assert.Eventually(t, func() bool {
+			return gone(owner) && gone(bob)
+		}, 60*time.Second, 200*time.Millisecond)
+	})
+
 	t.Run("FixedIDsAreSkipped", func(t *testing.T) {
 		row := putRow(t, owner, consts.RootDirID)
 		runSync(t, owner, consts.RootDirID)
