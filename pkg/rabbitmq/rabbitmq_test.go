@@ -1433,125 +1433,60 @@ func TestDLXDLQDeclaration(t *testing.T) {
 		t.Skip("integration test skipped with --short")
 	}
 
-	t.Run("DeclareDLXAndDLQ_WhenConfigured", func(t *testing.T) {
-		t.Parallel()
+	MQ := testutils.StartRabbitMQ(t, false, false)
+	cases := []struct {
+		name       string
+		declareDLX bool
+		declareDLQ bool
+	}{
+		{name: "DeclareDLXAndDLQ_WhenConfigured", declareDLX: true, declareDLQ: true},
+		{name: "DoNotDeclareDLXAndDLQ_WhenNotConfigured"},
+		{name: "DeclareOnlyDLX_WhenOnlyDLXConfigured", declareDLX: true},
+		{name: "DeclareOnlyDLQ_WhenOnlyDLQConfigured", declareDLQ: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		MQ := testutils.StartRabbitMQ(t, true, false)
-		defer MQ.Stop(context.Background(), 30*time.Second)
+			dlxName := t.Name() + "-dlx"
+			dlqName := t.Name() + "-dlq"
+			exchangeCfg := &config.RabbitExchange{
+				Name:            t.Name() + "-exchange",
+				Kind:            "topic",
+				DeclareExchange: true,
+				Durable:         true,
+			}
+			queueCfg := &config.RabbitQueue{
+				Name:       t.Name() + "-queue",
+				Bindings:   []string{"test.routing.key"},
+				Declare:    true,
+				DeclareDLX: tc.declareDLX,
+				DeclareDLQ: tc.declareDLQ,
+			}
+			if tc.declareDLX {
+				exchangeCfg.DLXName = dlxName
+				queueCfg.DLXName = dlxName
+			}
+			if tc.declareDLQ {
+				exchangeCfg.DLQName = dlqName
+				queueCfg.DLQName = dlqName
+			}
 
-		// Create configuration with DLX/DLQ enabled
-		exchangeCfg := &config.RabbitExchange{
-			Name:            "test-exchange",
-			Kind:            "topic",
-			DeclareExchange: true,
-			Durable:         true,
-			DLXName:         "test-dlx",
-			DLQName:         "test-dlq",
-		}
-		queueCfg := &config.RabbitQueue{
-			Name:       "test-queue",
-			Bindings:   []string{"test.routing.key"},
-			Declare:    true,
-			DeclareDLX: true,
-			DeclareDLQ: true,
-			DLXName:    "test-dlx",
-			DLQName:    "test-dlq",
-		}
+			mgr := createAndStartManager(t, MQ, exchangeCfg, queueCfg, exchangeCfg.DLXName, exchangeCfg.DLQName)
+			defer mgr.Shutdown(testCtx(t))
 
-		mgr := createAndStartManager(t, MQ, exchangeCfg, queueCfg, "test-dlx", "test-dlq")
-		defer mgr.Shutdown(testCtx(t))
-
-		verifyDLXExists(t, MQ, "test-dlx")
-		verifyDLQExists(t, MQ, "test-dlq")
-	})
-
-	t.Run("DoNotDeclareDLXAndDLQ_WhenNotConfigured", func(t *testing.T) {
-		t.Parallel()
-
-		MQ := testutils.StartRabbitMQ(t, true, false)
-		defer MQ.Stop(context.Background(), 30*time.Second)
-
-		// Create configuration without DLX/DLQ enabled
-		exchangeCfg := &config.RabbitExchange{
-			Name:            "test-exchange",
-			Kind:            "topic",
-			DeclareExchange: true,
-			Durable:         true,
-		}
-		queueCfg := &config.RabbitQueue{
-			Name:       "test-queue",
-			Bindings:   []string{"test.routing.key"},
-			Declare:    true,
-			DeclareDLX: false,
-			DeclareDLQ: false,
-		}
-
-		mgr := createAndStartManager(t, MQ, exchangeCfg, queueCfg, "", "")
-		defer mgr.Shutdown(testCtx(t))
-
-		verifyDLXNotExists(t, MQ, "test-dlx")
-		verifyDLQNotExists(t, MQ, "test-dlq")
-	})
-
-	t.Run("DeclareOnlyDLX_WhenOnlyDLXConfigured", func(t *testing.T) {
-		t.Parallel()
-
-		MQ := testutils.StartRabbitMQ(t, true, false)
-		defer MQ.Stop(context.Background(), 30*time.Second)
-
-		// Create configuration with only DLX enabled
-		exchangeCfg := &config.RabbitExchange{
-			Name:            "test-exchange",
-			Kind:            "topic",
-			DeclareExchange: true,
-			Durable:         true,
-			DLXName:         "test-dlx-only",
-		}
-		queueCfg := &config.RabbitQueue{
-			Name:       "test-queue",
-			Bindings:   []string{"test.routing.key"},
-			Declare:    true,
-			DeclareDLX: true,
-			DeclareDLQ: false,
-			DLXName:    "test-dlx-only",
-		}
-
-		mgr := createAndStartManager(t, MQ, exchangeCfg, queueCfg, "test-dlx-only", "")
-		defer mgr.Shutdown(testCtx(t))
-
-		verifyDLXExists(t, MQ, "test-dlx-only")
-		verifyDLQNotExists(t, MQ, "test-dlq-only")
-	})
-
-	t.Run("DeclareOnlyDLQ_WhenOnlyDLQConfigured", func(t *testing.T) {
-		t.Parallel()
-
-		MQ := testutils.StartRabbitMQ(t, true, false)
-		defer MQ.Stop(context.Background(), 30*time.Second)
-
-		// Create configuration with only DLQ enabled
-		exchangeCfg := &config.RabbitExchange{
-			Name:            "test-exchange",
-			Kind:            "topic",
-			DeclareExchange: true,
-			Durable:         true,
-			DLQName:         "test-dlq-only",
-		}
-		queueCfg := &config.RabbitQueue{
-			Name:       "test-queue",
-			Bindings:   []string{"test.routing.key"},
-			Declare:    true,
-			DeclareDLX: false,
-			DeclareDLQ: true,
-			DLQName:    "test-dlq-only",
-		}
-
-		mgr := createAndStartManager(t, MQ, exchangeCfg, queueCfg, "", "test-dlq-only")
-		defer mgr.Shutdown(testCtx(t))
-
-		verifyDLXNotExists(t, MQ, "test-dlx-only")
-		verifyDLQExists(t, MQ, "test-dlq-only")
-	})
+			if tc.declareDLX {
+				verifyDLXExists(t, MQ, dlxName)
+			} else {
+				verifyDLXNotExists(t, MQ, dlxName)
+			}
+			if tc.declareDLQ {
+				verifyDLQExists(t, MQ, dlqName)
+			} else {
+				verifyDLQNotExists(t, MQ, dlqName)
+			}
+		})
+	}
 }
 
 // createAndStartManager creates a RabbitMQ manager with the given configuration and starts it
@@ -1572,9 +1507,6 @@ func createAndStartManager(t *testing.T, mq *testutils.RabbitFixture, exchangeCf
 	_, err = mgr.Start(testCtx(t))
 	require.NoError(t, err)
 	require.NoError(t, mgr.WaitReady(testCtx(t)))
-
-	// Give some time for DLX/DLQ to be declared
-	time.Sleep(100 * time.Millisecond)
 
 	return mgr
 }
