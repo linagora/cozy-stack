@@ -398,6 +398,16 @@ change would kill the performance for realtime collaboration, so the stack
 writes the note to a cache, and has a trigger with debounce to persist the note
 to the VFS later.
 
+## recents-sync
+
+This worker is for the internal usage of the stack. When files and folders
+change on an instance, it updates the rows of `io.cozy.files.recents` that
+already exist for them, on this instance and on the instances of the members of
+its shared drives, and it deletes these rows when the items are destroyed. Its
+jobs are pushed by a trigger built in the stack, which gathers the changes of
+an instance for 10 seconds. It must be enabled on at least one process of the
+stack, as nothing else consumes these jobs.
+
 ## clean-clients
 
 This internal worker will delete unused OAuth clients. When an OAuth client is
