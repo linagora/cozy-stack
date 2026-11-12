@@ -115,6 +115,11 @@ func reportSMTP(t *testing.T) (*gomail.DialerOptions, <-chan capturedReportMail)
 
 func reportMailText(t *testing.T, raw string) (netmail.Header, string) {
 	t.Helper()
+	return reportMailPart(t, raw, "text/plain")
+}
+
+func reportMailPart(t *testing.T, raw, contentType string) (netmail.Header, string) {
+	t.Helper()
 	msg, err := netmail.ReadMessage(strings.NewReader(raw))
 	require.NoError(t, err)
 	media, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
@@ -124,7 +129,7 @@ func reportMailText(t *testing.T, raw string) (netmail.Header, string) {
 		for {
 			p, err := parts.NextPart()
 			require.NoError(t, err)
-			if strings.HasPrefix(p.Header.Get("Content-Type"), "text/plain") {
+			if strings.HasPrefix(p.Header.Get("Content-Type"), contentType) {
 				b, err := io.ReadAll(p)
 				require.NoError(t, err)
 				return msg.Header, string(b)
@@ -309,7 +314,9 @@ func TestExpiredLinkReport(t *testing.T) {
 		require.Contains(t, got.recipient, "host-owner@example.net")
 		require.NotContains(t, got.recipient, "recipient-other-instance")
 		require.NotEmpty(t, header.Get("Message-ID"))
-		require.Contains(t, got.raw, "text/html")
+		_, html := reportMailPart(t, got.raw, "text/html")
+		require.Contains(t, html, `alt="Twake Workplace"`)
+		require.Contains(t, html, "https://blog.cozy.io/")
 		server := setup.GetTestServer("/files", files.Routes)
 		_, ownerToken := setup.GetTestClient("io.cozy.files:GET")
 		_, narrowToken := setup.GetTestClient("io.cozy.files:GET:unrelated-file")

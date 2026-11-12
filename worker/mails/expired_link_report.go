@@ -164,7 +164,7 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 		Mode: mail.ModeFromStack, RequireDelivery: true,
 		MessageID:      "<link-report-" + state.ID() + "@" + strings.Split(inst.Domain, ":")[0] + ">",
 		TemplateName:   "expired_link_report",
-		Layout:         "layout-expired-link-report",
+		Layout:         mail.DefaultLayout,
 		TemplateValues: map[string]interface{}{"Expiry": state.Expiry.UTC().Format("2006-01-02 15:04 UTC"), "ReportURL": u.String(), "Events": last},
 	}
 	// The existing sender resolves settings on the hosting instance, not creator

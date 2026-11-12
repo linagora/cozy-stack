@@ -14,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/i18n"
+	"github.com/cozy/cozy-stack/pkg/mail"
 	_ "github.com/cozy/cozy-stack/web/statik"
 	"github.com/leonelquinteros/gotext"
 	"github.com/stretchr/testify/require"
@@ -57,9 +58,12 @@ func TestExpiredLinkReportRendering(t *testing.T) {
 			defer cancel()
 			url := "https://drive.example.test/#/folder/private/file/" + strings.Repeat("long", 35)
 			rows := [][]string{{"2026-10-29 14:10 UTC", "192.0.2.1", "<script>alert(1)</script>", "downloaded"}, {"2026-10-29 11:25 UTC", "192.0.2.2", strings.Repeat("long", 30), "opened"}, {"2026-10-28 18:02 UTC", "192.0.2.3", "Alice", "updated"}}
-			data := map[string]interface{}{"Expiry": "2026-10-31 23:59 UTC", "ReportURL": url, "Events": rows}
-			html, err := buildHTML("expired_link_report", "layout-expired-link-report", ctx, "", locale, data)
+			data := map[string]interface{}{"Expiry": "2026-10-31 23:59 UTC", "ReportURL": url, "Events": rows, "Locale": locale, "InstanceURL": "https://example.test/"}
+			html, err := buildHTML("expired_link_report", mail.DefaultLayout, ctx, "", locale, data)
 			require.NoError(t, err)
+			require.Contains(t, html, `alt="Twake Workplace"`)
+			require.Contains(t, html, `href="https://example.test/"`)
+			require.Contains(t, html, `https://blog.cozy.io/`+locale+`/`)
 			require.Contains(t, html, "&lt;script&gt;alert(1)&lt;/script&gt;")
 			require.NotContains(t, html, "<script>alert(1)</script>")
 			require.Equal(t, 3, strings.Count(html, `href="`+url+`"`))
@@ -75,17 +79,17 @@ func TestExpiredLinkReportRendering(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, locale+"-edge.html"), []byte(html), 0600))
 				data["ReportURL"] = "https://drive.example.test/#/folder/private/file/report"
 				data["Events"] = [][]string{{"2026-10-29 14:10 UTC", "192.168.1.45", "Anonymous", "downloaded"}, {"2026-10-29 11:25 UTC", "82.165.197.1", "Anonymous", "opened"}, {"2026-10-28 18:02 UTC", "104.28.15.88", "mira@example.test", "updated"}}
-				preview, err := buildHTML("expired_link_report", "layout-expired-link-report", ctx, "", locale, data)
+				preview, err := buildHTML("expired_link_report", mail.DefaultLayout, ctx, "", locale, data)
 				require.NoError(t, err)
 				require.NoError(t, os.WriteFile(filepath.Join(dir, locale+".html"), []byte(preview), 0600))
 			}
 			data["Events"] = rows[:1]
-			one, err := buildHTML("expired_link_report", "layout-expired-link-report", ctx, "", locale, data)
+			one, err := buildHTML("expired_link_report", mail.DefaultLayout, ctx, "", locale, data)
 			require.NoError(t, err)
 			require.Contains(t, one, "192.0.2.1")
 			require.NotContains(t, one, "192.0.2.2")
 			data["Events"] = [][]string{}
-			empty, err := buildHTML("expired_link_report", "layout-expired-link-report", ctx, "", locale, data)
+			empty, err := buildHTML("expired_link_report", mail.DefaultLayout, ctx, "", locale, data)
 			require.NoError(t, err)
 			require.Contains(t, empty, labels[locale].noActivity)
 		})
