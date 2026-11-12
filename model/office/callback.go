@@ -111,9 +111,10 @@ func finalSaveFile(inst *instance.Instance, key, downloadURL string) error {
 		return ErrInvalidKey
 	}
 
-	_, err = saveFile(inst, *detector, downloadURL)
+	saved, err := saveFile(inst, *detector, downloadURL)
 	if err == nil {
 		_ = GetStore().RemoveDoc(inst, key)
+		recordSaveActivity(inst, saved)
 	}
 	return err
 }
@@ -127,6 +128,7 @@ func forceSaveFile(inst *instance.Instance, key, downloadURL string) error {
 	updated, err := saveFile(inst, *detector, downloadURL)
 	if err == nil {
 		_ = GetStore().UpdateDoc(inst, key, *updated)
+		recordSaveActivity(inst, updated)
 	}
 	return err
 }
@@ -200,6 +202,8 @@ func saveFile(inst *instance.Instance, detector ConflictDetector, downloadURL st
 	if cerr := f.Close(); cerr != nil && err == nil {
 		err = cerr
 	}
-	updated := ConflictDetector{ID: newfile.ID(), Rev: newfile.Rev(), MD5Sum: newfile.MD5Sum}
+	// The participants are kept: a person who opened the session is credited
+	// with the save, including the revision written while they were opening.
+	updated := ConflictDetector{ID: newfile.ID(), Rev: newfile.Rev(), MD5Sum: newfile.MD5Sum, Participants: detector.Participants}
 	return &updated, err
 }

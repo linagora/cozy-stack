@@ -9,23 +9,48 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/recents"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/redis/go-redis/v9"
 )
 
+// Participant is a person who opened an OnlyOffice editing session: the
+// document server save callbacks credit them all. Drive is the shared drive
+// the document belongs to for this participant, or nil when the participant
+// owns it, so a save is recorded with the right metadata.
+type Participant struct {
+	Domain string
+	Drive  *recents.Drive
+}
+
 type ConflictDetector struct {
 	ID     string
 	Rev    string
 	MD5Sum []byte
+	// Participants are the people who opened the editing session, each once.
+	Participants []Participant
 }
 
 // Clone returns a deep copy of the session, which shares no memory with it.
 func (d *ConflictDetector) Clone() ConflictDetector {
 	cloned := *d
 	cloned.MD5Sum = slices.Clone(d.MD5Sum)
+	// A Drive is never mutated once set, so its pointer can be shared.
+	cloned.Participants = slices.Clone(d.Participants)
 	return cloned
+}
+
+// addParticipant returns the participants with the person of a domain added,
+// once: a second opening by the same person keeps the drive of the first.
+func addParticipant(participants []Participant, domain string, drive *recents.Drive) []Participant {
+	for _, p := range participants {
+		if p.Domain == domain {
+			return participants
+		}
+	}
+	return append(participants, Participant{Domain: domain, Drive: drive})
 }
 
 // Store is an object to store and retrieve document server keys <-> id,rev
@@ -35,6 +60,9 @@ type Store interface {
 	AddDoc(db prefixer.Prefixer, payload ConflictDetector) (string, error)
 	GetDoc(db prefixer.Prefixer, secret string) (*ConflictDetector, error)
 	UpdateDoc(db prefixer.Prefixer, secret string, payload ConflictDetector) error
+	// AddParticipant remembers a person who opened the editing session, once,
+	// without losing the revision written by a concurrent save.
+	AddParticipant(db prefixer.Prefixer, secret, domain string, drive *recents.Drive) error
 	RemoveDoc(db prefixer.Prefixer, secret string) error
 }
 
@@ -158,6 +186,18 @@ func (s *memStore) UpdateDoc(db prefixer.Prefixer, secret string, payload Confli
 	return nil
 }
 
+func (s *memStore) AddParticipant(db prefixer.Prefixer, secret, domain string, drive *recents.Drive) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := docKey(db, secret)
+	ref, ok := s.vals[key]
+	if !ok || time.Now().After(ref.exp) {
+		return nil
+	}
+	ref.val.Participants = addParticipant(ref.val.Participants, domain, drive)
+	return nil
+}
+
 func (s *memStore) RemoveDoc(db prefixer.Prefixer, secret string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -242,6 +282,20 @@ func (s *redisStore) UpdateDoc(db prefixer.Prefixer, secret string, payload Conf
 		return err
 	}
 	return nil
+}
+
+func (s *redisStore) AddParticipant(db prefixer.Prefixer, secret, domain string, drive *recents.Drive) error {
+	detector, err := s.GetDoc(db, secret)
+	if err != nil || detector == nil {
+		return err
+	}
+	detector.Participants = addParticipant(detector.Participants, domain, drive)
+	v, err := json.Marshal(detector)
+	if err != nil {
+		return err
+	}
+	key := docKey(db, secret)
+	return s.c.Set(s.ctx, key, v, storeTTL).Err()
 }
 
 func (s *redisStore) RemoveDoc(db prefixer.Prefixer, secret string) error {
