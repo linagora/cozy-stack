@@ -25,6 +25,31 @@ Keep Go tests near their packages and reuse `tests/testutils`. Keep useful Ruby
 coverage; replace brittle waits and shared state incrementally. Retire legacy
 scalability scripts only when their coverage has an identified replacement.
 
+## Go test shards
+
+The Go workflow runs four isolated jobs for each supported Go/CouchDB pair.
+Each job has its own CouchDB and Redis, and keeps `-p 1`: some tests change
+global databases, so packages cannot safely share those services concurrently.
+
+| Shard | Packages |
+| --- | --- |
+| 1 | `web/sharings`, `worker`, `tests`, and their subpackages |
+| 2 | All remaining packages, including the module root, `client`, `cmd` and `pkg` |
+| 3 | `model/instance/storagemigration` and the remaining `web` packages |
+| 4 | Remaining `model` packages |
+
+Run a shard from the repository root with the usual test dependencies available:
+
+```sh
+scripts/go-test-shard.sh 3 -count=1
+scripts/go-test-shard-test.sh
+```
+
+The selection comes from `go list ./...`; new packages enter the corresponding
+group automatically. CI uploads `go test -json` output for every shard, including
+failed runs, to retain per-test timings. `make unit-tests` remains the local
+short-test command.
+
 ## Drive web E2E on demand
 
 Add `e2e:web` to a same-repository PR to build its merge commit and call Drive's
