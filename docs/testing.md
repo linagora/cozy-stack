@@ -207,3 +207,12 @@ Later organization and shared-drive work continues under
 [#4866](https://github.com/linagora/cozy-stack/issues/4866)
 and [#4867](https://github.com/linagora/cozy-stack/issues/4867), within the
 [load-testing roadmap](https://github.com/linagora/cozy-stack/issues/4864).
+
+## Storage migration tests
+
+The MinIO migration cases share one server under `TestS3Migration`, with separate
+test data. Select an individual nested case using its full path:
+
+```sh
+go test ./model/instance/storagemigration -count=1 -run '^TestS3Migration$/^TestMigrateFlipsSchemeAfterVerify$'
+```
