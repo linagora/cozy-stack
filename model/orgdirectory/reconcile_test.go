@@ -22,6 +22,7 @@ func TestReconcileOrganizationContacts(t *testing.T) {
 func testReconcileOrganizationContacts(t *testing.T, centralized bool) {
 	config.UseTestFile(t)
 	needCouchDB(t)
+	startDirectoryTestJobs(t)
 
 	const onCtx = "reconcile-on"
 	conf := config.GetConfig()

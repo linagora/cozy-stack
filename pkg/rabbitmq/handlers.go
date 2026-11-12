@@ -320,7 +320,7 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 		return err
 	}
 
-	return nil
+	return orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, msg.Domain)
 }
 
 // B2BGroupLifecycleHandler handles B2B group lifecycle and membership events.
@@ -344,35 +344,50 @@ func (h *B2BGroupLifecycleHandler) Handle(ctx context.Context, d amqp.Delivery) 
 			return fmt.Errorf("b2b.group.created: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, len(msg.Members))
-		return orgdirectory.SyncGroupCreated(ctx, msg)
+		if err := orgdirectory.SyncGroupCreated(ctx, msg); err != nil {
+			return err
+		}
+		return orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, "")
 	case RoutingKeyB2BGroupUpdated:
 		var msg orgdirectory.GroupUpdatedMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.updated: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, 0)
-		return orgdirectory.SyncGroupUpdated(ctx, msg)
+		if err := orgdirectory.SyncGroupUpdated(ctx, msg); err != nil {
+			return err
+		}
+		return orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, "")
 	case RoutingKeyB2BGroupDeleted:
 		var msg orgdirectory.GroupDeletedMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.deleted: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, 0)
-		return orgdirectory.SyncGroupDeleted(ctx, msg)
+		if err := orgdirectory.SyncGroupDeleted(ctx, msg); err != nil {
+			return err
+		}
+		return orgdirectory.QueueGroupDeletion(ctx, msg.OrganizationID, orgdirectory.GroupDocID(msg.OrganizationID, msg.ID))
 	case RoutingKeyB2BGroupMemberAdded:
 		var msg orgdirectory.GroupMembersMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.member.added: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, len(msg.Members))
-		return orgdirectory.SyncGroupMembersAdded(ctx, msg)
+		if err := orgdirectory.SyncGroupMembersAdded(ctx, msg); err != nil {
+			return err
+		}
+		return orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, "")
 	case RoutingKeyB2BGroupMemberRemoved:
 		var msg orgdirectory.GroupMembersMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.member.removed: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, len(msg.Members))
-		return orgdirectory.SyncGroupMembersRemoved(ctx, msg)
+		if err := orgdirectory.SyncGroupMembersRemoved(ctx, msg); err != nil {
+			return err
+		}
+		return orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, "")
 	default:
 		return fmt.Errorf("b2b.group: unsupported routing key %s", d.RoutingKey)
 	}

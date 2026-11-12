@@ -416,9 +416,28 @@ the feed already wrote keeps its fields and only gets the group. Sharing looks
 up managed B2B groups on the organization instance even while replication is
 retained. Local fallback is allowed only while replication is retained.
 
-Keep `centralized_org_directory: false` for the initial backend rollout. The
-current sharing UI still queries local contacts/groups, and group changes on the
-organization instance do not yet propagate to sharings on member instances.
+With centralization enabled, successful group events, including redeliveries,
+schedule a `share-org-groups` run on the organization instance after the
+context setting `org_groups_propagation_delay`, 30 seconds by default. Changes
+made before it starts share that run, since it reads the current directory
+instead of replaying events. A member removed from a group can therefore keep
+access for that long. The run queues a job on each member
+instance, which scans active sharings by document ID in pages, then reconciles
+each affected sharing independently. Group deletion does not wait: it
+immediately queues jobs naming the deleted group, as only those may revoke it.
+Membership changes, group deletion and name/color changes therefore reach
+member-owned sharings without local contact copies or `common_contacts`.
+Direct grants and grants through another group are preserved. Owners notify
+recipients only when a sharing changed, or when a job is retried.
+Replication-retained mode continues to use local `share-group` triggers.
+
+Organization contact deletions from B2B, the common-contacts feed and contact
+reconciliation schedule the same run, even if the contact is already gone.
+Removing obsolete member-directory copies does not revoke sharing access.
+Propagation is asynchronous; failed jobs use the existing job retry/error handling.
+
+Keep `centralized_org_directory: false` until deployed clients support organization
+lookup. Both rollout flags must remain consistent across the organization.
 
 Example payload for `user.phone.updated`:
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -134,7 +135,6 @@ func (s *Sharing) RevokeGroup(inst *instance.Instance, index int) error {
 		return nil
 	}
 
-	var errm error
 	for i, m := range s.Members {
 		inGroup := false
 		for _, idx := range m.Groups {
@@ -147,33 +147,36 @@ func (s *Sharing) RevokeGroup(inst *instance.Instance, index int) error {
 		}
 		removeGroupFromMember(&s.Members[i], index)
 		if m.OnlyInGroups && len(s.Members[i].Groups) == 0 {
+			s.Members[i].Groups = m.Groups
 			if err := s.revokeRecipientAfterRemovingGroup(inst, i, index); err != nil {
-				errm = multierror.Append(errm, err)
+				return err
 			}
 		}
 	}
 
 	s.Groups[index].Revoked = true
 	if s.Drive {
-		if errm != nil {
-			if err := couchdb.UpdateDoc(inst, s); err != nil {
-				errm = multierror.Append(errm, err)
-			}
-			return errm
-		}
 		return s.NoMoreRecipient(inst)
 	}
-
-	if err := couchdb.UpdateDoc(inst, s); err != nil {
-		errm = multierror.Append(errm, err)
-	}
-	return errm
+	return couchdb.UpdateDoc(inst, s)
 }
 
 // UpdateGroups is called when a contact is added or removed to a group. It
 // finds the sharings for this group, and adds or removes the member to those
 // sharings.
 func UpdateGroups(inst *instance.Instance, msg job.ShareGroupMessage) error {
+	// Centralized managed groups are reconciled by explicit, retryable jobs.
+	if inst.HasCentralizedOrgDirectory() {
+		if msg.RenamedGroup != nil && orgdirectory.IsManagedDirectoryGroupID(msg.RenamedGroup.ID()) ||
+			orgdirectory.IsManagedDirectoryGroupID(msg.DeletedGroupID) {
+			return nil
+		}
+		msg.GroupsAdded = slices.DeleteFunc(slices.Clone(msg.GroupsAdded), orgdirectory.IsManagedDirectoryGroupID)
+		msg.GroupsRemoved = slices.DeleteFunc(slices.Clone(msg.GroupsRemoved), orgdirectory.IsManagedDirectoryGroupID)
+		if len(msg.GroupsAdded) == 0 && len(msg.GroupsRemoved) == 0 && !msg.BecomeInvitable {
+			return nil
+		}
+	}
 	if msg.RenamedGroup != nil {
 		return updateGroupMetadata(inst, msg.RenamedGroup)
 	}
@@ -307,21 +310,22 @@ func updateGroupMetadata(inst *instance.Instance, doc *couchdb.JSONDoc) error {
 
 // AddMemberToGroup adds a contact to a sharing via a group (on the owner).
 func (s *Sharing) AddMemberToGroup(inst *instance.Instance, groupIndex int, contact *contact.Contact) error {
-	if s.contactIsMemberOfGroup(groupIndex, contact) {
+	if i := s.groupMemberIndex(groupIndex, contact); i < 0 {
+		readOnly := s.Groups[groupIndex].ReadOnly
+		m := buildMemberFromContact(contact, readOnly)
+		m.OnlyInGroups = true
+		_, idx, err := s.addMember(inst, m)
+		if err != nil {
+			return err
+		}
+		addGroupToMember(&s.Members[idx], groupIndex)
+		if err := couchdb.UpdateDoc(inst, s); err != nil {
+			return err
+		}
+	} else if s.Members[i].Status != MemberStatusMailNotSent {
 		return nil
 	}
-	readOnly := s.Groups[groupIndex].ReadOnly
-	m := buildMemberFromContact(contact, readOnly)
-	m.OnlyInGroups = true
-	_, idx, err := s.addMember(inst, m)
-	if err != nil {
-		return err
-	}
-	addGroupToMember(&s.Members[idx], groupIndex)
-
-	// We can ignore the error as we will try again to save the sharing
-	// after sending the invitation.
-	_ = couchdb.UpdateDoc(inst, s)
+	var err error
 	var perms *permission.Permission
 	if s.PreviewPath != "" {
 		if perms, err = s.CreatePreviewPermissions(inst); err != nil {
@@ -338,7 +342,7 @@ func (s *Sharing) AddMemberToGroup(inst *instance.Instance, groupIndex int, cont
 
 // DelegateAddMemberToGroup adds a contact to a sharing via a group (on a recipient).
 func (s *Sharing) DelegateAddMemberToGroup(inst *instance.Instance, groupIndex int, contact *contact.Contact) error {
-	if s.contactIsMemberOfGroup(groupIndex, contact) {
+	if s.groupMemberIndex(groupIndex, contact) >= 0 {
 		return nil
 	}
 	readOnly := s.Groups[groupIndex].ReadOnly
@@ -373,31 +377,48 @@ func removeGroupFromMember(member *Member, groupIndex int) {
 	member.Groups = groups
 }
 
-func (s *Sharing) contactIsMemberOfGroup(groupIndex int, c *contact.Contact) bool {
-	var email string
-	if addr, err := c.ToMailAddress(); err == nil {
-		email = addr.Email
-	}
-	cozyURL := c.PrimaryCozyURL()
+// groupMemberIndex returns the index of the group member matching the contact, or -1.
+func (s *Sharing) groupMemberIndex(groupIndex int, c *contact.Contact) int {
+	m := buildMemberFromContact(c, false)
+	return s.groupPeople(groupIndex).find(m.Email, m.Instance)
+}
 
-	for i, member := range s.Members {
-		if i == 0 {
-			continue
-		}
-		matches := email != "" && member.Email == email
-		if email == "" && cozyURL != "" {
-			matches = member.Instance == cozyURL
-		}
-		if !matches {
-			continue
-		}
-		for _, index := range member.Groups {
-			if index == groupIndex {
-				return true
-			}
+// groupPeople indexes the recipients in a group.
+func (s *Sharing) groupPeople(groupIndex int) people {
+	p := newPeople()
+	for i, m := range s.Members {
+		if i > 0 && slices.Contains(m.Groups, groupIndex) {
+			p.add(m.Email, m.Instance, i)
 		}
 	}
-	return false
+	return p
+}
+
+// people finds a person by case-insensitive email, or else by Cozy URL.
+type people struct{ emails, instances map[string]int }
+
+func newPeople() people {
+	return people{emails: map[string]int{}, instances: map[string]int{}}
+}
+
+func (p people) add(email, cozyURL string, index int) {
+	if email != "" {
+		p.emails[strings.ToLower(email)] = index
+	}
+	if cozyURL != "" {
+		p.instances[cozyURL] = index
+	}
+}
+
+// find returns the index given to add for this person, or -1.
+func (p people) find(email, cozyURL string) int {
+	if i, ok := p.emails[strings.ToLower(email)]; ok {
+		return i
+	}
+	if i, ok := p.instances[cozyURL]; ok {
+		return i
+	}
+	return -1
 }
 
 // RemoveMemberFromGroup removes a member of a group.
@@ -426,6 +447,7 @@ func (s *Sharing) RemoveMemberFromGroup(inst *instance.Instance, groupIndex int,
 		removeGroupFromMember(&s.Members[i], groupIndex)
 
 		if m.OnlyInGroups && len(s.Members[i].Groups) == 0 {
+			s.Members[i].Groups = m.Groups
 			return s.revokeRecipientAfterRemovingGroup(inst, i, groupIndex)
 		} else {
 			return couchdb.UpdateDoc(inst, s)
@@ -496,9 +518,11 @@ func (s *Sharing) sendDelegationRequest(inst *instance.Instance, verb, path stri
 }
 
 func (s *Sharing) DelegatedRemoveMemberFromGroup(inst *instance.Instance, groupIndex, memberIndex int) error {
+	groups := s.Members[memberIndex].Groups
 	removeGroupFromMember(&s.Members[memberIndex], groupIndex)
 
 	if s.Members[memberIndex].OnlyInGroups && len(s.Members[memberIndex].Groups) == 0 {
+		s.Members[memberIndex].Groups = groups
 		return s.revokeRecipientAfterRemovingGroup(inst, memberIndex, groupIndex)
 	} else {
 		return couchdb.UpdateDoc(inst, s)
