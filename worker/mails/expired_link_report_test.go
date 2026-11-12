@@ -46,6 +46,23 @@ import (
 
 type capturedReportMail struct{ recipient, raw string }
 
+type reportTransport struct {
+	base   http.RoundTripper
+	before func(*http.Request)
+	after  func(*http.Request)
+}
+
+func (tr *reportTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if tr.before != nil {
+		tr.before(req)
+	}
+	resp, err := tr.base.RoundTrip(req)
+	if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && tr.after != nil {
+		tr.after(req)
+	}
+	return resp, err
+}
+
 // A real local SMTP boundary: assertions below inspect MIME delivered over TCP,
 // not an intercepted sendMail call or configured mock result.
 func reportSMTP(t *testing.T) (*gomail.DialerOptions, <-chan capturedReportMail) {
@@ -595,8 +612,492 @@ func TestExpiredLinkReport(t *testing.T) {
 		require.Equal(t, 8, getReport(t, other, p, expiry).Attempts)
 	})
 
+	t.Run("antivirus after publication does not cancel", func(t *testing.T) {
+		for _, status := range []string{vfs.AVStatusPending, vfs.AVStatusError, vfs.AVStatusClean} {
+			t.Run(status, func(t *testing.T) {
+				p := newReportLink(t, inst, expiry)
+				require.NoError(t, couchdb.CreateDoc(inst, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Second), Identity: "publication-visitor"}))
+				id := publiclink.ReportID(p.ID(), expiry)
+				client := config.CouchClient()
+				original := client.Transport
+				base := original
+				if base == nil {
+					base = http.DefaultTransport
+				}
+				changed := false
+				client.Transport = &reportTransport{base: base, after: func(req *http.Request) {
+					if changed || req.Method != http.MethodPut || !strings.Contains(req.URL.Path, id) || !strings.Contains(req.URL.Path, "public_links-reports") {
+						return
+					}
+					body, err := req.GetBody()
+					require.NoError(t, err)
+					var checkpoint publiclink.Report
+					require.NoError(t, json.NewDecoder(body).Decode(&checkpoint))
+					body.Close()
+					if checkpoint.Status != "file-ready" {
+						return
+					}
+					changed = true
+					file, err := inst.VFS().FileByID("link-report-" + id)
+					require.NoError(t, err)
+					file.AntivirusScan = &vfs.AntivirusScan{Status: status}
+					require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+				}}
+				t.Cleanup(func() { client.Transport = original })
+				require.NoError(t, runReport(t, inst, p, expiry))
+				client.Transport = original
+				require.True(t, changed)
+				state := getReport(t, inst, p, expiry)
+				require.Equal(t, "sent", state.Status)
+				rows, _ := readReport(t, inst, state)
+				require.Equal(t, "publication-visitor", rows[1][2])
+				got := <-messages
+				_, body := reportMailText(t, got.raw)
+				require.Contains(t, body, "publication-visitor")
+				require.NoError(t, runReport(t, inst, p, expiry))
+				select {
+				case <-messages:
+					t.Fatal("duplicate report mail")
+				default:
+				}
+			})
+		}
+	})
+
+	t.Run("changes after preview are revalidated", func(t *testing.T) {
+		for _, change := range []string{"pending", "error", "clean", "infected", "edited", "head-race", "tail-race"} {
+			t.Run(change, func(t *testing.T) {
+				p := newReportLink(t, inst, expiry)
+				id := publiclink.ReportID(p.ID(), expiry)
+				require.NoError(t, couchdb.CreateDoc(inst, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Second), Identity: "preview-visitor"}))
+				client := config.CouchClient()
+				original := client.Transport
+				base := original
+				if base == nil {
+					base = http.DefaultTransport
+				}
+				updates := 0
+				headRaceTriggered := false
+				client.Transport = &reportTransport{base: base, before: func(req *http.Request) {
+					if change != "head-race" || req.Method != http.MethodGet || req.URL.Query().Get("revs") != "true" || !strings.Contains(req.URL.Path, "link-report-"+id) {
+						return
+					}
+					headRaceTriggered = true
+					file, err := inst.VFS().FileByID("link-report-" + id)
+					require.NoError(t, err)
+					file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusInfected}
+					require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+				}, after: func(req *http.Request) {
+					if change == "tail-race" && updates >= 2 && !headRaceTriggered && req.Method == http.MethodGet && req.URL.Query().Get("rev") != "" && strings.Contains(req.URL.Path, "link-report-"+id) {
+						headRaceTriggered = true
+						file, err := inst.VFS().FileByID("link-report-" + id)
+						require.NoError(t, err)
+						file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusInfected}
+						require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+					}
+					if req.Method != http.MethodPut || !strings.Contains(req.URL.Path, id) || !strings.Contains(req.URL.Path, "public_links-reports") {
+						return
+					}
+					body, err := req.GetBody()
+					require.NoError(t, err)
+					var checkpoint publiclink.Report
+					require.NoError(t, json.NewDecoder(body).Decode(&checkpoint))
+					body.Close()
+					if checkpoint.Status != "file-ready" {
+						return
+					}
+					updates++
+					if updates != 2 {
+						return
+					}
+					file, err := inst.VFS().FileByID("link-report-" + id)
+					require.NoError(t, err)
+					if change == "pending" || change == "error" || change == "clean" {
+						file.AntivirusScan = &vfs.AntivirusScan{Status: change}
+					} else if change == "head-race" || change == "tail-race" {
+						file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusPending}
+					} else if change == "infected" {
+						file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusInfected}
+					} else {
+						file.Metadata["owner-edited"] = true
+					}
+					require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+				}}
+				t.Cleanup(func() { client.Transport = original })
+				err := runReport(t, inst, p, expiry)
+				client.Transport = original
+				if change == "head-race" || change == "tail-race" {
+					require.Error(t, err)
+					require.True(t, headRaceTriggered)
+				} else {
+					require.NoError(t, err)
+				}
+				require.GreaterOrEqual(t, updates, 2, "must interpose after preview")
+				state := getReport(t, inst, p, expiry)
+				if change == "pending" || change == "error" || change == "clean" {
+					require.Equal(t, "sent", state.Status)
+					rows, _ := readReport(t, inst, state)
+					require.Equal(t, "preview-visitor", rows[1][2])
+					got := <-messages
+					_, body := reportMailText(t, got.raw)
+					require.Contains(t, body, "preview-visitor")
+					require.NoError(t, runReport(t, inst, p, expiry))
+					select {
+					case <-messages:
+						t.Fatal("duplicate report mail")
+					default:
+					}
+				} else if change == "head-race" || change == "tail-race" {
+					retryReport(t, inst, state)
+					require.NoError(t, runReport(t, inst, p, expiry))
+					require.Equal(t, "cancelled", getReport(t, inst, p, expiry).Status)
+					select {
+					case <-messages:
+						t.Fatal("infected report mailed")
+					default:
+					}
+				} else {
+					require.Equal(t, "cancelled", state.Status)
+					select {
+					case <-messages:
+						t.Fatal("changed report mailed")
+					default:
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("antivirus revisions do not cancel pending mail", func(t *testing.T) {
+		for _, status := range []string{vfs.AVStatusPending, vfs.AVStatusError, vfs.AVStatusClean} {
+			t.Run(status, func(t *testing.T) {
+				p := newReportLink(t, inst, expiry)
+				require.NoError(t, couchdb.CreateDoc(inst, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Second), Identity: "retry-visitor"}))
+				config.GetConfig().Mail = &gomail.DialerOptions{Host: "-"}
+				t.Cleanup(func() { config.GetConfig().Mail = dialer })
+				require.Error(t, runReport(t, inst, p, expiry))
+				state := getReport(t, inst, p, expiry)
+				rows, file := readReport(t, inst, state)
+				file.AntivirusScan = &vfs.AntivirusScan{Status: status}
+				require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+				retryReport(t, inst, state)
+				config.GetConfig().Mail = dialer
+				require.NoError(t, runReport(t, inst, p, expiry))
+				state = getReport(t, inst, p, expiry)
+				require.Equal(t, "sent", state.Status)
+				after, _ := readReport(t, inst, state)
+				require.Equal(t, rows, after)
+				got := <-messages
+				_, body := reportMailText(t, got.raw)
+				require.Contains(t, body, "retry-visitor")
+				require.NoError(t, runReport(t, inst, p, expiry))
+				select {
+				case <-messages:
+					t.Fatal("duplicate report mail")
+				default:
+				}
+			})
+		}
+	})
+
+	t.Run("preview rejects transient altered bytes", func(t *testing.T) {
+		for _, compact := range []bool{false, true} {
+			t.Run(fmt.Sprint(compact), func(t *testing.T) {
+				p := newReportLink(t, inst, expiry)
+				id := publiclink.ReportID(p.ID(), expiry)
+				require.NoError(t, couchdb.CreateDoc(inst, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Second), Identity: "approved-visitor"}))
+				client := config.CouchClient()
+				original := client.Transport
+				base := original
+				if base == nil {
+					base = http.DefaultTransport
+				}
+				var originalBytes []byte
+				var originalDoc *couchdb.JSONDoc
+				changed, restored := false, false
+				writeContent := func(content []byte) {
+					file, err := inst.VFS().FileByID("link-report-" + id)
+					require.NoError(t, err)
+					replacement, err := vfs.NewFileDoc(file.DocName, file.DirID, -1, nil, file.Mime, file.Class, time.Now(), false, false, false, nil)
+					require.NoError(t, err)
+					replacement.Metadata = file.Metadata
+					out, err := inst.VFS().CreateFile(replacement, file)
+					require.NoError(t, err)
+					_, err = out.Write(content)
+					require.NoError(t, err)
+					require.NoError(t, out.Close())
+				}
+				client.Transport = &reportTransport{base: base, before: func(req *http.Request) {
+					if !changed || restored || req.Method != http.MethodGet || req.URL.Query().Get("rev") == "" || !strings.Contains(req.URL.Path, "link-report-"+id) {
+						return
+					}
+					restored = true
+					file, err := inst.VFS().FileByID("link-report-" + id)
+					require.NoError(t, err)
+					in, err := inst.VFS().OpenFile(file)
+					require.NoError(t, err)
+					actual, err := io.ReadAll(in)
+					require.NoError(t, err)
+					in.Close()
+					require.Contains(t, string(actual), "attacker-visitor")
+					writeContent(originalBytes)
+					current := &couchdb.JSONDoc{Type: consts.Files}
+					require.NoError(t, couchdb.GetDoc(inst, consts.Files, "link-report-"+id, current))
+					originalRev := originalDoc.Rev()
+					originalDoc.SetRev(current.Rev())
+					require.NoError(t, couchdb.UpdateDoc(inst, originalDoc))
+					if compact {
+						require.NoError(t, couchdb.Compact(inst, consts.Files))
+						require.Eventually(t, func() bool {
+							return couchdb.IsNotFoundError(couchdb.GetDocRev(inst, consts.Files, "link-report-"+id, originalRev, &vfs.FileDoc{}))
+						}, 15*time.Second, 100*time.Millisecond)
+					}
+				}, after: func(req *http.Request) {
+					if changed || req.Method != http.MethodPut || !strings.Contains(req.URL.Path, id) || !strings.Contains(req.URL.Path, "public_links-reports") {
+						return
+					}
+					body, err := req.GetBody()
+					require.NoError(t, err)
+					var checkpoint publiclink.Report
+					require.NoError(t, json.NewDecoder(body).Decode(&checkpoint))
+					body.Close()
+					if checkpoint.Status != "file-ready" {
+						return
+					}
+					changed = true
+					file, err := inst.VFS().FileByID("link-report-" + id)
+					require.NoError(t, err)
+					in, err := inst.VFS().OpenFile(file)
+					require.NoError(t, err)
+					originalBytes, err = io.ReadAll(in)
+					require.NoError(t, err)
+					in.Close()
+					originalDoc = &couchdb.JSONDoc{Type: consts.Files}
+					require.NoError(t, couchdb.GetDoc(inst, consts.Files, file.ID(), originalDoc))
+					writeContent([]byte(strings.ReplaceAll(string(originalBytes), "approved-visitor", "attacker-visitor")))
+				}}
+				t.Cleanup(func() { client.Transport = original })
+				err := runReport(t, inst, p, expiry)
+				client.Transport = original
+				require.True(t, changed)
+				require.True(t, restored)
+				if compact {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, "cancelled", getReport(t, inst, p, expiry).Status)
+				}
+				select {
+				case <-messages:
+					t.Fatal("unapproved preview was mailed")
+				default:
+				}
+			})
+		}
+	})
+
+	t.Run("legacy checkpoint without fingerprint fails closed", func(t *testing.T) {
+		for _, withAV := range []bool{false, true} {
+			t.Run(fmt.Sprint(withAV), func(t *testing.T) {
+				p := newReportLink(t, inst, expiry)
+				config.GetConfig().Mail = &gomail.DialerOptions{Host: "-"}
+				t.Cleanup(func() { config.GetConfig().Mail = dialer })
+				require.Error(t, runReport(t, inst, p, expiry))
+				state := getReport(t, inst, p, expiry)
+				state.FileFingerprint = ""
+				if withAV {
+					file, err := inst.VFS().FileByID(state.FileID)
+					require.NoError(t, err)
+					file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusClean}
+					require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+				}
+				retryReport(t, inst, state)
+				config.GetConfig().Mail = dialer
+				require.NoError(t, runReport(t, inst, p, expiry))
+				require.Equal(t, "cancelled", getReport(t, inst, p, expiry).Status)
+				select {
+				case <-messages:
+					t.Fatal("legacy report mailed")
+				default:
+				}
+			})
+		}
+	})
+
+	t.Run("compaction during publication accepts unchanged file", func(t *testing.T) {
+		p := newReportLink(t, inst, expiry)
+		id := publiclink.ReportID(p.ID(), expiry)
+		require.NoError(t, couchdb.CreateDoc(inst, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Second), Identity: "publication-compacted"}))
+		client := config.CouchClient()
+		original := client.Transport
+		base := original
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		triggered := false
+		client.Transport = &reportTransport{base: base, after: func(req *http.Request) {
+			if triggered || req.Method != http.MethodPut || !strings.Contains(req.URL.Path, "link-report-"+id) {
+				return
+			}
+			triggered = true
+			file := &couchdb.JSONDoc{Type: consts.Files}
+			require.NoError(t, couchdb.GetDoc(inst, consts.Files, "link-report-"+id, file))
+			publishedRev := file.Rev()
+			file.M["antivirus_scan"] = map[string]interface{}{"status": vfs.AVStatusPending}
+			require.NoError(t, couchdb.UpdateDoc(inst, file))
+			require.NoError(t, couchdb.Compact(inst, consts.Files))
+			require.Eventually(t, func() bool {
+				return couchdb.IsNotFoundError(couchdb.GetDocRev(inst, consts.Files, file.ID(), publishedRev, &vfs.FileDoc{}))
+			}, 15*time.Second, 100*time.Millisecond)
+		}}
+		t.Cleanup(func() { client.Transport = original })
+		require.NoError(t, runReport(t, inst, p, expiry))
+		client.Transport = original
+		require.True(t, triggered)
+		require.Equal(t, "sent", getReport(t, inst, p, expiry).Status)
+		got := <-messages
+		_, body := reportMailText(t, got.raw)
+		require.Contains(t, body, "publication-compacted")
+	})
+
+	t.Run("compaction during publication fingerprint retries fresh head", func(t *testing.T) {
+		p := newReportLink(t, inst, expiry)
+		id := publiclink.ReportID(p.ID(), expiry)
+		require.NoError(t, couchdb.CreateDoc(inst, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Second), Identity: "late-compaction"}))
+		client := config.CouchClient()
+		original := client.Transport
+		base := original
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		triggered := false
+		client.Transport = &reportTransport{base: base, before: func(req *http.Request) {
+			if triggered || req.Method != http.MethodGet || req.URL.Query().Get("rev") == "" || !strings.Contains(req.URL.Path, "link-report-"+id) {
+				return
+			}
+			triggered = true
+			file := &couchdb.JSONDoc{Type: consts.Files}
+			require.NoError(t, couchdb.GetDoc(inst, consts.Files, "link-report-"+id, file))
+			publishedRev := file.Rev()
+			file.M["antivirus_scan"] = map[string]interface{}{"status": vfs.AVStatusPending}
+			require.NoError(t, couchdb.UpdateDoc(inst, file))
+			require.NoError(t, couchdb.Compact(inst, consts.Files))
+			require.Eventually(t, func() bool {
+				return couchdb.IsNotFoundError(couchdb.GetDocRev(inst, consts.Files, file.ID(), publishedRev, &vfs.FileDoc{}))
+			}, 15*time.Second, 100*time.Millisecond)
+		}}
+		t.Cleanup(func() { client.Transport = original })
+		require.NoError(t, runReport(t, inst, p, expiry))
+		client.Transport = original
+		require.True(t, triggered)
+		require.Equal(t, "sent", getReport(t, inst, p, expiry).Status)
+		got := <-messages
+		_, body := reportMailText(t, got.raw)
+		require.Contains(t, body, "late-compaction")
+	})
+
+	t.Run("compacted report revisions use publication fingerprint", func(t *testing.T) {
+		for _, change := range []string{"antivirus", "legacy", "metadata", "unknown field", "content", "content with restored metadata", "observed restored edit", "compacted restored edit"} {
+			t.Run(change, func(t *testing.T) {
+				p := newReportLink(t, inst, expiry)
+				require.NoError(t, couchdb.CreateDoc(inst, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Second), Identity: "compaction-visitor"}))
+				config.GetConfig().Mail = &gomail.DialerOptions{Host: "-"}
+				t.Cleanup(func() { config.GetConfig().Mail = dialer })
+				require.Error(t, runReport(t, inst, p, expiry))
+				state := getReport(t, inst, p, expiry)
+				require.NotEmpty(t, state.FileFingerprint)
+				rows, file := readReport(t, inst, state)
+				file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusError}
+				require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+				antivirusRev := file.Rev()
+				require.NoError(t, couchdb.Compact(inst, consts.Files))
+				require.Eventually(t, func() bool {
+					return couchdb.IsNotFoundError(couchdb.GetDocRev(inst, consts.Files, file.ID(), state.FileRev, &vfs.FileDoc{}))
+				}, 15*time.Second, 100*time.Millisecond, "publication revision body must actually be compacted")
+				switch change {
+				case "legacy":
+					state.FileFingerprint = ""
+				case "metadata":
+					file.Metadata["owner-edited"] = true
+					require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+				case "unknown field":
+					doc := &couchdb.JSONDoc{Type: consts.Files}
+					require.NoError(t, couchdb.GetDoc(inst, consts.Files, file.ID(), doc))
+					doc.M["new_unknown_field"] = "modified"
+					require.NoError(t, couchdb.UpdateDoc(inst, doc))
+				case "content", "content with restored metadata":
+					original := &couchdb.JSONDoc{Type: consts.Files}
+					require.NoError(t, couchdb.GetDoc(inst, consts.Files, file.ID(), original))
+					newFile, err := vfs.NewFileDoc(file.DocName, file.DirID, -1, nil, file.Mime, file.Class, time.Now(), false, false, false, nil)
+					require.NoError(t, err)
+					newFile.Metadata = file.Metadata
+					out, err := inst.VFS().CreateFile(newFile, file)
+					require.NoError(t, err)
+					_, err = io.WriteString(out, "modified content")
+					require.NoError(t, err)
+					require.NoError(t, out.Close())
+					if change == "content with restored metadata" {
+						current := &couchdb.JSONDoc{Type: consts.Files}
+						require.NoError(t, couchdb.GetDoc(inst, consts.Files, file.ID(), current))
+						original.SetRev(current.Rev())
+						require.NoError(t, couchdb.UpdateDoc(inst, original))
+						restored := &couchdb.JSONDoc{Type: consts.Files}
+						require.NoError(t, couchdb.GetDoc(inst, consts.Files, file.ID(), restored))
+						require.Equal(t, original.M, restored.M)
+						published, err := inst.VFS().FileByID(file.ID())
+						require.NoError(t, err)
+						in, err := inst.VFS().OpenFile(published)
+						require.NoError(t, err)
+						bytes, err := io.ReadAll(in)
+						require.NoError(t, err)
+						in.Close()
+						require.Equal(t, "modified content", string(bytes))
+					}
+				case "observed restored edit", "compacted restored edit":
+					file.Metadata["owner-edited"] = true
+					require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+					editRev := file.Rev()
+					delete(file.Metadata, "owner-edited")
+					require.NoError(t, couchdb.UpdateDoc(inst.VFS(), file))
+					if change == "compacted restored edit" {
+						require.NoError(t, couchdb.Compact(inst, consts.Files))
+						require.Eventually(t, func() bool {
+							return couchdb.IsNotFoundError(couchdb.GetDocRev(inst, consts.Files, state.FileID, editRev, &vfs.FileDoc{}))
+						}, 15*time.Second, 100*time.Millisecond, "edited revision must actually be compacted")
+					}
+				}
+				if change == "metadata" || change == "unknown field" || change == "content" || change == "content with restored metadata" {
+					require.NoError(t, couchdb.Compact(inst, consts.Files))
+					require.Eventually(t, func() bool {
+						return couchdb.IsNotFoundError(couchdb.GetDocRev(inst, consts.Files, state.FileID, antivirusRev, &vfs.FileDoc{}))
+					}, 15*time.Second, 100*time.Millisecond, "prior revision must be compacted before fingerprint check")
+				}
+				retryReport(t, inst, state)
+				config.GetConfig().Mail = dialer
+				require.NoError(t, runReport(t, inst, p, expiry))
+				state = getReport(t, inst, p, expiry)
+				if change == "antivirus" || change == "compacted restored edit" {
+					require.Equal(t, "sent", state.Status)
+					after, _ := readReport(t, inst, state)
+					require.Equal(t, rows, after)
+					got := <-messages
+					_, body := reportMailText(t, got.raw)
+					require.Contains(t, body, "compaction-visitor")
+					require.NoError(t, runReport(t, inst, p, expiry))
+				} else {
+					require.Equal(t, "cancelled", state.Status)
+				}
+				select {
+				case <-messages:
+					t.Fatal("unexpected report mail")
+				default:
+				}
+			})
+		}
+	})
+
 	t.Run("deliberate file changes cancel pending mail", func(t *testing.T) {
-		for _, change := range []string{"edited", "moved", "trashed", "deleted", "parent trashed"} {
+		for _, change := range []string{"edited", "edited then restored", "content", "moved", "trashed", "deleted", "parent trashed"} {
 			t.Run(change, func(t *testing.T) {
 				p := newReportLink(t, inst, expiry)
 				config.GetConfig().Mail = &gomail.DialerOptions{Host: "-"}
@@ -608,6 +1109,21 @@ func TestExpiredLinkReport(t *testing.T) {
 				case "edited":
 					file.Metadata["owner-edited"] = true
 					require.NoError(t, couchdb.UpdateDoc(inst, file))
+				case "edited then restored":
+					file.Metadata["owner-edited"] = true
+					require.NoError(t, couchdb.UpdateDoc(inst, file))
+					delete(file.Metadata, "owner-edited")
+					file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusClean}
+					require.NoError(t, couchdb.UpdateDoc(inst, file))
+				case "content":
+					newFile, err := vfs.NewFileDoc(file.DocName, file.DirID, -1, nil, file.Mime, file.Class, time.Now(), false, false, false, nil)
+					require.NoError(t, err)
+					newFile.Metadata = file.Metadata
+					out, err := inst.VFS().CreateFile(newFile, file)
+					require.NoError(t, err)
+					_, err = io.WriteString(out, "altered report content")
+					require.NoError(t, err)
+					require.NoError(t, out.Close())
 				case "moved":
 					root := consts.RootDirID
 					_, err := vfs.ModifyFileMetadata(inst.VFS(), file, &vfs.DocPatch{DirID: &root})

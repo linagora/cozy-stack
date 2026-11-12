@@ -2,13 +2,18 @@ package mails
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/publiclink"
@@ -20,6 +25,7 @@ import (
 )
 
 var errReportCancelled = errors.New("link report cancelled")
+var errReportChanged = errors.New("report file changed during validation")
 
 func init() {
 	job.AddWorker(&job.WorkerConfig{
@@ -132,9 +138,12 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 		return err
 	}
 	// Never recreate a file deliberately moved, trashed, deleted or overwritten
-	// after its publication. A crash between file close and checkpoint is harmless.
-	if file.Trashed || file.DirID != state.DirectoryID || file.Metadata["public_link_report"] != state.ID() || (state.FileRev != "" && file.Rev() != state.FileRev) {
+	// after its publication. Without a checkpointed revision, fail closed.
+	if file.Trashed || (file.AntivirusScan != nil && file.AntivirusScan.Status == vfs.AVStatusInfected) || file.DirID != state.DirectoryID || file.Metadata["public_link_report"] != state.ID() || state.FileRev == "" || state.FileFingerprint == "" {
 		return errReportCancelled
+	}
+	if err := checkReportRevision(inst, file, state.FileRev, state.FileFingerprint); err != nil {
+		return err
 	}
 	if err := checkReportDestination(fs, file); err != nil {
 		return err
@@ -154,7 +163,7 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 		state.Status = "no-email"
 		return nil
 	}
-	last, err := reportPreview(ctx, fs, file)
+	last, err := reportPreview(ctx, inst, file, state.FileFingerprint)
 	if err != nil {
 		return err
 	}
@@ -184,8 +193,11 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 	if err != nil {
 		return err
 	}
-	if current.Rev() != file.Rev() || current.Trashed {
+	if current.Trashed || (current.AntivirusScan != nil && current.AntivirusScan.Status == vfs.AVStatusInfected) {
 		return errReportCancelled
+	}
+	if err := checkReportRevision(inst, current, file.Rev(), state.FileFingerprint); err != nil {
+		return err
 	}
 	if err := checkReportDestination(fs, current); err != nil {
 		return err
@@ -198,6 +210,129 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 	}
 	state.Status = "sent"
 	return nil
+}
+
+// checkReportRevision checks every available revision, and uses the original
+// publication fingerprint only when compaction removed revision bodies.
+func checkReportRevision(inst *instance.Instance, file *vfs.FileDoc, from, fingerprint string) error {
+	id, to := file.ID(), file.Rev()
+	if from == to {
+		return nil
+	}
+	head := &couchdb.JSONDoc{Type: consts.Files}
+	if err := couchdb.GetDocWithRevs(inst, consts.Files, id, head); err != nil {
+		return err
+	}
+	if head.Rev() != to {
+		return errReportChanged
+	}
+	revs, ok := head.M["_revisions"].(map[string]interface{})
+	if !ok {
+		return errReportCancelled
+	}
+	start, ok := revs["start"].(float64)
+	if !ok {
+		return errReportCancelled
+	}
+	ids, ok := revs["ids"].([]interface{})
+	if !ok {
+		return errReportCancelled
+	}
+	var previous map[string]interface{}
+	found, missing := false, false
+	for i, hash := range ids {
+		s, ok := hash.(string)
+		if !ok {
+			return errReportCancelled
+		}
+		rev := fmt.Sprintf("%d-%s", int(start)-i, s)
+		if rev == to {
+			found = true
+		}
+		if !found {
+			continue
+		}
+		doc := &couchdb.JSONDoc{Type: consts.Files}
+		if err := couchdb.GetDocRev(inst, consts.Files, id, rev, doc); err != nil {
+			if !couchdb.IsNotFoundError(err) {
+				return err
+			}
+			missing = true
+		} else {
+			delete(doc.M, "_rev")
+			delete(doc.M, "antivirus_scan")
+			if previous != nil && !reflect.DeepEqual(previous, doc.M) {
+				return errReportCancelled
+			}
+			previous = doc.M
+		}
+		if rev == from {
+			if missing {
+				if fingerprint == "" {
+					return errReportCancelled
+				}
+				actual, err := reportFileFingerprint(inst, file)
+				if err != nil {
+					return err
+				}
+				if actual != fingerprint {
+					return errReportCancelled
+				}
+			}
+			current, err := inst.VFS().FileByID(id)
+			if err != nil {
+				return err
+			}
+			if current.Rev() != to {
+				return errReportChanged
+			}
+			return nil
+		}
+	}
+	return errReportCancelled
+}
+
+// reportFingerprint binds the real content digest to all stable file metadata.
+func reportFingerprint(inst *instance.Instance, file *vfs.FileDoc, contentDigest []byte) (string, error) {
+	stable := &couchdb.JSONDoc{Type: consts.Files}
+	if err := couchdb.GetDocRev(inst, consts.Files, file.ID(), file.Rev(), stable); err != nil {
+		return "", err
+	}
+	return reportFingerprintDocument(stable.M, contentDigest)
+}
+
+func reportFingerprintDocument(doc interface{}, contentDigest []byte) (string, error) {
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	var stable map[string]interface{}
+	if err := json.Unmarshal(encoded, &stable); err != nil {
+		return "", err
+	}
+	delete(stable, "_rev")
+	delete(stable, "antivirus_scan")
+	metadata, err := json.Marshal(stable)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	_, _ = h.Write(metadata)
+	_, _ = h.Write(contentDigest)
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func reportFileFingerprint(inst *instance.Instance, file *vfs.FileDoc) (string, error) {
+	in, err := inst.VFS().OpenFile(file)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, in); err != nil {
+		return "", err
+	}
+	return reportFingerprint(inst, file, h.Sum(nil))
 }
 
 func createReportFile(ctx *job.TaskContext, state *publiclink.Report) (*vfs.FileDoc, error) {
@@ -264,7 +399,8 @@ func createReportFile(ctx *job.TaskContext, state *publiclink.Report) (*vfs.File
 		return nil, errors.New("report upload cannot be safely aborted")
 	}
 	abort := func() { _ = upload.Abort() }
-	if _, err = io.Copy(out, tmp); err != nil {
+	contentHash := sha256.New()
+	if _, err = io.Copy(io.MultiWriter(out, contentHash), tmp); err != nil {
 		abort()
 		return nil, err
 	}
@@ -285,12 +421,52 @@ func createReportFile(ctx *job.TaskContext, state *publiclink.Report) (*vfs.File
 	if err = out.Close(); err != nil {
 		return nil, err
 	}
+	// Anchor the fingerprint to the bytes just published, not to an existing
+	// file found during a later retry.
+	fingerprint, err := reportFingerprintDocument(file, contentHash.Sum(nil))
+	if err != nil {
+		return nil, err
+	}
+	var published *vfs.FileDoc
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		published, err = fs.FileByID(file.ID())
+		if err != nil {
+			return nil, err
+		}
+		if err := checkReportRevision(inst, published, file.Rev(), fingerprint); err != nil {
+			if couchdb.IsNotFoundError(err) || errors.Is(err, errReportChanged) {
+				continue
+			}
+			return nil, err
+		}
+		actual, err := reportFileFingerprint(inst, published)
+		if couchdb.IsNotFoundError(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if actual != fingerprint {
+			return nil, errReportCancelled
+		}
+		current, err := fs.FileByID(file.ID())
+		if err != nil {
+			return nil, err
+		}
+		if current.Rev() == published.Rev() {
+			break
+		}
+	}
 	state.Status = "file-ready"
+	state.FileFingerprint = fingerprint
 	state.FileRev = file.Rev()
 	if err = couchdb.UpdateDoc(inst, state); err != nil {
 		return nil, err
 	}
-	return file, nil
+	return published, nil
 }
 
 // checkReportDestination keeps reports out of the trash, including when an
@@ -319,13 +495,14 @@ func checkReportDestination(fs vfs.VFS, target vfs.Fetcher) error {
 	}
 }
 
-func reportPreview(ctx context.Context, fs vfs.VFS, file *vfs.FileDoc) ([][]string, error) {
-	in, err := fs.OpenFile(file)
+func reportPreview(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc, expected string) ([][]string, error) {
+	in, err := inst.VFS().OpenFile(file)
 	if err != nil {
 		return nil, err
 	}
 	defer in.Close()
-	reader := csv.NewReader(in)
+	h := sha256.New()
+	reader := csv.NewReader(io.TeeReader(in, h))
 	header, err := reader.Read()
 	if err != nil || strings.Join(header, ",") != "occurred_at,IP,identity,action" {
 		return nil, errors.New("invalid report CSV")
@@ -337,6 +514,13 @@ func reportPreview(ctx context.Context, fs vfs.VFS, file *vfs.FileDoc) ([][]stri
 		}
 		row, err := reader.Read()
 		if err == io.EOF {
+			actual, err := reportFingerprint(inst, file, h.Sum(nil))
+			if err != nil {
+				return nil, err
+			}
+			if actual != expected {
+				return nil, errReportCancelled
+			}
 			return formatReportPreview(last), nil
 		}
 		if err != nil {

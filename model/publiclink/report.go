@@ -20,13 +20,14 @@ type Report struct {
 	DocID  string `json:"_id,omitempty"`
 	DocRev string `json:"_rev,omitempty"`
 	ReportMessage
-	FileID      string    `json:"file_id"`
-	FileRev     string    `json:"file_rev,omitempty"`
-	DirectoryID string    `json:"directory_id,omitempty"`
-	Status      string    `json:"status"`
-	NoEmail     bool      `json:"no_email,omitempty"`
-	Attempts    int       `json:"attempts"`
-	NextAttempt time.Time `json:"next_attempt,omitempty"`
+	FileID          string    `json:"file_id"`
+	FileRev         string    `json:"file_rev,omitempty"`
+	FileFingerprint string    `json:"file_fingerprint,omitempty"`
+	DirectoryID     string    `json:"directory_id,omitempty"`
+	Status          string    `json:"status"`
+	NoEmail         bool      `json:"no_email,omitempty"`
+	Attempts        int       `json:"attempts"`
+	NextAttempt     time.Time `json:"next_attempt,omitempty"`
 }
 
 func ReportID(linkID string, expiry time.Time) string {
