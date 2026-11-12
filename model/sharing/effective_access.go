@@ -19,10 +19,11 @@ import (
 )
 
 // SharingScope describes a single sharing scope that applies to a target file
-// or folder. It is produced by AccessResolver.scopesMatching and consumed by
-// resolve to aggregate an EffectiveAccess. Sharing is the backing sharing
-// document and Member the matching member's entry inside it (the same object
-// as Sharing.Members[i]): the pair is coherent by construction.
+// or folder. It is produced by matchScopes, for AccessResolver.scopesMatching
+// and ResolveDocsForInstance, and merged by mergeScopes into an
+// EffectiveAccess. Sharing is the backing sharing document and Member the
+// matching member's entry inside it (the same object as Sharing.Members[i]):
+// the pair is coherent by construction.
 type SharingScope struct {
 	Sharing    *Sharing
 	Member     *Member
@@ -90,6 +91,139 @@ func (r *AccessResolver) ResolveForMember(targetID string, member *Member) (*Eff
 	})
 }
 
+// AccessTarget is a file or folder already loaded by the caller, for
+// ResolveDocsForInstance. Exactly one of Dir and File must be non-nil.
+type AccessTarget struct {
+	Dir  *vfs.DirDoc
+	File *vfs.FileDoc
+}
+
+// AccessResult is the effective access on one target of
+// ResolveDocsForInstance, or the error that prevented resolving it.
+type AccessResult struct {
+	Access *EffectiveAccess
+	Err    error
+}
+
+// ResolveDocsForInstance returns the effective access of another instance on
+// several files and folders, with one result per target in the same order.
+// The instance is the ready member of each sharing whose Cozy URL has one of
+// its domains (see Sharing.readyMemberOf). The scopes are merged as by
+// ResolveForMember, but in at most three requests whatever the number of
+// targets: one for the parents of the files, one for the shared roots on all
+// their paths and one for the sharings. An error specific to a target, like a
+// missing parent, is put in its result; the returned error is for a failure
+// of CouchDB.
+func (r *AccessResolver) ResolveDocsForInstance(targets []AccessTarget, inst *instance.Instance) ([]AccessResult, error) {
+	results := make([]AccessResult, len(targets))
+	fp, err := r.parentsPather(targets)
+	if err != nil {
+		return nil, err
+	}
+
+	targetPaths := make([]string, len(targets))
+	ancestorPaths := make([][]string, len(targets))
+	var allPaths []string
+	seenPaths := make(map[string]struct{})
+	for i, t := range targets {
+		switch {
+		case t.Dir != nil:
+			targetPaths[i] = t.Dir.Fullpath
+		case t.File != nil:
+			targetPaths[i], results[i].Err = t.File.Path(fp)
+		default:
+			results[i].Err = os.ErrNotExist
+		}
+		if results[i].Err != nil {
+			continue
+		}
+		ancestorPaths[i] = r.ancestorPaths(targetPaths[i], t.Dir != nil)
+		for _, p := range ancestorPaths[i] {
+			if _, ok := seenPaths[p]; !ok {
+				seenPaths[p] = struct{}{}
+				allPaths = append(allPaths, p)
+			}
+		}
+	}
+
+	roots, err := r.findSharedRoots(allPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	rootsBySharing := make([]map[string]rootInfo, len(targets))
+	seenSharings := make(map[string]struct{})
+	var sharingIDs []string
+	for i, t := range targets {
+		if results[i].Err != nil {
+			continue
+		}
+		rootsBySharing[i] = collectRoots(roots, ancestorPaths[i], t.File, targetPaths[i])
+		for id := range rootsBySharing[i] {
+			if _, ok := seenSharings[id]; !ok {
+				seenSharings[id] = struct{}{}
+				sharingIDs = append(sharingIDs, id)
+			}
+		}
+	}
+	// Same order as for a single target, so that the source sharings of each
+	// result are listed as by ResolveForMember.
+	sort.Strings(sharingIDs)
+
+	var sharings []*Sharing
+	if len(sharingIDs) > 0 {
+		sharings, err = r.loadSharings(sharingIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	memberOf := func(s *Sharing) *Member {
+		return s.readyMemberOf(inst)
+	}
+	for i := range targets {
+		if results[i].Err != nil {
+			continue
+		}
+		results[i].Access = mergeScopes(matchScopes(sharings, rootsBySharing[i], memberOf))
+	}
+	return results, nil
+}
+
+// parentsPather loads the parent directories of the target files in one
+// request, and returns a pather that computes the paths of these files
+// without any other request, including when a parent is missing.
+func (r *AccessResolver) parentsPather(targets []AccessTarget) (vfs.FilePather, error) {
+	var parentIDs []string
+	seen := make(map[string]struct{})
+	for _, t := range targets {
+		if t.Dir != nil || t.File == nil {
+			continue
+		}
+		id := t.File.DirID
+		if id == consts.RootDirID || id == consts.TrashDirID {
+			continue
+		}
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			parentIDs = append(parentIDs, id)
+		}
+	}
+	docs, err := vfs.DirOrFileDocsByIDs(r.inst, parentIDs)
+	if err != nil {
+		return nil, err
+	}
+	dirs := make(map[string]*vfs.DirDoc, len(parentIDs))
+	for _, id := range parentIDs {
+		var dir *vfs.DirDoc
+		if doc, ok := docs[id]; ok {
+			dir = doc.DirDoc
+		}
+		dirs[id] = dir
+	}
+	return vfs.NewFilePatherWithDirs(r.inst.VFS(), dirs), nil
+}
+
 // CrossesDriveBoundary reports whether moving a doc from one directory to
 // another enters or leaves a drive, nested ones included, i.e. whether
 // different drive sharings apply to the two directories. A drive rooted at
@@ -128,6 +262,12 @@ func (r *AccessResolver) resolve(targetID string, memberOf func(*Sharing) *Membe
 	if err != nil {
 		return nil, err
 	}
+	return mergeScopes(scopes), nil
+}
+
+// mergeScopes aggregates the scopes applying to a target into its effective
+// access.
+func mergeScopes(scopes []SharingScope) *EffectiveAccess {
 	ea := &EffectiveAccess{SourceSharingIDs: make([]string, 0, len(scopes))}
 	for _, sc := range scopes {
 		ea.SourceSharingIDs = append(ea.SourceSharingIDs, sc.Sharing.SID)
@@ -136,7 +276,7 @@ func (r *AccessResolver) resolve(targetID string, memberOf func(*Sharing) *Membe
 			ea.CanWrite = true
 		}
 	}
-	return ea, nil
+	return ea
 }
 
 // rootInfo describes a shared root applying to a target: the directory (or
@@ -156,7 +296,12 @@ func (r *AccessResolver) scopesMatching(targetID string, memberOf func(*Sharing)
 	if err != nil {
 		return nil, err
 	}
+	return matchScopes(sharings, rootBySharing, memberOf), nil
+}
 
+// matchScopes returns the scopes of the sharings that have a root in
+// rootBySharing and where memberOf resolves a member.
+func matchScopes(sharings []*Sharing, rootBySharing map[string]rootInfo, memberOf func(*Sharing) *Member) []SharingScope {
 	scopes := make([]SharingScope, 0, len(sharings))
 	for _, s := range sharings {
 		info, ok := rootBySharing[s.SID]
@@ -175,7 +320,7 @@ func (r *AccessResolver) scopesMatching(targetID string, memberOf func(*Sharing)
 			AccessMode: s.EffectiveAccessMode(),
 		})
 	}
-	return scopes, nil
+	return scopes
 }
 
 // applicableSharings resolves the active additive sharings applying to the
@@ -210,19 +355,50 @@ func (r *AccessResolver) applicableSharingsForDoc(dir *vfs.DirDoc, file *vfs.Fil
 	}
 
 	ancestorPaths := r.ancestorPaths(targetPath, dir != nil)
+	roots, err := r.findSharedRoots(ancestorPaths)
+	if err != nil {
+		return nil, nil, err
+	}
+	rootBySharing := collectRoots(roots, ancestorPaths, file, targetPath)
 
+	if len(rootBySharing) == 0 {
+		return nil, nil, nil
+	}
+
+	sharingIDs := make([]string, 0, len(rootBySharing))
+	for id := range rootBySharing {
+		sharingIDs = append(sharingIDs, id)
+	}
+	// Stable order: the recipient list derived from these sharings must not
+	// change between identical calls.
+	sort.Strings(sharingIDs)
+
+	sharings, err := r.loadSharings(sharingIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sharings, rootBySharing, nil
+}
+
+// sharedRootDoc is a directory referenced by a document, found by
+// findSharedRoots.
+type sharedRootDoc struct {
+	ID           string                 `json:"_id"`
+	Path         string                 `json:"path"`
+	Name         string                 `json:"name"`
+	ReferencedBy []couchdb.DocReference `json:"referenced_by"`
+}
+
+// findSharedRoots returns the directories at the given paths that are
+// referenced by a document, in the order of the dir-by-path index. The paths
+// must be distinct.
+func (r *AccessResolver) findSharedRoots(ancestorPaths []string) ([]sharedRootDoc, error) {
 	// XXX: single find via dir-by-path + Go-side referenced_by filter, rather
 	// than a dedicated shared-folder-roots-by-path view — one fewer view to
 	// maintain while N ancestors is small.
 	paths := make([]any, len(ancestorPaths))
 	for i, p := range ancestorPaths {
 		paths[i] = p
-	}
-	type sharedRootDoc struct {
-		ID           string                 `json:"_id"`
-		Path         string                 `json:"path"`
-		Name         string                 `json:"name"`
-		ReferencedBy []couchdb.DocReference `json:"referenced_by"`
 	}
 	var roots []sharedRootDoc
 	if len(paths) > 0 {
@@ -237,13 +413,23 @@ func (r *AccessResolver) applicableSharingsForDoc(dir *vfs.DirDoc, file *vfs.Fil
 			Limit:  len(paths),
 		}
 		if err := couchdb.FindDocs(r.inst, consts.Files, req, &roots); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
+	return roots, nil
+}
 
+// collectRoots returns the root info of each sharing applying to a target,
+// keyed by sharing ID: the shared roots at its ancestor paths, then its own
+// share if the target is a file. The roots at other paths are ignored, so the
+// roots found for several targets at once can be given.
+func collectRoots(roots []sharedRootDoc, ancestorPaths []string, file *vfs.FileDoc, targetPath string) map[string]rootInfo {
 	// Collect (sharingID -> rootInfo) from ancestor dir roots.
 	rootBySharing := make(map[string]rootInfo)
 	for _, root := range roots {
+		if !slices.Contains(ancestorPaths, root.Path) {
+			continue
+		}
 		for _, ref := range root.ReferencedBy {
 			if ref.Type == consts.Sharings {
 				if _, ok := rootBySharing[ref.ID]; !ok {
@@ -265,24 +451,7 @@ func (r *AccessResolver) applicableSharingsForDoc(dir *vfs.DirDoc, file *vfs.Fil
 			}
 		}
 	}
-
-	if len(rootBySharing) == 0 {
-		return nil, nil, nil
-	}
-
-	sharingIDs := make([]string, 0, len(rootBySharing))
-	for id := range rootBySharing {
-		sharingIDs = append(sharingIDs, id)
-	}
-	// Stable order: the recipient list derived from these sharings must not
-	// change between identical calls.
-	sort.Strings(sharingIDs)
-
-	sharings, err := r.loadSharings(sharingIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	return sharings, rootBySharing, nil
+	return rootBySharing
 }
 
 // ancestorPaths returns the directory paths to query for shared roots. When
@@ -313,7 +482,8 @@ func (r *AccessResolver) ancestorPaths(targetPath string, targetIsDir bool) []st
 
 // loadSharings bulk-loads sharings by ID and keeps only the active additive
 // ones. limited_access sharings are dropped in v1. Membership filtering is
-// done by the caller (scopesMatching) so this helper stays reusable.
+// done by the callers (scopesMatching, ResolveDocsForInstance) so this helper
+// stays reusable.
 func (r *AccessResolver) loadSharings(ids []string) ([]*Sharing, error) {
 	sharings, err := FindSharings(r.inst, ids)
 	if err != nil {
