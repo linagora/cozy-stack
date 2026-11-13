@@ -1,7 +1,10 @@
 package sharing
 
 import (
+	"net/http"
 	"os"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -656,6 +659,8 @@ func TestAccessResolver_DriveForMember(t *testing.T) {
 	// Every subtest has its own tree: /<name>/child/nested.txt and
 	// /<name>/top.txt, where the sharings of X are on /<name> and those of Y
 	// on /<name>/child.
+	// The items of every tree, resolved again in one call by the last subtest.
+	var allIDs []string
 	newTree := func(t *testing.T, name string) (x, y *vfs.DirDoc, nested, top *vfs.FileDoc) {
 		t.Helper()
 		tree := H{name + "/": H{"child/": H{"nested.txt": H{}}, "top.txt": H{}}}
@@ -667,6 +672,7 @@ func TestAccessResolver_DriveForMember(t *testing.T) {
 		require.NoError(t, err)
 		top, err = fs.FileByPath(x.Fullpath + "/top.txt")
 		require.NoError(t, err)
+		allIDs = append(allIDs, x.ID(), y.ID(), nested.ID(), top.ID())
 		return x, y, nested, top
 	}
 	// A drive where Dave is not a member has another ready member instead.
@@ -889,6 +895,169 @@ func TestAccessResolver_DriveForMember(t *testing.T) {
 		got, err := sc.PathFromRoot(nestedPath)
 		require.NoError(t, err)
 		assert.Equal(t, "/child/nested.txt", got)
+	})
+
+	// Must stay the last subtest: it resolves the items of all the trees above
+	// in one call.
+	t.Run("SameForSeveralDocsAtOnce", func(t *testing.T) {
+		got, err := resolver.DrivesForMember(loadAccessTargets(t, inst, allIDs), dave)
+		require.NoError(t, err)
+		require.Len(t, got, len(allIDs))
+		nbDrives := 0
+		for i, id := range allIDs {
+			want, err := resolver.DriveForMember(id, dave)
+			require.NoError(t, err)
+			if want == nil {
+				assert.Nil(t, got[i], id)
+				continue
+			}
+			nbDrives++
+			if assert.NotNil(t, got[i], id) {
+				assert.Equal(t, want.Sharing.SID, got[i].Sharing.SID, id)
+				assert.Equal(t, want.RootID, got[i].RootID, id)
+				assert.Equal(t, want.RootPath, got[i].RootPath, id)
+				assert.Equal(t, want.Member.ReadOnly, got[i].Member.ReadOnly, id)
+				assert.Same(t, &got[i].Sharing.Members[1], got[i].Member, id)
+			}
+		}
+		assert.Positive(t, nbDrives)
+		assert.Less(t, nbDrives, len(allIDs))
+	})
+}
+
+// loadAccessTargets loads the files and folders with the given IDs in one
+// request, as a caller of the batched resolutions does.
+func loadAccessTargets(t *testing.T, inst *instance.Instance, ids []string) []AccessTarget {
+	t.Helper()
+	docs, err := vfs.DirOrFileDocsByIDs(inst, ids)
+	require.NoError(t, err)
+	targets := make([]AccessTarget, len(ids))
+	for i, id := range ids {
+		require.Contains(t, docs, id)
+		dir, file := docs[id].Refine()
+		targets[i] = AccessTarget{Dir: dir, File: file}
+	}
+	return targets
+}
+
+// countCouchRequests returns the number of requests sent to CouchDB by fn.
+func countCouchRequests(t *testing.T, fn func()) int {
+	t.Helper()
+	client := config.CouchClient()
+	original := client.Transport
+	defer func() { client.Transport = original }()
+	next := original
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	var nb atomic.Int32
+	client.Transport = countingTransport(func(r *http.Request) (*http.Response, error) {
+		nb.Add(1)
+		return next.RoundTrip(r)
+	})
+	fn()
+	return int(nb.Load())
+}
+
+type countingTransport func(*http.Request) (*http.Response, error)
+
+func (f countingTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestAccessResolver_DrivesForMember(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	daveInstance := "https://dave.example.net"
+	dave := &Member{Email: "dave@example.net", Instance: daveInstance}
+	resolver := NewAccessResolver(inst)
+
+	root := createTree(t, fs, H{"drive/": H{
+		"a/":       H{"a.txt": H{}, "b/": H{"b.txt": H{}}},
+		"gone.txt": H{},
+		"own.txt":  H{},
+		"old/":     H{"old.txt": H{}},
+	}}, consts.RootDirID)
+	fileAt := func(p string) *vfs.FileDoc {
+		file, err := fs.FileByPath(p)
+		require.NoError(t, err)
+		return file
+	}
+	drive := createActiveRecipientSharing(t, inst, root.ID(), false, daveInstance)
+	// A drive whose root is a file stays referenced by its file in the trash.
+	own := fileAt("/drive/own.txt")
+	createSharing(t, inst, own.ID(), false, false, DriveRootTypeFile, daveInstance)
+	_, err := vfs.TrashFile(fs, fileAt("/drive/own.txt"))
+	require.NoError(t, err)
+	gone := fileAt("/drive/gone.txt")
+	_, err = vfs.TrashFile(fs, fileAt("/drive/gone.txt"))
+	require.NoError(t, err)
+	old, err := fs.DirByPath("/drive/old")
+	require.NoError(t, err)
+	oldFile := fileAt("/drive/old/old.txt")
+	_, err = vfs.TrashDir(fs, old)
+	require.NoError(t, err)
+
+	a, err := fs.DirByPath("/drive/a")
+	require.NoError(t, err)
+	live := []string{root.ID(), a.ID(), fileAt("/drive/a/a.txt").ID(), fileAt("/drive/a/b/b.txt").ID()}
+	trashed := []string{own.ID(), gone.ID(), old.ID(), oldFile.ID()}
+
+	t.Run("TrashedItemsAreInNoDrive", func(t *testing.T) {
+		ids := append(slices.Clone(live), trashed...)
+		got, err := resolver.DrivesForMember(loadAccessTargets(t, inst, ids), dave)
+		require.NoError(t, err)
+		require.Len(t, got, len(ids))
+		for i := range live {
+			if assert.NotNil(t, got[i], ids[i]) {
+				assert.Equal(t, drive.SID, got[i].Sharing.SID)
+				assert.Equal(t, root.Fullpath, got[i].RootPath)
+				assert.False(t, got[i].Member.ReadOnly)
+			}
+		}
+		for i := len(live); i < len(ids); i++ {
+			assert.Nil(t, got[i], ids[i])
+		}
+	})
+
+	t.Run("UnresolvableTargetsAreInNoDrive", func(t *testing.T) {
+		orphan := &vfs.FileDoc{Type: consts.FileType, DocID: "orphan", DocName: "orphan.txt", DirID: "no-such-dir"}
+		targets := append([]AccessTarget{{File: orphan}, {}}, loadAccessTargets(t, inst, live[2:3])...)
+		got, err := resolver.DrivesForMember(targets, dave)
+		require.NoError(t, err)
+		require.Len(t, got, 3)
+		assert.Nil(t, got[0])
+		assert.Nil(t, got[1])
+		require.NotNil(t, got[2])
+		assert.Equal(t, drive.SID, got[2].Sharing.SID)
+	})
+
+	t.Run("NilMember", func(t *testing.T) {
+		got, err := resolver.DrivesForMember(loadAccessTargets(t, inst, live), nil)
+		require.NoError(t, err)
+		assert.Equal(t, make([]*SharingScope, len(live)), got)
+	})
+
+	t.Run("RequestsDoNotGrowWithTheDocs", func(t *testing.T) {
+		count := func(ids []string) int {
+			targets := loadAccessTargets(t, inst, ids)
+			var got []*SharingScope
+			nb := countCouchRequests(t, func() {
+				var err error
+				got, err = resolver.DrivesForMember(targets, dave)
+				require.NoError(t, err)
+			})
+			require.NotNil(t, got[0])
+			return nb
+		}
+		one := count(live[3:])
+		assert.Equal(t, 3, one, "parents, shared roots and sharings")
+		assert.Equal(t, one, count(live))
 	})
 }
 
