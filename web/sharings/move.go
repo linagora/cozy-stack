@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/cozy/cozy-stack/client"
 	"github.com/cozy/cozy-stack/client/request"
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -181,9 +183,9 @@ func MoveHandler(c echo.Context) error {
 		}
 		if sourceInstance != nil && destInstance != nil {
 			if moveDirectory {
-				return moveDirSameStack(c, sourceInstance, destInstance, req.Source.DirID, req.Dest.DirID, destSharing, req.Copy)
+				return moveDirSameStack(c, sourceInstance, destInstance, req.Source.DirID, req.Dest.DirID, sourceSharing, destSharing, req.Copy)
 			} else {
-				return moveFileSameStack(c, sourceInstance, destInstance, req.Source.FileID, req.Dest.DirID, destSharing, req.Copy)
+				return moveFileSameStack(c, sourceInstance, destInstance, req.Source.FileID, req.Dest.DirID, sourceSharing, destSharing, req.Copy)
 			}
 		} else {
 			if moveDirectory {
@@ -204,9 +206,9 @@ func MoveHandler(c echo.Context) error {
 		}
 		if sourceInstance != nil && destInstance != nil {
 			if moveDirectory {
-				return moveDirSameStack(c, sourceInstance, destInstance, req.Source.DirID, req.Dest.DirID, nil, req.Copy)
+				return moveDirSameStack(c, sourceInstance, destInstance, req.Source.DirID, req.Dest.DirID, s, nil, req.Copy)
 			} else {
-				return moveFileSameStack(c, sourceInstance, destInstance, req.Source.FileID, req.Dest.DirID, nil, req.Copy)
+				return moveFileSameStack(c, sourceInstance, destInstance, req.Source.FileID, req.Dest.DirID, s, nil, req.Copy)
 			}
 		} else {
 			if moveDirectory {
@@ -227,9 +229,9 @@ func MoveHandler(c echo.Context) error {
 		}
 		if sourceInstance != nil && destInstance != nil {
 			if moveDirectory {
-				return moveDirSameStack(c, sourceInstance, destInstance, req.Source.DirID, req.Dest.DirID, s, req.Copy)
+				return moveDirSameStack(c, sourceInstance, destInstance, req.Source.DirID, req.Dest.DirID, nil, s, req.Copy)
 			} else {
-				return moveFileSameStack(c, sourceInstance, destInstance, req.Source.FileID, req.Dest.DirID, s, req.Copy)
+				return moveFileSameStack(c, sourceInstance, destInstance, req.Source.FileID, req.Dest.DirID, nil, s, req.Copy)
 			}
 		} else {
 			if moveDirectory {
@@ -355,7 +357,7 @@ func wrapRemoteErr(inst *instance.Instance, err error, what string) error {
 
 // Same-stack moves (instance ↔ instance)
 func moveDirSameStack(c echo.Context, srcInst *instance.Instance, destInst *instance.Instance, sourceDirID string,
-	destDirID string, destSharing *sharing.Sharing, copy bool) error {
+	destDirID string, sourceSharing, destSharing *sharing.Sharing, copy bool) error {
 	// Resolve source and destination root directories
 	srcRoot, err := srcInst.VFS().DirByID(sourceDirID)
 	if err != nil {
@@ -423,15 +425,18 @@ func moveDirSameStack(c echo.Context, srcInst *instance.Instance, destInst *inst
 	}
 
 	// Copy files and delete sources
+	var moved []job.RecentsMovePair
 	for _, f := range filesToMove {
 		destParentID, ok := srcToDstDirID[f.DirID]
 		if !ok {
 			return files.WrapVfsError(errors.New("destination parent directory not found while moving file"))
 		}
 		// When moving a directory we copy files but do not delete sources here
-		if _, err := moveFileSameStackCore(srcInst, destInst, f, destParentID, false); err != nil {
+		newFileDoc, err := moveFileSameStackCore(srcInst, destInst, f, destParentID, false)
+		if err != nil {
 			return err
 		}
+		moved = append(moved, job.RecentsMovePair{OldID: f.DocID, NewID: newFileDoc.DocID})
 	}
 
 	// Delete source directories bottom-up (reverse order) only if not copying
@@ -440,6 +445,10 @@ func moveDirSameStack(c echo.Context, srcInst *instance.Instance, destInst *inst
 		if err != nil {
 			return files.WrapVfsError(err)
 		}
+		for oldID, newID := range srcToDstDirID {
+			moved = append(moved, job.RecentsMovePair{OldID: oldID, NewID: newID})
+		}
+		pushRecentsMove(srcInst, destInst, sourceSharing, moved)
 	}
 
 	obj := files.NewDir(newRoot, destSharing)
@@ -476,7 +485,7 @@ func moveFileSameStackCore(srcInst *instance.Instance, destInst *instance.Instan
 	return newFileDoc, nil
 }
 
-func moveFileSameStack(c echo.Context, srcInst *instance.Instance, destInst *instance.Instance, fileID string, dirID string, destSharing *sharing.Sharing, copy bool) error {
+func moveFileSameStack(c echo.Context, srcInst *instance.Instance, destInst *instance.Instance, fileID string, dirID string, sourceSharing, destSharing *sharing.Sharing, copy bool) error {
 	srcFile, err := srcInst.VFS().FileByID(fileID)
 	if err != nil {
 		return files.WrapVfsError(err)
@@ -500,6 +509,9 @@ func moveFileSameStack(c echo.Context, srcInst *instance.Instance, destInst *ins
 	newFileDoc, err := moveFileSameStackCore(srcInst, destInst, srcFile, dirID, deleteSource)
 	if err != nil {
 		return err
+	}
+	if deleteSource {
+		pushRecentsMove(srcInst, destInst, sourceSharing, []job.RecentsMovePair{{OldID: fileID, NewID: newFileDoc.DocID}})
 	}
 	obj := files.NewFile(newFileDoc, destInst, destSharing)
 	return jsonapi.Data(c, http.StatusCreated, obj, nil)
@@ -1309,4 +1321,34 @@ func extractBearerToken(s *sharing.Sharing) (string, error) {
 		return "", jsonapi.Forbidden(errors.New("no credentials"))
 	}
 	return s.Credentials[0].DriveToken, nil
+}
+
+// pushRecentsMove pushes, on the instance of the source owner, the jobs that
+// move the personal recents rows of the items of a move to the drive of another
+// owner of the same stack under their new IDs.
+//
+// It is best-effort: a failure is logged but does not fail the move, which has
+// already happened. The rows are then deleted by the propagation of the
+// deletion of the originals, as they are when it runs before these jobs.
+func pushRecentsMove(srcInst, destInst *instance.Instance, sourceSharing *sharing.Sharing, pairs []job.RecentsMovePair) {
+	if srcInst.Domain == destInst.Domain {
+		return
+	}
+	move := job.RecentsMoveMessage{DestOwnerDomain: destInst.Domain}
+	if sourceSharing != nil {
+		move.SourceDriveID = sourceSharing.SID
+	}
+	log := srcInst.Logger().WithNamespace("move")
+	for batch := range slices.Chunk(pairs, job.RecentsMoveBatchSize) {
+		move.Pairs = batch
+		msg, err := job.NewMessage(&move)
+		if err != nil {
+			log.Warnf("recents move: cannot serialize the message: %s", err)
+			continue
+		}
+		req := &job.JobRequest{WorkerType: job.RecentsMoveWorker, Message: msg}
+		if _, err := job.System().PushJob(srcInst, req); err != nil {
+			log.Warnf("recents move: cannot push the job: %s", err)
+		}
+	}
 }

@@ -215,13 +215,17 @@ A move within the instance of the owner keeps the ID of the item: its rows
 follow it like any other change. A move to the shared drive of another owner of
 the stack creates the items again there, with new IDs, and deletes the
 originals. The move knows the old and new ID of each item it creates again, and
-stores this table once. For the owner and the members of the source drive that
-have the recents enabled, a job moves the rows under the old IDs to the new
-IDs, with their dates merged at their maximum, and with the `drive_id` of the
-destination for the members of that drive. The propagation of the deletion of
-the originals reads the same table, so that it never deletes a row before it is
-moved. A user who cannot open the destination loses the row, as for an item
-destroyed for good.
+gives this table to a job, in its message. For the owner and the members of the
+source drive that have the recents enabled, the job moves the rows under the
+old IDs to the new IDs, with their dates merged at their maximum, and with the
+`drive_id` of the destination for the members of that drive. A user who cannot
+open the destination loses the row, as for an item destroyed for good.
+
+Known limit: nothing holds the propagation of the deletion of the originals
+until the rows are moved. When it runs before the job of the move, it deletes
+the rows under the old IDs and the job finds nothing to move: the rows are
+lost, and come back with the next activity on the items. This is accepted
+rather than storing the table for the two jobs to share.
 
 When the drives of a member change on the owner's instance (the member accepts
 a drive or is revoked from it, their rights in it change, or a drive is created
