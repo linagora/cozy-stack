@@ -417,6 +417,28 @@ Content-Type: application/vnd.api+json
 }
 ```
 
+### GET /permissions/:id/statistics
+
+Download the retained events for one public file link as CSV. The permission ID
+identifies the link, not its sharecode. The request must use a webapp or OAuth
+token on the link owner's instance whose permissions cover the link's file
+rules and grant `GET` on the whole `io.cozy.public_links.events` doctype.
+Public and shared-drive member tokens cannot access the statistics. This grant
+authorizes the export endpoint, not direct access to the private doctype.
+This also applies to public links created by a member on a shared-drive owner's
+instance. Only explicit file IDs are supported. Expired links can still be
+exported while their permission document exists.
+
+The CSV has columns `occurred_at`, `IP`, `identity`, `action`, ordered from
+oldest to newest. Dates are UTC RFC3339; unknown identities are empty. Cells that could
+be interpreted as spreadsheet formulas are prefixed with an apostrophe. The
+response is an attachment with `Cache-Control: no-store`. Events added during
+generation may be absent. The CSV is generated in a private temporary file
+that is unlinked before any data is written and closed after the response. This
+requires an operating system that supports unlinking an open file; temporary
+storage still needs adequate capacity and protection for personal data. This
+endpoint does not create or publish a report file and does not collect events.
+
 ### PATCH /permissions/:id
 
 Add permissions in this permissions set. It can be used in inter-apps context as

@@ -31,8 +31,6 @@ func TestSharedDrivePublicLinkEvents(t *testing.T) {
 	_, err = lifecycle.GetInstance(ownerURL.Host)
 	require.Error(t, err)
 	eBetty = eBetty.Builder(func(r *httpexpect.Request) { r.WithHeader("X-Forwarded-For", "198.51.100.25") })
-	require.NoError(t, couchdb.CreateDB(f.env.acme, consts.PublicLinkEvents))
-	require.NoError(t, couchdb.CreateDB(f.env.betty, consts.PublicLinkEvents))
 	payload := makeSharedDrivePermissionPayload(t, consts.Files, []string{f.fileID}, "", nil)
 	id, attrs := createSharedDrivePermission(t, eBetty, f.sharingID, token, "link", "", payload)
 	code := attrs.Value("codes").Object().Value("link").String().NotEmpty().Raw()
