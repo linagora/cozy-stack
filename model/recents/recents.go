@@ -130,9 +130,10 @@ func (d *FileDirActivity) SetRev(rev string) { d.DocRev = rev }
 // Clone is part of the couchdb.Doc interface.
 func (d *FileDirActivity) Clone() couchdb.Doc { cloned := *d; return &cloned }
 
-// itemMetadata is the part of a row that comes from the item, and not from the
-// activity of the user.
-type itemMetadata struct {
+// Metadata is what a row tells of its item, as opposed to the dates of the
+// personal activity of its user. DriveID and OwnerDomain are empty, and Path is
+// the full path, for a row of the owner of the item.
+type Metadata struct {
 	DriveID     string
 	OwnerDomain string
 	Name        string
@@ -145,8 +146,34 @@ type itemMetadata struct {
 	Path        string
 }
 
-func (d *FileDirActivity) metadata() itemMetadata {
-	return itemMetadata{
+// DirMetadata returns the metadata of a folder for its owner.
+func DirMetadata(dir *vfs.DirDoc) Metadata {
+	return Metadata{
+		Name:      dir.DocName,
+		Type:      dir.Type,
+		UpdatedAt: dir.UpdatedAt.Format(time.RFC3339Nano),
+		DirID:     dir.DirID,
+		Path:      dir.Fullpath,
+	}
+}
+
+// FileMetadata returns the metadata of a file for its owner, given its full
+// path, which a file document does not hold.
+func FileMetadata(file *vfs.FileDoc, fullpath string) Metadata {
+	return Metadata{
+		Name:      file.DocName,
+		Type:      file.Type,
+		Mime:      file.Mime,
+		Class:     file.Class,
+		Size:      strconv.FormatInt(file.ByteSize, 10),
+		UpdatedAt: file.UpdatedAt.Format(time.RFC3339Nano),
+		DirID:     file.DirID,
+		Path:      fullpath,
+	}
+}
+
+func (d *FileDirActivity) metadata() Metadata {
+	return Metadata{
 		DriveID:     d.DriveID,
 		OwnerDomain: d.OwnerDomain,
 		Name:        d.Name,
@@ -160,7 +187,7 @@ func (d *FileDirActivity) metadata() itemMetadata {
 	}
 }
 
-func (d *FileDirActivity) setMetadata(m itemMetadata) {
+func (d *FileDirActivity) setMetadata(m Metadata) {
 	d.DriveID = m.DriveID
 	d.OwnerDomain = m.OwnerDomain
 	d.Name = m.Name
@@ -176,7 +203,7 @@ func (d *FileDirActivity) setMetadata(m itemMetadata) {
 // activityItem is an item on which an activity must be recorded.
 type activityItem struct {
 	id       string
-	metadata itemMetadata
+	metadata Metadata
 }
 
 // newActivityItem returns the item of an activity, or nil when the activity
@@ -197,25 +224,11 @@ func newActivityItem(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vf
 		return nil, nil
 	}
 
-	var meta itemMetadata
+	var meta Metadata
 	if dir != nil {
-		meta = itemMetadata{
-			Name:      dir.DocName,
-			Type:      consts.DirType,
-			UpdatedAt: dir.UpdatedAt.Format(time.RFC3339Nano),
-			DirID:     dir.DirID,
-			Path:      dir.Fullpath,
-		}
+		meta = DirMetadata(dir)
 	} else {
-		meta = itemMetadata{
-			Name:      file.DocName,
-			Type:      consts.FileType,
-			Mime:      file.Mime,
-			Class:     file.Class,
-			Size:      strconv.FormatInt(file.ByteSize, 10),
-			UpdatedAt: file.UpdatedAt.Format(time.RFC3339Nano),
-			DirID:     file.DirID,
-		}
+		meta = FileMetadata(file, "")
 	}
 
 	switch {
@@ -279,7 +292,7 @@ const activityCacheSize = 10000
 // of activity: a date of that kind at least stamp, with this metadata.
 type storedActivity struct {
 	stamp    string
-	metadata itemMetadata
+	metadata Metadata
 }
 
 var (
