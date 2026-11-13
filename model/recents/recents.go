@@ -5,7 +5,6 @@ package recents
 
 import (
 	"errors"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,18 +55,10 @@ const (
 	KindView Kind = "view"
 )
 
-// Drive is the shared drive of an item that the user does not own. The caller
-// computes it on the instance that holds the item, as this package knows nothing
-// of the sharings.
-type Drive struct {
-	// ID is the ID of the sharing of the drive.
-	ID string
-	// Path is the path of the item from the root of the drive.
-	Path string
-}
-
-// SchemaVersion is the version of the recents row format.
-const SchemaVersion = 1
+// SchemaVersion is the version of the recents row format. The version 1 also
+// stored the size, the modification date, the parent, the path and the drive
+// of the item, which are now read from its io.cozy.files document.
+const SchemaVersion = 2
 
 // fixedIDPrefix starts the IDs that every instance shares: the root, the
 // trash and the system folders.
@@ -81,33 +72,28 @@ func IsFixedID(id string) bool {
 }
 
 // FileDirActivity is a row of the io.cozy.files.recents doctype: the
-// personal activity of a user on an item, and what is displayed for this item.
-// Its _id is the ID of the file or folder. The dates of activity are RFC 3339
-// strings, in UTC and to the second, so that their lexicographic order is their
-// chronological order.
+// personal activity of a user on an item. Its _id is the ID of the file or
+// folder. The dates of activity are RFC 3339 strings, in UTC and to the second,
+// so that their lexicographic order is their chronological order.
 type FileDirActivity struct {
 	DocID  string `json:"_id,omitempty"`
 	DocRev string `json:"_rev,omitempty"`
 
-	// DriveID is the ID of the sharing of the shared drive and OwnerDomain the
-	// domain of the instance of its owner, for an item of a drive that the
-	// user does not own. They are empty otherwise.
-	DriveID     string `json:"drive_id,omitempty"`
+	// OwnerDomain is the domain of the instance that holds the item, for an
+	// item of a shared drive that the user does not own. It is empty otherwise.
 	OwnerDomain string `json:"owner_domain,omitempty"`
 
 	LastEditedAt   string `json:"last_edited_at,omitempty"`
 	LastViewedAt   string `json:"last_viewed_at,omitempty"`
 	LastActivityAt string `json:"last_activity_at"`
 
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Mime      string `json:"mime,omitempty"`
-	Class     string `json:"class,omitempty"`
-	Size      string `json:"size,omitempty"`
-	UpdatedAt string `json:"updated_at"`
-	DirID     string `json:"dir_id"`
-	// Path starts at the root of the drive for an item of a shared drive.
-	Path string `json:"path"`
+	// Name, Type, Mime and Class are those of the item at the last written
+	// activity of the user, and are not kept up to date otherwise: they are
+	// what is left to display when the item cannot be read any more.
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Mime  string `json:"mime,omitempty"`
+	Class string `json:"class,omitempty"`
 
 	SchemaVersion int `json:"schema_version"`
 }
@@ -130,124 +116,73 @@ func (d *FileDirActivity) SetRev(rev string) { d.DocRev = rev }
 // Clone is part of the couchdb.Doc interface.
 func (d *FileDirActivity) Clone() couchdb.Doc { cloned := *d; return &cloned }
 
-// itemMetadata is the part of a row that comes from the item, and not from the
-// activity of the user.
-type itemMetadata struct {
-	DriveID     string
-	OwnerDomain string
-	Name        string
-	Type        string
-	Mime        string
-	Class       string
-	Size        string
-	UpdatedAt   string
-	DirID       string
-	Path        string
-}
-
-func (d *FileDirActivity) metadata() itemMetadata {
-	return itemMetadata{
-		DriveID:     d.DriveID,
-		OwnerDomain: d.OwnerDomain,
-		Name:        d.Name,
-		Type:        d.Type,
-		Mime:        d.Mime,
-		Class:       d.Class,
-		Size:        d.Size,
-		UpdatedAt:   d.UpdatedAt,
-		DirID:       d.DirID,
-		Path:        d.Path,
-	}
-}
-
-func (d *FileDirActivity) setMetadata(m itemMetadata) {
-	d.DriveID = m.DriveID
-	d.OwnerDomain = m.OwnerDomain
-	d.Name = m.Name
-	d.Type = m.Type
-	d.Mime = m.Mime
-	d.Class = m.Class
-	d.Size = m.Size
-	d.UpdatedAt = m.UpdatedAt
-	d.DirID = m.DirID
-	d.Path = m.Path
-}
-
-// activityItem is an item on which an activity must be recorded.
+// activityItem is an item on which an activity must be recorded, as the user
+// sees it at the time of the activity.
 type activityItem struct {
-	id       string
-	metadata itemMetadata
+	id          string
+	ownerDomain string
+	name        string
+	docType     string
+	mime        string
+	class       string
+}
+
+// describe writes on the row what the item is at the time of an activity.
+func (d *FileDirActivity) describe(item *activityItem) {
+	d.OwnerDomain = item.ownerDomain
+	d.Name = item.name
+	d.Type = item.docType
+	d.Mime = item.mime
+	d.Class = item.class
 }
 
 // newActivityItem returns the item of an activity, or nil when the activity
 // must not be recorded: an item with a fixed ID, an item of another instance
 // outside of a drive of the user, or an actor without the recents enabled.
-func newActivityItem(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs.FileDoc, drive *Drive) (*activityItem, error) {
-	var id string
+func newActivityItem(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs.FileDoc, inDrive bool) (*activityItem, error) {
+	var item activityItem
 	switch {
 	case dir != nil:
-		id = dir.ID()
+		item = activityItem{id: dir.ID(), name: dir.DocName, docType: consts.DirType}
 	case file != nil:
-		id = file.ID()
+		item = activityItem{
+			id:      file.ID(),
+			name:    file.DocName,
+			docType: consts.FileType,
+			mime:    file.Mime,
+			class:   file.Class,
+		}
 	default:
 		return nil, errors.New("recents: an activity needs a file or a folder")
 	}
 	own := actor.Domain == holder.Domain
-	if IsFixedID(id) || (!own && drive == nil) || !Enabled(actor) {
+	if IsFixedID(item.id) || (!own && !inDrive) || !Enabled(actor) {
 		return nil, nil
 	}
-
-	var meta itemMetadata
-	if dir != nil {
-		meta = itemMetadata{
-			Name:      dir.DocName,
-			Type:      consts.DirType,
-			UpdatedAt: dir.UpdatedAt.Format(time.RFC3339Nano),
-			DirID:     dir.DirID,
-			Path:      dir.Fullpath,
-		}
-	} else {
-		meta = itemMetadata{
-			Name:      file.DocName,
-			Type:      consts.FileType,
-			Mime:      file.Mime,
-			Class:     file.Class,
-			Size:      strconv.FormatInt(file.ByteSize, 10),
-			UpdatedAt: file.UpdatedAt.Format(time.RFC3339Nano),
-			DirID:     file.DirID,
-		}
+	if !own {
+		item.ownerDomain = holder.Domain
 	}
-
-	switch {
-	case !own:
-		// The full path on the holder must never reach the row: it names the
-		// folders above the root of the drive.
-		meta.DriveID = drive.ID
-		meta.OwnerDomain = holder.Domain
-		meta.Path = drive.Path
-	case file != nil:
-		fullpath, err := file.Path(holder.VFS())
-		if err != nil {
-			return nil, err
-		}
-		meta.Path = fullpath
-	}
-	return &activityItem{id: id, metadata: meta}, nil
+	return &item, nil
 }
 
 // RecordActivity upserts the personal recents row of the actor on an item,
-// with the metadata of the item. The actor is the person doing the activity, as
-// their instance: the row lives in their io.cozy.files.recents database. The
-// holder is the instance of the item, that is the instance of the actor for
-// their own item. The item is the file or the folder, the other one being nil,
-// as it is once written. The drive is required for an item of another instance,
-// and ignored for an own item. The date is stamped by the server here: a single
-// stack means a single clock.
+// with the name, the type, the MIME type and the class of the item. The actor
+// is the person doing the activity, as their instance: the row lives in their
+// io.cozy.files.recents database. The holder is the instance of the item, that
+// is the instance of the actor for their own item. The item is the file or the
+// folder, the other one being nil, as it is once written. The date is stamped
+// by the server here: a single stack means a single clock.
+//
+// inDrive tells that a shared drive of the actor gives them the item. The
+// caller computes it on the holder, as this package knows nothing of the
+// sharings. It is required for an item of another instance, and ignored for an
+// own item.
 //
 // Nothing is recorded for an item with a fixed ID, for an item of another
-// instance without a drive, or when the recents are not enabled for the actor.
-func RecordActivity(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs.FileDoc, kind Kind, drive *Drive) error {
-	item, err := newActivityItem(actor, holder, dir, file, drive)
+// instance outside of a drive, or when the recents are not enabled for the
+// actor.
+func RecordActivity(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs.FileDoc, kind Kind, inDrive bool) error {
+	item, err := newActivityItem(actor, holder, dir, file, inDrive)
 	if err != nil || item == nil {
 		return err
 	}
@@ -263,8 +198,8 @@ func RecordActivity(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs
 	return nil
 }
 
-func recordActivity(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs.FileDoc, kind Kind, drive *Drive, at time.Time) error {
-	item, err := newActivityItem(actor, holder, dir, file, drive)
+func recordActivity(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs.FileDoc, kind Kind, inDrive bool, at time.Time) error {
+	item, err := newActivityItem(actor, holder, dir, file, inDrive)
 	if err != nil || item == nil {
 		return err
 	}
@@ -275,23 +210,17 @@ func recordActivity(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs
 // activityCacheSize bounds the per-process memory of the stored activities.
 const activityCacheSize = 10000
 
-// storedActivity is what this process knows to be stored on a row for a kind
-// of activity: a date of that kind at least stamp, with this metadata.
-type storedActivity struct {
-	stamp    string
-	metadata itemMetadata
-}
-
+// activityCache maps a row and a kind of activity to what this process knows
+// to be stored: a date of that kind at least this stamp.
 var (
-	activityCache     *expirable.LRU[string, storedActivity]
+	activityCache     *expirable.LRU[string, string]
 	initActivityCache sync.Once
 )
 
 // storedActivities is the memory of the activities that this process wrote,
 // or found already stored, in the last minRewriteInterval. A hit means that
 // the row already holds an activity of this kind less than minRewriteInterval
-// old, with the same metadata: nothing would be written, so the hot paths skip
-// the CouchDB read.
+// old: nothing would be written, so the hot paths skip the CouchDB read.
 //
 // A row deleted or changed outside of RecordActivity cannot be rewritten by
 // this process while the entry lives. No legitimate activity can target such
@@ -299,9 +228,9 @@ var (
 // is never reused, or when the instance of the actor is reset by an import,
 // which keeps it blocked much longer. The TTL is part of that bound, as a stored
 // date can be in the future: it must stay minRewriteInterval.
-func storedActivities() *expirable.LRU[string, storedActivity] {
+func storedActivities() *expirable.LRU[string, string] {
 	initActivityCache.Do(func() {
-		activityCache = expirable.NewLRU[string, storedActivity](activityCacheSize, nil, minRewriteInterval)
+		activityCache = expirable.NewLRU[string, string](activityCacheSize, nil, minRewriteInterval)
 	})
 	return activityCache
 }
@@ -311,17 +240,16 @@ func activityCacheKey(actor *instance.Instance, id string, kind Kind) string {
 }
 
 // recentlyStored reports whether this process knows that the row of the actor
-// already holds this activity: same metadata, and a stored date of this kind
-// less than minRewriteInterval before stamp.
+// already holds this activity: a stored date of this kind less than
+// minRewriteInterval before stamp.
 func recentlyStored(actor *instance.Instance, item *activityItem, kind Kind, stamp string) bool {
-	s, ok := storedActivities().Get(activityCacheKey(actor, item.id, kind))
-	return ok && s.metadata == item.metadata && !isNewer(stamp, s.stamp)
+	stored, ok := storedActivities().Get(activityCacheKey(actor, item.id, kind))
+	return ok && !isNewer(stamp, stored)
 }
 
 func rememberStored(actor *instance.Instance, doc *FileDirActivity, kind Kind) {
 	if stamp := doc.stampOf(kind); stamp != "" {
-		storedActivities().Add(activityCacheKey(actor, doc.DocID, kind),
-			storedActivity{stamp: stamp, metadata: doc.metadata()})
+		storedActivities().Add(activityCacheKey(actor, doc.DocID, kind), stamp)
 	}
 }
 
@@ -340,7 +268,9 @@ func formatStamp(at time.Time) string {
 }
 
 // upsertActivity applies an activity to the row of the actor on an item, and
-// returns the row as stored, written or left unchanged.
+// returns the row as stored, written or left unchanged. Only a date makes a
+// write, and each write describes the item as it is: within the minimal
+// interval, an item that has just been renamed keeps its previous name.
 func upsertActivity(actor *instance.Instance, item *activityItem, kind Kind, at time.Time) (*FileDirActivity, error) {
 	stamp := formatStamp(at)
 
@@ -350,7 +280,7 @@ func upsertActivity(actor *instance.Instance, item *activityItem, kind Kind, at 
 		err = couchdb.GetDoc(actor, consts.FilesRecents, item.id, &doc)
 		if couchdb.IsNotFoundError(err) || couchdb.IsNoDatabaseError(err) {
 			doc = FileDirActivity{DocID: item.id, SchemaVersion: SchemaVersion}
-			doc.setMetadata(item.metadata)
+			doc.describe(item)
 			mergeActivity(&doc, kind, stamp)
 			err = couchdb.CreateNamedDocWithDB(actor, &doc)
 			// The row, or the database, has been created meanwhile by a
@@ -368,14 +298,10 @@ func upsertActivity(actor *instance.Instance, item *activityItem, kind Kind, at 
 		}
 
 		old := doc
-		changed := mergeActivity(&doc, kind, stamp)
-		if doc.metadata() != item.metadata {
-			doc.setMetadata(item.metadata)
-			changed = true
-		}
-		if !changed {
+		if !mergeActivity(&doc, kind, stamp) {
 			return &old, nil // A replayed or too close activity is a no-op.
 		}
+		doc.describe(item)
 		err = couchdb.UpdateDocWithOld(actor, &doc, &old)
 		if couchdb.IsConflictError(err) {
 			continue
