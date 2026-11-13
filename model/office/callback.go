@@ -126,6 +126,11 @@ func forceSaveFile(inst *instance.Instance, key, downloadURL string) error {
 
 	updated, err := saveFile(inst, *detector, downloadURL)
 	if err == nil {
+		if updated.ID != detector.ID {
+			// The file has changed during the session and the document went
+			// to a conflict copy: the next saves go to that copy too.
+			_ = GetStore().UpdateSecret(inst, key, detector.ID, updated.ID)
+		}
 		_ = GetStore().UpdateDoc(inst, key, *updated)
 	}
 	return err

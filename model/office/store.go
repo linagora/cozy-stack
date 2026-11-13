@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +37,32 @@ type Store interface {
 	GetDoc(db prefixer.Prefixer, secret string) (*ConflictDetector, error)
 	UpdateDoc(db prefixer.Prefixer, secret string, payload ConflictDetector) error
 	RemoveDoc(db prefixer.Prefixer, secret string) error
+
+	// AcquireForceSave takes the forcesave of the session of the key for the
+	// owner, until it is finished or for ttl. It reports false when a
+	// forcesave is running or has ended within its delay.
+	AcquireForceSave(db prefixer.Prefixer, secret, owner string, ttl time.Duration) (bool, error)
+	// FinishForceSave records the outcome of the forcesave of the owner for
+	// delay, which also frees it. It does nothing when the owner no longer
+	// holds the forcesave.
+	FinishForceSave(db prefixer.Prefixer, secret, owner string, outcome ForceSaveOutcome, delay time.Duration) error
+	// LastForceSave returns the outcome of the forcesave of the session ended
+	// within its delay, or nil.
+	LastForceSave(db prefixer.Prefixer, secret string) (*ForceSaveOutcome, error)
+}
+
+// ForceSaveOutcome is how a forcesave has ended, for the readers of the
+// document on all the stacks.
+type ForceSaveOutcome struct {
+	Saved bool   `json:"saved"`
+	Error string `json:"error,omitempty"`
+}
+
+func (o *ForceSaveOutcome) err() error {
+	if o.Error == "" {
+		return nil
+	}
+	return errors.New(o.Error)
 }
 
 // storeTTL is the time an entry stay alive
@@ -69,19 +96,29 @@ type memRef struct {
 	exp time.Time
 }
 
+// memForceSave is the forcesave of a session: running for its owner, or
+// ended with its outcome.
+type memForceSave struct {
+	owner   string
+	outcome *ForceSaveOutcome
+	exp     time.Time
+}
+
 func newMemStore() Store {
 	store := &memStore{
-		vals: make(map[string]*memRef),
-		byID: make(map[string]string),
+		vals:       make(map[string]*memRef),
+		byID:       make(map[string]string),
+		forceSaves: make(map[string]memForceSave),
 	}
 	go store.cleaner()
 	return store
 }
 
 type memStore struct {
-	mu   sync.Mutex
-	vals map[string]*memRef
-	byID map[string]string // id -> secret
+	mu         sync.Mutex
+	vals       map[string]*memRef
+	byID       map[string]string // id -> secret
+	forceSaves map[string]memForceSave
 }
 
 func (s *memStore) cleaner() {
@@ -94,6 +131,11 @@ func (s *memStore) cleaner() {
 					delete(s.byID, v.val.ID)
 				}
 				delete(s.vals, k)
+			}
+		}
+		for k, v := range s.forceSaves {
+			if now.After(v.exp) {
+				delete(s.forceSaves, k)
 			}
 		}
 		s.mu.Unlock()
@@ -169,6 +211,54 @@ func (s *memStore) RemoveDoc(db prefixer.Prefixer, secret string) error {
 	}
 	delete(s.vals, key)
 	return nil
+}
+
+// forceSave returns the forcesave of the session, if it has not expired. The
+// caller holds the lock.
+func (s *memStore) forceSave(key string) (memForceSave, bool) {
+	fs, ok := s.forceSaves[key]
+	if ok && time.Now().After(fs.exp) {
+		delete(s.forceSaves, key)
+		return fs, false
+	}
+	return fs, ok
+}
+
+func (s *memStore) AcquireForceSave(db prefixer.Prefixer, secret, owner string, ttl time.Duration) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := forceSaveKey(db, secret)
+	if _, ok := s.forceSave(key); ok {
+		return false, nil
+	}
+	s.forceSaves[key] = memForceSave{owner: owner, exp: time.Now().Add(ttl)}
+	return true, nil
+}
+
+func (s *memStore) FinishForceSave(db prefixer.Prefixer, secret, owner string, outcome ForceSaveOutcome, delay time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := forceSaveKey(db, secret)
+	if fs, ok := s.forceSave(key); !ok || fs.outcome != nil || fs.owner != owner {
+		return nil
+	}
+	if delay <= 0 {
+		delete(s.forceSaves, key)
+		return nil
+	}
+	s.forceSaves[key] = memForceSave{outcome: &outcome, exp: time.Now().Add(delay)}
+	return nil
+}
+
+func (s *memStore) LastForceSave(db prefixer.Prefixer, secret string) (*ForceSaveOutcome, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fs, ok := s.forceSave(forceSaveKey(db, secret))
+	if !ok || fs.outcome == nil {
+		return nil, nil
+	}
+	outcome := *fs.outcome
+	return &outcome, nil
 }
 
 type redisStore struct {
@@ -254,6 +344,57 @@ func (s *redisStore) RemoveDoc(db prefixer.Prefixer, secret string) error {
 	}
 	key := docKey(db, secret)
 	return s.c.Del(s.ctx, key).Err()
+}
+
+// The key of the forcesave of a session holds "running:<owner>" until the
+// owner records "done:<outcome>" in its place.
+const (
+	forceSaveRunning = "running:"
+	forceSaveDone    = "done:"
+)
+
+// luaFinishForceSave replaces the forcesave of the owner by its outcome, in one
+// step: a reader never sees it freed without its outcome.
+var luaFinishForceSave = redis.NewScript(`
+if redis.call("get", KEYS[1]) ~= ARGV[1] then return 0 end
+if ARGV[3] == "0" then return redis.call("del", KEYS[1]) end
+return redis.call("set", KEYS[1], ARGV[2], "px", ARGV[3])`)
+
+func (s *redisStore) AcquireForceSave(db prefixer.Prefixer, secret, owner string, ttl time.Duration) (bool, error) {
+	return s.c.SetNX(s.ctx, forceSaveKey(db, secret), forceSaveRunning+owner, ttl).Result()
+}
+
+func (s *redisStore) FinishForceSave(db prefixer.Prefixer, secret, owner string, outcome ForceSaveOutcome, delay time.Duration) error {
+	v, err := json.Marshal(outcome)
+	if err != nil {
+		return err
+	}
+	keys := []string{forceSaveKey(db, secret)}
+	return luaFinishForceSave.Run(s.ctx, s.c, keys,
+		forceSaveRunning+owner, forceSaveDone+string(v), max(delay.Milliseconds(), 0)).Err()
+}
+
+func (s *redisStore) LastForceSave(db prefixer.Prefixer, secret string) (*ForceSaveOutcome, error) {
+	v, err := s.c.Get(s.ctx, forceSaveKey(db, secret)).Result()
+	if errors.Is(err, redis.Nil) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	done, ok := strings.CutPrefix(v, forceSaveDone)
+	if !ok {
+		return nil, nil
+	}
+	var outcome ForceSaveOutcome
+	if err := json.Unmarshal([]byte(done), &outcome); err != nil {
+		return nil, err
+	}
+	return &outcome, nil
+}
+
+func forceSaveKey(db prefixer.Prefixer, secret string) string {
+	return db.DBPrefix() + ":ooforcesave:" + secret
 }
 
 func docKey(db prefixer.Prefixer, suffix string) string {

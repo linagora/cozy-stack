@@ -126,7 +126,7 @@ func OpenOffice(inst *instance.Instance, fileID string) (*OfficeOpener, error) {
 	}
 
 	// Check that the file is an office document
-	if !isOfficeDocument(file) {
+	if !office.IsOfficeDocument(file) {
 		return nil, office.ErrInvalidFile
 	}
 
@@ -284,7 +284,8 @@ func (o *OfficeOpener) downloadURL() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return o.Inst.PageURL("/files/downloads/"+secret+"/"+o.File.DocName, nil), nil
+	query := url.Values{office.DocumentServerParam: {"1"}}
+	return o.Inst.PageURL("/files/downloads/"+secret+"/"+o.File.DocName, query), nil
 }
 
 // uploadedDate returns the uploaded date for a file in the date format used by
@@ -315,15 +316,6 @@ func documentType(f *vfs.FileDoc) string {
 // fileType returns the extension expected by the OnlyOffice document config.
 func fileType(f *vfs.FileDoc) string {
 	return strings.ToLower(strings.TrimPrefix(path.Ext(f.DocName), "."))
-}
-
-func isOfficeDocument(f *vfs.FileDoc) bool {
-	switch f.Class {
-	case "pdf", "spreadsheet", "slide", "text":
-		return true
-	default:
-		return false
-	}
 }
 
 func shouldOpenANewVersion(file *vfs.FileDoc, detector *office.ConflictDetector) bool {

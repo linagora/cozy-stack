@@ -3,6 +3,7 @@ package sharing
 import (
 	"testing"
 
+	"github.com/cozy/cozy-stack/model/office"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	jwt "github.com/golang-jwt/jwt/v5"
@@ -24,7 +25,7 @@ func TestOnlyOfficeDocumentConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.class, func(t *testing.T) {
 			file := &vfs.FileDoc{DocName: tt.name, Class: tt.class}
-			if !isOfficeDocument(file) {
+			if !office.IsOfficeDocument(file) {
 				t.Fatalf("expected class %q to be supported", tt.class)
 			}
 			if got := documentType(file); got != tt.documentType {
