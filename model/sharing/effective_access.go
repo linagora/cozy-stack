@@ -115,29 +115,59 @@ type AccessResult struct {
 // missing parent, is put in its result; the returned error is for a failure
 // of CouchDB.
 func (r *AccessResolver) ResolveDocsForInstance(targets []AccessTarget, inst *instance.Instance) ([]AccessResult, error) {
-	results := make([]AccessResult, len(targets))
+	docs, err := r.scopesForDocs(targets, func(s *Sharing) *Member {
+		return s.readyMemberOf(inst)
+	})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AccessResult, len(docs))
+	for i, doc := range docs {
+		if doc.err != nil {
+			results[i].Err = doc.err
+			continue
+		}
+		results[i].Access = mergeScopes(doc.scopes)
+	}
+	return results, nil
+}
+
+// docScopes is what scopesForDocs resolves for one target: its full path and
+// the scopes applying to it, or the error that prevented resolving it.
+type docScopes struct {
+	path   string
+	scopes []SharingScope
+	err    error
+}
+
+// scopesForDocs returns, for each target in the same order, the scopes where
+// memberOf resolves a member. It is scopesMatching for several targets, in at
+// most three requests whatever their number: one for the parents of the
+// files, one for the shared roots on all their paths and one for the
+// sharings. The returned error is for a failure of CouchDB.
+func (r *AccessResolver) scopesForDocs(targets []AccessTarget, memberOf func(*Sharing) *Member) ([]docScopes, error) {
+	docs := make([]docScopes, len(targets))
 	fp, err := r.parentsPather(targets)
 	if err != nil {
 		return nil, err
 	}
 
-	targetPaths := make([]string, len(targets))
 	ancestorPaths := make([][]string, len(targets))
 	var allPaths []string
 	seenPaths := make(map[string]struct{})
 	for i, t := range targets {
 		switch {
 		case t.Dir != nil:
-			targetPaths[i] = t.Dir.Fullpath
+			docs[i].path = t.Dir.Fullpath
 		case t.File != nil:
-			targetPaths[i], results[i].Err = t.File.Path(fp)
+			docs[i].path, docs[i].err = t.File.Path(fp)
 		default:
-			results[i].Err = os.ErrNotExist
+			docs[i].err = os.ErrNotExist
 		}
-		if results[i].Err != nil {
+		if docs[i].err != nil {
 			continue
 		}
-		ancestorPaths[i] = r.ancestorPaths(targetPaths[i], t.Dir != nil)
+		ancestorPaths[i] = r.ancestorPaths(docs[i].path, t.Dir != nil)
 		for _, p := range ancestorPaths[i] {
 			if _, ok := seenPaths[p]; !ok {
 				seenPaths[p] = struct{}{}
@@ -155,10 +185,10 @@ func (r *AccessResolver) ResolveDocsForInstance(targets []AccessTarget, inst *in
 	seenSharings := make(map[string]struct{})
 	var sharingIDs []string
 	for i, t := range targets {
-		if results[i].Err != nil {
+		if docs[i].err != nil {
 			continue
 		}
-		rootsBySharing[i] = collectRoots(roots, ancestorPaths[i], t.File, targetPaths[i])
+		rootsBySharing[i] = collectRoots(roots, ancestorPaths[i], t.File, docs[i].path)
 		for id := range rootsBySharing[i] {
 			if _, ok := seenSharings[id]; !ok {
 				seenSharings[id] = struct{}{}
@@ -166,8 +196,8 @@ func (r *AccessResolver) ResolveDocsForInstance(targets []AccessTarget, inst *in
 			}
 		}
 	}
-	// Same order as for a single target, so that the source sharings of each
-	// result are listed as by ResolveForMember.
+	// Same order as for a single target, so that the scopes of each target are
+	// listed as by scopesMatching.
 	sort.Strings(sharingIDs)
 
 	var sharings []*Sharing
@@ -178,16 +208,13 @@ func (r *AccessResolver) ResolveDocsForInstance(targets []AccessTarget, inst *in
 		}
 	}
 
-	memberOf := func(s *Sharing) *Member {
-		return s.readyMemberOf(inst)
-	}
 	for i := range targets {
-		if results[i].Err != nil {
+		if docs[i].err != nil {
 			continue
 		}
-		results[i].Access = mergeScopes(matchScopes(sharings, rootsBySharing[i], memberOf))
+		docs[i].scopes = matchScopes(sharings, rootsBySharing[i], memberOf)
 	}
-	return results, nil
+	return docs, nil
 }
 
 // parentsPather loads the parent directories of the target files in one
@@ -541,20 +568,65 @@ func (r *AccessResolver) NearestWritableSharing(targetID string, member *Member)
 // nil when no drive applies: a classic sharing does not count, and neither
 // does the owner of a drive, who is not one of its ready members.
 func (r *AccessResolver) DriveForMember(targetID string, member *Member) (*SharingScope, error) {
-	scopes, err := r.scopesMatching(targetID, func(s *Sharing) *Member {
+	scopes, err := r.scopesMatching(targetID, driveMemberMatching(member))
+	if err != nil {
+		return nil, err
+	}
+	return preferredDrive(scopes), nil
+}
+
+// DrivesForMember is DriveForMember for several files and folders already
+// loaded by the caller: it returns the drive of each target in the same order,
+// chosen by the same rule, or nil when no drive applies. The scope gives the
+// ID of the drive (Sharing.SID), its root, from which PathFromRoot computes
+// the path of the item, and the rights of the member (Member.ReadOnly). The
+// sharings are shared between the scopes and must not be modified. At most
+// three requests are made whatever the number of targets, as for
+// ResolveDocsForInstance.
+//
+// Unlike DriveForMember, an item in the trash is in no drive, even a file that
+// is the root of a drive, and a target that cannot be resolved (no doc, file
+// with a missing parent) gets nil instead of an error. The returned error is
+// for a failure of CouchDB.
+func (r *AccessResolver) DrivesForMember(targets []AccessTarget, member *Member) ([]*SharingScope, error) {
+	docs, err := r.scopesForDocs(targets, driveMemberMatching(member))
+	if err != nil {
+		return nil, err
+	}
+	drives := make([]*SharingScope, len(docs))
+	for i, doc := range docs {
+		if doc.err != nil || isInTrash(doc.path) {
+			continue
+		}
+		drives[i] = preferredDrive(doc.scopes)
+	}
+	return drives, nil
+}
+
+// driveMemberMatching resolves the member in the drives only, as by
+// Sharing.MemberMatching: a classic sharing gives no scope.
+func driveMemberMatching(member *Member) func(*Sharing) *Member {
+	return func(s *Sharing) *Member {
 		if !s.Drive {
 			return nil
 		}
 		return s.MemberMatching(member)
-	})
-	if err != nil {
-		return nil, err
 	}
+}
+
+// preferredDrive returns the first of the drive scopes applying to a same
+// target in the order of compareDriveScopes, or nil when there is none.
+func preferredDrive(scopes []SharingScope) *SharingScope {
 	if len(scopes) == 0 {
-		return nil, nil
+		return nil
 	}
 	drive := slices.MinFunc(scopes, compareDriveScopes)
-	return &drive, nil
+	return &drive
+}
+
+// isInTrash reports whether a full path is the trash or under it.
+func isInTrash(fullpath string) bool {
+	return fullpath == vfs.TrashDirName || strings.HasPrefix(fullpath, vfs.TrashDirName+"/")
 }
 
 // compareDriveScopes orders the scopes applying to a same target by preference
