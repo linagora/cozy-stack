@@ -42,7 +42,7 @@ func EnsureFileForKey(inst *instance.Instance, key string) (*vfs.FileDoc, error)
 		return nil, err
 	}
 
-	updated := ConflictDetector{ID: newfile.ID(), Rev: newfile.Rev(), MD5Sum: newfile.MD5Sum}
+	updated := ConflictDetector{ID: newfile.ID(), Rev: newfile.Rev(), MD5Sum: newfile.MD5Sum, Participants: detector.Participants}
 	_ = GetStore().UpdateSecret(inst, key, file.ID(), newfile.ID())
 	_ = GetStore().UpdateDoc(inst, key, updated)
 	return newfile, nil
