@@ -24,6 +24,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/session"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/assets/dynamic"
@@ -1559,9 +1560,20 @@ func TestCreateDriveFromFolder(t *testing.T) {
 		PublicName: "Owner",
 	})
 	ownerAppToken := generateAppToken(ownerInstance, "drive", consts.Files)
+	// The session makes a session-bound app token stand for a person.
+	ownerSession, err := session.New(ownerInstance, session.LongRun, "")
+	require.NoError(t, err)
 	tsOwner := setup.GetTestServerMultipleRoutes(map[string]func(*echo.Group){
 		"/files":    files.Routes,
 		"/sharings": sharings.Routes,
+	}, func(r *echo.Echo) *echo.Echo {
+		r.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+			return func(c echo.Context) error {
+				c.Set("session", ownerSession)
+				return next(c)
+			}
+		})
+		return r
 	})
 	tsOwner.Config.Handler.(*echo.Echo).Renderer = render
 	tsOwner.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
@@ -1683,6 +1695,23 @@ func TestCreateDriveFromFolder(t *testing.T) {
 		createdDir, err := ownerInstance.VFS().DirByID(createdDirID)
 		require.NoError(t, err)
 		require.Equal(t, consts.RootDirID, createdDir.DirID)
+	})
+
+	t.Run("CreateDriveFromNameRecordsTheFolderInRecents", func(t *testing.T) {
+		testutils.WithFlag(t, ownerInstance, "drive.recents.enabled", true)
+
+		dirID := eOwner.POST("/sharings/drives").
+			WithHeader("Authorization", "Bearer "+ownerInstance.BuildAppToken("drive", ownerSession.ID())).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes([]byte(`{"data": {"type": "` + consts.Sharings + `", "attributes": {"name": "RecentDrive"}}}`)).
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.attributes.rules[0].values[0]").String().NotEmpty().Raw()
+
+		row := testutils.FindRecentsRow(t, ownerInstance, dirID)
+		require.NotNil(t, row)
+		assert.Equal(t, "/RecentDrive", row.Path)
+		assert.NotEmpty(t, row.LastEditedAt)
 	})
 
 	t.Run("FailOnMissingFolderIDFileIDAndName", func(t *testing.T) {
