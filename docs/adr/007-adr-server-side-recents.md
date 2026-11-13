@@ -25,9 +25,11 @@ a shared folder alone should add nothing.
 
 Store recents on the backend in a per-user `io.cozy.files.recents` doctype.
 Keep one row per file or folder. An item is there because I edited or opened
-it, whoever owns it. Each row also holds what Drive needs to display the item,
-kept up to date when the item changes, so that listing recents reads nothing
-but the user's own rows.
+it, whoever owns it. A row holds my activity dates and where to find the item,
+not the item itself: listing recents completes each row with the current
+`io.cozy.files` document of its item, read when the list is requested. Drive
+needs the same attributes as for any file to display a working page, and they
+are then always up to date.
 
 Scope for now: only instances of the same stack are covered. A file whose
 owner's instance lives on another stack gets no recents entry and no activity
@@ -40,11 +42,12 @@ tracking. Instance moves are not handled either (see the known limits).
 | I successfully edit a file, including inside a folder shared with me | Add the file or update my last-edited time. |
 | I create a folder, including inside a folder shared with me | Add the folder or update my last-edited time. |
 | Another member edits a shared file | Do not add it or change my recency. |
-| Another member edits or renames an item already in my recents | Refresh its displayed metadata without changing my recency. |
+| Another member edits or renames an item already in my recents | Write nothing: the list shows the item as it is when I read it, and my recency does not change. |
 | I open a document in its editor (notes, drawing, office) | Add it or update my last-viewed time. |
 | I download or preview a file | Do not record a personal activity. |
-| An item of my recents is trashed | Keep it: it comes back with its row when restored. |
+| An item of my recents is trashed | Keep it, shown as trashed. |
 | An item of my recents is destroyed for good | Remove it. |
+| I lose access to an item of my recents | Keep it, shown with its last known name and not openable, so that I can see that I lost the access. |
 
 Creating/uploading a file, creating a folder and saving a file's contents
 count as edits, and so does restoring a file from the trash: the restorer acts
@@ -61,23 +64,23 @@ file creations.
 A row is keyed by the ID of its file or folder, used as its `_id`:
 
 ```text
-drive_id             string    sharing ID of the shared drive, for an item of
-                               a drive the user does not own
-owner_domain         string    domain of the owner's instance, for the same
-                               items
+owner_domain         string    domain of the owner's instance, for an item of
+                               a shared drive the user does not own
 last_edited_at       string    my latest successful edit, if any (RFC 3339)
 last_viewed_at       string    my latest open, if any (RFC 3339)
 last_activity_at     string    max of the two fields above (RFC 3339)
-name                 string    display metadata of the item: name, type,
-type                 string    MIME type, class, size, last modification,
-mime                 string    parent folder and path
+name                 string    last known name, type, MIME type and class of
+type                 string    the item, as they were at my latest recorded
+mime                 string    activity
 class                string
-size                 string
-updated_at           string
-dir_id               string
-path                 string    from the root of the drive for a drive item
 schema_version       integer   version of this record format
 ```
+
+`name`, `type`, `mime` and `class` are not a copy of the item kept up to date.
+They are written with my activity, when I can read the item, and are only shown
+for an item I cannot read any more: its name and its icon, as I last saw them.
+Everything else that describes the item (size, dates, parent folder, path,
+drive) is read from its `io.cozy.files` document when the list is requested.
 
 Keep `last_edited_at` and `last_viewed_at` as separate components and compute
 `last_activity_at` as their maximum. Adding a new kind of activity later then
@@ -88,25 +91,26 @@ The items that can enter my recents are the files and folders of my instance,
 and the items of the shared drives I am a member of, which stay on the owner's
 instance. Drive opens a drive item with the ID of its sharing (`driveId`) and
 its file ID, and finds the members of the drive in the sharing document of my
-instance: the file ID and `drive_id` identify the item, and `owner_domain`
-finds the rows of a user on the items of an owner when their drives change. The
-internal ID of an instance is never stored. File and folder IDs are UUIDs,
-unique across the instances of the stack, except the fixed IDs that every
-instance shares (`io.cozy.files.` prefix: root, trash, system folders), on
-which no activity is recorded. A move between two drives of the same owner
-keeps the ID of the item and only changes its `drive_id`.
+instance. The file ID identifies the item, and `owner_domain` tells on which
+instance to read it: nothing else maps a file ID to its instance. The internal
+ID of an instance is never stored. File and folder IDs are UUIDs, unique
+across the instances of the stack, except the fixed IDs that every instance
+shares (`io.cozy.files.` prefix: root, trash, system folders), on which no
+activity is recorded. A move between two drives of the same owner keeps the ID
+of the item and its row.
 
 An item can be in several drives: a folder or a file of a drive can be the root
-of another drive, nested in the first one, with its own members. A row holds
-one of them, computed on the owner's instance from the position of the item,
-never from the route or the code of the request, with the same rule when the
-activity is recorded and when the row is updated: among the drives that cover
-the item and of which the user is a ready member, the drives where the user can
-write come first, then the outermost one. Drive shows an item with the rights
-of the member in the drive of the item, so this drive gives the highest rights;
-among drives with the same rights, the outermost one does not change when a
-drive is created inside it. `path` is relative to the root of that drive, and
-empty for the root itself.
+of another drive, nested in the first one, with its own members. The drive of
+an item is not stored. It is computed on the owner's instance from the position
+of the item, never from the route or the code of the request, when the activity
+is recorded (an item of another owner gets a row only if one of my drives gives
+it) and each time the list is read: among the drives that cover the item and of
+which the user is a ready member, the drives where the user can write come
+first, then the outermost one. Drive shows an item with the rights of the member
+in the drive of the item, so this drive gives the highest rights; among drives
+with the same rights, the outermost one does not change when a drive is created
+inside it. The path given for the item is relative to the root of that drive,
+and empty for the root itself.
 
 Sort by `last_activity_at` descending, then `_id` descending. Use the time of
 the successful edit or open, not the time the row was written. Another
@@ -183,105 +187,136 @@ CouchDB cannot write the file and its activity marker in one atomic operation.
 Decision: the `files` handlers (`web/files/files.go`) and the `drives` handlers
 (`web/sharings/drives.go`, for the routes that do not call the `files`
 handlers) write the per-user/file recents row right after the successful file
-write, in the same request, with the metadata of the item as written. Failed
-writes must never become successful-edit records: the row is written only after
-success. If the process dies between the two writes, or the row write fails,
-that activity is lost; this is accepted for a recents list. The row write
-upserts by `_id` and keeps the maximum date per component, so writing a row
-twice is a no-op.
+write, in the same request, with the name, type, MIME type and class of the
+item as written. Failed writes must never become successful-edit records: the
+row is written only after success. If the process dies between the two writes,
+or the row write fails, that activity is lost; this is accepted for a recents
+list. The row write upserts by `_id` and keeps the maximum date per component,
+so writing a row twice is a no-op.
 
 Two activities of the same kind on a row less than 60 seconds apart are one:
-the row is not rewritten, unless its metadata changed, so that the hot write
-paths (typing in a note, a sync client uploading files) do not write it on
-every request.
+the row is not rewritten, so that the hot write paths (typing in a note, a sync
+client uploading files) do not write it on every request.
 
 Dates are stamped by the server that captures the activity, never by the
 client: a browser clock is not trusted. One stack means one clock, so no
 cross-stack skew needs clamping.
 
-### Keeping the metadata up to date
+### Following the items
 
-When a file or folder changes on its owner's instance (rename, move, new
-content, trash or restore), a job updates the rows that the owner and the
-members of the shared drives giving access to the item hold for it: only the
-members on this stack, with the recents enabled, that still have access and
-already have a row. Destroying an item for good deletes these rows. The job is
-fed by the stack's own events on `io.cozy.files`, not by the clients, and
-coalesces the changes of an item, so that frequent saves cause a bounded number
-of updates. An edit of a shared file writes only the rows that exist for it,
-never a row for every member with access.
+A rename, a move within the instance of the owner, a new content, a trash or a
+restore writes no row: the row keeps the ID of the item, and the list reads the
+item as it is. The same goes for the drives of a member (the member accepts a
+drive or is revoked from it, their rights in it change, or a drive is created
+inside another one): the drive of an item is chosen again at each read.
 
-A move within the instance of the owner keeps the ID of the item: its rows
-follow it like any other change. A move to the shared drive of another owner of
-the stack creates the items again there, with new IDs, and deletes the
-originals. The move knows the old and new ID of each item it creates again, and
-stores this table once. For the owner and the members of the source drive that
-have the recents enabled, a job moves the rows under the old IDs to the new
-IDs, with their dates merged at their maximum, and with the `drive_id` of the
-destination for the members of that drive. The propagation of the deletion of
-the originals reads the same table, so that it never deletes a row before it is
-moved. A user who cannot open the destination loses the row, as for an item
-destroyed for good.
+Destroying an item for good deletes its rows. A job, fed by the stack's own
+events on `io.cozy.files` and not by the clients, deletes the rows that the
+owner and the members of the owner's shared drives hold for the item: only the
+members on this stack, with the recents enabled. It coalesces the deletions of
+an instance, so that emptying a large trash causes a bounded number of jobs.
+The list does not wait for this job: it leaves out a row whose item is gone
+(see below), and the job only cleans up.
 
-When the drives of a member change on the owner's instance (the member accepts
-a drive or is revoked from it, their rights in it change, or a drive is created
-inside another one), a job takes the rows of that member on the items of the
-owner, found by `owner_domain`, chooses their drive again with the same rule,
-and refreshes their `drive_id`, `path` and metadata. It is fed by the same
-events, on `io.cozy.sharings`. A row whose item the member cannot open any more
-is left as it is.
+A move to the shared drive of another owner of the stack creates the items
+again there, with new IDs, and deletes the originals. The move knows the old
+and new ID of each item it creates again, and gives these pairs to a job. For
+the owner and the members of the source drive that have the recents enabled,
+the job moves the rows under the old IDs to the new IDs, with their dates
+merged at their maximum and the owner of the destination. It does not check
+whether each user can open the destination: the list does, at each read, and
+shows the item as unreadable to a user who cannot.
 
-Known limit: an instance that has lost access to an item keeps the last
-metadata it was given until it is given access again: its row is not updated
-meanwhile, so a rename made after the revocation is not shown to it. Opening
-the item still goes through the usual rights.
+Known limit: nothing coordinates the move of the rows with the deletion of the
+rows of the destroyed originals. When the deletion runs first, the rows are
+lost, and the item only comes back in my recents with my next activity on it.
 
-Known limit: when one of my items moves to the shared drive of another owner
-that I cannot open, my row is deleted, and being given access to that drive
-afterwards does not bring it back: it only comes back with my next activity on
-the item.
+Known limit: the last known name, type, MIME type and class of an item I
+cannot read any more are those of my latest recorded activity. A rename made
+since, even while I still had access, is not shown.
 
-Known limit: `path` is updated when the item itself changes, not when one of
-its parent folders is renamed or moved: it can be out of date until the next
-change of the item. `dir_id` stays right, and the link to the parent folder
-with it.
-
-Known limit: rows whose item can never be shown again without being destroyed
+Known limit: rows whose item can never be read again without being destroyed
 for good (the instance of a shared drive destroyed, a member who left a drive)
-are kept for now. Storing too many rows is accepted until a cleanup is
-designed.
+are kept and shown as unreadable. Storing too many rows is accepted until a
+cleanup is designed.
 
 Known limit: instance moves are not handled. The rows of the members on the
-items of a moved instance keep its metadata, frozen with the instance, until it
-is destroyed.
+items of a moved instance are shown as unreadable once that instance cannot be
+found on the stack under its domain.
 
 ### Reading recents
 
 Add a dedicated endpoint, provisionally `GET /files/recents`. It reads the
 user's rows with a sort index on `(last_activity_at, _id)`, a default page size
 of 50, a maximum page size and a cursor for the next page, the position
-`(last_activity_at, _id)` of the last row of the page. The response is JSON:API:
-one resource per row, built from its stored fields only, with a `links.next`
-cursor. No request is made to the owners' instances.
+`(last_activity_at, _id)` of the last row of the page. The response is JSON:API,
+with a `links.next` cursor and one `io.cozy.files.recents` resource per row,
+whose ID is the ID of the item.
+
+A resource holds what belongs to my activity, the fields of its row: my three
+activity dates, `owner_domain` and the last known `name`, `type`, `mime` and
+`class`. It points to its item with a `file` relationship, and the
+`io.cozy.files` document of the item, read when the list is requested, is given
+in the top-level `included`, with the attributes, the thumbnail links and the
+relationships that the files routes give for it, and its `driveId` for an item
+of a shared drive. The two doctypes stay separate: a client stores the files
+as files, keeps those of my instance up to date with the realtime events it
+already gets on `io.cozy.files`, and gives a real file document to its actions.
+
+The rows of a page are grouped by instance: my own items are read from my
+instance in one request, and the items of each owner from that owner's
+instance, in a number of requests that does not depend on the number of rows.
+
+Reading an item on its owner's instance checks my access, with the same rule
+as when an activity is recorded: a drive of which I am a ready member must give
+the item. Without this check, the current name, path, tags and thumbnails of an
+item would be shown to a member after their revocation. For such an item, the
+included document holds what the shared drive routes give to a member, with a
+path relative to the root of the drive, never the path on the owner's instance.
+A trashed item is in no drive any more: my access to it is checked on the
+folder it would be restored into, as the shared drive routes do to restore it,
+so that I still get it and can restore it.
+
+What the list gives depends on what is found for the item:
+
+| The item | Its resource |
+|---|---|
+| Is found and I can read it | Has a `file` relationship to the current document, included. |
+| Is in the trash | The same: a trashed file has `trashed: true`, and a trashed folder has its path under the trash. |
+| Is not found on its instance | Left out: it was destroyed for good, or moved to another owner. |
+| Is found, but no drive of mine gives it any more | Has an empty `file` relationship (`"data": null`), and no included document. |
+| Belongs to an instance that is not found on the stack | The same. |
+
+A resource without a file is an item I cannot read any more, and nothing else:
+an item that is gone has no resource at all. It lets me see that I lost access
+to an item I used: it is listed, with the name I knew, and cannot be opened.
+The list never writes rows: a row left out is deleted by the job that follows
+the destructions.
+
+A page can hold fewer resources than its size, when rows are left out. The
+cursor is the position of the last row read, not of the last resource given,
+and the route does not read more rows to fill the page.
 
 Bind cursors to the user and the query parameters. A traversal goes on after
 the position of its cursor, whatever activity happens meanwhile; refreshing
 starts a new traversal. The client decides how many entries to display by
 choosing page sizes and pages; the server keeps all history.
 
-Being in recents does not check access: a row stays listed after its item has
-become unreadable, with the last metadata it was given (see the known limits).
 Every later open, download or edit uses the existing file APIs and their
 permission checks.
 
 Apps with a permission on `io.cozy.files.recents` can subscribe to its
-realtime events: the rows hold nothing more than the file IDs, drive IDs,
-owner domains and display metadata that the user already sees. The generic
-`/data` routes, `@event` triggers and instance exports stay closed to the
-doctype. Client code must use normal cozy-client queries, centralized
-definitions, explicit aliases and fetch policies, with endpoint support in the
-library. Offline, users see the last recorded state; optimistic offline updates
-may come later, as client-side future work.
+realtime events: the rows hold nothing more than the file IDs, owner domains,
+activity dates and last known names that the user already sees. These events
+tell that my activity changed, not that an item did: a rename by a colleague
+writes no row and sends no event on this doctype. A client follows the changes
+of my own items with the events on `io.cozy.files`, and reloads the list to
+see those of the items of a shared drive. The generic `/data` routes, `@event`
+triggers and instance exports stay closed to the doctype. Client code must use
+normal cozy-client queries, centralized definitions, explicit aliases and
+fetch policies, with endpoint support in the library. Offline, users see the
+last recorded state; optimistic offline updates may come later, as client-side
+future work.
 
 ### Storage and history
 
@@ -300,8 +335,8 @@ of distinct items the user touches is accepted and measured at rollout.
 Roll this out separately from search, using capability checks and a feature flag.
 At the switch from `cozy-web-data-proxy`, users must not see an empty page:
 seed each user's recents with the 20 most recently modified files and created
-folders they can see, with their metadata. A seeded file's `last_edited_at` is
-its last modification date, a seeded folder's is its creation date.
+folders they can see. A seeded file's `last_edited_at` is its last modification
+date, a seeded folder's is its creation date.
 The seed is best effort and capped at 20: a colleague's touch can appear in it
 even though the normal rules would exclude it, and seeded rows become ordinary
 rows, updated by real activity afterwards. Beyond the seed, import past edits
@@ -323,15 +358,24 @@ Check at least these cases:
   file only.
 - Creating a folder inside a shared folder adds one row for that folder only,
   not for its contents.
-- A colleague's edit or rename refreshes the stored metadata of the members
-  that have a row, without changing recency.
+- A colleague's edit or rename shows in the list of the members that have a
+  row, at their next read, without changing recency and without writing a row.
 - A note of a shared drive opened and edited by a member is in the member's
   recents, with the drive.
-- Destroying an item for good removes its rows; trashing it keeps them.
-- Joining or leaving a drive, or a change of rights in it, moves the rows of
-  the member to the drive that gives the highest rights.
+- Destroying an item for good removes it from the list at once and deletes its
+  rows; trashing it keeps it, shown as trashed.
+- Joining or leaving a drive, or a change of rights in it, changes the drive
+  given for the items of the member to the one that gives the highest rights,
+  at the next read.
+- A member revoked from a drive still sees the items of that drive they used,
+  with their last known name and no way to open them; a rename made after the
+  revocation is not shown to them.
 - An item moved to the shared drive of another owner keeps its rows, under
-  its new ID, for the users who can open it there.
+  its new ID; a user who cannot open it there sees it as inaccessible.
+- A page that leaves rows out still gives a cursor that reaches the next
+  rows.
+- An item of a shared drive trashed by a member is still given to the members
+  that have a row, as a trashed file, and can be restored.
 - Crashes during saves, stale callbacks and every supported editor/client
   path.
 - Paging through recents gives every row once, in order, even when new
@@ -339,10 +383,11 @@ Check at least these cases:
 - Old rows stay reachable through the pages: nothing caps or expires the
   history.
 - Frequent saves of a shared document (notes, OnlyOffice) cause a bounded
-  number of row writes, for the editor and for the update of the other
-  members' rows.
+  number of row writes for the editor, and none for the other members.
+- A page with items of several owners costs a bounded number of requests per
+  owner, whatever the number of rows.
 
-Measure capture delays, update jobs, record count and query time. Document
+Measure capture delays, deletion jobs, record count and query time. Document
 unsupported write paths before rollout.
 
 ## Alternatives considered
@@ -353,23 +398,35 @@ unsupported write paths before rollout.
 - Filtering by the file's latest editor loses my earlier edit after someone
   else saves it.
 - Recording activity only in the browser misses other devices and editors.
-- Reading the metadata and the access from the owners' instances at each read
-  keeps the rows minimal, but makes every page cost requests to every owner,
-  page refills within a work limit, and repairs of the rows; it also keeps the
-  doctype out of realtime.
+- Storing in each row what Drive displays (name, type, size, dates, parent
+  folder, path, drive), kept up to date by jobs when the item or the drives of
+  a member change, makes a page read nothing but the user's own rows. It was
+  the first decision of this ADR. Drive needs more than these fields to show a
+  working page, and each field added to the rows would have to be copied to
+  every row at every change; the jobs that keep the copies up to date were
+  most of the code.
+- Refilling a page that leaves rows out, within a work limit, and repairing
+  the rows from the read route, give full pages and a self-cleaning list, at
+  the cost of a read route that writes and of cursors that must be searched
+  for. Short pages and a deletion job are simpler.
 - Keying the rows by the internal ID of the source instance survives domain
-  changes, but exposes that ID to the members of a shared drive, and is not
-  needed once the rows are not read back from the owners.
+  changes, but exposes that ID to the members of a shared drive.
 
 ## Consequences
 
 - Recents becomes a personal list of my edits and opens. A folder gets a row
   only when I create it: browsing a folder or listing its contents is not
   personal activity.
-- Listing recents reads only the user's own database, and the list can be kept
-  live with realtime.
-- The cost moves to the writes: a change of an item updates the rows that
-  exist for it, through a job.
+- Listing recents reads the user's rows, then the items on the instances of
+  their owners: a page costs a bounded number of requests per owner, and the
+  items it shows are always current.
+- A change of an item writes no row. Only a destruction for good and a move
+  to another owner go through a job.
+- Realtime on the doctype tells about my activity, not about the changes of
+  the items: a live list follows `io.cozy.files` for my own items and reloads
+  for the others.
+- A user who loses access to an item keeps it in the list, by its last known
+  name, without being able to open it.
 - Recents and search use the same item IDs, but store different data.
 - We need reliable editor identity. Existing `updated_at` values cannot provide
   personal edit history.
