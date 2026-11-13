@@ -244,4 +244,23 @@ func TestWorkerSyncMembers(t *testing.T) {
 		_, err := memberMetadata(owner, scope, &item{fullpath: "/Private/a.txt"})
 		assert.Error(t, err)
 	})
+
+	t.Run("AChangeOfAFileEndsUpInTheRowsThroughTheTrigger", func(t *testing.T) {
+		// The real trigger of the stack, with its real delay.
+		root := mkdir(t, owner, "/Trigger/Drive")
+		newDrive(t, owner, root.ID(), writer(bob))
+		file := newFile(t, owner, root, "a.txt", "a")
+		putRow(t, owner, file.ID())
+		putRow(t, bob, file.ID())
+
+		patchFile(t, owner, file, "b.txt", nil)
+		named := func(inst *instance.Instance) bool {
+			row := &recents.FileDirActivity{}
+			err := couchdb.GetDoc(inst, consts.FilesRecents, file.ID(), row)
+			return err == nil && row.Name == "b.txt"
+		}
+		assert.Eventually(t, func() bool {
+			return named(owner) && named(bob)
+		}, 60*time.Second, 200*time.Millisecond)
+	})
 }
