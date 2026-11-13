@@ -62,6 +62,7 @@ type redisScheduler struct {
 	share   *ShareGroupTrigger
 	av      *AntivirusTrigger
 	recents *FirehoseTrigger
+	members *FirehoseTrigger
 	closed  chan struct{}
 	stopped chan struct{}
 	log     *logger.Entry
@@ -108,6 +109,8 @@ func (s *redisScheduler) StartScheduler(b Broker) error {
 	go s.av.Schedule()
 	s.recents = NewRecentsSyncTrigger(s.broker)
 	go s.recents.Schedule()
+	s.members = NewRecentsMembershipsTrigger(s.broker)
+	go s.members.Schedule()
 	go s.pollLoop()
 	return nil
 }
@@ -264,6 +267,7 @@ func (s *redisScheduler) ShutdownScheduler(ctx context.Context) error {
 	s.share.Unschedule()
 	s.av.Unschedule()
 	s.recents.Unschedule()
+	s.members.Unschedule()
 	select {
 	case <-ctx.Done():
 		fmt.Println("failed: ", ctx.Err())
