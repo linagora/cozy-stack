@@ -257,6 +257,8 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 			commands++
 			assert.Equal(t, commands, oo.commands.Load())
 		}
+		// The last outcome holds for the delay it was recorded with.
+		time.Sleep(delay)
 	})
 
 	t.Run("ConflictCopy", func(t *testing.T) {
