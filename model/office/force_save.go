@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -40,47 +40,24 @@ const commandTokenTTL = time.Minute
 // from to open it: that download must not ask it to save the same session.
 const DocumentServerParam = "DocumentServer"
 
-// forceSaves lets the readers of a document during an editing session share
-// one forcesave instead of each asking OnlyOffice for its own.
+// forceSaves lets the readers of a document in one process share one wait for
+// the forcesave, instead of each asking the store. The store shares it between
+// the stacks.
 var forceSaves singleflight.Group
 
-// lastForceSaves keeps, by session, when the last command ended. Each new
-// entry drops the entries older than the delay. The entry of a closed
-// session is not read again: its next session has a new key.
-var lastForceSaves = struct {
-	sync.Mutex
-	at    map[string]time.Time
-	delay time.Duration
-}{at: make(map[string]time.Time), delay: ForceSaveDebounce}
+var forceSaveDebounce atomic.Int64
+
+func init() {
+	forceSaveDebounce.Store(int64(ForceSaveDebounce))
+}
 
 // SetForceSaveDebounce changes the delay of ForceSaveDebounce, for the tests.
 func SetForceSaveDebounce(delay time.Duration) {
-	lastForceSaves.Lock()
-	defer lastForceSaves.Unlock()
-	lastForceSaves.delay = delay
+	forceSaveDebounce.Store(int64(delay))
 }
 
 func sessionID(db prefixer.Prefixer, key string) string {
 	return db.DBPrefix() + "/" + key
-}
-
-func recentlyForceSaved(id string) bool {
-	lastForceSaves.Lock()
-	defer lastForceSaves.Unlock()
-	at, ok := lastForceSaves.at[id]
-	return ok && time.Since(at) < lastForceSaves.delay
-}
-
-func markForceSaved(id string) {
-	lastForceSaves.Lock()
-	defer lastForceSaves.Unlock()
-	now := time.Now()
-	for other, at := range lastForceSaves.at {
-		if now.Sub(at) >= lastForceSaves.delay {
-			delete(lastForceSaves.at, other)
-		}
-	}
-	lastForceSaves.at[id] = now
 }
 
 // unconfirmed records that a file is served during an editing session
@@ -117,8 +94,9 @@ func SaveOpenSession(ctx context.Context, inst *instance.Instance, file *vfs.Fil
 	if key == "" {
 		return file
 	}
-	id := sessionID(inst, key)
-	if recentlyForceSaved(id) {
+	if last, err := GetStore().LastForceSave(inst, key); err != nil {
+		return unconfirmed(inst, file, "store", err)
+	} else if last != nil {
 		return file
 	}
 
@@ -127,11 +105,10 @@ func SaveOpenSession(ctx context.Context, inst *instance.Instance, file *vfs.Fil
 
 	// The forcesave has its own deadline: a reader that leaves must not cancel
 	// it for the others.
-	flight := forceSaves.DoChan(id, recovered(func() (interface{}, error) {
+	flight := forceSaves.DoChan(sessionID(inst, key), recovered(func() (interface{}, error) {
 		flightCtx, cancel := context.WithTimeout(context.Background(), ForceSaveTimeout)
 		defer cancel()
-		defer markForceSaved(id)
-		return forceSave(flightCtx, inst, cfg, key)
+		return saveSession(flightCtx, inst, cfg, key)
 	}))
 	select {
 	case <-ctx.Done():
@@ -169,6 +146,48 @@ func recovered(fn func() (interface{}, error)) func() (interface{}, error) {
 		}()
 		return fn()
 	}
+}
+
+// saveSession sends the forcesave of the session of the key, or, when another
+// stack is sending it, waits for its outcome. The outcome is recorded for the
+// readers of the next ForceSaveDebounce.
+func saveSession(ctx context.Context, inst *instance.Instance, cfg *config.Office, key string) (saved bool, err error) {
+	store := GetStore()
+	owner := makeSecret()
+	ticker := time.NewTicker(forceSavePollInterval)
+	defer ticker.Stop()
+	for {
+		// The margin lets the owner record its outcome after its own deadline.
+		acquired, err := store.AcquireForceSave(inst, key, owner, ForceSaveTimeout+time.Second)
+		if err != nil {
+			return false, err
+		}
+		if acquired {
+			break
+		}
+		last, err := store.LastForceSave(inst, key)
+		if err != nil {
+			return false, err
+		}
+		if last != nil {
+			return last.Saved, last.err()
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+
+	defer func() {
+		outcome := ForceSaveOutcome{Saved: saved}
+		if err != nil {
+			outcome.Error = err.Error()
+		}
+		delay := time.Duration(forceSaveDebounce.Load())
+		_ = store.FinishForceSave(inst, key, owner, outcome, delay)
+	}()
+	return forceSave(ctx, inst, cfg, key)
 }
 
 // forceSave asks OnlyOffice to save the session of the key, and reports true
