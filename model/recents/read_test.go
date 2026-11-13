@@ -148,7 +148,6 @@ func TestCandidatesReadsTheStoredFields(t *testing.T) {
 
 	stored := &recents.FileDirActivity{
 		DocID:          "019a6f2e-7c1d-7e3a-9b42-5d8e1f0a2c34",
-		DriveID:        "019a6f2e-0000-7000-8000-000000000001",
 		OwnerDomain:    "alice.example.net",
 		LastEditedAt:   "2026-11-05T09:00:00Z",
 		LastViewedAt:   "2026-11-05T10:00:00Z",
@@ -157,10 +156,6 @@ func TestCandidatesReadsTheStoredFields(t *testing.T) {
 		Type:           consts.FileType,
 		Mime:           "text/plain",
 		Class:          "text",
-		Size:           "1234",
-		UpdatedAt:      "2026-11-05T09:00:00Z",
-		DirID:          "019a6f2e-0000-7000-8000-000000000002",
-		Path:           "/Reports/report.docx",
 		SchemaVersion:  recents.SchemaVersion,
 	}
 	require.NoError(t, couchdb.CreateNamedDocWithDB(inst, stored))

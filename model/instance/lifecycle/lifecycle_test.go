@@ -266,13 +266,6 @@ func TestLifecycle(t *testing.T) {
 		assert.NoError(t, err)
 
 		req = &couchdb.FindRequest{
-			UseIndex: "by-drive-id",
-			Selector: mango.Equal("drive_id", "some-drive"),
-		}
-		err = couchdb.FindDocs(prefix, consts.FilesRecents, req, &results)
-		assert.NoError(t, err)
-
-		req = &couchdb.FindRequest{
 			UseIndex: "by-owner-domain",
 			Selector: mango.Equal("owner_domain", "alice.example.net"),
 		}

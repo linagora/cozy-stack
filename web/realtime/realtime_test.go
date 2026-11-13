@@ -164,9 +164,6 @@ func TestRealtime(t *testing.T) {
 			LastActivityAt: "2026-11-06T10:00:00Z",
 			Name:           "report.odt",
 			Type:           "file",
-			UpdatedAt:      "2026-11-06T10:00:00Z",
-			DirID:          "dir-id",
-			Path:           "/report.odt",
 			SchemaVersion:  recents.SchemaVersion,
 		}
 		require.NoError(t, couchdb.CreateNamedDoc(inst, row))
