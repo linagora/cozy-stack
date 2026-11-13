@@ -132,6 +132,13 @@ Go to https://github.com/username/cozy-stack and select your branch. Click the
 Pull requests are usually reviewed within a few days. If there are comments to
 address, apply your changes in a separate commit and push that to your branch.
 
+### AI-assisted review
+
+The [PR review bot and prompts](../.github/review/README.md) live in this repository.
+Once configured, the bot reviews new commits and updates its GitHub comments.
+People with write access can request another run by commenting `/review`.
+Humans decide what to fix, resolve discussions and approve or merge.
+
 ## Code organization
 
 The codebase of cozy-stack contains several packages, and it is quite easy to
