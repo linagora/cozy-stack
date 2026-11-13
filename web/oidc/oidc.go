@@ -993,25 +993,22 @@ func validateDelegatedCode(inst *instance.Instance, code string) (*DelegatedCode
 
 // validateOIDCToken validates an OIDC token (id_token or access_token) for the instance.
 func validateOIDCToken(inst *instance.Instance, idToken, oidcToken string) error {
-	var err error
 	if idToken != "" {
 		conf, err := oidcprovider.LoadConfig(inst.ContextName, oidcprovider.RequireIDTokenKeyURL)
 		if err != nil || !conf.AllowOAuthToken {
 			return errors.New("this endpoint is not enabled")
 		}
-		err = checkIDToken(conf, inst, idToken)
-	} else {
-		conf, err := oidcprovider.LoadConfig(
-			inst.ContextName,
-			oidcprovider.RequireUserInfoURL,
-			oidcprovider.RequireUserInfoMapping,
-		)
-		if err != nil || !conf.AllowOAuthToken {
-			return errors.New("this endpoint is not enabled")
-		}
-		err = checkDomainFromUserInfo(conf, inst, oidcToken)
+		return checkIDToken(conf, inst, idToken)
 	}
-	return err
+	conf, err := oidcprovider.LoadConfig(
+		inst.ContextName,
+		oidcprovider.RequireUserInfoURL,
+		oidcprovider.RequireUserInfoMapping,
+	)
+	if err != nil || !conf.AllowOAuthToken {
+		return errors.New("this endpoint is not enabled")
+	}
+	return checkDomainFromUserInfo(conf, inst, oidcToken)
 }
 
 // AccessToken delivers an access_token and a refresh_token if the client gives

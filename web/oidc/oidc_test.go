@@ -183,6 +183,64 @@ func TestDelegatedCodeContextMismatch(t *testing.T) {
 	}
 }
 
+func TestAccessTokenValidatesOIDCToken(t *testing.T) {
+	config.UseTestFile(t)
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Header.Get("Authorization") {
+		case "Bearer alice-token":
+			_, _ = w.Write([]byte(`{"sub":"alice-sub"}`))
+		case "Bearer other-user-token":
+			_, _ = w.Write([]byte(`{"sub":"other-sub"}`))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	t.Cleanup(idp.Close)
+	privateKey, kid, jwksURL := newBackchannelSigningKey(t)
+	config.GetConfig().Authentication = map[string]interface{}{
+		"oauth_token_context": map[string]interface{}{
+			"oidc": map[string]interface{}{
+				"allow_oauth_token":     true,
+				"allow_custom_instance": true,
+				"userinfo_url":          idp.URL + "/userinfo",
+				"id_token_jwk_url":      jwksURL,
+			},
+		},
+	}
+	inst := &instance.Instance{
+		Domain: "alice.twake.app", ContextName: "oauth_token_context", OIDCID: "alice-sub",
+	}
+	idToken := func(sub string) string {
+		return makeSignedJWT(t, privateKey, kid, map[string]interface{}{"sub": sub, "sid": "sid"})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		body  string
+		error string
+	}{
+		{"unsigned id_token", `{"id_token":"` + makeUnsignedJWT(map[string]interface{}{"sub": "alice-sub", "sid": "sid"}) + `"}`, "invalid token"},
+		{"id_token of another user", `{"id_token":"` + idToken("other-sub") + `"}`, "OIDC Domain Mismatch alice.twake.app other-sub"},
+		{"oidc_token refused by the IdP", `{"oidc_token":"garbage"}`, "OIDC service responded with 401"},
+		{"oidc_token of another user", `{"oidc_token":"other-user-token"}`, "OIDC Domain Mismatch alice.twake.app other-sub"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/oidc/access_token", strings.NewReader(tc.body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			res := httptest.NewRecorder()
+			c := echo.New().NewContext(req, res)
+			middlewares.SetInstance(c, inst)
+			require.NoError(t, AccessToken(c))
+			require.Equal(t, http.StatusBadRequest, res.Code)
+			require.JSONEq(t, `{"error":"`+tc.error+`"}`, res.Body.String())
+		})
+	}
+
+	require.NoError(t, validateOIDCToken(inst, idToken("alice-sub"), ""))
+	require.NoError(t, validateOIDCToken(inst, "", "alice-token"))
+}
+
 func TestOidc(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
