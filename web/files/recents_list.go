@@ -69,6 +69,14 @@ func ListRecentsHandler(c echo.Context) error {
 		return err
 	}
 
+	// The first page seeds the recents once, so that the first switch to the
+	// server-side recents never shows an empty page. A deeper page is reached
+	// through a cursor and never seeds. The seed is best effort: a failure
+	// leaves the page to the stored rows without failing the read.
+	if !c.QueryParams().Has(recentsCursorParam) {
+		recents.Seed(inst)
+	}
+
 	// One more row than the page tells whether rows follow it.
 	rows, err := recents.Candidates(inst, size+1, after)
 	if err != nil {

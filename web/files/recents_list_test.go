@@ -472,3 +472,30 @@ func TestRecentsListWithoutRows(t *testing.T) {
 		}
 	})
 }
+
+func TestRecentsSeedOnFirstCall(t *testing.T) {
+	env := recentsSetup(t)
+
+	seedable := func(name string) *vfs.FileDoc {
+		t.Helper()
+		doc, err := vfs.NewFileDoc(name, consts.RootDirID, -1, nil,
+			"text/plain", "text", time.Now().Add(-time.Hour), false, false, false, nil)
+		require.NoError(t, err)
+		f, err := env.inst.VFS().CreateFile(doc, nil)
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		return doc
+	}
+
+	before := seedable("before-first-call.txt")
+
+	// The first page seeds the recents: the file appears without any recorded
+	// activity.
+	page := env.getPage(t, "")
+	assert.Contains(t, pageIDs(page), before.ID())
+
+	// The seed runs once: a file created after the first page is not seeded.
+	after := seedable("after-first-call.txt")
+	page = env.getPage(t, "")
+	assert.NotContains(t, pageIDs(page), after.ID())
+}
