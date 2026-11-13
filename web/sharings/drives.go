@@ -19,6 +19,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/publiclink"
+	"github.com/cozy/cozy-stack/model/recents"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -118,8 +119,9 @@ func CreateSharedDrive(c echo.Context) error {
 		return jsonapi.BadRequest(errors.New("folder_id, file_id and name are mutually exclusive"))
 	}
 
+	var newDir *vfs.DirDoc
 	if attrs.Name != "" {
-		newDir, err := vfs.Mkdir(inst.VFS(), path.Join("/", attrs.Name), nil)
+		newDir, err = vfs.Mkdir(inst.VFS(), path.Join("/", attrs.Name), nil)
 		if err != nil {
 			return wrapDriveNameErrors(err)
 		}
@@ -130,7 +132,14 @@ func CreateSharedDrive(c echo.Context) error {
 	if rootID == "" {
 		rootID = attrs.FolderID
 	}
-	return createDriveFromContacts(c, inst, obj, rootID, attrs.Description)
+	if err := createDriveFromContacts(c, inst, obj, rootID, attrs.Description); err != nil {
+		return err
+	}
+	// This route makes the folder of the drive without the files handlers.
+	if newDir != nil {
+		files.RecordActivity(c, newDir, nil, recents.KindEdit)
+	}
+	return nil
 }
 
 // createDriveFromContacts resolves recipients on the owner's instance and checks the app's permissions.
