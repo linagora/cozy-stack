@@ -5560,7 +5560,11 @@ func TestSharedDriveNotes(t *testing.T) {
 	t.Run("OpenPDFWithOnlyOfficeFromSharedDrive", func(t *testing.T) {
 		eA, eB, _ := env.createClients(t)
 		config.GetConfig().Office = map[string]config.Office{
-			config.DefaultInstanceContext: {OnlyOfficeURL: "https://documentserver.example"},
+			config.DefaultInstanceContext: {
+				OnlyOfficeURL: "https://documentserver.example",
+				InboxSecret:   "inbox",
+				OutboxSecret:  "outbox",
+			},
 		}
 		pdfID := createFileWithMime(t, eA, env.meetingsDirID, "shared.pdf", env.acmeToken, "application/pdf")
 

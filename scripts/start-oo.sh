@@ -3,9 +3,10 @@
 # Start OnlyOffice Document Server for local development
 #
 # This script:
-# 1. Stops and removes any existing onlyoffice-ds container
-# 2. Collects all instance hostnames from cozy-stack
-# 3. Starts OnlyOffice with proper host mappings so it can reach cozy-stack
+# 1. Reads the JWT secret shared with cozy-stack from ~/.cozy/onlyoffice.env
+# 2. Stops and removes any existing onlyoffice-ds container
+# 3. Collects all instance hostnames from cozy-stack
+# 4. Starts OnlyOffice with proper host mappings so it can reach cozy-stack
 #
 # Usage: ./scripts/start-oo.sh
 #
@@ -15,6 +16,18 @@ set -e
 
 CONTAINER_NAME="onlyoffice-ds"
 PORT="${OO_PORT:-8000}"
+SECRET_FILE="${OO_SECRET_FILE:-$HOME/.cozy/onlyoffice.env}"
+
+if [ ! -f "$SECRET_FILE" ]; then
+  echo "Error: $SECRET_FILE not found. Create it with:" >&2
+  echo "  (umask 077; printf 'JWT_SECRET=%s\\n' \"\$(openssl rand -hex 32)\" > \"$SECRET_FILE\")" >&2
+  exit 1
+fi
+. "$SECRET_FILE"
+if [ -z "$JWT_SECRET" ]; then
+  echo "Error: JWT_SECRET is empty in $SECRET_FILE" >&2
+  exit 1
+fi
 
 echo "Stopping existing OnlyOffice container..."
 docker stop $CONTAINER_NAME 2>/dev/null || true
@@ -34,7 +47,8 @@ fi
 echo "Starting OnlyOffice Document Server on port $PORT..."
 docker run -d --name $CONTAINER_NAME \
   -p $PORT:80 \
-  -e JWT_ENABLED=false \
+  -e JWT_ENABLED=true \
+  -e JWT_SECRET="$JWT_SECRET" \
   -e ALLOW_PRIVATE_IP_ADDRESS=true \
   -e ALLOW_META_IP_ADDRESS=true \
   $HOSTS \

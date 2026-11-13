@@ -1,6 +1,7 @@
 package office
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"strconv"
@@ -98,7 +99,9 @@ func Callback(c echo.Context) error {
 		inst.Logger().WithNamespace("office").
 			Infof("Error on the callback: %s", err)
 		code := http.StatusInternalServerError
-		if httpError, ok := err.(*echo.HTTPError); ok {
+		if errors.Is(err, office.ErrNoServer) {
+			code = http.StatusNotFound
+		} else if httpError, ok := err.(*echo.HTTPError); ok {
 			code = httpError.Code
 		}
 		return c.JSON(code, echo.Map{"error": err.Error()})

@@ -62,6 +62,22 @@ docker run --rm -it -p 8080:8080 -v "$(pwd)/build":/data/cozy-app/***my-app*** c
 
 ## Only-Office document server
 
+### Shared secret
+
+OnlyOffice and cozy-stack share a secret: it signs the configuration sent to
+the editor (inbox) and the callbacks from OnlyOffice (outbox). cozy-stack
+requires the outbox secret as soon as a document server URL is configured.
+Generate the secret **once** and store it outside the repository:
+
+```bash
+(umask 077; printf 'JWT_SECRET=%s\n' "$(openssl rand -hex 32)" > "$HOME/.cozy/onlyoffice.env")
+```
+
+Reuse this file on subsequent restarts; do not generate a new secret unless
+you also update the cozy-stack configuration below. Without a secret,
+OnlyOffice generates a random one when the container is recreated, and
+cozy-stack refuses its callbacks.
+
 ### Option 1: With Helper Script
 
 Use the helper script that works on both Linux and macOS:
@@ -71,8 +87,9 @@ Use the helper script that works on both Linux and macOS:
 ```
 
 The script automatically:
+- Reads the secret from `~/.cozy/onlyoffice.env` and fails if it is missing
 - Collects all instance hostnames from cozy-stack
-- Starts OnlyOffice with proper `--add-host` mappings
+- Starts OnlyOffice with JWT enabled and proper `--add-host` mappings
 - Waits for OnlyOffice to be ready
 
 ### Option 2: Manual Docker Command
@@ -82,7 +99,8 @@ The script automatically:
 ```bash
 docker run -d --name onlyoffice-ds \
     -p 8000:80 \
-    -e JWT_ENABLED=false \
+    --env-file "$HOME/.cozy/onlyoffice.env" \
+    -e JWT_ENABLED=true \
     -e ALLOW_PRIVATE_IP_ADDRESS=true \
     -e ALLOW_META_IP_ADDRESS=true \
     --add-host=cozy.localhost:host-gateway \
@@ -94,7 +112,8 @@ docker run -d --name onlyoffice-ds \
 ```bash
 docker run -d --name onlyoffice-ds \
     --net=host \
-    -e JWT_ENABLED=false \
+    --env-file "$HOME/.cozy/onlyoffice.env" \
+    -e JWT_ENABLED=true \
     -e ALLOW_PRIVATE_IP_ADDRESS=true \
     -e ALLOW_META_IP_ADDRESS=true \
     -e DS_PORT=8000 \
@@ -113,63 +132,17 @@ contexts:
 office:
   default:
     onlyoffice_url: http://localhost:8000/
-    onlyoffice_inbox_secret: ""
-    onlyoffice_outbox_secret: ""
+    onlyoffice_inbox_secret: "<value of JWT_SECRET in ~/.cozy/onlyoffice.env>"
+    onlyoffice_outbox_secret: "<value of JWT_SECRET in ~/.cozy/onlyoffice.env>"
 ```
 
-### Optional: Enable JWT authentication locally
+Use the actual secret in the YAML, not `$JWT_SECRET`: the YAML value is not a
+shell variable reference. Restart cozy-stack to load the configuration, then
+reload the editor in the browser. Keep the default `Authorization` JWT header
+so cozy-stack can verify callbacks. This setup was tested with Document Server
+9.4.
 
-JWT authentication is **optional for local development**. The default setup
-above works without it; skip this section unless you need to test the
-authenticated flow used in production.
-
-To enable JWT, OnlyOffice and cozy-stack must share the same secret. This
-setup was tested with Document Server 9.4.
-
-Generate a secret **once** and store it outside the repository:
-
-```bash
-(umask 077; printf 'JWT_SECRET=%s\n' "$(openssl rand -hex 32)" > "$HOME/.cozy/onlyoffice.env")
-```
-
-In your local `scripts/start-oo.sh`, replace `-e JWT_ENABLED=false` with:
-
-```bash
-  -e JWT_ENABLED=true \
-  -e JWT_SECRET="$JWT_SECRET" \
-```
-
-Do not hardcode the secret in the script or commit it. Passing the value
-explicitly also avoids relying on whether the shell variable was exported:
-`-e JWT_SECRET` alone only reads exported environment variables. Without a
-secret, OnlyOffice generates a random one when the container is recreated.
-
-In `~/.cozy/cozy.yaml`, replace the two empty secrets with the value stored
-in `~/.cozy/onlyoffice.env`:
-
-```yaml
-office:
-  default:
-    onlyoffice_url: http://localhost:8000/
-    onlyoffice_inbox_secret: "<same value as JWT_SECRET>"
-    onlyoffice_outbox_secret: "<same value as JWT_SECRET>"
-```
-
-The inbox secret signs the configuration sent to the editor; the outbox
-secret verifies callbacks from OnlyOffice. Use the actual secret in the YAML,
-not `$JWT_SECRET`: the YAML value is not a shell variable reference.
-
-From the repository root, load the saved secret and recreate OnlyOffice:
-
-```bash
-. "$HOME/.cozy/onlyoffice.env"
-JWT_SECRET="$JWT_SECRET" ./scripts/start-oo.sh
-```
-
-Reuse this file on subsequent restarts; do not generate a new secret unless
-you also update both YAML values. Restart cozy-stack to load the configuration,
-then reload the editor in the browser. Keep the default `Authorization` JWT
-header so cozy-stack can verify callbacks.
+### Check the host mapping
 
 The helper script uses `go run . instances ls` to discover instance domains.
 Running it outside the repository root can silently fall back to a

@@ -215,6 +215,10 @@ office:
     onlyoffice_outbox_secret: outbox_secret
 ```
 
+The outbox secret is required: a context with an `onlyoffice_url` but no
+`onlyoffice_outbox_secret` has no document server (the editor cannot be opened
+and the callback is refused), and an error is logged at startup.
+
 Don't forget to restart all the services after having made the changes to the
 configuration files. And you should be able to edit office documents and PDFs
 in your browser via the Drive application.
