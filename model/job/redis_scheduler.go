@@ -380,7 +380,14 @@ func (s *redisScheduler) AddTrigger(t Trigger) error {
 	if err := createTrigger(t); err != nil {
 		return err
 	}
-	return s.addToRedis(t, time.Now())
+	if err := s.addToRedis(t, time.Now()); err != nil {
+		// A trigger saved without its Redis entry never fires, but HasTrigger finds it.
+		if errd := couchdb.DeleteDoc(t, t.Infos()); errd != nil {
+			s.log.Warnf("trigger %s: cannot delete unscheduled trigger: %s", t.ID(), errd)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *redisScheduler) addToRedis(t Trigger, prev time.Time) error {
