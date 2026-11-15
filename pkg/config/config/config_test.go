@@ -726,7 +726,7 @@ func TestSearchConfig(t *testing.T) {
 		cfg.Set("search.opensearch.index_prefix", "prod-eu_1")
 		require.NoError(t, UseViper(cfg))
 		require.NotNil(t, GetConfig().Search)
-		require.ErrorContains(t, GetConfig().Search.Ping(t.Context()), "certificate")
+		require.ErrorContains(t, GetConfig().Search.CreateIndex(t.Context(), "files%20old", nil), "certificate")
 
 		caFile := filepath.Join(t.TempDir(), "ca.pem")
 		pemCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
