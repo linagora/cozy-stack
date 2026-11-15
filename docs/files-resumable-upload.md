@@ -110,6 +110,9 @@ sequenceDiagram
   uploads, creates an empty file for such a request.
 - A name already taken is refused with `409` when the upload is created, like
   the usual upload, and checked again at the end.
+- A drive member whose stack does not relay `X-Cozy-Resumable-Relay` is
+  answered as on a storage without resumable uploads (see [A member on an
+  older stack](#a-member-on-an-older-stack)).
 
 ## The io.cozy.files.uploads document
 
@@ -284,17 +287,64 @@ sequenceDiagram
   `HEAD` included, as it takes the upload over. The parts already written stay
   until the upload expires.
 - The upload keeps the drive and the member who have created it
-  (`drive_id`, `drive_member`). An upload of another member, of another drive, or outside
-  the drive answers `404`, like a missing one.
+  (`drive_id`, `drive_member`). An upload of another member, of another
+  drive, or outside the drive answers `404`, like a missing one.
 - The relay forwards the `104` interim response: Go's `httputil.ReverseProxy`
   relays the 1xx responses, and the stack writes them on the connection
   directly, so that echo keeps the final status.
-- The stack of the member may be older than the stack of the owner, at
-  another host. An older stack would answer `200` after the `104`, and has
-  no route to resume. So the stack of the member sets
-  `X-Cozy-Resumable-Relay` on the requests it relays, and the owner starts a
-  resumable upload for a member only with this header. Otherwise, the member
-  gets the usual upload.
+
+### A member on an older stack
+
+The stack of a member and the stack of the owner can run two versions of
+cozy-stack:
+
+- during a deployment;
+- for a long time when they are on two platforms, for example SaaS and an
+  on-premise platform: a shared drive can join instances of different
+  domains.
+
+An older stack relays the request as it is, and the owner would start a
+resumable upload. A client that does not see the `104`, like a browser,
+creates an empty upload first (`Upload-Complete: ?0`), then:
+
+- it gets `200` instead of `201`, as the older relay takes the `104` for the
+  final status;
+- it cannot continue: the older stack has no route for `HEAD` and `PATCH` on
+  `/sharings/drives/:id/uploads/:upload-id`;
+- the upload stays open on the owner's instance for 7 days, and takes one of
+  the places of the member.
+
+So the relay announces that it knows the resumable uploads:
+
+- the stack of the member sets `X-Cozy-Resumable-Relay: 1` on each request
+  it relays to the owner, and on the requests it serves directly when the
+  owner is on the same stack;
+- the owner starts a resumable upload for a drive token only with this
+  header;
+- without it, the member is answered as on a storage without resumable
+  uploads: the usual upload for a request with the whole content, and `501`
+  for `Upload-Complete: ?0`.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant M as Older stack of the member
+    participant O as Stack of the owner
+    C->>M: POST /sharings/drives/:id/:dir-id (Upload-Complete ?0)
+    M->>O: the same request, without X-Cozy-Resumable-Relay
+    O-->>C: 501, send the whole content in one request
+    C->>M: POST with the whole content
+    M->>O: the same request
+    O-->>C: 201, usual upload
+```
+
+No web client speaks the protocol yet: this case becomes real when Drive
+web adopts it.
+
+The `resumable_uploads` capability describes the stack of the member, not the
+stack of the owner. When the stack of the owner is older than the resumable
+uploads, a creation with `Upload-Complete: ?0` gets `201` without
+`Location`: the usual upload has created an empty file.
 
 ## Settings and limits
 
@@ -421,3 +471,10 @@ To remove the lock of the VFS later:
 
 - The `io.cozy.files.uploads` database is created at the first resumable
   upload of an instance, not on every instance.
+
+## Open questions
+
+- @Quentin: on a `201` without `Location` for a creation with
+  `Upload-Complete: ?0` in a shared drive, should the client send the content
+  with `PUT` on the file it gets, or should the drive routes announce the
+  capability of the owner?
