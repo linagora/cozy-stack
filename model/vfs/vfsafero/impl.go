@@ -862,16 +862,21 @@ func (f *aferoFileCreation) Close() (err error) {
 		return vfs.ErrContentLengthMismatch
 	}
 
-	lockerr := f.afs.mu.Lock()
-	if lockerr != nil {
+	return f.afs.commitFile(newdoc, olddoc, f.tmppath, f.size, f.capsize)
+}
+
+// commitFile adds a file to the index and moves its content from tmppath to
+// its place.
+func (afs *aferoVFS) commitFile(newdoc, olddoc *vfs.FileDoc, tmppath string, size, capsize int64) error {
+	if lockerr := afs.mu.Lock(); lockerr != nil {
 		return lockerr
 	}
-	defer f.afs.mu.Unlock()
+	defer afs.mu.Unlock()
 
 	// Check again that a file with the same path does not exist. It can happen
 	// when the same file is uploaded twice in parallel.
 	if olddoc == nil {
-		exists, err := f.afs.Indexer.DirChildExists(newdoc.DirID, newdoc.DocName)
+		exists, err := afs.Indexer.DirChildExists(newdoc.DirID, newdoc.DocName)
 		if err != nil {
 			return err
 		}
@@ -880,8 +885,7 @@ func (f *aferoFileCreation) Close() (err error) {
 		}
 	}
 
-	var newpath string
-	newpath, err = f.afs.Indexer.FilePath(newdoc)
+	newpath, err := afs.Indexer.FilePath(newdoc)
 	if err != nil {
 		return err
 	}
@@ -892,11 +896,11 @@ func (f *aferoFileCreation) Close() (err error) {
 	var v *vfs.Version
 	if olddoc != nil {
 		v = vfs.NewVersion(olddoc)
-		err = f.afs.Indexer.UpdateFileDoc(olddoc, newdoc)
+		err = afs.Indexer.UpdateFileDoc(olddoc, newdoc)
 	} else if newdoc.ID() == "" {
-		err = f.afs.Indexer.CreateFileDoc(newdoc)
+		err = afs.Indexer.CreateFileDoc(newdoc)
 	} else {
-		err = f.afs.Indexer.CreateNamedFileDoc(newdoc)
+		err = afs.Indexer.CreateNamedFileDoc(newdoc)
 	}
 	if err != nil {
 		return err
@@ -904,8 +908,8 @@ func (f *aferoFileCreation) Close() (err error) {
 
 	if v != nil {
 		vPath := pathForVersion(v)
-		_ = f.afs.fs.MkdirAll(filepath.Dir(vPath), 0755)
-		if err = f.afs.fs.Rename(newpath, vPath); err != nil {
+		_ = afs.fs.MkdirAll(filepath.Dir(vPath), 0755)
+		if err = afs.fs.Rename(newpath, vPath); err != nil {
 			// If we can't move the content, we just don't create the version,
 			// but still let the upload for the new content finishes.
 			v = nil
@@ -913,35 +917,35 @@ func (f *aferoFileCreation) Close() (err error) {
 	}
 
 	// move the temporary file to its final location
-	if err = f.afs.fs.Rename(f.tmppath, newpath); err != nil {
+	if err = afs.fs.Rename(tmppath, newpath); err != nil {
 		if v != nil {
 			vPath := pathForVersion(v)
-			_ = f.afs.fs.Rename(vPath, newpath)
+			_ = afs.fs.Rename(vPath, newpath)
 		}
 		return err
 	}
 
 	if v != nil {
-		actionV, toClean, _ := vfs.FindVersionsToClean(f.afs, newdoc.DocID, v)
+		actionV, toClean, _ := vfs.FindVersionsToClean(afs, newdoc.DocID, v)
 		if bytes.Equal(newdoc.MD5Sum, olddoc.MD5Sum) {
 			actionV = vfs.CleanCandidateVersion
 		}
 		if actionV == vfs.KeepCandidateVersion {
-			if errv := f.afs.Indexer.CreateVersion(v); errv != nil {
+			if errv := afs.Indexer.CreateVersion(v); errv != nil {
 				actionV = vfs.CleanCandidateVersion
 			}
 		}
 		if actionV == vfs.CleanCandidateVersion {
 			vPath := pathForVersion(v)
-			_ = f.afs.fs.Remove(vPath)
+			_ = afs.fs.Remove(vPath)
 		}
 		for _, old := range toClean {
-			_ = cleanOldVersion(f.afs, old)
+			_ = cleanOldVersion(afs, old)
 		}
 	}
 
-	if f.capsize > 0 && f.size >= f.capsize {
-		vfs.PushDiskQuotaAlert(f.afs, true)
+	if capsize > 0 && size >= capsize {
+		vfs.PushDiskQuotaAlert(afs, true)
 	}
 
 	return nil
