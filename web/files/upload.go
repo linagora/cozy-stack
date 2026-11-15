@@ -147,6 +147,9 @@ func uploadNotFound(c echo.Context) error {
 // upload, storage error, lost connection), the client must resume it
 // (draft-ietf-httpbis-resumable-upload §4.2.1 and §11).
 func uploadError(c echo.Context, err error) error {
+	if errors.Is(err, errUploadHidden) {
+		return c.NoContent(http.StatusNotFound)
+	}
 	if errors.Is(err, vfs.ErrUploadNotFound) {
 		return uploadNotFound(c)
 	}
@@ -178,7 +181,27 @@ func uploadError(c echo.Context, err error) error {
 	return WrapVfsError(err)
 }
 
+// errUploadHidden is the answer for a completed upload whose file is out of
+// the reach of the request: a 404 that tells nothing about it.
+var errUploadHidden = errors.New("upload hidden")
+
 func checkUploadPerm(c echo.Context, fs vfs.VFS, u *vfs.Upload) error {
+	if u.Completed {
+		// The file may have been moved or deleted since: the permissions
+		// apply to its current state.
+		doc, err := fs.FileByID(u.File.ID())
+		if err != nil {
+			return errUploadHidden
+		}
+		verb := permission.POST
+		if u.OldFileID != "" {
+			verb = permission.PUT
+		}
+		if checkPerm(c, verb, nil, doc) != nil {
+			return errUploadHidden
+		}
+		return nil
+	}
 	if u.OldFileID == "" {
 		return checkPerm(c, permission.POST, nil, u.File)
 	}
@@ -228,7 +251,7 @@ func UploadOffsetHandler(c echo.Context) error {
 		u, err = vfs.ClaimUpload(inst.VFS(), u.UploadID)
 	}
 	if err != nil {
-		if errors.Is(err, vfs.ErrUploadNotFound) {
+		if errors.Is(err, vfs.ErrUploadNotFound) || errors.Is(err, errUploadHidden) {
 			return c.NoContent(http.StatusNotFound)
 		}
 		return err

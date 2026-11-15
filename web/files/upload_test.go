@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -434,4 +436,85 @@ func TestResumableUploadsDatabase(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
 	assert.True(t, exists())
+}
+
+// dropLink returns a client with the token of a sharing by link that can add
+// files to dirID, like a public drop folder.
+func dropLink(t *testing.T, inst *instance.Instance, base, dirID string) *uploadClient {
+	token, err := inst.MakeJWT(consts.ShareAudience, "drop-"+dirID, consts.Files, "", time.Now())
+	require.NoError(t, err)
+	rules := permission.Set{{
+		Type:   consts.Files,
+		Verbs:  permission.Verbs(permission.GET, permission.POST),
+		Values: []string{dirID},
+	}}
+	expires := time.Now().Add(time.Hour)
+	_, err = permission.CreateShareSet(inst, &permission.Permission{Type: "app", Permissions: rules}, "",
+		map[string]string{"drop-" + dirID: token}, nil, permission.Permission{Permissions: rules}, &expires, false)
+	require.NoError(t, err)
+	return &uploadClient{t: t, base: base, token: token}
+}
+
+func (c *uploadClient) mkdir(name string) string {
+	res, err := c.do(http.MethodPost, "/files/?Type=directory&Name="+url.QueryEscape(name), nil, 0, nil)
+	require.NoError(c.t, err)
+	require.Equal(c.t, http.StatusCreated, res.StatusCode, string(res.body))
+	id, _ := res.fileAttrs(c.t)
+	return id
+}
+
+// TestResumableUploadsByLink checks the uploads made with the token of a
+// sharing by link.
+func TestResumableUploadsByLink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	require.NoError(t, loadLocale(), "Could not load default locale translations")
+	testutils.NeedCouchdb(t)
+	config.GetConfig().Fs.ResumableUploads = config.FsResumableUploads{
+		PartSize:       uploadTestPartSize,
+		MaxAge:         time.Hour,
+		MaxPerInstance: 20,
+	}
+	config.GetConfig().Fs.URL = &url.URL{Scheme: "file", Host: "localhost", Path: t.TempDir()}
+	setup := testutils.NewSetup(t, "upload-by-link")
+	inst := setup.GetTestInstance()
+	_, token := setup.GetTestClient(consts.Files)
+	ts := newUploadServer(t, inst)
+	owner := &uploadClient{t: t, base: ts.URL, token: token}
+
+	t.Run("CompletedUploadOfAMovedFile", func(t *testing.T) {
+		drop := owner.mkdir("drop")
+		private := owner.mkdir("private")
+		link := dropLink(t, inst, ts.URL, drop)
+
+		res, err := link.do(http.MethodPost, "/files/"+drop+"?Type=file&Name=from-link.bin", nil, 0, map[string]string{
+			"Upload-Draft-Interop-Version": "6",
+			"Upload-Complete":              "?0",
+		})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+		location := res.Header.Get("Location")
+		content := randomBytes(uploadTestPartSize+10, 20)
+		done := link.patch(location, 0, content, true)
+		require.Equal(t, http.StatusCreated, done.StatusCode, string(done.body))
+		id, _ := done.fileAttrs(t)
+
+		// The owner moves the file out of the drop folder.
+		body := `{"data":{"type":"io.cozy.files","id":"` + id + `","attributes":{"dir_id":"` + private + `","name":"report.bin"}}}`
+		moved, err := owner.do(http.MethodPatch, "/files/"+id, bytes.NewReader([]byte(body)), int64(len(body)),
+			map[string]string{"Content-Type": "application/vnd.api+json"})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, moved.StatusCode, string(moved.body))
+
+		// The link has no access to the file anymore, nor to its upload.
+		head := link.head(location)
+		assert.Equal(t, http.StatusNotFound, head.StatusCode)
+		replay := link.patch(location, int64(len(content)), nil, true)
+		assert.Equal(t, http.StatusNotFound, replay.StatusCode)
+		assert.Empty(t, replay.body)
+		// The owner still has.
+		assert.Equal(t, http.StatusNoContent, owner.head(location).StatusCode)
+	})
 }
