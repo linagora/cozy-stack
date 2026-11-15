@@ -91,34 +91,37 @@ func CountGroupMembers(db prefixer.Prefixer, groupIDs []string) (map[string]int,
 
 // GetAllContacts returns the list of contacts inside this group.
 func (g *Group) GetAllContacts(db prefixer.Prefixer) ([]*Contact, error) {
-	var docs []*Contact
-	req := &couchdb.FindRequest{
-		UseIndex: "by-groups",
-		Selector: mango.Map{
-			"relationships": map[string]interface{}{
-				"groups": map[string]interface{}{
-					"data": map[string]interface{}{
-						"$elemMatch": map[string]interface{}{
-							"_id":   g.ID(),
-							"_type": consts.Groups,
-						},
+	const pageSize = 1000
+	inGroup := mango.Map{
+		"relationships": map[string]interface{}{
+			"groups": map[string]interface{}{
+				"data": map[string]interface{}{
+					"$elemMatch": map[string]interface{}{
+						"_id":   g.ID(),
+						"_type": consts.Groups,
 					},
 				},
 			},
 		},
-		Limit: 1000,
 	}
-	for {
+	var docs []*Contact
+	// Bookmarks can skip the next row when the previous page's last contact is
+	// deleted. The array index cannot serve $elemMatch either, so page by ID.
+	for after := ""; ; {
 		var page []*Contact
-		res, err := couchdb.FindDocsRaw(db, consts.Contacts, req, &page)
+		err := couchdb.FindDocsUnoptimized(db, consts.Contacts, &couchdb.FindRequest{
+			UseIndex: "_all_docs",
+			Selector: mango.And(mango.Gt("_id", after), inGroup),
+			Limit:    pageSize,
+		}, &page)
 		if err != nil {
 			return nil, err
 		}
 		docs = append(docs, page...)
-		if len(page) < req.Limit || res.Bookmark == "" || res.Bookmark == req.Bookmark {
+		if len(page) < pageSize {
 			break
 		}
-		req.Bookmark = res.Bookmark
+		after = page[len(page)-1].ID()
 	}
 
 	// XXX I didn't find a way to make a mango request with the correct sort

@@ -172,4 +172,21 @@ func TestGetAllContacts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, contacts, 1)
 	assert.Equal(t, contacts[0].PrimaryName(), "Gaby")
+
+	// A group larger than a page is read across pages.
+	docs := make([]interface{}, 1001)
+	for i := range docs {
+		c := &couchdb.JSONDoc{Type: consts.Contacts, M: map[string]interface{}{
+			"fullname": fmt.Sprintf("Contact %04d", i),
+			"relationships": map[string]interface{}{"groups": map[string]interface{}{
+				"data": []interface{}{map[string]interface{}{"_id": g.ID(), "_type": consts.Groups}},
+			}},
+		}}
+		c.SetID(fmt.Sprintf("contact-%04d", i))
+		docs[i] = c
+	}
+	require.NoError(t, couchdb.BulkUpdateDocs(instPrefix, consts.Contacts, docs, make([]interface{}, len(docs))))
+	contacts, err = g.GetAllContacts(instPrefix)
+	require.NoError(t, err)
+	require.Len(t, contacts, 1002)
 }
