@@ -2,7 +2,12 @@ package vfs_test
 
 import (
 	"bytes"
+	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -169,4 +174,74 @@ func TestSwiftLargeObjectOverwrittenWithoutVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, versions)
 	assert.Empty(t, b.objects(u))
+}
+
+// TestSwiftLargeObjectDeletedWithoutBulkDelete checks that the segments of a
+// file are removed on a Swift that refuses the bulk delete.
+func TestSwiftLargeObjectDeletedWithoutBulkDelete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+
+	fixture := testutils.StartSwift(t)
+	target, err := url.Parse("http://" + fixture.Endpoint)
+	require.NoError(t, err)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("bulk-delete") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	defer refusing.Close()
+
+	b := swiftUploadBackendAt(t, &testutils.SwiftFixture{Endpoint: strings.TrimPrefix(refusing.URL, "http://")})
+	fs := b.newFS()
+	content := randomContent(testPartSize+10, 24)
+	u, err := vfs.NewUpload(fs, newUploadDoc(t, "no-bulk.bin", content), nil, "", -1)
+	require.NoError(t, err)
+	doc, err := vfs.AppendUpload(fs, u, bytes.NewReader(content), true)
+	require.NoError(t, err)
+	require.NotEmpty(t, b.objects(u))
+
+	require.NoError(t, fs.DestroyFile(doc))
+	assert.Empty(t, b.objects(u))
+}
+
+// TestSwiftDissociatedLargeObject checks the deletion of a plain object with
+// the name of a large object: a sharing dissociates a file by copying it,
+// which flattens the manifest, and keeps its internal ID.
+func TestSwiftDissociatedLargeObject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+
+	b := swiftUploadBackend(t)
+	fs := b.newFS()
+	content := randomContent(testPartSize+10, 25)
+	u, err := vfs.NewUpload(fs, newUploadDoc(t, "shared.bin", content), nil, "", -1)
+	require.NoError(t, err)
+	src, err := vfs.AppendUpload(fs, u, bytes.NewReader(content), true)
+	require.NoError(t, err)
+
+	dst := src.Clone().(*vfs.FileDoc)
+	dst.DocName = "dissociated.bin"
+	dst.DocRev = ""
+	require.NoError(t, fs.DissociateFile(src, dst))
+	assert.Empty(t, b.objects(u))
+	assert.Equal(t, content, readContent(t, fs, dst))
+
+	require.NoError(t, fs.DestroyFile(dst))
+	names, err := config.GetSwiftConnection().ObjectNamesAll(context.Background(), "cozy-v3-upload.swift.example.org", nil)
+	require.NoError(t, err)
+	for _, name := range names {
+		assert.NotContains(t, name, dst.DocID)
+	}
 }

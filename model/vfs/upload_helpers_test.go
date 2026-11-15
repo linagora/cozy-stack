@@ -131,7 +131,10 @@ func s3UploadBackend(t *testing.T) uploadBackend {
 }
 
 func swiftUploadBackend(t *testing.T) uploadBackend {
-	swiftFixture := testutils.StartSwift(t)
+	return swiftUploadBackendAt(t, testutils.StartSwift(t))
+}
+
+func swiftUploadBackendAt(t *testing.T, swiftFixture *testutils.SwiftFixture) uploadBackend {
 	db := &contexter{0, "upload.swift.example.org", "upload.swift.example.org", "cozy_beta"}
 	initUploadDB(t, db)
 	require.NoError(t, config.InitSwiftConnection(config.Fs{URL: swiftFixture.FsURL()}))
