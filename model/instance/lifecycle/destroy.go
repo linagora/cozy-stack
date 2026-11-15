@@ -11,6 +11,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	job "github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/rag"
+	"github.com/cozy/cozy-stack/model/search/purge"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -79,6 +80,13 @@ func Destroy(domain string) error {
 
 	if err := rag.CleanInstance(inst); err != nil {
 		return err
+	}
+
+	if err := purge.CleanInstance(inst.Domain); err != nil {
+		// A failure must not block the deletion: the leftover documents are
+		// only found by the former members of the drives of the instance.
+		logger.WithDomain(inst.Domain).WithNamespace("search").
+			Warnf("Could not remove the search documents: %s", err)
 	}
 
 	// Reload the instance, it can have been updated in CouchDB if the instance

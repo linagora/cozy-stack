@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/search/purge"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -18,8 +19,8 @@ import (
 
 // Names of the search indices, before the configured prefix.
 const (
-	FilesIndex  = "files_v1"
-	ScopesIndex = "share_scopes_v1"
+	FilesIndex  = purge.FilesIndex
+	ScopesIndex = purge.ScopesIndex
 )
 
 // subtreePageSize is the number of folders loaded per CouchDB request when
