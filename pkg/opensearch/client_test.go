@@ -121,13 +121,14 @@ func TestBulk(t *testing.T) {
 	t.Run("a failed item is an error", func(t *testing.T) {
 		c, _ := newTestClient(t, 200, `{"errors":true,"items":[
 			{"index":{"status":201}},
-			{"index":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse"}}}]}`)
+			{"index":{"_id":"b","status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse"}}}]}`)
 		err := c.Bulk(context.Background(), "files_v1", ndjson)
 		var osErr *Error
 		require.True(t, errors.As(err, &osErr))
 		assert.Equal(t, 400, osErr.Status)
 		assert.Equal(t, "mapper_parsing_exception", osErr.Type)
 		assert.Equal(t, "failed to parse", osErr.Reason)
+		assert.Equal(t, "b", osErr.DocID)
 	})
 }
 
