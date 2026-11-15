@@ -15,3 +15,10 @@ func StopUploadAfter(step string, err error) func() {
 
 // ActiveUploads returns the uploads that are not completed.
 var ActiveUploads = activeUploads
+
+// SetUploadStepHook calls hook at each step of the uploads. It returns a
+// function to restore the normal behavior.
+func SetUploadStepHook(hook func(step string) error) func() {
+	uploadStepHook = hook
+	return func() { uploadStepHook = nil }
+}

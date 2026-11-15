@@ -675,7 +675,8 @@ func testMigrateCancelsUploadsInProgress(t *testing.T, mf *testutils.MinioFixtur
 	_, err = vfs.AppendUpload(inst.VFS(), u, bytes.NewReader([]byte("the first bytes")), false)
 	require.NoError(t, err)
 	source := inst.VFS().(vfs.UploadStorage)
-	content, err := source.OpenUploadContent(u)
+	require.NotNil(t, u.Tail)
+	content, err := source.OpenUploadTail(u)
 	require.NoError(t, err)
 	require.NoError(t, content.Close())
 
@@ -684,7 +685,7 @@ func testMigrateCancelsUploadsInProgress(t *testing.T, mf *testutils.MinioFixtur
 
 	_, err = vfs.GetUpload(inst.VFS(), u.UploadID)
 	assert.ErrorIs(t, err, vfs.ErrUploadNotFound)
-	_, err = source.OpenUploadContent(u)
+	_, err = source.OpenUploadTail(u)
 	assert.Error(t, err, "the content of the upload must be removed from the source")
 }
 

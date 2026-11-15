@@ -77,10 +77,15 @@ func aferoUploadBackend(t *testing.T) uploadBackend {
 		newFS: newFS,
 		objects: func(u *vfs.Upload) []string {
 			p := path.Join(dir, "upload-test", vfs.UploadsDirName, u.UploadID)
-			if _, err := os.Stat(p); err == nil {
-				return []string{p}
+			entries, err := os.ReadDir(p)
+			if err != nil {
+				return nil
 			}
-			return nil
+			names := make([]string, len(entries))
+			for i, e := range entries {
+				names[i] = path.Join(p, e.Name())
+			}
+			return names
 		},
 		pending: func(u *vfs.Upload) bool { return false },
 	}

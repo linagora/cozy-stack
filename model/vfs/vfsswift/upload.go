@@ -45,28 +45,23 @@ func (sfs *swiftVFSV3) putSegment(name string, content io.Reader, size int64) (*
 	}, nil
 }
 
-func (sfs *swiftVFSV3) WriteUploadPart(u *vfs.Upload, content io.Reader, size int64) error {
-	number := len(u.Parts) + 1
-	part, err := sfs.putSegment(fmt.Sprintf("%spart-%05d", sfs.uploadPrefix(u), number), content, size)
+// The segments and tails are named after their slot: two requests never write
+// the same object.
+func (sfs *swiftVFSV3) writeSegment(u *vfs.Upload, kind string, slot int, content io.Reader, size int64) (vfs.UploadPart, error) {
+	part, err := sfs.putSegment(fmt.Sprintf("%s%s-%05d", sfs.uploadPrefix(u), kind, slot), content, size)
 	if err != nil {
-		return err
+		return vfs.UploadPart{}, err
 	}
-	part.Number = number
-	u.Parts = append(u.Parts, *part)
-	u.Tail = nil
-	return nil
+	part.Number = slot
+	return *part, nil
 }
 
-func (sfs *swiftVFSV3) WriteUploadTail(u *vfs.Upload, content io.Reader, size int64) error {
-	end := u.Offset - u.TailSize() + size
-	// The name depends on the end offset: a tail is never overwritten by a
-	// different content.
-	tail, err := sfs.putSegment(fmt.Sprintf("%stail-%d", sfs.uploadPrefix(u), end), content, size)
-	if err != nil {
-		return err
-	}
-	u.Tail = tail
-	return nil
+func (sfs *swiftVFSV3) WriteUploadPart(u *vfs.Upload, slot int, content io.Reader, size int64) (vfs.UploadPart, error) {
+	return sfs.writeSegment(u, "part", slot, content, size)
+}
+
+func (sfs *swiftVFSV3) WriteUploadTail(u *vfs.Upload, slot int, content io.Reader, size int64) (vfs.UploadPart, error) {
+	return sfs.writeSegment(u, "tail", slot, content, size)
 }
 
 func (sfs *swiftVFSV3) OpenUploadTail(u *vfs.Upload) (io.ReadCloser, error) {
@@ -74,8 +69,12 @@ func (sfs *swiftVFSV3) OpenUploadTail(u *vfs.Upload) (io.ReadCloser, error) {
 	return f, err
 }
 
-func (sfs *swiftVFSV3) DeleteUploadTail(u *vfs.Upload, tail *vfs.UploadPart) error {
-	return sfs.c.ObjectDelete(sfs.ctx, sfs.container, tail.Name)
+func (sfs *swiftVFSV3) DeleteUploadPart(u *vfs.Upload, part vfs.UploadPart) error {
+	err := sfs.c.ObjectDelete(sfs.ctx, sfs.container, part.Name)
+	if errors.Is(err, swift.ObjectNotFound) {
+		return nil
+	}
+	return err
 }
 
 type manifestSegment struct {

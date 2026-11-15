@@ -10,17 +10,17 @@ import (
 	"io"
 	"os"
 	"time"
-
-	"github.com/cozy/cozy-stack/pkg/couchdb"
 )
 
 // AppendUpload writes the content of r to the upload. When complete is true,
 // the upload is finished once r has been fully read: the file is added to the
 // VFS and returned.
 //
-// The content is written to the storage part by part. When the request is
-// interrupted, the bytes received so far are kept. The offset in CouchDB is
-// updated only after the bytes have been written, so it never goes backward.
+// The content is written to the storage part by part, without lock: each
+// write has its own slot, and counts only once the state of the upload has
+// been saved with it. When the request is interrupted, the bytes received so
+// far are kept. The offset in CouchDB is updated only after the bytes have
+// been written, so it never goes backward.
 func AppendUpload(fs VFS, u *Upload, r io.Reader, complete bool) (*FileDoc, error) {
 	store, err := uploadStorage(fs)
 	if err != nil {
@@ -81,11 +81,7 @@ func AppendUpload(fs VFS, u *Upload, r io.Reader, complete bool) (*FileDoc, erro
 			return nil, deactivateUpload(fs, u, ErrFileTooBig)
 		}
 		if err == nil {
-			err = u.locked(fs, func(fresh *Upload) error {
-				return fresh.writeProgress(fs, store, received, h, func() error {
-					return store.WriteUploadPart(fresh, io.NewSectionReader(buf, 0, inBuf), inBuf)
-				})
-			})
+			err = u.writeProgress(fs, store, received, h, false, io.NewSectionReader(buf, 0, inBuf), inBuf)
 			if err != nil {
 				return nil, err
 			}
@@ -109,11 +105,7 @@ func AppendUpload(fs VFS, u *Upload, r io.Reader, complete bool) (*FileDoc, erro
 	}
 
 	if received > 0 {
-		err := u.locked(fs, func(fresh *Upload) error {
-			return fresh.writeProgress(fs, store, received, h, func() error {
-				return store.WriteUploadTail(fresh, io.NewSectionReader(buf, 0, inBuf), inBuf)
-			})
-		})
+		err := u.writeProgress(fs, store, received, h, true, io.NewSectionReader(buf, 0, inBuf), inBuf)
 		if err != nil {
 			return nil, err
 		}
@@ -121,128 +113,253 @@ func AppendUpload(fs VFS, u *Upload, r io.Reader, complete bool) (*FileDoc, erro
 	return nil, readErr
 }
 
+// writeProgress writes the bytes after the last part, as a part or as the
+// tail, then saves the new offset and md5 state, if the request is still the
+// owner of the upload and nobody has written in the meantime. A write that
+// does not count, and a replaced tail, are removed.
+func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h hash.Hash, tail bool, content io.Reader, size int64) error {
+	state, err := h.(encoding.BinaryMarshaler).MarshalBinary()
+	if err != nil {
+		return err
+	}
+	start := u.Offset
+	slot, err := u.reserveSlot(fs)
+	if err != nil {
+		return err
+	}
+	if err := uploadStep("write"); err != nil {
+		return err
+	}
+	var part UploadPart
+	if tail {
+		part, err = store.WriteUploadTail(u, slot, content, size)
+	} else {
+		part, err = store.WriteUploadPart(u, slot, content, size)
+	}
+	if err != nil {
+		return err
+	}
+	if err := uploadStep("written"); err != nil {
+		return err
+	}
+	replaced := u.Tail
+	written := *u
+	err = u.update(fs, func(fresh *Upload) error {
+		if fresh.Offset != start || fresh.Finalizing {
+			return ErrUploadTakenOver
+		}
+		if tail {
+			fresh.Tail = &part
+		} else {
+			fresh.Parts = append(fresh.Parts, part)
+			fresh.Tail = nil
+		}
+		fresh.Offset += received
+		fresh.MD5State = state
+		fresh.ExpiresAt = time.Now().Add(uploadConfig().MaxAge)
+		return nil
+	})
+	if err != nil {
+		_ = store.DeleteUploadPart(&written, part)
+		return err
+	}
+	if replaced != nil {
+		_ = store.DeleteUploadPart(u, *replaced)
+	}
+	return nil
+}
+
 func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, received int64, h hash.Hash) (*FileDoc, error) {
-	var created *FileDoc
-	err := u.locked(fs, func(fresh *Upload) error {
-		if doc := committedFile(fs, fresh); doc != nil {
-			created = doc
-			return fresh.markCompleted(fs, doc)
+	if doc := committedFile(fs, u); doc != nil {
+		return doc, u.markCompleted(fs, doc)
+	}
+	total := u.Offset + received
+	if u.Length >= 0 && total != u.Length {
+		return nil, finishError(fs, u, ErrUploadLength)
+	}
+	if u.Finalizing && received > 0 {
+		return nil, finishError(fs, u, ErrUploadLength)
+	}
+	var olddoc *FileDoc
+	if u.OldFileID != "" {
+		var err error
+		if olddoc, err = fs.FileByID(u.OldFileID); err != nil {
+			return nil, finishError(fs, u, err)
 		}
-		total := fresh.Offset + received
-		if fresh.Length >= 0 && total != fresh.Length {
-			return finishError(fs, fresh, ErrUploadLength)
+		if u.OldRev != "" && olddoc.Rev() != u.OldRev {
+			return nil, finishError(fs, u, ErrConflict)
 		}
-		if fresh.Finalizing && received > 0 {
-			return finishError(fs, fresh, ErrUploadLength)
-		}
-		var olddoc *FileDoc
-		if fresh.OldFileID != "" {
-			var err error
-			if olddoc, err = fs.FileByID(fresh.OldFileID); err != nil {
-				return finishError(fs, fresh, err)
-			}
-			if fresh.OldRev != "" && olddoc.Rev() != fresh.OldRev {
-				return finishError(fs, fresh, ErrConflict)
-			}
-		}
-		newdoc := fresh.File.Clone().(*FileDoc)
-		newdoc.ByteSize = total
-		if olddoc != nil {
-			// The file may have been moved, renamed, trashed or referenced
-			// since the upload has started.
-			newdoc.DocName = olddoc.DocName
-			newdoc.DirID = olddoc.DirID
-			newdoc.RestorePath = olddoc.RestorePath
-			newdoc.Trashed = olddoc.Trashed
-			newdoc.ReferencedBy = olddoc.ReferencedBy
-		}
-		// The storages close the readers that they receive.
-		last := func() io.Reader { return io.NewSectionReader(buf, 0, inBuf) }
+	}
+	newdoc := u.File.Clone().(*FileDoc)
+	newdoc.ByteSize = total
+	if olddoc != nil {
+		// The file may have been moved, renamed, trashed or referenced
+		// since the upload has started.
+		newdoc.DocName = olddoc.DocName
+		newdoc.DirID = olddoc.DirID
+		newdoc.RestorePath = olddoc.RestorePath
+		newdoc.Trashed = olddoc.Trashed
+		newdoc.ReferencedBy = olddoc.ReferencedBy
+	}
+	// The storages close the readers that they receive.
+	last := func() io.Reader { return io.NewSectionReader(buf, 0, inBuf) }
+	md5sum := h.Sum(nil)
 
-		// A content that fits in one part goes through the usual upload, so
-		// that it is stored as a plain object.
-		if !fresh.Finalizing && len(fresh.Parts) == 0 && fresh.Offset == fresh.TailSize() {
-			newdoc.InternalID = ""
-			if len(newdoc.MD5Sum) == 0 {
-				newdoc.MD5Sum = nil
-			}
-			if err := createFile(fs, newdoc, olddoc, last()); err != nil {
-				return finishError(fs, fresh, err)
-			}
-			if err := store.AbortUpload(fresh); err != nil {
-				return err
-			}
-			created = newdoc
-			return fresh.markCompleted(fs, newdoc)
+	// A content that fits in one part goes through the usual upload, so that
+	// it is stored as a plain object.
+	if !u.Finalizing && len(u.Parts) == 0 && u.Offset == u.TailSize() {
+		if err := ownsUpload(fs, u); err != nil {
+			return nil, err
 		}
+		newdoc.InternalID = ""
+		if len(newdoc.MD5Sum) == 0 {
+			newdoc.MD5Sum = nil
+		}
+		if err := createFile(fs, newdoc, olddoc, last()); err != nil {
+			if doc := createdFile(fs, u, total, md5sum); doc != nil {
+				return doc, u.markCompleted(fs, doc)
+			}
+			return nil, finishError(fs, u, err)
+		}
+		_ = store.AbortUpload(u)
+		return newdoc, u.markCompleted(fs, newdoc)
+	}
 
-		if !fresh.Finalizing {
-			md5sum := h.Sum(nil)
-			if len(newdoc.MD5Sum) > 0 && !bytes.Equal(newdoc.MD5Sum, md5sum) {
-				return finishError(fs, fresh, ErrInvalidHash)
-			}
-			newdoc.MD5Sum = md5sum
-			if _, _, _, err := CheckAvailableDiskSpace(fs, newdoc); err != nil {
-				return finishError(fs, fresh, err)
-			}
-			// The offset becomes the final size before anything is assembled:
-			// after a stop of the stack, the client sends an empty request to
-			// finish, and no byte is written twice.
-			err := fresh.writeProgress(fs, store, received, h, func() error {
-				if inBuf > 0 || len(fresh.Parts) == 0 {
-					if err := store.WriteUploadPart(fresh, last(), inBuf); err != nil {
-						return err
-					}
-				}
-				fresh.Length = total
-				fresh.Finalizing = true
-				fresh.File.MD5Sum = md5sum
-				fresh.File.ByteSize = total
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-			if err := uploadStep("finalizing"); err != nil {
-				return err
-			}
+	if !u.Finalizing {
+		if len(newdoc.MD5Sum) > 0 && !bytes.Equal(newdoc.MD5Sum, md5sum) {
+			return nil, finishError(fs, u, ErrInvalidHash)
 		}
-		_, _, capsize, err := CheckAvailableDiskSpace(fs, newdoc)
-		if err != nil {
-			return finishError(fs, fresh, err)
+		newdoc.MD5Sum = md5sum
+		if _, _, _, err := CheckAvailableDiskSpace(fs, newdoc); err != nil {
+			return nil, finishError(fs, u, err)
 		}
+		// The offset becomes the final size before anything is assembled:
+		// after a stop of the stack, the client sends an empty request to
+		// finish, and no byte is written twice.
+		if err := u.finalize(fs, store, received, h, last(), inBuf, md5sum); err != nil {
+			return nil, err
+		}
+		if err := uploadStep("finalizing"); err != nil {
+			return nil, err
+		}
+	}
+	_, _, capsize, err := CheckAvailableDiskSpace(fs, newdoc)
+	if err != nil {
+		return nil, finishError(fs, u, err)
+	}
 
-		if !fresh.Assembled {
-			if err := store.AssembleUpload(fresh); err != nil {
-				return err
-			}
+	// The assembling can run again: it gives the same object.
+	if !u.Assembled {
+		if err := store.AssembleUpload(u); err != nil {
+			return nil, err
+		}
+		if err := u.update(fs, func(fresh *Upload) error {
 			fresh.Assembled = true
-			if err := couchdb.UpdateDoc(fs, fresh); err != nil {
-				return err
-			}
-			if err := uploadStep("assembled"); err != nil {
-				return err
-			}
+			return nil
+		}); err != nil {
+			return nil, err
 		}
+		if err := uploadStep("assembled"); err != nil {
+			return nil, err
+		}
+	}
 
-		fresh.File = newdoc
-		if meta := NewMetaExtractor(newdoc); meta != nil {
-			extractMetadata(store, fresh, newdoc, meta)
+	committing := *u
+	committing.File = newdoc
+	if meta := NewMetaExtractor(newdoc); meta != nil {
+		extractMetadata(store, &committing, newdoc, meta)
+	}
+	if err := ownsUpload(fs, u); err != nil {
+		return nil, err
+	}
+	err = uploadStep("commit")
+	if err == nil {
+		// The commit takes the lock of the VFS, like the usual upload.
+		err = store.CommitUpload(&committing, olddoc, capsize)
+	}
+	if err != nil {
+		// Another request may have indexed the file in the meantime.
+		if doc := committedFile(fs, u); doc != nil {
+			return doc, u.markCompleted(fs, doc)
 		}
-		err = uploadStep("commit")
-		if err == nil {
-			err = store.CommitUpload(fresh, olddoc, capsize)
-		}
+		return nil, finishError(fs, u, err)
+	}
+	if err := uploadStep("committed"); err != nil {
+		return nil, err
+	}
+	return newdoc, u.markCompleted(fs, newdoc)
+}
+
+// finalize writes the last bytes and saves the final size and md5.
+func (u *Upload) finalize(fs VFS, store UploadStorage, received int64, h hash.Hash, last io.Reader, size int64, md5sum []byte) error {
+	state, err := h.(encoding.BinaryMarshaler).MarshalBinary()
+	if err != nil {
+		return err
+	}
+	start := u.Offset
+	var part *UploadPart
+	if size > 0 || len(u.Parts) == 0 {
+		slot, err := u.reserveSlot(fs)
 		if err != nil {
-			return finishError(fs, fresh, err)
-		}
-		if err := uploadStep("committed"); err != nil {
 			return err
 		}
-		created = newdoc
-		return fresh.markCompleted(fs, newdoc)
+		written, err := store.WriteUploadPart(u, slot, last, size)
+		if err != nil {
+			return err
+		}
+		part = &written
+	}
+	replaced := u.Tail
+	before := *u
+	err = u.update(fs, func(fresh *Upload) error {
+		if fresh.Offset != start || fresh.Finalizing {
+			return ErrUploadTakenOver
+		}
+		if part != nil {
+			fresh.Parts = append(fresh.Parts, *part)
+		}
+		fresh.Tail = nil
+		fresh.Offset += received
+		fresh.Length = fresh.Offset
+		fresh.MD5State = state
+		fresh.Finalizing = true
+		fresh.File.MD5Sum = md5sum
+		fresh.File.ByteSize = fresh.Offset
+		return nil
 	})
-	return created, err
+	if err != nil {
+		if part != nil {
+			_ = store.DeleteUploadPart(&before, *part)
+		}
+		return err
+	}
+	if replaced != nil {
+		_ = store.DeleteUploadPart(u, *replaced)
+	}
+	return nil
+}
+
+// ownsUpload checks that the request is still the owner of the upload, before
+// a step that is not guarded by the state of the upload.
+func ownsUpload(fs VFS, u *Upload) error {
+	fresh, err := GetUpload(fs, u.UploadID)
+	if err != nil {
+		return err
+	}
+	if fresh.Completed || fresh.Owner != u.Owner {
+		return ErrUploadTakenOver
+	}
+	return nil
+}
+
+// createdFile returns the file created by the usual upload of a small content
+// when another request has created it first.
+func createdFile(fs VFS, u *Upload, size int64, md5sum []byte) *FileDoc {
+	doc, err := fs.FileByID(u.File.ID())
+	if err != nil || doc.ByteSize != size || !bytes.Equal(doc.MD5Sum, md5sum) {
+		return nil
+	}
+	return doc
 }
 
 // RejectedUploadError is the error of an upload whose whole content has been
@@ -265,7 +382,11 @@ func finishError(fs VFS, u *Upload, err error) error {
 		ErrInvalidHash, ErrContentLengthMismatch, ErrUploadLength,
 	} {
 		if errors.Is(err, final) {
-			return &RejectedUploadError{Err: deactivateLocked(fs, u, err)}
+			err = deactivateUpload(fs, u, err)
+			if errors.Is(err, ErrUploadTakenOver) {
+				return err
+			}
+			return &RejectedUploadError{Err: err}
 		}
 	}
 	return err
@@ -310,36 +431,26 @@ func extractMetadata(store UploadStorage, u *Upload, doc *FileDoc, meta *MetaExt
 	}
 }
 
-// writeProgress writes the content with write, then saves the new offset and
-// md5 state. A tail replaced by write is removed once the new state is saved.
-func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h hash.Hash, write func() error) error {
-	state, err := h.(encoding.BinaryMarshaler).MarshalBinary()
+// markCompleted records that the file is indexed. The upload is completed even
+// if another request has resumed it in the meantime.
+func (u *Upload) markCompleted(fs VFS, doc *FileDoc) error {
+	saved, err := updateUpload(fs, u.UploadID, func(fresh *Upload) error {
+		fresh.Completed = true
+		fresh.File = doc
+		fresh.Offset = doc.ByteSize
+		fresh.MD5State = nil
+		fresh.Parts = nil
+		fresh.Tail = nil
+		fresh.ExpiresAt = time.Now().Add(uploadConfig().MaxAge)
+		return nil
+	})
+	if errors.Is(err, ErrUploadNotFound) {
+		// The upload has been cancelled after the file was indexed.
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	replaced := u.Tail
-	if err := write(); err != nil {
-		return err
-	}
-	u.Offset += received
-	u.MD5State = state
-	u.ExpiresAt = time.Now().Add(uploadConfig().MaxAge)
-	if err := couchdb.UpdateDoc(fs, u); err != nil {
-		return err
-	}
-	if replaced != nil && (u.Tail == nil || u.Tail.Name != replaced.Name) {
-		_ = store.DeleteUploadTail(u, replaced)
-	}
+	*u = *saved
 	return nil
-}
-
-func (u *Upload) markCompleted(fs VFS, doc *FileDoc) error {
-	u.Completed = true
-	u.File = doc
-	u.Offset = doc.ByteSize
-	u.MD5State = nil
-	u.Parts = nil
-	u.Tail = nil
-	u.ExpiresAt = time.Now().Add(uploadConfig().MaxAge)
-	return couchdb.UpdateDoc(fs, u)
 }

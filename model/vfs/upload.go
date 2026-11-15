@@ -60,12 +60,18 @@ type Upload struct {
 	// segments).
 	Tail      *UploadPart `json:"tail,omitempty"`
 	StorageID string      `json:"storage_id,omitempty"`
+	// NextPart is the last slot given to a part or a tail. Each write gets its
+	// own slot, so two requests never write the same object.
+	NextPart int `json:"next_part,omitempty"`
 	// Finalizing is set once all the content is written: the offset is the
 	// final size, and the next steps (assembling, indexing) can be run again
 	// after a stop of the stack.
 	Finalizing bool `json:"finalizing,omitempty"`
 	Assembled  bool `json:"assembled,omitempty"`
 	Completed  bool `json:"completed"`
+	// Removed is set before the content of the upload is removed: the upload
+	// is then not found, and a removal that fails is run again by the cleaning.
+	Removed bool `json:"removed,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -119,17 +125,18 @@ type UploadStorage interface {
 	// StartUpload prepares the storage for a new upload, and sets the
 	// InternalID of the file.
 	StartUpload(u *Upload) error
-	// WriteUploadPart writes the content that follows the last part, and adds
-	// it as a part.
-	WriteUploadPart(u *Upload, content io.Reader, size int64) error
+	// WriteUploadPart writes the content that follows the last part, under the
+	// given slot. It does not change u: the part counts only once the state of
+	// the upload has been saved with it.
+	WriteUploadPart(u *Upload, slot int, content io.Reader, size int64) (UploadPart, error)
 	// WriteUploadTail writes the content that follows the last part, when it is
-	// smaller than a part, and sets it as the tail (or as a part for the
-	// storages that accept parts of any size).
-	WriteUploadTail(u *Upload, content io.Reader, size int64) error
+	// smaller than a part, under the given slot.
+	WriteUploadTail(u *Upload, slot int, content io.Reader, size int64) (UploadPart, error)
 	// OpenUploadTail returns the content of the tail.
 	OpenUploadTail(u *Upload) (io.ReadCloser, error)
-	// DeleteUploadTail removes a tail that has been replaced.
-	DeleteUploadTail(u *Upload, tail *UploadPart) error
+	// DeleteUploadPart removes a part or a tail that does not count: a
+	// replaced tail, or the write of a request that has lost the upload.
+	DeleteUploadPart(u *Upload, part UploadPart) error
 	// AssembleUpload puts the parts together at the place of the file. It can
 	// be called again after a stop of the stack.
 	AssembleUpload(u *Upload) error

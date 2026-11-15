@@ -8,10 +8,12 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
-// The content of an upload is a multipart upload on the key of the file. A
-// part must have at least 5 MiB, except the last one: the bytes received after
-// the last part are kept in a temporary object (the tail), and go in front of
-// the next part.
+// The content of an upload is a multipart upload on the key of the file,
+// started with the upload. The number of a part is its slot: two requests
+// never write the same part, and the completion lists only the parts that
+// count. A part must have at least 5 MiB, except the last one: the bytes
+// received after the last part are kept in a temporary object (the tail), and
+// go in front of the next part.
 
 func (sfs *s3VFS) uploadKey(u *vfs.Upload) string {
 	return MakeObjectKey(sfs.keyPrefix, u.File.DocID, u.File.InternalID)
@@ -21,61 +23,49 @@ func (sfs *s3VFS) uploadPrefix(u *vfs.Upload) string {
 	return sfs.keyPrefix + vfs.UploadsObjectPrefix + u.UploadID + "/"
 }
 
+// StartUpload starts the multipart upload before the upload is saved, so that
+// no two requests can start one each.
 func (sfs *s3VFS) StartUpload(u *vfs.Upload) error {
 	u.File.InternalID = NewInternalID()
-	return nil
-}
-
-func (sfs *s3VFS) writePart(u *vfs.Upload, content io.Reader, size int64) error {
 	core := minio.Core{Client: sfs.client}
-	started := false
-	if u.StorageID == "" {
-		id, err := core.NewMultipartUpload(sfs.ctx, sfs.bucket, sfs.uploadKey(u), minio.PutObjectOptions{
-			ContentType: u.File.Mime,
-		})
-		if err != nil {
-			return err
-		}
-		u.StorageID = id
-		started = true
-	}
-	number := len(u.Parts) + 1
-	part, err := core.PutObjectPart(sfs.ctx, sfs.bucket, sfs.uploadKey(u), u.StorageID, number, content, size, minio.PutObjectPartOptions{})
+	id, err := core.NewMultipartUpload(sfs.ctx, sfs.bucket, sfs.uploadKey(u), minio.PutObjectOptions{
+		ContentType: u.File.Mime,
+	})
 	if err != nil {
-		if started {
-			// The ID is saved only with a part: nothing else would abort it.
-			_ = core.AbortMultipartUpload(sfs.ctx, sfs.bucket, sfs.uploadKey(u), u.StorageID)
-			u.StorageID = ""
-		}
 		return err
 	}
-	u.Parts = append(u.Parts, vfs.UploadPart{Number: number, ETag: part.ETag, Size: size})
-	u.Tail = nil
+	u.StorageID = id
 	return nil
 }
 
-func (sfs *s3VFS) WriteUploadPart(u *vfs.Upload, content io.Reader, size int64) error {
-	return sfs.writePart(u, content, size)
+func (sfs *s3VFS) WriteUploadPart(u *vfs.Upload, slot int, content io.Reader, size int64) (vfs.UploadPart, error) {
+	core := minio.Core{Client: sfs.client}
+	part, err := core.PutObjectPart(sfs.ctx, sfs.bucket, sfs.uploadKey(u), u.StorageID, slot, content, size, minio.PutObjectPartOptions{})
+	if err != nil {
+		return vfs.UploadPart{}, err
+	}
+	return vfs.UploadPart{Number: slot, ETag: part.ETag, Size: size}, nil
 }
 
-func (sfs *s3VFS) WriteUploadTail(u *vfs.Upload, content io.Reader, size int64) error {
-	end := u.Offset - u.TailSize() + size
-	// The name depends on the end offset: a tail is never overwritten by a
-	// different content.
-	key := fmt.Sprintf("%stail-%d", sfs.uploadPrefix(u), end)
+func (sfs *s3VFS) WriteUploadTail(u *vfs.Upload, slot int, content io.Reader, size int64) (vfs.UploadPart, error) {
+	key := fmt.Sprintf("%stail-%d", sfs.uploadPrefix(u), slot)
 	if _, err := sfs.client.PutObject(sfs.ctx, sfs.bucket, key, content, size, minio.PutObjectOptions{}); err != nil {
-		return err
+		return vfs.UploadPart{}, err
 	}
-	u.Tail = &vfs.UploadPart{Name: key, Size: size}
-	return nil
+	return vfs.UploadPart{Number: slot, Name: key, Size: size}, nil
 }
 
 func (sfs *s3VFS) OpenUploadTail(u *vfs.Upload) (io.ReadCloser, error) {
 	return sfs.client.GetObject(sfs.ctx, sfs.bucket, u.Tail.Name, minio.GetObjectOptions{})
 }
 
-func (sfs *s3VFS) DeleteUploadTail(u *vfs.Upload, tail *vfs.UploadPart) error {
-	return sfs.client.RemoveObject(sfs.ctx, sfs.bucket, tail.Name, minio.RemoveObjectOptions{})
+// DeleteUploadPart removes a tail. A part of the multipart upload that does
+// not count is left out of the completion, and dropped by S3 with it.
+func (sfs *s3VFS) DeleteUploadPart(u *vfs.Upload, part vfs.UploadPart) error {
+	if part.Name == "" {
+		return nil
+	}
+	return sfs.client.RemoveObject(sfs.ctx, sfs.bucket, part.Name, minio.RemoveObjectOptions{})
 }
 
 func (sfs *s3VFS) AssembleUpload(u *vfs.Upload) error {
