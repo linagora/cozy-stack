@@ -94,10 +94,11 @@ sequenceDiagram
   content), and on a storage without resumable uploads.
 - A request with `Upload-Complete: ?0` has no content, so it never falls back
   to the usual upload, which would create an empty file. At the limit of
-  uploads in progress it gets `429`; with another interop version or on a
-  storage without resumable uploads, it gets `501` with an
-  `application/problem+json` body. The client then sends the whole content
-  in one request.
+  uploads in progress it gets `429`; with another interop version, on a
+  storage without resumable uploads, for a note (`.cozy-note`, imported in one
+  request), in a shared drive, or with `SourceURL`, it gets `501` with an
+  `application/problem+json` body, and nothing is created or imported. The
+  client then sends the whole content in one request.
 - The new routes are `HEAD`, `PATCH` and `DELETE` on
   `/files/uploads/:upload-id`.
 - The `resumable_uploads` capability of

@@ -736,3 +736,66 @@ func TestResumableUploadNeverEmpty(t *testing.T) {
 		assert.False(t, exists("second.bin"))
 	})
 }
+
+// TestResumableUploadOnlyUsual checks that a request without content
+// (Upload-Complete: ?0) gets 501 where only the usual upload exists: notes and
+// SourceURL. Nothing is imported.
+func TestResumableUploadOnlyUsual(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	require.NoError(t, loadLocale(), "Could not load default locale translations")
+	testutils.NeedCouchdb(t)
+	config.GetConfig().Fs.ResumableUploads = config.FsResumableUploads{
+		PartSize:       uploadTestPartSize,
+		MaxAge:         time.Hour,
+		MaxPerInstance: 20,
+	}
+	config.GetConfig().Fs.URL = &url.URL{Scheme: "file", Host: "localhost", Path: t.TempDir()}
+	setup := testutils.NewSetup(t, "upload-only-usual")
+	inst := setup.GetTestInstance()
+	_, token := setup.GetTestClient(consts.Files)
+	c := &uploadClient{t: t, base: newUploadServer(t, inst).URL, token: token}
+	resumable := map[string]string{
+		"Upload-Draft-Interop-Version": "6",
+		"Upload-Complete":              "?0",
+	}
+	refused := func(t *testing.T, res *uploadResponse) {
+		assert.Equal(t, http.StatusNotImplemented, res.StatusCode, string(res.body))
+		assert.Equal(t, "Resumable upload unavailable", res.problem(t)["title"])
+		assert.Empty(t, res.Header.Get("Location"))
+	}
+
+	t.Run("NoteCreated", func(t *testing.T) {
+		res, err := c.do(http.MethodPost, "/files/?Type=file&Name=new.cozy-note", nil, 0, resumable)
+		require.NoError(t, err)
+		refused(t, res)
+		_, err = inst.VFS().FileByPath("/new.cozy-note")
+		assert.Error(t, err)
+	})
+
+	t.Run("NoteReplaced", func(t *testing.T) {
+		text := []byte("# Title\n\nSome text.\n")
+		res, err := c.do(http.MethodPost, "/files/?Type=file&Name=kept.cozy-note", bytes.NewReader(text), int64(len(text)), nil)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+		id, _ := res.fileAttrs(t)
+		before, err := inst.VFS().FileByID(id)
+		require.NoError(t, err)
+
+		res, err = c.do(http.MethodPut, "/files/"+id, nil, 0, resumable)
+		require.NoError(t, err)
+		refused(t, res)
+		after, err := inst.VFS().FileByID(id)
+		require.NoError(t, err)
+		assert.Equal(t, before.Rev(), after.Rev())
+		assert.Equal(t, before.MD5Sum, after.MD5Sum)
+	})
+
+	t.Run("SourceURL", func(t *testing.T) {
+		res, err := c.do(http.MethodPost, "/files/?Type=file&Name=remote.bin&SourceURL="+url.QueryEscape("http://127.0.0.1:1/remote.bin"), nil, 0, resumable)
+		require.NoError(t, err)
+		refused(t, res)
+	})
+}

@@ -12,6 +12,18 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// refuseResumableUpload answers 501 to a request without the content
+// (Upload-Complete: ?0) where only the usual upload is possible: it would
+// create an empty file. It returns true when the response has been written.
+func refuseResumableUpload(c echo.Context) (bool, error) {
+	complete, ok := parseSFBoolean(c.Request().Header.Get(headerUploadComplete))
+	if !ok || complete {
+		return false, nil
+	}
+	return true, uploadProblem(c, http.StatusNotImplemented, "about:blank", "Resumable upload unavailable",
+		"The upload cannot be resumable here: send the whole content in one request.", nil)
+}
+
 // startUpload handles a request that creates a file (olddoc is nil) or
 // replaces its content, when it asks for a resumable upload. It returns false
 // when the request must go through the usual upload. The returned document is
@@ -24,12 +36,8 @@ func startUpload(c echo.Context, fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev
 	}
 	interop := interopVersion(c)
 	if interop == "" || !vfs.SupportsUploads(fs) {
-		if complete {
-			return false, nil, nil
-		}
-		// A request without the content would create an empty file.
-		return true, nil, uploadProblem(c, http.StatusNotImplemented, "about:blank", "Resumable upload unavailable",
-			"The upload cannot be resumable here: send the whole content in one request.", nil)
+		refused, err := refuseResumableUpload(c)
+		return refused, nil, err
 	}
 
 	length := int64(-1)

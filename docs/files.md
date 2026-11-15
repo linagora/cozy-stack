@@ -1119,6 +1119,8 @@ whole content is a normal upload. These values are in the
 `fs.resumable_uploads` section of the configuration.
 
 Uploads to shared drives, from a `SourceURL`, and of notes are normal uploads.
+A request without the content (`Upload-Complete: ?0`) gets `501 Not
+Implemented` for them, and nothing is created or imported.
 
 #### Request
 

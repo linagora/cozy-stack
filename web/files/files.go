@@ -176,6 +176,16 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 		return nil, err
 	}
 
+	isNote := filepath.Ext(doc.DocName) == ".cozy-note"
+	if sharedDrive != nil || isNote || c.QueryParam("SourceURL") != "" {
+		if refused, err := refuseResumableUpload(c); refused {
+			if err == nil {
+				err = errResponseSent
+			}
+			return nil, err
+		}
+	}
+
 	body := c.Request().Body
 	if sourceURL := c.QueryParam("SourceURL"); sourceURL != "" {
 		req, err := http.NewRequestWithContext(c.Request().Context(), http.MethodGet, sourceURL, nil)
@@ -194,7 +204,7 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 		doc.ByteSize = res.ContentLength
 	}
 
-	if filepath.Ext(doc.DocName) == ".cozy-note" {
+	if isNote {
 		err := note.ImportFile(inst, doc, nil, body)
 		if err != nil {
 			inst.Logger().WithNamespace("files").
@@ -389,7 +399,14 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 		return nil, err
 	}
 
-	if filepath.Ext(newdoc.DocName) == ".cozy-note" {
+	isNote := filepath.Ext(newdoc.DocName) == ".cozy-note"
+	if sharedDrive != nil || isNote {
+		if refused, err := refuseResumableUpload(c); refused {
+			return nil, err
+		}
+	}
+
+	if isNote {
 		err := note.ImportFile(instance, newdoc, olddoc, c.Request().Body)
 		if err != nil {
 			instance.Logger().WithNamespace("files").
