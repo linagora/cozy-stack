@@ -147,6 +147,14 @@ func TestSharedDriveResumableUploads(t *testing.T) {
 				assertOwnerContent(t, env, id, content)
 			})
 
+			t.Run("NoteWithoutContent", func(t *testing.T) {
+				res := betty.create(http.MethodPost, prefix+"/"+env.meetingsDirID+"?Type=file&Name=empty.cozy-note", nil, false)
+				assert.Equal(t, http.StatusNotImplemented, res.StatusCode, string(res.body))
+				res.problem(t)
+				_, err := env.acme.VFS().FileByPath("/" + env.rootDirName + "/Meetings/empty.cozy-note")
+				assert.Error(t, err)
+			})
+
 			t.Run("OwnerWithoutResumableUploads", func(t *testing.T) {
 				owner := newFakeOwner(t, env.tsA.URL, "old")
 				ownerBehind(t, env, owner.URL())
