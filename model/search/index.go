@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path"
 	"slices"
 	"strings"
 	"sync/atomic"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -104,7 +106,11 @@ func Index(ctx context.Context, inst *instance.Instance, log logger.Logger) erro
 		return nil
 	}
 
-	if ndjson := bulkActions(inst.Domain, feed.Results); len(ndjson) > 0 {
+	parents, err := loadParents(inst, feed.Results)
+	if err != nil {
+		return err
+	}
+	if ndjson := bulkActions(inst.Domain, feed.Results, parents); len(ndjson) > 0 {
 		err := client.Bulk(ctx, FilesIndex, ndjson)
 		var osErr *opensearch.Error
 		if errors.As(err, &osErr) && osErr.DocID != "" && slices.Contains(refusedDocErrors, osErr.Type) {
@@ -143,12 +149,16 @@ func Index(ctx context.Context, inst *instance.Instance, log logger.Logger) erro
 }
 
 // bulkActions turns the changes into the NDJSON body of a _bulk request: the
-// changed docs are indexed, the deleted ones are removed.
-func bulkActions(domain string, changes []couchdb.Change) []byte {
+// changed docs are indexed, the deleted ones and those in a skipped tree are
+// removed. parents are the parent folders of the changed files.
+//
+// shortcut: a folder moved into or out of a skipped tree does not reindex the
+// files already in it, reindex the moved subtree if that matters.
+func bulkActions(domain string, changes []couchdb.Change, parents map[string]*vfs.DirDoc) []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	for _, change := range changes {
-		if change.Deleted {
+		if change.Deleted || isInSkippedTree(change.Doc, parents) {
 			if !strings.HasPrefix(change.DocID, "_design/") {
 				_ = enc.Encode(map[string]any{"delete": map[string]string{"_id": Key(domain, change.DocID)}})
 			}
@@ -162,4 +172,35 @@ func bulkActions(domain string, changes []couchdb.Change) []byte {
 		_ = enc.Encode(doc)
 	}
 	return buf.Bytes()
+}
+
+// isInSkippedTree returns true if the file or folder is under a skipped
+// folder. A skipped folder itself is indexed.
+func isInSkippedTree(doc couchdb.JSONDoc, parents map[string]*vfs.DirDoc) bool {
+	if doc.M["type"] == consts.DirType {
+		dirPath, _ := doc.M["path"].(string)
+		return dirPath != "" && inSkippedTree(path.Dir(dirPath))
+	}
+	dirID, _ := doc.M["dir_id"].(string)
+	parent := parents[dirID]
+	return parent != nil && inSkippedTree(parent.Fullpath)
+}
+
+// loadParents returns the parent folders of the changed files, as the file
+// docs have no path.
+func loadParents(inst *instance.Instance, changes []couchdb.Change) (map[string]*vfs.DirDoc, error) {
+	var ids []string
+	seen := make(map[string]bool)
+	for _, change := range changes {
+		dirID, _ := change.Doc.M["dir_id"].(string)
+		if change.Deleted || change.Doc.M["type"] == consts.DirType || dirID == "" || seen[dirID] {
+			continue
+		}
+		seen[dirID] = true
+		ids = append(ids, dirID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return loadDirs(inst, ids)
 }
