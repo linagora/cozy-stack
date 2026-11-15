@@ -57,6 +57,13 @@ func Index(ctx context.Context, inst *instance.Instance, log logger.Logger) erro
 	if err != nil {
 		return err
 	}
+	if cp.LastSeq == "" {
+		// A backfill: make sure that the indices exist, as a bulk request on
+		// a missing index would create it without our mappings.
+		if err := EnsureIndices(ctx, client); err != nil {
+			return err
+		}
+	}
 	feed, err := couchdb.GetChanges(inst, &couchdb.ChangesRequest{
 		DocType:     consts.Files,
 		IncludeDocs: true,

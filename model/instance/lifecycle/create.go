@@ -13,6 +13,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/settings/common"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -267,6 +268,12 @@ func Create(opts *Options) (*instance.Instance, error) {
 	email, _ := settings.M["email"].(string)
 	if err := instance.SetEmail(i, email); err != nil {
 		i.Logger().Warnf("Email not set: %s", err)
+	}
+
+	// The instance is usable without search, so a failure here does not fail
+	// the creation (search enable creates the trigger later).
+	if err := job.EnsureSearchTrigger(i); err != nil {
+		i.Logger().WithNamespace("search").Warnf("Search trigger not created: %s", err)
 	}
 
 	opts.trace("install apps", func() {
