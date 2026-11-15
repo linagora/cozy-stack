@@ -73,7 +73,23 @@ func Index(ctx context.Context, inst *instance.Instance, log logger.Logger) erro
 	if err != nil {
 		return err
 	}
-	if feed.LastSeq == cp.LastSeq {
+	scp, err := couchdb.LoadCheckpoint(inst, consts.Sharings, sharingsCheckpointDocID)
+	if err != nil {
+		return err
+	}
+	sfeed, err := couchdb.GetChanges(inst, &couchdb.ChangesRequest{
+		DocType:     consts.Sharings,
+		IncludeDocs: true,
+		Since:       scp.LastSeq,
+		Limit:       batchSize,
+	})
+	if couchdb.IsNoDatabaseError(err) {
+		sfeed, err = &couchdb.ChangesResponse{LastSeq: scp.LastSeq}, nil
+	}
+	if err != nil {
+		return err
+	}
+	if feed.LastSeq == cp.LastSeq && sfeed.LastSeq == scp.LastSeq {
 		return nil
 	}
 
@@ -90,12 +106,23 @@ func Index(ctx context.Context, inst *instance.Instance, log logger.Logger) erro
 		}
 	}
 
+	// The checkpoints move only when the scopes are up to date too, so that
+	// a folder change is never lost for them.
+	if err := syncScopes(ctx, client, inst, feed.Results, sfeed.Results); err != nil {
+		return err
+	}
+
 	cp = couchdb.Checkpoint{LastSeq: feed.LastSeq}
 	if err := couchdb.SaveCheckpoint(inst, consts.Files, checkpointDocID, cp); err != nil {
 		return err
 	}
-	log.Debugf("%d change(s) indexed up to %s, %d pending", len(feed.Results), feed.LastSeq, feed.Pending)
-	if feed.Pending > 0 {
+	scp = couchdb.Checkpoint{LastSeq: sfeed.LastSeq}
+	if err := couchdb.SaveCheckpoint(inst, consts.Sharings, sharingsCheckpointDocID, scp); err != nil {
+		return err
+	}
+	log.Debugf("%d file and %d sharing change(s) indexed, %d and %d pending",
+		len(feed.Results), len(sfeed.Results), feed.Pending, sfeed.Pending)
+	if feed.Pending > 0 || sfeed.Pending > 0 {
 		return pushJob(inst)
 	}
 	return nil
