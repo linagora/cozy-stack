@@ -106,7 +106,8 @@ fs:
   #   part_size: 16777216 # bytes written to the storage at once, 5 MiB minimum,
   #                       # buffered in the temporary directory for each request
   #   max_age: 168h # an upload without a new byte for this long is removed
-  #   max_per_instance: 20 # uploads in progress for an instance
+  #   max_per_account: 20 # uploads in progress for one account of an instance
+  #   max_per_instance: 200 # uploads in progress for an instance, all accounts
 
   # contexts:
   #   cozy_beta:

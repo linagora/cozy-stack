@@ -51,7 +51,8 @@ func NewUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*U
 			active++
 		}
 	}
-	if active >= cfg.MaxPerInstance {
+	// All the uploads are made by the account of the owner of the instance.
+	if active >= cfg.MaxPerAccount || active >= cfg.MaxPerInstance {
 		return nil, ErrTooManyUploads
 	}
 

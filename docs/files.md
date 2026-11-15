@@ -1104,11 +1104,11 @@ is sent again, gets the final response again, so a client that has lost this
 response does not upload the file a second time. An upload in progress is
 also removed when the storage of the instance is migrated.
 An upload that does not exist (expired, cancelled, or never created) returns
-`404 Not Found` with an `application/problem+json` body. An instance can have
-20 uploads in progress: above, a request with `Upload-Complete: ?0` returns
-`429 Too Many Requests`, and a request with the whole content is a normal
-upload. These values are in the `fs.resumable_uploads` section of the
-configuration.
+`404 Not Found` with an `application/problem+json` body. An account can have
+20 uploads in progress, and an instance 200: above, a request with
+`Upload-Complete: ?0` returns `429 Too Many Requests`, and a request with the
+whole content is a normal upload. These values are in the
+`fs.resumable_uploads` section of the configuration.
 
 Uploads to shared drives, from a `SourceURL`, and of notes are normal uploads.
 

@@ -262,8 +262,11 @@ type FsResumableUploads struct {
 	PartSize int64
 	// MaxAge is how long an upload is kept after its last received byte.
 	MaxAge time.Duration
+	// MaxPerAccount is the maximal number of uploads in progress for one
+	// account of an instance.
+	MaxPerAccount int
 	// MaxPerInstance is the maximal number of uploads in progress for an
-	// instance.
+	// instance, all accounts together.
 	MaxPerInstance int
 }
 
@@ -877,7 +880,8 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("fs.versioning.min_delay_between_two_versions", 15*time.Minute)
 	v.SetDefault("fs.resumable_uploads.part_size", 16<<20)
 	v.SetDefault("fs.resumable_uploads.max_age", 7*24*time.Hour)
-	v.SetDefault("fs.resumable_uploads.max_per_instance", 20)
+	v.SetDefault("fs.resumable_uploads.max_per_account", 20)
+	v.SetDefault("fs.resumable_uploads.max_per_instance", 200)
 }
 
 func envMap() map[string]string {
@@ -1282,6 +1286,7 @@ func UseViper(v *viper.Viper) error {
 			ResumableUploads: FsResumableUploads{
 				PartSize:       uploadPartSize(v.GetInt64("fs.resumable_uploads.part_size")),
 				MaxAge:         v.GetDuration("fs.resumable_uploads.max_age"),
+				MaxPerAccount:  v.GetInt("fs.resumable_uploads.max_per_account"),
 				MaxPerInstance: v.GetInt("fs.resumable_uploads.max_per_instance"),
 			},
 			Contexts:        v.GetStringMap("fs.contexts"),

@@ -161,8 +161,11 @@ func uploadConfig() config.FsResumableUploads {
 	if cfg.MaxAge <= 0 {
 		cfg.MaxAge = 7 * 24 * time.Hour
 	}
+	if cfg.MaxPerAccount <= 0 {
+		cfg.MaxPerAccount = 20
+	}
 	if cfg.MaxPerInstance <= 0 {
-		cfg.MaxPerInstance = 20
+		cfg.MaxPerInstance = 200
 	}
 	return cfg
 }

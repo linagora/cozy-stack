@@ -90,8 +90,8 @@ sequenceDiagram
   `Upload-Complete` header. The current clients, and the other interop
   versions, get the **usual upload**: one request, one object, without parts.
 - The stack also falls back to the usual upload for a content that fits in
-  one part, when the instance has 20 uploads in progress (for a request with
-  the whole content), and on a storage without resumable uploads.
+  one part, at the limit of uploads in progress (for a request with the whole
+  content), and on a storage without resumable uploads.
 - The new routes are `HEAD`, `PATCH` and `DELETE` on
   `/files/uploads/:upload-id`.
 - The `resumable_uploads` capability of
@@ -233,9 +233,14 @@ In the `fs.resumable_uploads` section of the configuration:
 - `part_size`: 16 MiB by default, 5 MiB at least. Each request buffers one
   part in the temporary directory of the stack.
 - `max_age`: 7 days without a new byte before an upload is removed.
-- `max_per_instance`: 20 uploads in progress. Above, a request with
-  `Upload-Complete: ?0` gets `429`, and a request with the whole content is
-  a usual upload.
+- `max_per_account`: 20 uploads in progress for one account, by default.
+- `max_per_instance`: 200 uploads in progress for the instance, all accounts
+  together, by default.
+
+The owner of the instance is one account. At either limit, a request with
+`Upload-Complete: ?0` gets `429`, and a request with the whole content is a
+usual upload. The limits count the uploads in progress, read with the index
+on `completed`.
 
 The usual upload is also used for the requests without the protocol headers,
 the shared drives, `SourceURL`, and notes. The uploads in progress count in
