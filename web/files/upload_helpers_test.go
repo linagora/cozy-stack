@@ -108,6 +108,8 @@ type uploadClient struct {
 	t     *testing.T
 	base  string
 	token string
+	// announced receives the Location of the 104 responses, when set.
+	announced chan string
 }
 
 type uploadResponse struct {
@@ -123,6 +125,9 @@ func (c *uploadClient) do(method, target string, body io.Reader, size int64, hea
 		Got1xxResponse: func(code int, header textproto.MIMEHeader) error {
 			if code == 104 {
 				res.interim = header.Get("Location")
+				if c.announced != nil {
+					c.announced <- res.interim
+				}
 			}
 			return nil
 		},

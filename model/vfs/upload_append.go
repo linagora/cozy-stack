@@ -130,10 +130,10 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 		}
 		total := fresh.Offset + received
 		if fresh.Length >= 0 && total != fresh.Length {
-			return deactivateLocked(fs, fresh, ErrUploadLength)
+			return finishError(fs, fresh, ErrUploadLength)
 		}
 		if fresh.Finalizing && received > 0 {
-			return deactivateLocked(fs, fresh, ErrUploadLength)
+			return finishError(fs, fresh, ErrUploadLength)
 		}
 		var olddoc *FileDoc
 		if fresh.OldFileID != "" {
@@ -142,7 +142,7 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 				return finishError(fs, fresh, err)
 			}
 			if fresh.OldRev != "" && olddoc.Rev() != fresh.OldRev {
-				return deactivateLocked(fs, fresh, ErrConflict)
+				return finishError(fs, fresh, ErrConflict)
 			}
 		}
 		newdoc := fresh.File.Clone().(*FileDoc)
@@ -179,7 +179,7 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 		if !fresh.Finalizing {
 			md5sum := h.Sum(nil)
 			if len(newdoc.MD5Sum) > 0 && !bytes.Equal(newdoc.MD5Sum, md5sum) {
-				return deactivateLocked(fs, fresh, ErrInvalidHash)
+				return finishError(fs, fresh, ErrInvalidHash)
 			}
 			newdoc.MD5Sum = md5sum
 			if _, _, _, err := CheckAvailableDiskSpace(fs, newdoc); err != nil {
@@ -245,6 +245,16 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 	return created, err
 }
 
+// RejectedUploadError is the error of an upload whose whole content has been
+// received, but cannot become a file. It is the final answer for the upload,
+// unlike the other errors, after which the client can resume it.
+type RejectedUploadError struct {
+	Err error
+}
+
+func (e *RejectedUploadError) Error() string { return e.Err.Error() }
+func (e *RejectedUploadError) Unwrap() error { return e.Err }
+
 // finishError removes the upload when the error tells that the file cannot be
 // created, and keeps it resumable for a passing error: the client finishes it
 // later with an empty request.
@@ -252,10 +262,10 @@ func finishError(fs VFS, u *Upload, err error) error {
 	for _, final := range []error{
 		os.ErrExist, os.ErrNotExist, ErrConflict, ErrFileTooBig, ErrMaxFileSize,
 		ErrParentDoesNotExist, ErrParentInTrash, ErrIllegalFilename,
-		ErrInvalidHash, ErrContentLengthMismatch,
+		ErrInvalidHash, ErrContentLengthMismatch, ErrUploadLength,
 	} {
 		if errors.Is(err, final) {
-			return deactivateLocked(fs, u, err)
+			return &RejectedUploadError{Err: deactivateLocked(fs, u, err)}
 		}
 	}
 	return err

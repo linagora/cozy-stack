@@ -141,10 +141,17 @@ func uploadNotFound(c echo.Context) error {
 
 // uploadError writes the response for an error on a resumable upload.
 // complete tells if the error comes from the processing of the whole content.
-func uploadError(c echo.Context, err error, complete bool) error {
+//
+// Upload-Complete is ?1 only when the error comes from the processing of the
+// whole content: after the other errors (another request has resumed the
+// upload, storage error, lost connection), the client must resume it
+// (draft-ietf-httpbis-resumable-upload §4.2.1 and §11).
+func uploadError(c echo.Context, err error) error {
 	if errors.Is(err, vfs.ErrUploadNotFound) {
 		return uploadNotFound(c)
 	}
+	var rejected *vfs.RejectedUploadError
+	complete := errors.As(err, &rejected)
 	c.Response().Header().Set(headerUploadComplete, sfBoolean(complete))
 	switch {
 	case errors.Is(err, vfs.ErrUploadTakenOver):
@@ -158,6 +165,15 @@ func uploadError(c echo.Context, err error, complete bool) error {
 	case errors.Is(err, vfs.ErrTooManyUploads):
 		return uploadProblem(c, http.StatusTooManyRequests, "about:blank", "Too many uploads",
 			"Too many uploads are in progress for this instance. Retry later.", nil)
+	}
+	for _, cause := range []error{
+		os.ErrExist, os.ErrNotExist, vfs.ErrConflict, vfs.ErrFileTooBig, vfs.ErrMaxFileSize,
+		vfs.ErrParentDoesNotExist, vfs.ErrParentInTrash, vfs.ErrIllegalFilename,
+		vfs.ErrInvalidHash, vfs.ErrContentLengthMismatch,
+	} {
+		if errors.Is(err, cause) {
+			return WrapVfsError(cause)
+		}
 	}
 	return WrapVfsError(err)
 }
@@ -264,7 +280,7 @@ func UploadAppendHandler(c echo.Context) error {
 
 	inst, u, err := loadUpload(c)
 	if err != nil {
-		return uploadError(c, err, false)
+		return uploadError(c, err)
 	}
 	fs := inst.VFS()
 	if u.Completed {
@@ -284,16 +300,16 @@ func UploadAppendHandler(c echo.Context) error {
 	length := parseSFInteger(req.Header.Get(headerUploadLength))
 	if complete && req.ContentLength >= 0 {
 		if length >= 0 && length != offset+req.ContentLength {
-			return uploadError(c, vfs.ErrUploadLength, false)
+			return uploadError(c, vfs.ErrUploadLength)
 		}
 		length = offset + req.ContentLength
 	}
 	if length >= 0 && u.Length >= 0 && length != u.Length {
-		return uploadError(c, vfs.ErrUploadLength, false)
+		return uploadError(c, vfs.ErrUploadLength)
 	}
 
 	if u, err = vfs.ClaimUpload(fs, u.UploadID); err != nil {
-		return uploadError(c, err, false)
+		return uploadError(c, err)
 	}
 	if offset != u.Offset {
 		h := c.Response().Header()
@@ -307,7 +323,7 @@ func UploadAppendHandler(c echo.Context) error {
 	}
 	if length >= 0 && u.Length < 0 {
 		if err := vfs.SetUploadLength(fs, u, length); err != nil {
-			return uploadError(c, err, false)
+			return uploadError(c, err)
 		}
 	}
 
@@ -315,7 +331,7 @@ func UploadAppendHandler(c echo.Context) error {
 	if err != nil {
 		inst.Logger().WithNamespace("files").
 			Infof("Resumable upload %s stopped at %d bytes: %s", u.UploadID, u.Offset, err)
-		return uploadError(c, err, complete)
+		return uploadError(c, err)
 	}
 	if complete {
 		return respondUploadCompleted(c, inst, u, created)
@@ -334,7 +350,7 @@ func UploadCancelHandler(c echo.Context) error {
 		err = vfs.CancelUpload(inst.VFS(), u.UploadID)
 	}
 	if err != nil {
-		return uploadError(c, err, false)
+		return uploadError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
 }

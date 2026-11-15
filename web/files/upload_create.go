@@ -29,12 +29,12 @@ func startUpload(c echo.Context, fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev
 	length := int64(-1)
 	if v := req.Header.Get(headerUploadLength); v != "" {
 		if length = parseSFInteger(v); length < 0 {
-			return true, nil, uploadError(c, vfs.ErrUploadLength, false)
+			return true, nil, uploadError(c, vfs.ErrUploadLength)
 		}
 	}
 	if complete && req.ContentLength >= 0 {
 		if length >= 0 && length != req.ContentLength {
-			return true, nil, uploadError(c, vfs.ErrUploadLength, false)
+			return true, nil, uploadError(c, vfs.ErrUploadLength)
 		}
 		length = req.ContentLength
 	}
@@ -51,7 +51,7 @@ func startUpload(c echo.Context, fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev
 		return false, nil, nil
 	}
 	if err != nil {
-		return true, nil, uploadError(c, err, false)
+		return true, nil, uploadError(c, err)
 	}
 	inst := middlewares.GetInstance(c)
 	job.EnsureCleanUploadsTrigger(inst)
@@ -61,7 +61,7 @@ func startUpload(c echo.Context, fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev
 	if err != nil {
 		inst.Logger().WithNamespace("files").
 			Infof("Resumable upload %s stopped at %d bytes: %s", u.UploadID, u.Offset, err)
-		return true, nil, uploadError(c, err, complete)
+		return true, nil, uploadError(c, err)
 	}
 	c.Response().Header().Set(headerInteropVersion, interop)
 	c.Response().Header().Set(headerUploadComplete, sfBoolean(complete))

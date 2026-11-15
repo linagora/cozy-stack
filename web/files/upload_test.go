@@ -272,6 +272,46 @@ func TestResumableUploadsHTTP(t *testing.T) {
 				assert.Empty(t, b.leftovers(t, inst, uploadIDOf(location)))
 			})
 
+			t.Run("ResumedElsewhereIsNotComplete", func(t *testing.T) {
+				// A POST with the whole file is resumed by a HEAD, as URLSession
+				// does after a lost connection: the POST must not say that the
+				// upload is complete, or the client would not resume it.
+				content := randomBytes(2*uploadTestPartSize, 9)
+				poster := &uploadClient{t: t, base: ts.URL, token: token, announced: make(chan string, 1)}
+				pr, pw := io.Pipe()
+				done := make(chan *uploadResponse, 1)
+				go func() {
+					res, _ := poster.do(http.MethodPost, "/files/?Type=file&Name=elsewhere.bin", pr, int64(len(content)), map[string]string{
+						"Upload-Draft-Interop-Version": "6",
+						"Upload-Complete":              "?1",
+					})
+					done <- res
+				}()
+				go func() {
+					_, _ = pw.Write(content[:uploadTestPartSize+10])
+				}()
+				location := <-poster.announced
+				waitUploadOffset(t, inst, uploadIDOf(location), uploadTestPartSize)
+
+				head := c.head(location)
+				assert.Equal(t, strconv.Itoa(uploadTestPartSize), head.Header.Get("Upload-Offset"))
+				go func() {
+					_, _ = pw.Write(content[uploadTestPartSize+10:])
+					_ = pw.Close()
+				}()
+				res := <-done
+				require.NotNil(t, res.Response)
+				assert.Equal(t, http.StatusConflict, res.StatusCode)
+				assert.Equal(t, "?0", res.Header.Get("Upload-Complete"))
+
+				// The client resumes, and finishes the upload.
+				head = c.head(location)
+				offset, err := strconv.Atoi(head.Header.Get("Upload-Offset"))
+				require.NoError(t, err)
+				done2 := c.patch(location, int64(offset), content[offset:], true)
+				require.Equal(t, http.StatusCreated, done2.StatusCode, string(done2.body))
+			})
+
 			t.Run("UnknownUpload", func(t *testing.T) {
 				assert.Equal(t, http.StatusNotFound, c.head("/files/uploads/unknown").StatusCode)
 				patch := c.patch("/files/uploads/unknown", 0, []byte("data"), true)
