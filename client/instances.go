@@ -636,3 +636,41 @@ func readInstance(res *http.Response) (*Instance, error) {
 func validDomain(domain string) bool {
 	return !strings.ContainsAny(domain, " /?#@\t\r\n")
 }
+
+// SearchEnable turns the server-side file search on for an instance.
+func (ac *AdminClient) SearchEnable(domain string) error {
+	_, err := ac.Req(&request.Options{
+		Method:     "POST",
+		Path:       "/instances/" + url.PathEscape(domain) + "/search/enable",
+		NoResponse: true,
+	})
+	return err
+}
+
+// SearchReset drops the search documents of an instance and indexes it
+// again.
+func (ac *AdminClient) SearchReset(domain string) error {
+	_, err := ac.Req(&request.Options{
+		Method:     "POST",
+		Path:       "/instances/" + url.PathEscape(domain) + "/search/reset",
+		NoResponse: true,
+	})
+	return err
+}
+
+// SearchStatus returns the indexing status of an instance.
+func (ac *AdminClient) SearchStatus(domain string) (map[string]interface{}, error) {
+	res, err := ac.Req(&request.Options{
+		Method: "GET",
+		Path:   "/instances/" + url.PathEscape(domain) + "/search/status",
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	var status map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&status); err != nil {
+		return nil, err
+	}
+	return status, nil
+}

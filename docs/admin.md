@@ -875,6 +875,72 @@ POST /instances/alice.cozy.localhost/rag/purge HTTP/1.1
 HTTP/1.1 204 No Content
 ```
 
+## File search
+
+These routes manage the server-side file search of an instance (see the
+`search` section of the configuration). They answer `503 Service Unavailable`
+when search is not configured.
+
+### POST /instances/:domain/search/enable
+
+Creates the search indices if they are missing, adds the trigger that indexes
+the file changes of the instance, and launches a `search-index` job. For an
+instance that was never indexed, this job indexes all its files.
+
+#### Request
+
+```http
+POST /instances/alice.cozy.localhost/search/enable HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+### POST /instances/:domain/search/reset
+
+Deletes the `search-index` checkpoint and the search documents of the
+instance, and launches a `search-index` job that indexes all its files again.
+
+#### Request
+
+```http
+POST /instances/alice.cozy.localhost/search/reset HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+```
+
+### GET /instances/:domain/search/status
+
+Tells if the instance has the search trigger, and the last change of the
+files indexed (empty until the first batch is indexed).
+
+#### Request
+
+```http
+GET /instances/alice.cozy.localhost/search/status HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "trigger": true,
+  "last_seq": "1234-g1AAAAFTeJzLYWBg4MhgTmFQSs4vTc5ISXIoyEnMy0vNzEvNycxLLE7Vy0s"
+}
+```
+
 ## Contexts
 
 ### GET /instances/contexts
