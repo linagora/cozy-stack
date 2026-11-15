@@ -147,6 +147,7 @@ type Config struct {
 	Contexts       map[string]interface{}
 	Authentication map[string]interface{}
 	RAGServers     map[string]RAGServer
+	Search         Search
 	CommonSettings map[string]CommonSettings
 	ContactsSearch map[string]ContactsSearch
 	Office         map[string]Office
@@ -964,6 +965,11 @@ func UseViper(v *viper.Viper) error {
 		return err
 	}
 
+	search, err := makeSearch(v)
+	if err != nil {
+		return err
+	}
+
 	regs, err := makeRegistries(v)
 	if err != nil {
 		return err
@@ -1268,6 +1274,7 @@ func UseViper(v *viper.Viper) error {
 			Cmd: v.GetString("konnectors.cmd"),
 		},
 		RAGServers:     rag,
+		Search:         search,
 		CommonSettings: commonSettings,
 		ContactsSearch: contactsSearch,
 		Move: Move{

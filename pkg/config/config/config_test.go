@@ -699,3 +699,41 @@ func TestOfficeCheck(t *testing.T) {
 	assert.NoError(t, Office{OnlyOfficeURL: "https://onlyoffice-url", InboxSecret: "inbox", OutboxSecret: "outbox"}.Check())
 	assert.Error(t, Office{OnlyOfficeURL: "https://onlyoffice-url", InboxSecret: "inbox"}.Check())
 }
+
+func TestSearchConfig(t *testing.T) {
+	t.Run("search is off without url", func(t *testing.T) {
+		require.NoError(t, UseViper(viper.New()))
+		assert.Nil(t, GetConfig().Search.URL)
+	})
+
+	t.Run("valid config", func(t *testing.T) {
+		cfg := viper.New()
+		cfg.Set("search.opensearch.url", "https://opensearch.example.net:9200")
+		cfg.Set("search.opensearch.username", "admin")
+		cfg.Set("search.opensearch.password", "secret")
+		cfg.Set("search.opensearch.index_prefix", "prod")
+		require.NoError(t, UseViper(cfg))
+		search := GetConfig().Search
+		require.NotNil(t, search.URL)
+		assert.Equal(t, "opensearch.example.net:9200", search.URL.Host)
+		assert.Equal(t, "admin", search.Username)
+		assert.Equal(t, "secret", search.Password)
+		assert.Equal(t, "prod", search.IndexPrefix)
+		assert.NotNil(t, search.Client)
+	})
+
+	t.Run("invalid url makes UseViper fail", func(t *testing.T) {
+		cfg := viper.New()
+		cfg.Set("search.opensearch.url", "opensearch:9200")
+		err := UseViper(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid search.opensearch.url config")
+	})
+
+	t.Run("missing root_ca file makes UseViper fail", func(t *testing.T) {
+		cfg := viper.New()
+		cfg.Set("search.opensearch.url", "https://opensearch.example.net:9200")
+		cfg.Set("search.opensearch.root_ca", "/does/not/exist.pem")
+		require.Error(t, UseViper(cfg))
+	})
+}
