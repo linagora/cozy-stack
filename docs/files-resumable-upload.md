@@ -96,11 +96,13 @@ sequenceDiagram
   to the usual upload, which would create an empty file. At the limit of
   uploads in progress it gets `429`; with another interop version, on a
   storage without resumable uploads, for a note (`.cozy-note`, imported in one
-  request), in a shared drive, or with `SourceURL`, it gets `501` with an
+  request), or with `SourceURL`, it gets `501` with an
   `application/problem+json` body, and nothing is created or imported. The
   client then sends the whole content in one request.
 - The new routes are `HEAD`, `PATCH` and `DELETE` on
-  `/files/uploads/:upload-id`.
+  `/files/uploads/:upload-id`, and on
+  `/sharings/drives/:id/uploads/:upload-id` for the
+  [shared drives](#shared-drives).
 - The `resumable_uploads` capability of
   [`GET /settings/capabilities`](settings.md#get-settingscapabilities) is true
   when the VFS of the instance accepts the resumable uploads. A client checks
@@ -236,6 +238,50 @@ What the Swift manifests change:
 On all the storages, a storage migration removes the uploads in progress,
 with their content, before the switch, as their parts are on the source.
 
+## Shared drives
+
+A member of a shared drive sends a file with the drive routes of their own
+stack. The upload lives on the instance of the owner, like the file it
+creates.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant M as Stack of the member
+    participant O as Stack of the owner
+    C->>M: POST /sharings/drives/:id/:dir-id
+    M->>O: the same request, with the drive token
+    O-->>M: 104 Location /sharings/drives/:id/uploads/:upload-id
+    M-->>C: 104, relayed
+    Note over C,O: the connection is lost
+    C->>M: HEAD /sharings/drives/:id/uploads/:upload-id
+    M->>O: relayed, the rights are checked again
+    O-->>C: 204 Upload-Offset N
+```
+
+- The `io.cozy.files.uploads` document and the parts are on the instance and
+  the storage of the owner. The quota, the 20 uploads in progress and the
+  expiration are those of the owner: the uploads of the members count in the
+  limit of the owner's instance. The `max-size` of `Upload-Limit` tells a
+  member the free space of the owner.
+- The routes are `HEAD`, `PATCH` and `DELETE` on
+  `/sharings/drives/:id/uploads/:upload-id`. Like the other drive routes, the
+  stack of the member serves them directly when the owner is on the same
+  stack, and relays them over HTTP with the drive token otherwise.
+- `Location` is a relative URL with this path. The sharing has the same ID on
+  both instances, so the client resolves it against the stack of the member,
+  which relays it. Nothing is rewritten.
+- Each request checks the rights again, on the instance of the owner: the
+  member behind the drive token, then their effective write access on the
+  folder of the upload, or on the file whose content it replaces. A member
+  removed from the drive or made read-only gets `403` on the next request,
+  `HEAD` included, as it takes the upload over. An upload outside the drive
+  answers `404`, like a missing one. The parts already written stay until the
+  upload expires.
+- The relay forwards the `104` interim response: Go's `httputil.ReverseProxy`
+  relays the 1xx responses, and the stack writes them on the connection
+  directly, so that echo keeps the final status.
+
 ## Settings and limits
 
 In the `fs.resumable_uploads` section of the configuration:
@@ -253,12 +299,14 @@ usual upload. The limits count the uploads in progress, read with the index
 on `completed`.
 
 The usual upload is also used for the requests without the protocol headers,
-the shared drives, `SourceURL`, and notes. The uploads in progress count in
-the quota, checked before each part: an upload that goes over it gets `413`
-and is removed. A length announced on creation or on an append must fit in
-the space left. The other uploads count with their announced length, except
-the ones of a sharing by link, which count only with their written bytes: a
-visitor cannot take the space of the uploads of the owner. The `max-size` of `Upload-Limit` is the space left on the
+`SourceURL`, and notes. A `SourceURL` is downloaded by the stack itself, so
+there is no client to resume it. The uploads in progress count in the quota,
+checked before each part: an upload that goes over it gets `413` and is
+removed. A length announced on creation or on an append must fit in the space
+left. The other uploads count with their announced length, except the ones of
+a sharing by link, which count only with their written bytes: a visitor
+cannot take the space of the uploads of the owner. The `max-size` of
+`Upload-Limit` is the space left on the
 instance, and is not announced to the visitors of a sharing by link. A daily
 `clean-uploads` job per instance removes the expired uploads with their
 content.
@@ -362,6 +410,9 @@ To remove the lock of the VFS later:
 
 ## Open questions
 
-- @Quentin: the uploads to a shared drive and the uploads from a `SourceURL`
-  are always usual uploads. Should the resumable upload be extended to them?
-  A following pull request will handle it.
+- @Quentin: the stack of the owner cannot tell if the stack of the member
+  that relays a request knows the resumable uploads. A stack of a member that
+  is not updated relays the `104`, then answers `200` instead of `201` or
+  `204`, and has no `HEAD` or `PATCH` route to resume. Is it enough to update
+  all the stacks together, or should the relay add a header that the owner
+  requires before starting a resumable upload?

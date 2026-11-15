@@ -1120,9 +1120,10 @@ An upload that does not exist (expired, cancelled, or never created) returns
 whole content is a normal upload. These values are in the
 `fs.resumable_uploads` section of the configuration.
 
-Uploads to shared drives, from a `SourceURL`, and of notes are normal uploads.
-A request without the content (`Upload-Complete: ?0`) gets `501 Not
-Implemented` for them, and nothing is created or imported.
+Uploads from a `SourceURL` and of notes are normal uploads. A request without
+the content (`Upload-Complete: ?0`) gets `501 Not Implemented` for them, and
+nothing is created or imported. Uploads to a shared drive are resumable with
+the [drive routes](shared-drives.md#resumable-uploads).
 
 #### Request
 
