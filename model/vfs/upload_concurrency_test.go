@@ -2,6 +2,7 @@ package vfs_test
 
 import (
 	"bytes"
+	"crypto/md5"
 	"fmt"
 	"io"
 	"sync"
@@ -295,4 +296,75 @@ func TestParallelUploadsShareTheQuota(t *testing.T) {
 		}
 	}
 	assert.GreaterOrEqual(t, refused, 1)
+}
+
+// TestUploadCutThenResumedAtOnce checks that the bytes of a cut request are
+// kept when the client resumes the upload before the stack has saved them:
+// the HEAD of the client takes the upload, but the cut request still saves
+// its last write, contiguous to the offset.
+func TestUploadCutThenResumedAtOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+
+	for _, b := range uploadBackends(t) {
+		for _, cut := range []int64{1000, testPartSize + 1000} {
+			t.Run(fmt.Sprintf("%s/%d", b.name, cut), func(t *testing.T) {
+				fs := b.newFS()
+				content := randomContent(2*testPartSize+500, 74)
+				u, err := vfs.NewUpload(fs, newUploadDoc(t, fmt.Sprintf("cut-%d.bin", cut), content), nil, "", -1)
+				require.NoError(t, err)
+
+				// The request is cut after cut bytes; the stack sees the end of
+				// the body, but the HEAD of the client arrives before it saves
+				// the bytes.
+				reached := make(chan struct{})
+				release := make(chan struct{})
+				var first atomic.Bool
+				restore := vfs.SetUploadStepHook(func(step string) error {
+					if step == "received" && first.CompareAndSwap(false, true) {
+						close(reached)
+						<-release
+					}
+					return nil
+				})
+				defer restore()
+				done := make(chan error, 1)
+				go func() {
+					_, err := vfs.AppendUpload(fs, u, &cutReader{bytes.NewReader(content), cut, errCut}, false)
+					done <- err
+				}()
+				<-reached
+				head, err := vfs.ClaimUpload(fs, u.UploadID)
+				require.NoError(t, err)
+				assert.LessOrEqual(t, head.Offset, cut)
+				close(release)
+				require.Error(t, <-done)
+
+				// The bytes of the cut request are kept.
+				fresh, err := vfs.GetUpload(fs, u.UploadID)
+				require.NoError(t, err)
+				assert.Equal(t, cut, fresh.Offset)
+
+				// The client resumes from the offset of its HEAD: the stack
+				// answers that the offset has moved, and the client resumes
+				// from the new one.
+				if head.Offset != fresh.Offset {
+					_, err = vfs.AppendUpload(fs, head, bytes.NewReader(content[head.Offset:]), true)
+					require.ErrorIs(t, err, vfs.ErrUploadTakenOver)
+				}
+				resumed, err := vfs.ClaimUpload(fs, u.UploadID)
+				require.NoError(t, err)
+				require.Equal(t, cut, resumed.Offset)
+				doc, err := vfs.AppendUpload(fs, resumed, bytes.NewReader(content[cut:]), true)
+				require.NoError(t, err)
+				assert.True(t, bytes.Equal(content, readContent(t, fs, doc)))
+				sum := md5.Sum(content)
+				assert.Equal(t, sum[:], doc.MD5Sum)
+			})
+		}
+	}
 }

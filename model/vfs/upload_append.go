@@ -104,6 +104,9 @@ func AppendUpload(fs VFS, u *Upload, r io.Reader, complete bool) (*FileDoc, erro
 		return finishUpload(fs, store, u, buf, inBuf, received, h)
 	}
 
+	if err := uploadStep("received"); err != nil {
+		return nil, err
+	}
 	if received > 0 {
 		err := u.writeProgress(fs, store, received, h, true, io.NewSectionReader(buf, 0, inBuf), inBuf)
 		if err != nil {
@@ -144,10 +147,7 @@ func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h ha
 	}
 	replaced := u.Tail
 	written := *u
-	err = u.update(fs, func(fresh *Upload) error {
-		if fresh.Offset != start || fresh.Finalizing {
-			return ErrUploadTakenOver
-		}
+	lost, err := u.updateAt(fs, start, func(fresh *Upload) error {
 		if tail {
 			fresh.Tail = &part
 		} else {
@@ -166,6 +166,10 @@ func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h ha
 	}
 	if replaced != nil {
 		_ = store.DeleteUploadPart(u, *replaced)
+	}
+	if lost {
+		// The write is kept, but a newer request owns the upload now.
+		return ErrUploadTakenOver
 	}
 	return nil
 }

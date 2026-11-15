@@ -244,12 +244,36 @@ func (u *Upload) reserveSlot(fs VFS, end, size int64) (int, error) {
 	if end > limit {
 		return 0, deactivateUpload(fs, u, ErrFileTooBig)
 	}
-	err = u.update(fs, func(fresh *Upload) error {
+	_, err = u.updateAt(fs, u.Offset, func(fresh *Upload) error {
 		fresh.NextPart++
 		fresh.Writing = size
 		return nil
 	})
 	return u.NextPart, err
+}
+
+// updateAt applies change to the upload if nobody has written to it since the
+// offset start. A request that has lost the upload to a newer one can still
+// save a write that starts at the current offset: the draft asks to keep as
+// much of an interrupted request as possible, without discontinuities
+// (draft-ietf-httpbis-resumable-upload §6.2 and §8.2). lost tells the request
+// that it must stop after this write.
+func (u *Upload) updateAt(fs VFS, start int64, change func(fresh *Upload) error) (bool, error) {
+	owner := u.Owner
+	lost := false
+	saved, err := updateUpload(fs, u.UploadID, func(fresh *Upload) error {
+		if fresh.Completed || fresh.Finalizing || fresh.Offset != start {
+			return ErrUploadTakenOver
+		}
+		lost = fresh.Owner != owner
+		return change(fresh)
+	})
+	if err != nil {
+		return false, err
+	}
+	*u = *saved
+	u.Owner = owner
+	return lost, nil
 }
 
 // SetUploadLength records the length of the content, once it is known.
