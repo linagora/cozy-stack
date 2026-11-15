@@ -123,7 +123,7 @@ func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h ha
 		return err
 	}
 	start := u.Offset
-	slot, err := u.reserveSlot(fs)
+	slot, err := u.reserveSlot(fs, start+received, received)
 	if err != nil {
 		return err
 	}
@@ -155,6 +155,7 @@ func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h ha
 			fresh.Tail = nil
 		}
 		fresh.Offset += received
+		fresh.Writing = 0
 		fresh.MD5State = state
 		fresh.ExpiresAt = time.Now().Add(uploadConfig().MaxAge)
 		return nil
@@ -306,7 +307,7 @@ func (u *Upload) finalize(fs VFS, store UploadStorage, received int64, h hash.Ha
 	start := u.Offset
 	var part *UploadPart
 	if size > 0 || len(u.Parts) == 0 {
-		slot, err := u.reserveSlot(fs)
+		slot, err := u.reserveSlot(fs, start+received, received)
 		if err != nil {
 			return err
 		}
@@ -327,6 +328,7 @@ func (u *Upload) finalize(fs VFS, store UploadStorage, received int64, h hash.Ha
 		}
 		fresh.Tail = nil
 		fresh.Offset += received
+		fresh.Writing = 0
 		fresh.Length = fresh.Offset
 		fresh.MD5State = state
 		fresh.Finalizing = true

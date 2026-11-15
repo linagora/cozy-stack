@@ -220,10 +220,20 @@ func ClaimUpload(fs VFS, id string) (*Upload, error) {
 	})
 }
 
-// reserveSlot gives a slot to the next write of the request.
-func (u *Upload) reserveSlot(fs VFS) (int, error) {
-	err := u.update(fs, func(fresh *Upload) error {
+// reserveSlot gives a slot to the next write of the request, after checking
+// that its end fits in the space left by the other uploads. The size of the
+// write counts in the quota until the write is saved.
+func (u *Upload) reserveSlot(fs VFS, end, size int64) (int, error) {
+	limit, err := UploadSpaceLimit(fs, u)
+	if err != nil {
+		return 0, err
+	}
+	if end > limit {
+		return 0, deactivateUpload(fs, u, ErrFileTooBig)
+	}
+	err = u.update(fs, func(fresh *Upload) error {
 		fresh.NextPart++
+		fresh.Writing = size
 		return nil
 	})
 	return u.NextPart, err
@@ -378,7 +388,7 @@ func uploadSpaceLimit(fs VFS, uploads []*Upload, exclude string) (int64, error) 
 		if !u.active() || u.UploadID == exclude {
 			continue
 		}
-		available -= max(u.Length, u.Offset)
+		available -= max(u.Length, u.Offset+u.Writing)
 	}
 	return max(min(limit, available), 0), nil
 }

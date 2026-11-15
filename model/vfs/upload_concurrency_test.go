@@ -3,6 +3,7 @@ package vfs_test
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -233,4 +234,65 @@ func TestUploadFinishedDuringAStorageMigration(t *testing.T) {
 			assert.False(t, exists, "a removed upload must not be indexed")
 		})
 	}
+}
+
+// TestParallelUploadsShareTheQuota checks that two uploads of unknown length,
+// sent at the same time, do not store more than the available space together.
+func TestParallelUploadsShareTheQuota(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+	b := aferoUploadBackend(t)
+	fs := b.newFS()
+
+	usage, err := fs.DiskUsage()
+	require.NoError(t, err)
+	diskQuota = usage + 2*testPartSize
+	defer func() { diskQuota = 0 }()
+	available := int64(2 * testPartSize)
+
+	u1, err := vfs.NewUpload(fs, newUploadDoc(t, "quota-1.bin", nil), nil, "", -1)
+	require.NoError(t, err)
+	u2, err := vfs.NewUpload(fs, newUploadDoc(t, "quota-2.bin", nil), nil, "", -1)
+	require.NoError(t, err)
+
+	// Each request sends the whole available space, in two parts.
+	content := randomContent(int(available), 73)
+	send := func(u *vfs.Upload) chan error {
+		pr, pw := io.Pipe()
+		done := make(chan error, 1)
+		go func() {
+			_, err := vfs.AppendUpload(fs, u, pr, false)
+			_ = pr.CloseWithError(err)
+			done <- err
+		}()
+		go func() {
+			// Both requests have started before the content arrives.
+			time.Sleep(300 * time.Millisecond)
+			_, _ = pw.Write(content)
+			_ = pw.Close()
+		}()
+		return done
+	}
+	d1, d2 := send(u1), send(u2)
+	err1, err2 := <-d1, <-d2
+
+	var stored int64
+	for _, id := range []string{u1.UploadID, u2.UploadID} {
+		if u, err := vfs.GetUpload(fs, id); err == nil {
+			stored += u.Offset
+		}
+	}
+	assert.LessOrEqual(t, stored, available, "the uploads must not store more than the available space")
+	refused := 0
+	for _, err := range []error{err1, err2} {
+		if err != nil {
+			require.ErrorIs(t, err, vfs.ErrFileTooBig)
+			refused++
+		}
+	}
+	assert.GreaterOrEqual(t, refused, 1)
 }

@@ -63,6 +63,9 @@ type Upload struct {
 	// NextPart is the last slot given to a part or a tail. Each write gets its
 	// own slot, so two requests never write the same object.
 	NextPart int `json:"next_part,omitempty"`
+	// Writing is the size of the write in progress, counted in the quota by
+	// the other uploads.
+	Writing int64 `json:"writing,omitempty"`
 	// Finalizing is set once all the content is written: the offset is the
 	// final size, and the next steps (assembling, indexing) can be run again
 	// after a stop of the stack.
