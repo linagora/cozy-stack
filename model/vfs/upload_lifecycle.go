@@ -174,6 +174,17 @@ func CancelUpload(fs VFS, id string) error {
 // CleanUploads removes the uploads that have expired. It returns the number of
 // removed uploads.
 func CleanUploads(fs VFS) (int, error) {
+	return removeUploads(fs, (*Upload).expired)
+}
+
+// RemoveAllUploads removes all the uploads, with the content of those in
+// progress. The storage migration calls it before switching the storage of
+// an instance: the state of an upload points to the parts of the source.
+func RemoveAllUploads(fs VFS) (int, error) {
+	return removeUploads(fs, func(*Upload) bool { return true })
+}
+
+func removeUploads(fs VFS, selected func(u *Upload) bool) (int, error) {
 	uploads, err := listUploads(fs)
 	if err != nil {
 		return 0, err
@@ -181,7 +192,7 @@ func CleanUploads(fs VFS) (int, error) {
 	var errm error
 	removed := 0
 	for _, u := range uploads {
-		if !u.expired() {
+		if !selected(u) {
 			continue
 		}
 		err := withUploadLock(fs, u.UploadID, func() error {
@@ -189,7 +200,7 @@ func CleanUploads(fs VFS) (int, error) {
 			if err := couchdb.GetDoc(fs, consts.FilesUploads, u.UploadID, fresh); err != nil {
 				return err
 			}
-			if !fresh.expired() {
+			if !selected(fresh) {
 				return nil
 			}
 			removed++

@@ -465,6 +465,16 @@ func migrate(inst *instance.Instance, opts Options, quietPeriod time.Duration) (
 	}
 	defer mutex.Unlock()
 
+	// The state of a resumable upload points to the parts on the source: it
+	// could not be finished on the target.
+	removed, err := vfs.RemoveAllUploads(src)
+	if err != nil {
+		return nil, fmt.Errorf("storagemigration: remove resumable uploads: %w", err)
+	}
+	if removed > 0 {
+		log.Infof("Removed %d resumable uploads", removed)
+	}
+
 	log.Info("Preparing target storage")
 	dst, dstAv, err := buildTarget(inst, opts.To)
 	if err != nil {
