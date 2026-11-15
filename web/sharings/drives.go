@@ -1795,9 +1795,23 @@ func proxyWithLinkMutationGuard(fn func(c echo.Context, inst *instance.Instance,
 		logger := inst.Logger().WithNamespace("drive-proxy").Writer()
 		defer logger.Close()
 		proxy.ErrorLog = log.New(logger, "", 0)
-		proxy.ServeHTTP(c.Response(), c.Request())
+		proxy.ServeHTTP(interimWriter{c.Response()}, c.Request())
 		return nil
 	}
+}
+
+// interimWriter relays the interim responses, like the 104 of a resumable
+// upload: echo would take them for the final status and drop the real one.
+type interimWriter struct {
+	*echo.Response
+}
+
+func (w interimWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		w.Writer.WriteHeader(code)
+		return
+	}
+	w.Response.WriteHeader(code)
 }
 
 // contextDriveMember is the echo context key where proxy stores the drive
