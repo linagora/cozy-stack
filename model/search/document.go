@@ -4,7 +4,6 @@ package search
 import (
 	"strings"
 
-	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 )
@@ -56,13 +55,11 @@ func NewFileDocument(domain string, doc couchdb.JSONDoc) (*FileDocument, bool) {
 	if fd.Type == consts.DirType {
 		// A folder is in its own scope, so the root of a shared drive is found
 		fd.ScopedDirKey = fd.ResourceKey
-		p := str("path")
-		fd.Trashed = p == vfs.TrashDirName || strings.HasPrefix(p, vfs.TrashDirName+"/")
+		fd.Trashed = isTrashed(str("path"))
 	} else {
 		fd.ScopedDirKey = Key(domain, fd.DirID)
-		// shortcut: files inside a trashed folder keep trashed=false (trashing
-		// a folder only moves the folder doc); hits must be filtered on their
-		// parent folder when building results (#5214/#5217).
+		// Files inside a trashed folder keep trashed=false (trashing a folder
+		// only moves the folder doc): VisiblePaths hides them.
 		fd.Trashed, _ = doc.M["trashed"].(bool)
 	}
 	return fd, true
