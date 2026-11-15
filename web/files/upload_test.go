@@ -543,3 +543,62 @@ func TestResumableUploadsByLink(t *testing.T) {
 		assert.Contains(t, res.Header.Get("Upload-Limit"), "max-size=")
 	})
 }
+
+// TestResumableUploadNameTaken checks that a name already taken is refused
+// when the upload is created, like the usual upload, before any byte is
+// stored.
+func TestResumableUploadNameTaken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	require.NoError(t, loadLocale(), "Could not load default locale translations")
+	testutils.NeedCouchdb(t)
+	config.GetConfig().Fs.ResumableUploads = config.FsResumableUploads{
+		PartSize:       uploadTestPartSize,
+		MaxAge:         time.Hour,
+		MaxPerInstance: 20,
+	}
+	config.GetConfig().Fs.URL = &url.URL{Scheme: "file", Host: "localhost", Path: t.TempDir()}
+	setup := testutils.NewSetup(t, "upload-name-taken")
+	inst := setup.GetTestInstance()
+	_, token := setup.GetTestClient(consts.Files)
+	c := &uploadClient{t: t, base: newUploadServer(t, inst).URL, token: token}
+
+	res, err := c.do(http.MethodPost, "/files/?Type=file&Name=taken.bin", bytes.NewReader([]byte("v1")), 2, nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, res.StatusCode)
+
+	res, err = c.do(http.MethodPost, "/files/?Type=file&Name=taken.bin", nil, 0, map[string]string{
+		"Upload-Draft-Interop-Version": "6",
+		"Upload-Complete":              "?0",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, res.StatusCode)
+	assert.Empty(t, res.interim)
+
+	content := randomBytes(2*uploadTestPartSize, 30)
+	read := &countingReader{r: bytes.NewReader(content)}
+	res, err = c.do(http.MethodPost, "/files/?Type=file&Name=taken.bin", read, int64(len(content)), map[string]string{
+		"Upload-Draft-Interop-Version": "6",
+		"Upload-Complete":              "?1",
+	})
+	if err == nil {
+		assert.Equal(t, http.StatusConflict, res.StatusCode)
+		assert.Empty(t, res.interim)
+	}
+	assert.Less(t, read.n, int64(len(content)), "the content must not be read")
+	_, err = couchdb.DBStatus(inst, consts.FilesUploads)
+	assert.True(t, couchdb.IsNoDatabaseError(err), "no upload must have been created")
+}
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
