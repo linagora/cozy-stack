@@ -76,10 +76,18 @@ models. All use DeepSeek initially. The `deepseek/` prefix selects the adapter;
 the request sends `deepseek-v4-pro` to LINAGORA, without that prefix.
 
 Warden splits the diff into chunks and runs each skill separately. Five directions
-can mean many model calls. We allow three concurrent analyses, ten agent turns
-per chunk and 45 minutes for the job. [models.json](models.json) caps agent output
+can mean many model calls. We allow three concurrent analyses and use Warden's
+default limit of 50 agent turns per chunk. Analysis has a 110-minute deadline;
+the job has 120 minutes, leaving time to validate and upload results after a
+timeout. [models.json](models.json) caps agent output
 at 65,536 tokens. Helper calls have their own smaller limits; their reasoning is
 disabled to leave room for the JSON answer. Gateway limits still apply.
+These are ceilings, not a fixed number of calls. Longer investigations can cost
+more when the model uses the additional time or turns.
+
+If analysis times out, the job fails and does not publish comments. The artifact
+keeps Warden's latest partial report when one exists. It is incomplete review
+data, not a clean result. A cancelled job can still stop before artifact upload.
 
 The output limit is per call, not per PR. Reasoning and the final answer share
 that budget. No custom input-token limit is configured here. The model context,

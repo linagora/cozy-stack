@@ -13,7 +13,6 @@ minConfidence = "medium"
 
 [defaults.agent]
 model = "deepseek/deepseek-v4-pro"
-maxTurns = 10
 effort = "high"
 
 [defaults.auxiliary]
