@@ -132,6 +132,15 @@ Go to https://github.com/username/cozy-stack and select your branch. Click the
 Pull requests are usually reviewed within a few days. If there are comments to
 address, apply your changes in a separate commit and push that to your branch.
 
+### AI-assisted review
+
+The [PR review bot and prompts](../.github/review/README.md) live in this repository.
+Add the `ai-review` label to request a review of a non-draft PR from a branch in
+this public repository. While labeled, the PR is reviewed again when reopened,
+marked ready or updated with new commits. Fork PRs are excluded, and the person
+triggering the run must have write access. Results appear as inline comments and
+Checks. Humans decide what to fix and whether to approve or merge.
+
 ## Code organization
 
 The codebase of cozy-stack contains several packages, and it is quite easy to
