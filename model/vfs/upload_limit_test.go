@@ -31,10 +31,14 @@ func TestUploadLimits(t *testing.T) {
 	}
 
 	// fill creates uploads until the limit, and tells how many it has created.
-	fill := func(t *testing.T, fs vfs.VFS, name string) int {
+	fill := func(t *testing.T, fs vfs.VFS, name string, member ...string) int {
+		driveID, account := "", ""
+		if len(member) > 0 {
+			driveID, account = "drive", member[0]
+		}
 		n := 0
 		for ; n < 10; n++ {
-			_, err := vfs.NewUpload(fs, newUploadDoc(t, name+strconv.Itoa(n)+".bin", nil), nil, "", -1)
+			_, err := vfs.NewDriveUpload(fs, newUploadDoc(t, name+strconv.Itoa(n)+".bin", nil), nil, "", -1, driveID, account)
 			if err != nil {
 				require.ErrorIs(t, err, vfs.ErrTooManyUploads)
 				break
@@ -50,6 +54,17 @@ func TestUploadLimits(t *testing.T) {
 		fs := b.newFS()
 		cleanAllUploads(t, fs)
 		require.Equal(t, 2, fill(t, fs, "account-"))
+	})
+
+	t.Run("PerDriveMember", func(t *testing.T) {
+		setUploadConfig(t, 5)
+		config.GetConfig().Fs.ResumableUploads.MaxPerAccount = 2
+		fs := b.newFS()
+		cleanAllUploads(t, fs)
+		require.Equal(t, 2, fill(t, fs, "betty-", "betty@example.net"))
+		require.Equal(t, 2, fill(t, fs, "dave-", "dave@example.net"))
+		// The owner has their own account, but the instance is at 5.
+		require.Equal(t, 1, fill(t, fs, "owner-"))
 	})
 
 	t.Run("PerInstance", func(t *testing.T) {

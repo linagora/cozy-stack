@@ -37,17 +37,24 @@ const maxUpdateTries = 20
 // current version of the file when its content is replaced, and oldRev the
 // revision expected by the client, if any. length is -1 when unknown.
 func NewUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*Upload, error) {
-	return newUpload(fs, newdoc, olddoc, oldRev, length, false)
+	return newUpload(fs, newdoc, olddoc, oldRev, length, false, "", "")
 }
 
 // NewUploadByLink creates a resumable upload for a visitor of a sharing by
 // link. Its announced length does not reserve space: only its written bytes
 // count in the space left for the uploads of the owner.
 func NewUploadByLink(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*Upload, error) {
-	return newUpload(fs, newdoc, olddoc, oldRev, length, true)
+	return newUpload(fs, newdoc, olddoc, oldRev, length, true, "", "")
 }
 
-func newUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64, byLink bool) (*Upload, error) {
+// NewDriveUpload creates a resumable upload for a member of a shared drive.
+// Each member is an account, whatever the drive, and the owner of the
+// instance (empty member) is another one.
+func NewDriveUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64, driveID, member string) (*Upload, error) {
+	return newUpload(fs, newdoc, olddoc, oldRev, length, false, driveID, member)
+}
+
+func newUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64, byLink bool, driveID, member string) (*Upload, error) {
 	store, err := uploadStorage(fs)
 	if err != nil {
 		return nil, err
@@ -86,15 +93,17 @@ func newUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64, byL
 	}
 	now := time.Now()
 	u := &Upload{
-		UploadID:  strings.ToLower(crand.Text()),
-		File:      newdoc,
-		OldRev:    oldRev,
-		Length:    length,
-		MD5State:  state,
-		Owner:     crand.Text(),
-		ByLink:    byLink,
-		CreatedAt: now,
-		ExpiresAt: now.Add(cfg.MaxAge),
+		UploadID:    strings.ToLower(crand.Text()),
+		File:        newdoc,
+		OldRev:      oldRev,
+		DriveID:     driveID,
+		DriveMember: member,
+		Length:      length,
+		MD5State:    state,
+		Owner:       crand.Text(),
+		ByLink:      byLink,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(cfg.MaxAge),
 	}
 	if olddoc != nil {
 		u.OldFileID = olddoc.ID()
@@ -123,14 +132,16 @@ func createWithinLimits(fs VFS, u *Upload, cfg config.FsResumableUploads) error 
 	if err != nil {
 		return err
 	}
-	active := 0
+	active, ofAccount := 0, 0
 	for _, other := range uploads {
 		if other.active() {
 			active++
+			if other.DriveMember == u.DriveMember {
+				ofAccount++
+			}
 		}
 	}
-	// All the uploads are made by the account of the owner of the instance.
-	if active >= cfg.MaxPerAccount || active >= cfg.MaxPerInstance {
+	if ofAccount >= cfg.MaxPerAccount || active >= cfg.MaxPerInstance {
 		return ErrTooManyUploads
 	}
 	limit, err := uploadSpaceLimit(fs, uploads, "")

@@ -83,6 +83,22 @@ func sfBoolean(b bool) string {
 	return "?0"
 }
 
+const contextUploadDriveMember = "upload-drive-member"
+
+// uploadDrive is the shared drive and its member behind a request.
+type uploadDrive struct{ id, member string }
+
+// SetUploadDriveMember tells which shared drive and which of its members send
+// the request: the resumable upload it creates keeps them.
+func SetUploadDriveMember(c echo.Context, driveID, member string) {
+	c.Set(contextUploadDriveMember, uploadDrive{driveID, member})
+}
+
+func uploadDriveMember(c echo.Context) (uploadDrive, bool) {
+	d, ok := c.Get(contextUploadDriveMember).(uploadDrive)
+	return d, ok
+}
+
 // uploadLocation is a relative URL: a member of a shared drive resolves it
 // against the stack that relays the request, which serves the same path.
 func uploadLocation(u *vfs.Upload, sharedDrive *sharing.Sharing) string {
@@ -246,6 +262,10 @@ func loadUpload(c echo.Context) (*instance.Instance, *vfs.Upload, error) {
 	u, err := vfs.GetUpload(inst.VFS(), c.Param("upload-id"))
 	if err != nil {
 		return nil, nil, err
+	}
+	// A drive member sees only the uploads they have created under this drive.
+	if d, ok := uploadDriveMember(c); ok && (u.DriveID != d.id || u.DriveMember != d.member) {
+		return nil, nil, vfs.ErrUploadNotFound
 	}
 	if err := checkUploadPerm(c, inst.VFS(), u); err != nil {
 		return nil, nil, err

@@ -60,7 +60,8 @@ func TestSharedDriveResumableUploads(t *testing.T) {
 				config.GetConfig().Fs.ResumableUploads = config.FsResumableUploads{
 					PartSize:       driveUploadPartSize,
 					MaxAge:         time.Hour,
-					MaxPerInstance: 20,
+					MaxPerAccount:  20,
+					MaxPerInstance: 200,
 				}
 			})
 			prefix := "/sharings/drives/" + env.firstSharingID
@@ -115,6 +116,75 @@ func TestSharedDriveResumableUploads(t *testing.T) {
 				assert.Equal(t, http.StatusNotFound, betty.patch(location, 0, []byte("x"), true).StatusCode)
 				assert.Equal(t, http.StatusNotFound, betty.do(http.MethodDelete, location, nil, 0, nil).StatusCode)
 				assert.Equal(t, http.StatusNoContent, acme.head(res.Header.Get("Location")).StatusCode)
+			})
+
+			t.Run("UploadOfAnotherMember", func(t *testing.T) {
+				sid, rootID, _ := createSharedDrive(t, DriveCreationMethodLegacy, env.acme, env.acmeToken, env.tsA.URL,
+					"Two writers", "Drive with two writers", []RecipientInfo{
+						{Name: "Betty", Email: "betty@example.net"},
+						{Name: "Dave", Email: "dave@example.net"},
+					})
+				acceptSharedDrive(t, env.acme, env.betty, "Betty", env.tsA.URL, env.tsB.URL, sid)
+				acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, sid)
+				dave := &driveUploadClient{t: t, base: env.tsD.URL, token: env.daveToken}
+
+				res := betty.create(http.MethodPost, "/sharings/drives/"+sid+"/"+rootID+"?Type=file&Name=betty.bin", nil, false)
+				require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+				location := res.Header.Get("Location")
+
+				// Betty is a member of both drives: the upload stays under its own.
+				other := prefix + "/uploads/" + path.Base(location)
+				assert.Equal(t, http.StatusNotFound, betty.head(other).StatusCode)
+				assert.Equal(t, http.StatusNotFound, betty.patch(other, 0, []byte("x"), false).StatusCode)
+
+				assert.Equal(t, http.StatusNotFound, dave.head(location).StatusCode)
+				assert.Equal(t, http.StatusNotFound, dave.patch(location, 0, []byte("dave"), false).StatusCode)
+				head := betty.head(location)
+				require.Equal(t, http.StatusNoContent, head.StatusCode)
+				assert.Equal(t, "0", head.Header.Get("Upload-Offset"))
+
+				assert.Equal(t, http.StatusNotFound, dave.do(http.MethodDelete, location, nil, 0, nil).StatusCode)
+				assert.Equal(t, http.StatusNoContent, betty.head(location).StatusCode)
+			})
+
+			t.Run("TooManyUploadsRelayed", func(t *testing.T) {
+				sid, rootID, _ := createSharedDrive(t, DriveCreationMethodLegacy, env.acme, env.acmeToken, env.tsA.URL,
+					"Limits", "Drive for the limits", []RecipientInfo{
+						{Name: "Betty", Email: "betty@example.net"},
+						{Name: "Dave", Email: "dave@example.net"},
+					})
+				acceptSharedDrive(t, env.acme, env.betty, "Betty", env.tsA.URL, env.tsB.URL, sid)
+				acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, sid)
+				dave := &driveUploadClient{t: t, base: env.tsD.URL, token: env.daveToken}
+				acme := &driveUploadClient{t: t, base: env.tsA.URL, token: env.acmeToken}
+				n := 0
+				create := func(c *driveUploadClient, target string) *driveUploadResponse {
+					n++
+					return c.create(http.MethodPost, target+"?Type=file&Name=limit-"+strconv.Itoa(n)+".bin", nil, false)
+				}
+				inDrive := "/sharings/drives/" + sid + "/" + rootID
+				inOwnDrive := "/files/" + env.outsideOfShareID
+
+				cfg := &config.GetConfig().Fs.ResumableUploads
+				old := *cfg
+				t.Cleanup(func() { *cfg = old })
+				_, byAccount := ownerActiveUploads(t, env)
+				cfg.MaxPerAccount = max(byAccount["betty@example.net"], byAccount["dave@example.net"], byAccount[""]) + 1
+				cfg.MaxPerInstance = 1000
+
+				for i := byAccount["betty@example.net"]; i < cfg.MaxPerAccount; i++ {
+					require.Equal(t, http.StatusCreated, create(betty, inDrive).StatusCode)
+				}
+				refused := create(betty, inDrive)
+				assert.Equal(t, http.StatusTooManyRequests, refused.StatusCode)
+				refused.problem(t)
+				assert.Equal(t, http.StatusCreated, create(dave, inDrive).StatusCode)
+				assert.Equal(t, http.StatusCreated, create(acme, inOwnDrive).StatusCode)
+
+				// The instance is full: nobody can start another upload.
+				cfg.MaxPerInstance, _ = ownerActiveUploads(t, env)
+				assert.Equal(t, http.StatusTooManyRequests, create(dave, inDrive).StatusCode)
+				assert.Equal(t, http.StatusTooManyRequests, create(acme, inOwnDrive).StatusCode)
 			})
 
 			t.Run("ReadOnlyDuringUpload", func(t *testing.T) {
@@ -236,6 +306,24 @@ func ownerUpload(t *testing.T, env *sharedDrivesEnv, location string) *vfs.Uploa
 	u := &vfs.Upload{}
 	require.NoError(t, couchdb.GetDoc(env.acme, consts.FilesUploads, path.Base(location), u))
 	return u
+}
+
+// ownerActiveUploads counts the uploads in progress on the owner's instance,
+// in all and by drive member (empty for the owner).
+func ownerActiveUploads(t *testing.T, env *sharedDrivesEnv) (int, map[string]int) {
+	var uploads []*vfs.Upload
+	err := couchdb.GetAllDocs(env.acme, consts.FilesUploads, &couchdb.AllDocsRequest{Limit: 1000}, &uploads)
+	if !couchdb.IsNoDatabaseError(err) {
+		require.NoError(t, err)
+	}
+	total, byAccount := 0, map[string]int{}
+	for _, u := range uploads {
+		if !u.Completed {
+			total++
+			byAccount[u.DriveMember]++
+		}
+	}
+	return total, byAccount
 }
 
 func assertOwnerContent(t *testing.T, env *sharedDrivesEnv, id string, content []byte) {

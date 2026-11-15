@@ -1890,6 +1890,7 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	if member == nil {
 		return nil
 	}
+	files.SetUploadDriveMember(c, s.ID(), driveUploadMember(member))
 
 	method := c.Request().Method
 	if method == http.MethodHead {
@@ -1923,7 +1924,7 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	// A resumable upload is checked against its target at each request, HEAD
 	// included, as it takes the upload over from the request that writes.
 	if strings.HasPrefix(c.Path(), "/sharings/drives/:id/uploads/") {
-		return checkUploadEffectiveAccess(inst, c.Param("upload-id"), member)
+		return checkUploadEffectiveAccess(c, inst, s, member)
 	}
 	// Trashed files are outside every sharing scope: the effective access
 	// resolver cannot see them. Restore and destroy are authorized against
@@ -1989,20 +1990,33 @@ func checkEffectiveAccessForMember(inst *instance.Instance, targetID string, ver
 
 // checkUploadEffectiveAccess requires the effective write access of the
 // member on the folder of a resumable upload, or on the file whose content it
-// replaces. A missing upload is left to the handler, which answers 404.
-func checkUploadEffectiveAccess(inst *instance.Instance, uploadID string, member *sharing.Member) error {
-	u, err := vfs.GetUpload(inst.VFS(), uploadID)
+// replaces. A missing upload, or one created by someone else or under another
+// drive, is left to the handler, which answers 404.
+func checkUploadEffectiveAccess(c echo.Context, inst *instance.Instance, s *sharing.Sharing, member *sharing.Member) error {
+	u, err := vfs.GetUpload(inst.VFS(), c.Param("upload-id"))
 	if errors.Is(err, vfs.ErrUploadNotFound) {
 		return nil
 	}
 	if err != nil {
 		return wrapErrors(err)
 	}
+	if u.DriveID != s.ID() || u.DriveMember != driveUploadMember(member) {
+		return nil
+	}
 	targetID := u.File.DirID
 	if u.OldFileID != "" {
 		targetID = u.OldFileID
 	}
 	return checkEffectiveAccessForMember(inst, targetID, permission.PUT, member)
+}
+
+// driveUploadMember names a member for the resumable uploads, by the email or
+// the instance that their drive token is bound to.
+func driveUploadMember(member *sharing.Member) string {
+	if member.Email != "" {
+		return member.Email
+	}
+	return member.Instance
 }
 
 // checkTrashEffectiveAccess authorizes a restore or destroy of a trashed

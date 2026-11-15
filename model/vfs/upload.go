@@ -45,6 +45,11 @@ type Upload struct {
 	File      *FileDoc `json:"file"`
 	OldFileID string   `json:"old_file_id,omitempty"`
 	OldRev    string   `json:"old_rev,omitempty"`
+	// DriveID and DriveMember are the shared drive and its member who have
+	// created the upload, when it comes from a member: only this member can
+	// resume it, and only under this drive.
+	DriveID     string `json:"drive_id,omitempty"`
+	DriveMember string `json:"drive_member,omitempty"`
 	// Length is the announced size of the content, or -1 while unknown.
 	Length int64 `json:"length"`
 	// Offset is the number of bytes durably written to the storage.

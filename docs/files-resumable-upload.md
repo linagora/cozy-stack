@@ -121,6 +121,9 @@ fields:
   `internal_vfs_id`. It is indexed in `io.cozy.files` only at the end.
 - `old_file_id`, `old_rev`: the file whose content is replaced (`PUT`), and
   the revision expected by the client in `If-Match`.
+- `drive_id`, `drive_member`: the shared drive and its member (email, or
+  instance) who have created the upload, for an upload by a member (see
+  [Shared drives](#shared-drives)).
 - `length`: the size announced by the client, or -1 while unknown.
 - `offset`: the bytes written to the storage. It is saved only after the
   bytes are written, so it never goes backward.
@@ -260,10 +263,13 @@ sequenceDiagram
 ```
 
 - The `io.cozy.files.uploads` document and the parts are on the instance and
-  the storage of the owner. The quota, the 20 uploads in progress and the
-  expiration are those of the owner: the uploads of the members count in the
-  limit of the owner's instance. The `max-size` of `Upload-Limit` tells a
-  member the free space of the owner.
+  the storage of the owner. The quota and the expiration are those of the
+  owner. The `max-size` of `Upload-Limit` tells a member the free space of the
+  owner.
+- Each member is an account for the limits, whatever the drive: 20 uploads
+  in progress by default, apart from the 20 of the owner. A member at their
+  limit stops neither the other members nor the owner. The 200 uploads of the
+  instance count them all.
 - The routes are `HEAD`, `PATCH` and `DELETE` on
   `/sharings/drives/:id/uploads/:upload-id`. Like the other drive routes, the
   stack of the member serves them directly when the owner is on the same
@@ -275,9 +281,11 @@ sequenceDiagram
   member behind the drive token, then their effective write access on the
   folder of the upload, or on the file whose content it replaces. A member
   removed from the drive or made read-only gets `403` on the next request,
-  `HEAD` included, as it takes the upload over. An upload outside the drive
-  answers `404`, like a missing one. The parts already written stay until the
-  upload expires.
+  `HEAD` included, as it takes the upload over. The parts already written stay
+  until the upload expires.
+- The upload keeps the drive and the member who have created it
+  (`drive_id`, `drive_member`). An upload of another member, of another drive, or outside
+  the drive answers `404`, like a missing one.
 - The relay forwards the `104` interim response: Go's `httputil.ReverseProxy`
   relays the 1xx responses, and the stack writes them on the connection
   directly, so that echo keeps the final status.

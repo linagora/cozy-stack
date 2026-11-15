@@ -64,6 +64,11 @@ func startUpload(c echo.Context, fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev
 	if perm, err := middlewares.GetPermission(c); err == nil && perm.Type == permission.TypeShareByLink {
 		newUpload = vfs.NewUploadByLink
 	}
+	if drive, ok := uploadDriveMember(c); ok {
+		newUpload = func(fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev string, length int64) (*vfs.Upload, error) {
+			return vfs.NewDriveUpload(fs, newdoc, olddoc, oldRev, length, drive.id, drive.member)
+		}
+	}
 	u, err := newUpload(fs, newdoc, olddoc, oldRev, length)
 	if errors.Is(err, vfs.ErrTooManyUploads) && complete {
 		newdoc.ByteSize = req.ContentLength
