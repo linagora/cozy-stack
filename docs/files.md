@@ -768,6 +768,102 @@ Content-Type: application/json
 ```
 
 
+### POST `/files/search`
+
+Searches the files and folders by their name, among those of the user and
+those of the shared drives the user is a member of. The search is case and
+accent insensitive, matches parts of words, and the results are sorted by
+relevance. Trashed files are not returned.
+
+It needs the server-side file search to be configured (the `search` section of
+the configuration), and a permission on the whole `io.cozy.files` doctype.
+
+The request body has:
+
+- `q`: the text to search, with 1 to 256 characters (required)
+- `limit`: the maximal number of results of the page (default 20, max 100)
+- `cursor`: the cursor of the next page, from a previous response (it can
+  also be given with `page[cursor]` in the query string, as in `links.next`).
+
+A page can have fewer results than `limit`, even if there are more pages:
+results whose parent folder is no longer visible to the user are left out.
+
+Each result has the `path` of its parent folder, as the user sees it. For a
+file of a shared drive, it starts with the name of the drive and stops at its
+root, and `drive_id` is the id of the drive sharing. For a drive owned by an
+instance outside of the stack cluster, the `path` is empty.
+
+#### Request
+
+```http
+POST /files/search HTTP/1.1
+Accept: application/vnd.api+json
+Content-Type: application/json
+```
+
+```json
+{
+  "q": "report",
+  "limit": 20
+}
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/vnd.api+json
+```
+
+```json
+{
+  "data": [
+    {
+      "type": "io.cozy.files",
+      "id": "9152d568-7e7c-11e6-a377-37cbfb190b4b",
+      "attributes": {
+        "name": "Quarterly report.pdf",
+        "type": "file",
+        "mime": "application/pdf",
+        "class": "pdf",
+        "updated_at": "2026-11-15T10:00:00Z",
+        "dir_id": "fce1a6c0-dfc5-11e5-8d1a-1f854d4aaf81",
+        "path": "/Documents/2026"
+      },
+      "meta": {}
+    },
+    {
+      "type": "io.cozy.files",
+      "id": "5ef0c2b6-c25b-11ef-9e5e-cfb0a8a4a4bd",
+      "attributes": {
+        "name": "Team report.odt",
+        "type": "file",
+        "mime": "application/vnd.oasis.opendocument.text",
+        "class": "text",
+        "updated_at": "2026-11-14T09:00:00Z",
+        "dir_id": "6a3b1c5e-c25b-11ef-8f2c-77c3d3e1a2f0",
+        "path": "/Team/Reports",
+        "drive_id": "aae62886e79611e8a81dbb9c4d0d0cd0"
+      },
+      "meta": {}
+    }
+  ],
+  "links": {
+    "next": "/files/search?page[cursor]=WzEuNSwiYWxpY2UuY296eS5sb2NhbGhvc3Q6ZjEiXQ"
+  },
+  "meta": {
+    "count": 2
+  }
+}
+```
+
+#### Status codes
+
+- 200 OK, for a page of results (possibly empty)
+- 400 Bad Request, when `q` is missing or too long, or the cursor is invalid
+- 403 Forbidden, without a permission on the whole `io.cozy.files` doctype
+- 503 Service Unavailable, when search is not configured
+
 ### DELETE /files/:dir-id
 
 Put a directory and its subtree in the trash. It requires the permissions on
