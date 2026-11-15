@@ -36,6 +36,17 @@ const maxUpdateTries = 20
 // current version of the file when its content is replaced, and oldRev the
 // revision expected by the client, if any. length is -1 when unknown.
 func NewUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*Upload, error) {
+	return newUpload(fs, newdoc, olddoc, oldRev, length, false)
+}
+
+// NewUploadByLink creates a resumable upload for a visitor of a sharing by
+// link. Its announced length does not reserve space: only its written bytes
+// count in the space left for the uploads of the owner.
+func NewUploadByLink(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*Upload, error) {
+	return newUpload(fs, newdoc, olddoc, oldRev, length, true)
+}
+
+func newUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64, byLink bool) (*Upload, error) {
 	store, err := uploadStorage(fs)
 	if err != nil {
 		return nil, err
@@ -80,6 +91,7 @@ func NewUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*U
 		Length:    length,
 		MD5State:  state,
 		Owner:     crand.Text(),
+		ByLink:    byLink,
 		CreatedAt: now,
 		ExpiresAt: now.Add(cfg.MaxAge),
 	}
@@ -433,7 +445,11 @@ func uploadSpaceLimit(fs VFS, uploads []*Upload, exclude string) (int64, error) 
 		if !u.active() || u.UploadID == exclude {
 			continue
 		}
-		available -= max(u.Length, u.Offset+u.Writing)
+		reserved := u.Offset + u.Writing
+		if !u.ByLink {
+			reserved = max(u.Length, reserved)
+		}
+		available -= reserved
 		if available <= 0 {
 			// Stop before the sum of the reservations overflows.
 			return 0, nil

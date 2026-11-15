@@ -571,6 +571,28 @@ func TestResumableUploadsByLink(t *testing.T) {
 		_, attrs := done.fileAttrs(t)
 		assert.Equal(t, md5Base64(content), attrs["md5sum"])
 	})
+
+	t.Run("LengthOfALinkReservesNoSpace", func(t *testing.T) {
+		inst.BytesDiskQuota = 100 << 20
+		defer func() { inst.BytesDiskQuota = 0 }()
+		drop := owner.mkdir("drop-reservation")
+		link := dropLink(t, inst, ts.URL, drop)
+
+		mine := owner.startUpload(t, drop, "mine.bin", -1)
+		content := randomBytes(2*uploadTestPartSize, 22)
+		first := owner.patch(mine, 0, content[:uploadTestPartSize], false)
+		require.Equal(t, http.StatusNoContent, first.StatusCode, string(first.body))
+
+		// The link announces all the space left.
+		usage, err := inst.VFS().DiskUsage()
+		require.NoError(t, err)
+		link.startUpload(t, drop, "theirs.bin", inst.BytesDiskQuota-usage-uploadTestPartSize)
+
+		done := owner.patch(mine, uploadTestPartSize, content[uploadTestPartSize:], true)
+		require.Equal(t, http.StatusCreated, done.StatusCode, string(done.body))
+		_, attrs := done.fileAttrs(t)
+		assert.Equal(t, md5Base64(content), attrs["md5sum"])
+	})
 }
 
 // startUpload creates an upload of a file in dirID without its content, with

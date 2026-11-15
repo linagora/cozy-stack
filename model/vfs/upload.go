@@ -53,6 +53,9 @@ type Upload struct {
 	// Owner is the token of the last request that has created or resumed the
 	// upload. Only this request can write.
 	Owner string `json:"owner,omitempty"`
+	// ByLink is set for an upload made through a sharing by link: its length
+	// does not reserve space in the quota, only its written bytes count.
+	ByLink bool `json:"by_link,omitempty"`
 
 	Parts []UploadPart `json:"parts,omitempty"`
 	// Tail holds the bytes after the last part, when the storage cannot keep

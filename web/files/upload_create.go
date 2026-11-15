@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
@@ -50,7 +51,11 @@ func startUpload(c echo.Context, fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev
 	newdoc.ByteSize = length
 	exposeUploadHeaders(c)
 
-	u, err := vfs.NewUpload(fs, newdoc, olddoc, oldRev, length)
+	newUpload := vfs.NewUpload
+	if perm, err := middlewares.GetPermission(c); err == nil && perm.Type == permission.TypeShareByLink {
+		newUpload = vfs.NewUploadByLink
+	}
+	u, err := newUpload(fs, newdoc, olddoc, oldRev, length)
 	if errors.Is(err, vfs.ErrTooManyUploads) && complete {
 		newdoc.ByteSize = req.ContentLength
 		return false, nil, nil
