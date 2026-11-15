@@ -33,23 +33,22 @@ func TestUploadsWriteInParallel(t *testing.T) {
 	for _, b := range uploadBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			fs := b.newFS()
-			var writing, overlap atomic.Int32
+			// No write leaves before the n-th has started, unless it times out.
+			var writing atomic.Int32
+			var timedOut atomic.Bool
 			all := make(chan struct{})
 			var once sync.Once
 			restore := vfs.SetUploadStepHook(func(step string) error {
 				if step != "write" {
 					return nil
 				}
-				now := writing.Add(1)
-				if now > overlap.Load() {
-					overlap.Store(now)
-				}
-				if now == n {
+				if writing.Add(1) == n {
 					once.Do(func() { close(all) })
 				}
 				select {
 				case <-all:
 				case <-time.After(20 * time.Second):
+					timedOut.Store(true)
 				}
 				return nil
 			})
@@ -70,7 +69,7 @@ func TestUploadsWriteInParallel(t *testing.T) {
 				}(i, u)
 			}
 			wg.Wait()
-			assert.EqualValues(t, n, overlap.Load(), "the parts must be written at the same time")
+			assert.False(t, timedOut.Load(), "the parts must be written at the same time")
 			for i := 0; i < n; i++ {
 				require.NoError(t, errs[i])
 				assert.True(t, bytes.Equal(contents[i], readContent(t, fs, docs[i])))
