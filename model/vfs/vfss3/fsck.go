@@ -95,7 +95,7 @@ func (sfs *s3VFS) checkFiles(
 		// Strip the key prefix to get the object name
 		objName := strings.TrimPrefix(obj.Key, sfs.keyPrefix)
 
-		if objName == "avatar" {
+		if objName == "avatar" || strings.HasPrefix(objName, vfs.UploadsObjectPrefix) {
 			continue
 		}
 		if strings.HasPrefix(objName, "thumbs/") {
