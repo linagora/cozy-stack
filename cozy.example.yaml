@@ -217,6 +217,18 @@ konnectors:
   # cmd: ./scripts/konnector-rkt-run.sh # run connectors with rkt
   # cmd: ./scripts/konnector-nsjail-node8-run.sh # run connectors with nsjail
 
+# search configures the OpenSearch cluster used by the server-side file
+# search. Search is off when the url is empty.
+search:
+  opensearch:
+    url: http://localhost:9200
+    username: admin
+    password: $3cr3t
+    # Prefix of the index names, so several stacks can share a cluster.
+    index_prefix: cozy
+    # CA certificate(s) of the cluster, when not installed on the system.
+    # root_ca: /ca-certificates.pem
+
 # rag are the URL of the RAG server(s) for AI.
 rag:
   # A cozy will use the rag server named by its rag.server feature flag, else
