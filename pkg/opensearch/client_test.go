@@ -104,11 +104,11 @@ func TestDeleteByQueryFailures(t *testing.T) {
 		body   string
 		want   Error
 	}{
-		{"partial success", 200, failedDeletes, Error{403, "security_exception", "delete denied"}},
-		{"failed deletes", 429, failedDeletes, Error{429, "security_exception", "delete denied"}},
+		{"partial success", 200, failedDeletes, Error{Status: 403, Type: "security_exception", Reason: "delete denied"}},
+		{"failed deletes", 429, failedDeletes, Error{Status: 429, Type: "security_exception", Reason: "delete denied"}},
 		{"failed shard", 503, `{"failures":[{"shard":0,"status":503,
 			"reason":{"type":"search_context_missing_exception","reason":"scroll expired"}}]}`,
-			Error{503, "search_context_missing_exception", "scroll expired"}},
+			Error{Status: 503, Type: "search_context_missing_exception", Reason: "scroll expired"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := newTestClient(t, tc.status, tc.body)
@@ -134,13 +134,14 @@ func TestBulk(t *testing.T) {
 	t.Run("a failed item is an error", func(t *testing.T) {
 		c, _ := newTestClient(t, 200, `{"errors":true,"items":[
 			{"index":{"status":201}},
-			{"index":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse"}}}]}`)
+			{"index":{"_id":"b","status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse"}}}]}`)
 		err := c.Bulk(context.Background(), "files_v1", ndjson)
 		var osErr *Error
 		require.True(t, errors.As(err, &osErr))
 		assert.Equal(t, 400, osErr.Status)
 		assert.Equal(t, "mapper_parsing_exception", osErr.Type)
 		assert.Equal(t, "failed to parse", osErr.Reason)
+		assert.Equal(t, "b", osErr.DocID)
 	})
 }
 
