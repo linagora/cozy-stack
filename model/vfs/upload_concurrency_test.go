@@ -297,6 +297,46 @@ func TestParallelUploadsShareTheQuota(t *testing.T) {
 	assert.GreaterOrEqual(t, refused, 1)
 }
 
+// TestUploadCancelledDuringItsCommit checks that a cancel that arrives while
+// the file is being indexed waits for the lock of the VFS, and keeps the
+// content of the indexed file.
+func TestUploadCancelledDuringItsCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+
+	for _, b := range uploadBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			fs := b.newFS()
+			content := randomContent(testPartSize+10, 75)
+			u, err := vfs.NewUpload(fs, newUploadDoc(t, "cancelled-during-commit.bin", content), nil, "", -1)
+			require.NoError(t, err)
+
+			cancelled := make(chan error, 1)
+			var first atomic.Bool
+			restore := vfs.SetUploadStepHook(func(step string) error {
+				if step == "locked" && first.CompareAndSwap(false, true) {
+					go func() { cancelled <- vfs.CancelUpload(b.newFS(), u.UploadID) }()
+					// Leave time to the cancel to remove the content, if it
+					// does not wait for the lock.
+					time.Sleep(300 * time.Millisecond)
+				}
+				return nil
+			})
+			defer restore()
+			_, _ = vfs.AppendUpload(fs, u, bytes.NewReader(content), true)
+			require.NoError(t, <-cancelled)
+
+			doc, err := fs.FileByID(u.File.ID())
+			require.NoError(t, err)
+			assert.True(t, bytes.Equal(content, readContent(t, fs, doc)))
+		})
+	}
+}
+
 // TestUploadCutThenResumedAtOnce checks that the bytes of a cut request are
 // kept when the client resumes the upload before the stack has saved them:
 // the HEAD of the client takes the upload, but the cut request still saves

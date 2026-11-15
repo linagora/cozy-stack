@@ -283,7 +283,10 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 		// upload may have been removed while the request was waiting for it,
 		// by a storage migration for example.
 		err = store.CommitUpload(&committing, olddoc, capsize, func() error {
-			return ownsUpload(fs, u)
+			if err := ownsUpload(fs, u); err != nil {
+				return err
+			}
+			return uploadStep("locked")
 		})
 	}
 	if errors.Is(err, ErrUploadNotFound) || errors.Is(err, ErrUploadTakenOver) {
