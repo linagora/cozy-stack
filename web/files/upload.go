@@ -86,14 +86,19 @@ func uploadLocation(u *vfs.Upload) string {
 	return "/files/uploads/" + u.UploadID
 }
 
+// setUploadLimit announces the limits of the upload. The maximal size comes
+// from the space left on the instance: it is not announced to the visitors of
+// a sharing by link.
 func setUploadLimit(c echo.Context, fs vfs.VFS, u *vfs.Upload, interop string) {
-	limit, err := vfs.UploadSpaceLimit(fs, u)
-	if err != nil {
-		return
-	}
 	value := ""
-	if limit < math.MaxInt64 {
-		value = fmt.Sprintf("max-size=%d, ", max(limit, 1))
+	if perm, err := middlewares.GetPermission(c); err == nil && perm.Type != permission.TypeShareByLink {
+		limit, err := vfs.UploadSpaceLimit(fs, u)
+		if err != nil {
+			return
+		}
+		if limit < math.MaxInt64 {
+			value = fmt.Sprintf("max-size=%d, ", max(limit, 1))
+		}
 	}
 	age := max(int64(time.Until(u.ExpiresAt).Seconds()), 0)
 	if interop == "6" {

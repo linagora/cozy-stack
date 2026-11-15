@@ -517,4 +517,29 @@ func TestResumableUploadsByLink(t *testing.T) {
 		// The owner still has.
 		assert.Equal(t, http.StatusNoContent, owner.head(location).StatusCode)
 	})
+
+	t.Run("NoSpaceAnnouncedToALink", func(t *testing.T) {
+		inst.BytesDiskQuota = 200 << 20
+		defer func() { inst.BytesDiskQuota = 0 }()
+		drop := owner.mkdir("drop-limit")
+		link := dropLink(t, inst, ts.URL, drop)
+		start := func(c *uploadClient, name string) *uploadResponse {
+			res, err := c.do(http.MethodPost, "/files/"+drop+"?Type=file&Name="+name, nil, 0, map[string]string{
+				"Upload-Draft-Interop-Version": "10",
+				"Upload-Complete":              "?0",
+			})
+			require.NoError(t, err)
+			require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+			return res
+		}
+
+		// The space left on the instance is not for the visitors of a link.
+		res := start(link, "by-link.bin")
+		assert.NotContains(t, res.Header.Get("Upload-Limit"), "max-size")
+		assert.Contains(t, res.Header.Get("Upload-Limit"), "max-age=")
+		assert.NotContains(t, link.head(res.Header.Get("Location")).Header.Get("Upload-Limit"), "max-size")
+
+		res = start(owner, "by-owner.bin")
+		assert.Contains(t, res.Header.Get("Upload-Limit"), "max-size=")
+	})
 }
