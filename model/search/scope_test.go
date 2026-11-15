@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/sharing"
@@ -44,8 +45,13 @@ func TestActivePrincipals(t *testing.T) {
 
 func TestScopeWrites(t *testing.T) {
 	var path, body string
+	mgetAnswer := `{"docs":[{"_id":"sharing-1","found":true,"_source":{"owner_instance_id":"owner.example.net"}}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := io.ReadAll(r.Body)
+		if strings.HasSuffix(r.URL.Path, "/_mget") {
+			_, _ = w.Write([]byte(mgetAnswer))
+			return
+		}
 		path, body = r.URL.Path, string(data)
 		_, _ = w.Write([]byte(`{"errors":false,"items":[]}`))
 	}))
@@ -68,8 +74,17 @@ func TestScopeWrites(t *testing.T) {
 		`{"sharing_id":"sharing-1","owner_instance_id":"owner.example.net","root_dir_id":"root",`+
 		`"active_member_principals":["bob.example.net"],"subtree_dir_keys":["owner.example.net:root"]}`+"\n", body)
 
-	require.NoError(t, DeleteScope(context.Background(), client, "sharing-1"))
+	body = ""
+	require.NoError(t, DeleteScope(context.Background(), client, "bob.example.net", "sharing-1"))
+	assert.Empty(t, body, "a recipient does not delete the owner's scope")
+
+	require.NoError(t, DeleteScope(context.Background(), client, "owner.example.net", "sharing-1"))
 	assert.Equal(t, `{"delete":{"_id":"sharing-1"}}`+"\n", body)
+
+	body = ""
+	mgetAnswer = `{"docs":[{"_id":"sharing-1","found":false}]}`
+	require.NoError(t, DeleteScope(context.Background(), client, "owner.example.net", "sharing-1"))
+	assert.Empty(t, body, "nothing to delete")
 }
 
 func TestNewScopeDocument(t *testing.T) {
