@@ -1,0 +1,153 @@
+name: AI review (Warden)
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
+
+permissions: {}
+
+jobs:
+  review:
+    if: >-
+      !github.event.repository.private &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'ai-review') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ai-review')
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write # GitHub requires this to resolve review threads.
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Check review access
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const assert = require('node:assert/strict')
+            const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+              ...context.repo, username: context.actor
+            })
+            assert(['admin', 'maintain', 'write'].includes(permission.permission), 'Write access is required')
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number: context.payload.pull_request.number
+            })
+            assert(pr.state === 'open' && !pr.draft, 'PR is closed or draft')
+            assert(pr.labels.some(label => label.name === 'ai-review'), 'PR no longer has the ai-review label')
+            assert(pr.base.repo.private === false && pr.head.repo?.private === false,
+              'Only public repositories and branches are supported')
+            assert(pr.head.sha === context.payload.pull_request.head.sha,
+              'PR changed; use the run for the latest push')
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare the five local skills
+        env:
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/warden-pi
+        run: |
+          mkdir -p .warden/skills "$PI_CODING_AGENT_DIR"
+          cp .github/review/models.json "$PI_CODING_AGENT_DIR/models.json"
+          for direction in security correctness simplicity alternatives tests-performance; do
+            {
+              printf -- '---\nname: %s\ndescription: Review cozy-stack changes for %s.\nallowed-tools: Read Grep Glob\n---\n\n' "$direction" "$direction"
+              cat .github/review/common.md
+              printf '\n'
+              cat ".github/review/$direction.md"
+            } > ".warden/skills/$direction.md"
+          done
+      - name: Analyze with Warden
+        id: warden
+        uses: getsentry/warden@9ac18f90e5287a8d59476448070e9c9257477aed # v0.53.0
+        with:
+          mode: analyze
+          config-path: .github/review/warden.toml
+          parallel: '3'
+        env:
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/warden-pi
+          WARDEN_DEEPSEEK_API_KEY: ${{ secrets.LINAGORA_AI_GATEWAY_KEY }}
+          WARDEN_DEEPSEEK_BASE_URL: https://ai-api.linagora.com/v1
+      - name: Check review failures
+        if: ${{ !cancelled() && steps.warden.outcome != 'skipped' }}
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          WARDEN_REPORT: ${{ steps.warden.outputs.findings-file }}
+        with:
+          script: |
+            const assert = require('node:assert/strict')
+            const fs = require('node:fs')
+            assert(process.env.WARDEN_REPORT, 'Warden did not produce a review report')
+            // shortcut: Uses Warden v0.53 report fields; recheck on upgrades.
+            const report = JSON.parse(fs.readFileSync(process.env.WARDEN_REPORT, 'utf8'))
+            assert.equal(report.version, '1', 'Unsupported Warden report format')
+            assert.equal(report.pullRequest.headSha, context.payload.pull_request.head.sha, 'Report is for another commit')
+            const expected = ['security', 'correctness', 'simplicity', 'alternatives', 'tests-performance']
+            assert.deepEqual(report.skills.map(skill => skill.name).sort(), expected.sort(), 'A review direction is missing or duplicated')
+            assert.equal(report.skippedTriggers.length, 0, 'A review direction was skipped')
+            assert.equal(report.triggerResults.length, expected.length, 'A review direction did not finish')
+            assert(report.triggerResults.every(result => result.status === 'success'), 'A review direction failed')
+            const failed = report.skills.filter(skill => skill.error || skill.failedHunks > 0 || skill.failedExtractions > 0)
+            const details = failed.map(skill => `${skill.name}: ${skill.failedHunks ?? 0} failed chunks, ${skill.failedExtractions ?? 0} failed extractions${skill.error ? ', analysis error' : ''}`)
+            assert.equal(failed.length, 0, `Incomplete review: ${details.join('; ')}`)
+            core.info('All five review directions finished without reported failures. Findings remain advisory.')
+      - name: Publish with Warden
+        id: publish
+        uses: getsentry/warden@9ac18f90e5287a8d59476448070e9c9257477aed # v0.53.0
+        with:
+          mode: report
+          findings-file: ${{ steps.warden.outputs.findings-file }}
+          config-path: .github/review/warden.toml
+        env:
+          PI_CODING_AGENT_DIR: ${{ runner.temp }}/warden-pi
+          WARDEN_DEEPSEEK_API_KEY: ${{ secrets.LINAGORA_AI_GATEWAY_KEY }}
+          WARDEN_DEEPSEEK_BASE_URL: https://ai-api.linagora.com/v1
+      - name: Show severity in review comments
+        if: ${{ !cancelled() && steps.publish.outcome != 'skipped' }}
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            // shortcut: Uses Warden v0.53 metadata; remove when Warden shows severity inline.
+            const labels = new Map([
+              ['high', '🔴 High severity'],
+              ['medium', '🟠 Medium severity'],
+              ['low', '🔵 Low severity']
+            ])
+            const pull = { ...context.repo, pull_number: context.payload.pull_request.number }
+            const { data: pr } = await github.rest.pulls.get(pull)
+            if (pr.state !== 'open' || pr.head.sha !== context.payload.pull_request.head.sha) return
+            const comments = await github.paginate(github.rest.pulls.listReviewComments, {
+              ...pull, per_page: 100
+            })
+            for (const comment of comments) {
+              if (comment.user?.login !== 'github-actions[bot]' || comment.in_reply_to_id) continue
+              const marker = comment.body.match(/<!-- warden:finding:v1:([A-Za-z0-9_-]+) -->/)
+              if (!marker) continue
+              let severity
+              try {
+                severity = JSON.parse(Buffer.from(marker[1], 'base64url').toString('utf8'))?.severity
+              } catch {
+                core.warning(`Invalid Warden metadata in comment ${comment.id}`)
+                continue
+              }
+              const label = labels.get(severity)
+              if (!label) {
+                core.warning(`Unknown Warden severity in comment ${comment.id}`)
+                continue
+              }
+              const original = comment.body.replace(/^(?:🔴 High|🟠 Medium|🔵 Low) severity\n\n/, '')
+              const body = `${label}\n\n${original}`
+              if (body === comment.body) continue
+              await github.rest.pulls.updateReviewComment({ ...context.repo, comment_id: comment.id, body })
+            }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && steps.warden.outputs.findings-file != '' }}
+        with:
+          name: warden-review
+          path: ${{ steps.warden.outputs.findings-file }}
+          retention-days: 3
+          if-no-files-found: error

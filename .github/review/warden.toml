@@ -1,0 +1,40 @@
+version = 1
+
+[defaults]
+runtime = "pi"
+offline = true
+incremental = false
+postChecks = true
+requestChanges = false
+failCheck = false
+failOn = "off"
+reportOn = "info"
+minConfidence = "medium"
+
+[defaults.agent]
+model = "deepseek/deepseek-v4-pro"
+maxTurns = 10
+effort = "high"
+
+[defaults.auxiliary]
+model = "deepseek/deepseek-v4-pro"
+effort = "off"
+maxRetries = 1
+
+[defaults.synthesis]
+model = "deepseek/deepseek-v4-pro"
+
+[[skills]]
+name = "security"
+
+[[skills]]
+name = "correctness"
+
+[[skills]]
+name = "simplicity"
+
+[[skills]]
+name = "alternatives"
+
+[[skills]]
+name = "tests-performance"
