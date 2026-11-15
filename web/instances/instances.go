@@ -804,6 +804,9 @@ func Routes(router *echo.Group) {
 	router.POST("/:domain/rag/prune", ragPrune)
 	router.POST("/:domain/rag/purge", ragPurge)
 	router.POST("/:domain/rag/reconcile", ragReconcile)
+	router.POST("/:domain/search/enable", searchEnable)
+	router.POST("/:domain/search/reset", searchReset)
+	router.GET("/:domain/search/status", searchStatus)
 
 	// Config
 	router.POST("/redis", rebuildRedis)
