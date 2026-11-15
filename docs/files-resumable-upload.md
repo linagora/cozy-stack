@@ -286,6 +286,10 @@ The state of an upload:
   assembling, and the extraction of the metadata. Each write has its own slot
   and object, so the uploads of an instance, and two requests on one upload,
   never write the same object.
+- The creation of an upload counts the uploads in progress and saves the new
+  one under a short lock of the instance, held only for these CouchDB reads
+  and this write: uploads created at the same time cannot all pass the
+  limits.
 - A removal (`DELETE`, expiration, migration) first marks the document, then
   removes the content, then the document. Before removing the content, it
   looks for the file in the index, which takes the lock of the VFS in read

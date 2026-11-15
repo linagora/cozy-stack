@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
@@ -40,29 +41,6 @@ func NewUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*U
 		return nil, err
 	}
 	cfg := uploadConfig()
-
-	uploads, err := activeUploads(fs)
-	if err != nil {
-		return nil, err
-	}
-	active := 0
-	for _, u := range uploads {
-		if u.active() {
-			active++
-		}
-	}
-	// All the uploads are made by the account of the owner of the instance.
-	if active >= cfg.MaxPerAccount || active >= cfg.MaxPerInstance {
-		return nil, ErrTooManyUploads
-	}
-
-	limit, err := uploadSpaceLimit(fs, uploads, "")
-	if err != nil {
-		return nil, err
-	}
-	if length > limit {
-		return nil, ErrFileTooBig
-	}
 
 	if olddoc != nil {
 		newdoc.SetID(olddoc.ID())
@@ -111,11 +89,45 @@ func NewUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*U
 	if err := store.StartUpload(u); err != nil {
 		return nil, err
 	}
-	if err := createUploadDoc(fs, u); err != nil {
+	if err := createWithinLimits(fs, u, cfg); err != nil {
 		_ = store.AbortUpload(u)
 		return nil, err
 	}
 	return u, nil
+}
+
+// createWithinLimits counts the uploads in progress and saves the new one
+// under a lock of the instance, held only for these reads and this write:
+// uploads created at the same time cannot all pass the limits.
+func createWithinLimits(fs VFS, u *Upload, cfg config.FsResumableUploads) error {
+	mu := config.Lock().ReadWrite(fs, "vfs/uploads")
+	if err := mu.Lock(); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+
+	uploads, err := activeUploads(fs)
+	if err != nil {
+		return err
+	}
+	active := 0
+	for _, other := range uploads {
+		if other.active() {
+			active++
+		}
+	}
+	// All the uploads are made by the account of the owner of the instance.
+	if active >= cfg.MaxPerAccount || active >= cfg.MaxPerInstance {
+		return ErrTooManyUploads
+	}
+	limit, err := uploadSpaceLimit(fs, uploads, "")
+	if err != nil {
+		return err
+	}
+	if u.Length > limit {
+		return ErrFileTooBig
+	}
+	return createUploadDoc(fs, u)
 }
 
 // uploadsIndex finds the uploads in progress.
