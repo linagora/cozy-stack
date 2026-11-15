@@ -116,6 +116,9 @@ func Create(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) 
 		err = ErrDocTypeInvalid
 	}
 
+	if errors.Is(err, errResponseSent) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, WrapVfsError(err)
 	}
@@ -199,6 +202,20 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 			return nil, WrapVfsError(err)
 		}
 		return NewFile(doc, inst, sharedDrive), nil
+	}
+
+	if sharedDrive == nil && c.QueryParam("SourceURL") == "" {
+		handled, created, err := startUpload(c, fs, doc, nil, "")
+		if handled {
+			if err != nil {
+				return nil, err
+			}
+			if created == nil {
+				return nil, errResponseSent
+			}
+			maybeNotifyShareByLinkUpload(c, inst, created.DocName, created.ID(), created.DirID, false)
+			return NewFile(created, inst, sharedDrive), nil
+		}
 	}
 
 	file, err := fs.CreateFile(doc, nil)
@@ -381,6 +398,16 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 		}
 		recordEdit(c, nil, newdoc)
 		return newdoc, FileData(c, http.StatusOK, newdoc, true, nil, sharedDrive)
+	}
+
+	if sharedDrive == nil {
+		handled, updated, err := startUpload(c, instance.VFS(), newdoc, olddoc, wantedRev(c))
+		if handled {
+			if err != nil || updated == nil {
+				return nil, err
+			}
+			return updated, FileData(c, http.StatusOK, updated, true, nil, sharedDrive)
+		}
 	}
 
 	file, err := instance.VFS().CreateFile(newdoc, olddoc)
@@ -2576,16 +2603,16 @@ func FileDocFromReq(c echo.Context, name, dirID string) (*vfs.FileDoc, error) {
 // CheckIfMatch checks if the revision provided matches the revision number
 // given in the request, in the header and/or the query.
 func CheckIfMatch(c echo.Context, rev string) error {
-	ifMatch := c.Request().Header.Get("If-Match")
-	revQuery := c.QueryParam("rev")
-	var wantedRev string
-	if ifMatch != "" {
-		wantedRev = ifMatch
+	return checkIfMatch(rev, wantedRev(c))
+}
+
+// wantedRev returns the revision given in the If-Match header or in the rev
+// query parameter.
+func wantedRev(c echo.Context) string {
+	if ifMatch := c.Request().Header.Get("If-Match"); ifMatch != "" {
+		return ifMatch
 	}
-	if revQuery != "" && wantedRev == "" {
-		wantedRev = revQuery
-	}
-	return checkIfMatch(rev, wantedRev)
+	return c.QueryParam("rev")
 }
 
 func checkIfMatch(rev, wantedRev string) error {
