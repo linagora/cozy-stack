@@ -1086,12 +1086,22 @@ of the `201 Created` response, then sends the content with `PATCH` requests.
 
 To pause, the client stops the request in progress. To resume, it asks the
 offset with `HEAD`, and sends the rest with `PATCH`. When a request is
-interrupted, the server keeps the bytes received so far.
+interrupted, the server keeps the bytes received so far. When the offset
+returned by `HEAD` is the size of the file but `Upload-Complete` is `?0`, the
+server has received everything but has not finished creating the file: the
+client sends a `PATCH` with no content and `Upload-Complete: ?1`.
+
+A response with `Upload-Complete: ?1` is the final answer for the upload: the
+file, or the reason why it cannot be created (wrong `Content-MD5`, name
+already taken, quota, etc.). After any other error, the client can resume the
+upload.
 
 An upload without any new byte for 7 days is removed, with its content. When
 the upload is finished, the server keeps its state for 7 days: `HEAD` returns
-`Upload-Complete: ?1`, and `PATCH` sends the final response again, so a
-client that has lost this response does not upload the file a second time.
+`Upload-Complete: ?1`, and the request that has completed the upload, when it
+is sent again, gets the final response again, so a client that has lost this
+response does not upload the file a second time. An upload in progress is
+also removed when the storage of the instance is migrated.
 An upload that does not exist (expired, cancelled, or never created) returns
 `404 Not Found` with an `application/problem+json` body. An instance can have
 20 uploads in progress: above, a request with `Upload-Complete: ?0` returns
