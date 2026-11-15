@@ -20,9 +20,14 @@ type Error struct {
 	Status int
 	Type   string
 	Reason string
+	// DocID is set when the error is about one document of a bulk request.
+	DocID string
 }
 
 func (e *Error) Error() string {
+	if e.DocID != "" {
+		return fmt.Sprintf("opensearch: %d %s on %s: %s", e.Status, e.Type, e.DocID, e.Reason)
+	}
 	return fmt.Sprintf("opensearch: %d %s: %s", e.Status, e.Type, e.Reason)
 }
 
@@ -81,7 +86,7 @@ func (c *Client) Bulk(ctx context.Context, index string, ndjson []byte) error {
 	for _, item := range res.Items {
 		for _, r := range item {
 			if r.Error != nil {
-				return &Error{Status: r.Status, Type: r.Error.Type, Reason: r.Error.Reason}
+				return &Error{Status: r.Status, Type: r.Error.Type, Reason: r.Error.Reason, DocID: r.ID}
 			}
 		}
 	}
@@ -89,6 +94,7 @@ func (c *Client) Bulk(ctx context.Context, index string, ndjson []byte) error {
 }
 
 type bulkItemResult struct {
+	ID     string     `json:"_id"`
 	Status int        `json:"status"`
 	Error  *errorBody `json:"error"`
 }
