@@ -602,3 +602,54 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	c.n += int64(n)
 	return n, err
 }
+
+// TestResumableUploadNeverEmpty checks that a request with
+// Upload-Complete: ?0, which has no content, never creates an empty file when
+// the upload cannot be resumable.
+func TestResumableUploadNeverEmpty(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	require.NoError(t, loadLocale(), "Could not load default locale translations")
+	testutils.NeedCouchdb(t)
+	config.GetConfig().Fs.ResumableUploads = config.FsResumableUploads{
+		PartSize:       uploadTestPartSize,
+		MaxAge:         time.Hour,
+		MaxPerAccount:  1,
+		MaxPerInstance: 200,
+	}
+	config.GetConfig().Fs.URL = &url.URL{Scheme: "file", Host: "localhost", Path: t.TempDir()}
+	setup := testutils.NewSetup(t, "upload-never-empty")
+	inst := setup.GetTestInstance()
+	_, token := setup.GetTestClient(consts.Files)
+	c := &uploadClient{t: t, base: newUploadServer(t, inst).URL, token: token}
+	create := func(name, interop string) *uploadResponse {
+		res, err := c.do(http.MethodPost, "/files/?Type=file&Name="+name, nil, 0, map[string]string{
+			"Upload-Draft-Interop-Version": interop,
+			"Upload-Complete":              "?0",
+		})
+		require.NoError(t, err)
+		return res
+	}
+	exists := func(name string) bool {
+		ok, err := inst.VFS().DirChildExists(consts.RootDirID, name)
+		require.NoError(t, err)
+		return ok
+	}
+
+	t.Run("UnsupportedVersion", func(t *testing.T) {
+		res := create("old-version.bin", "5")
+		assert.Equal(t, http.StatusNotImplemented, res.StatusCode)
+		assert.Equal(t, "Resumable upload unavailable", res.problem(t)["title"])
+		assert.False(t, exists("old-version.bin"))
+	})
+
+	t.Run("AtTheLimit", func(t *testing.T) {
+		res := create("first.bin", "6")
+		require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+		res = create("second.bin", "6")
+		assert.Equal(t, http.StatusTooManyRequests, res.StatusCode)
+		assert.False(t, exists("second.bin"))
+	})
+}

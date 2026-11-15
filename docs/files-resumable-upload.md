@@ -92,13 +92,19 @@ sequenceDiagram
 - The stack also falls back to the usual upload for a content that fits in
   one part, at the limit of uploads in progress (for a request with the whole
   content), and on a storage without resumable uploads.
+- A request with `Upload-Complete: ?0` has no content, so it never falls back
+  to the usual upload, which would create an empty file. At the limit of
+  uploads in progress it gets `429`; with another interop version or on a
+  storage without resumable uploads, it gets `501` with an
+  `application/problem+json` body. The client then sends the whole content
+  in one request.
 - The new routes are `HEAD`, `PATCH` and `DELETE` on
   `/files/uploads/:upload-id`.
 - The `resumable_uploads` capability of
   [`GET /settings/capabilities`](settings.md#get-settingscapabilities) is true
   when the VFS of the instance accepts the resumable uploads. A client checks
-  it before sending `Upload-Complete: ?0`: a stack without resumable uploads
-  creates an empty file for such a request.
+  it before sending `Upload-Complete: ?0`: an older stack, without resumable
+  uploads, creates an empty file for such a request.
 - A name already taken is refused with `409` when the upload is created, like
   the usual upload, and checked again at the end.
 

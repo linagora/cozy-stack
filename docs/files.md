@@ -1059,7 +1059,12 @@ instead of starting again. The design is explained in
 The protocol is used only when the request has the
 `Upload-Draft-Interop-Version` header set to `6` (draft -05, spoken by
 `URLSession` on iOS 18.1+ and macOS, and by `tus-js-client`) or `10` (draft
--15), and the `Upload-Complete` header. Other requests are handled as before.
+-15), and the `Upload-Complete` header. Other requests are handled as before,
+except a request with `Upload-Complete: ?0` (no content) when the upload cannot
+be resumable (another interop version, or a storage without resumable
+uploads): it gets a `501 Not Implemented` with an `application/problem+json`
+body instead of creating an empty file, and the client sends the whole content
+in one request.
 The query-string and the headers are the same as for a normal upload. The
 `Content-MD5` header, when given, is checked against the whole file.
 

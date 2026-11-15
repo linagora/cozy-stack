@@ -16,14 +16,19 @@ import (
 // when the request must go through the usual upload. The returned document is
 // nil when the response has already been written.
 func startUpload(c echo.Context, fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev string) (bool, *vfs.FileDoc, error) {
-	interop := interopVersion(c)
-	if interop == "" || !vfs.SupportsUploads(fs) {
-		return false, nil, nil
-	}
 	req := c.Request()
 	complete, ok := parseSFBoolean(req.Header.Get(headerUploadComplete))
 	if !ok {
 		return false, nil, nil
+	}
+	interop := interopVersion(c)
+	if interop == "" || !vfs.SupportsUploads(fs) {
+		if complete {
+			return false, nil, nil
+		}
+		// A request without the content would create an empty file.
+		return true, nil, uploadProblem(c, http.StatusNotImplemented, "about:blank", "Resumable upload unavailable",
+			"The upload cannot be resumable here: send the whole content in one request.", nil)
 	}
 
 	length := int64(-1)
