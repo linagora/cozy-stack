@@ -19,6 +19,20 @@ jobs:
         image: redis
         ports:
           - 6379:6379
+      opensearch:
+        image: opensearchproject/opensearch:2.17.1
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          DISABLE_INSTALL_DEMO_CONFIG: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -fs http://localhost:9200/_cluster/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
     strategy:
       fail-fast: false
       matrix:
@@ -67,4 +81,6 @@ jobs:
           cache: true
 
       - name: Run tests
+        env:
+          COZY_TEST_OPENSEARCH_URL: http://localhost:9200
         run: go test -p 1 -timeout 10m ./...

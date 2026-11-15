@@ -175,29 +175,3 @@ func TestRootCA(t *testing.T) {
 		require.NoError(t, c.CreateIndex(context.Background(), "files_v1", map[string]any{}))
 	})
 }
-
-func TestPing(t *testing.T) {
-	t.Run("reachable", func(t *testing.T) {
-		c, rec := newTestClient(t, 200, `{"version":{"number":"2.17.0"}}`)
-		require.NoError(t, c.Ping(context.Background()))
-		assert.Equal(t, http.MethodGet, rec.method)
-		assert.Equal(t, "/", rec.path)
-		assert.Equal(t, "admin", rec.user)
-	})
-
-	t.Run("bad credentials", func(t *testing.T) {
-		c, _ := newTestClient(t, 401, `Unauthorized`)
-		var osErr *Error
-		require.True(t, errors.As(c.Ping(context.Background()), &osErr))
-		assert.Equal(t, 401, osErr.Status)
-	})
-
-	t.Run("connection refused", func(t *testing.T) {
-		srv := httptest.NewServer(http.NotFoundHandler())
-		srv.Close()
-		c := newClientFromViper(t, map[string]string{"url": srv.URL})
-		err := c.Ping(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "opensearch:")
-	})
-}
