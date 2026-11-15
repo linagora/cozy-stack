@@ -36,7 +36,10 @@ func startUpload(c echo.Context, fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev
 		return false, nil, nil
 	}
 	interop := interopVersion(c)
-	if interop == "" || !vfs.SupportsUploads(fs) {
+	drive, fromMember := uploadDriveMember(c)
+	// The stack of a member that does not relay the resumption cannot resume.
+	relayed := !fromMember || req.Header.Get(HeaderResumableRelay) != ""
+	if interop == "" || !vfs.SupportsUploads(fs) || !relayed {
 		refused, err := refuseResumableUpload(c)
 		return refused, nil, err
 	}
@@ -64,7 +67,7 @@ func startUpload(c echo.Context, fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev
 	if perm, err := middlewares.GetPermission(c); err == nil && perm.Type == permission.TypeShareByLink {
 		newUpload = vfs.NewUploadByLink
 	}
-	if drive, ok := uploadDriveMember(c); ok {
+	if fromMember {
 		newUpload = func(fs vfs.VFS, newdoc, olddoc *vfs.FileDoc, oldRev string, length int64) (*vfs.Upload, error) {
 			return vfs.NewDriveUpload(fs, newdoc, olddoc, oldRev, length, drive.id, drive.member)
 		}

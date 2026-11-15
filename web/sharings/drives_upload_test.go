@@ -118,6 +118,31 @@ func TestSharedDriveResumableUploads(t *testing.T) {
 				assert.Equal(t, http.StatusNoContent, acme.head(res.Header.Get("Location")).StatusCode)
 			})
 
+			t.Run("MemberStackNotUpdated", func(t *testing.T) {
+				// A stack without resumable uploads relays the request as it
+				// is: the owner sees the drive token without the relay header.
+				bettySharing, err := sharing.FindSharing(env.betty, env.firstSharingID)
+				require.NoError(t, err)
+				old := &driveUploadClient{t: t, base: env.tsA.URL, token: bettySharing.Credentials[0].DriveToken}
+				target := prefix + "/" + env.meetingsDirID + "?Type=file&Name=old-stack.bin"
+
+				// Without the content, the request is refused rather than
+				// creating an empty file.
+				empty := old.create(http.MethodPost, target, nil, false)
+				assert.Equal(t, http.StatusNotImplemented, empty.StatusCode, string(empty.body))
+				empty.problem(t)
+				_, err = env.acme.VFS().FileByPath("/" + env.rootDirName + "/Meetings/old-stack.bin")
+				assert.Error(t, err)
+
+				content := randomUploadBytes(driveUploadPartSize+10, 4)
+				res := old.create(http.MethodPost, target, content, true)
+				require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+				assert.Empty(t, res.interim)
+				assert.Empty(t, res.Header.Get("Location"))
+				id, _ := res.fileAttrs(t)
+				assertOwnerContent(t, env, id, content)
+			})
+
 			t.Run("UploadOfAnotherMember", func(t *testing.T) {
 				sid, rootID, _ := createSharedDrive(t, DriveCreationMethodLegacy, env.acme, env.acmeToken, env.tsA.URL,
 					"Two writers", "Drive with two writers", []RecipientInfo{

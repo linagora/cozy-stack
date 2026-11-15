@@ -31,6 +31,11 @@ const (
 	headerUploadLimit    = "Upload-Limit"
 	partialUploadType    = "application/partial-upload"
 	problemType          = "application/problem+json"
+
+	// HeaderResumableRelay is set by a stack that relays a request of a drive
+	// member and knows the resumable uploads. Without it, a member gets the
+	// usual upload: an older stack would not relay the resumption.
+	HeaderResumableRelay = "X-Cozy-Resumable-Relay"
 )
 
 // errResponseSent is returned when the response has already been written.

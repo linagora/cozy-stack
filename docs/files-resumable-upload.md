@@ -289,6 +289,12 @@ sequenceDiagram
 - The relay forwards the `104` interim response: Go's `httputil.ReverseProxy`
   relays the 1xx responses, and the stack writes them on the connection
   directly, so that echo keeps the final status.
+- The stack of the member may be older than the stack of the owner, at
+  another host. An older stack would answer `200` after the `104`, and has
+  no route to resume. So the stack of the member sets
+  `X-Cozy-Resumable-Relay` on the requests it relays, and the owner starts a
+  resumable upload for a member only with this header. Otherwise, the member
+  gets the usual upload.
 
 ## Settings and limits
 
@@ -415,12 +421,3 @@ To remove the lock of the VFS later:
 
 - The `io.cozy.files.uploads` database is created at the first resumable
   upload of an instance, not on every instance.
-
-## Open questions
-
-- @Quentin: the stack of the owner cannot tell if the stack of the member
-  that relays a request knows the resumable uploads. A stack of a member that
-  is not updated relays the `104`, then answers `200` instead of `201` or
-  `204`, and has no `HEAD` or `PATCH` route to resume. Is it enough to update
-  all the stacks together, or should the relay add a header that the owner
-  requires before starting a resumable upload?

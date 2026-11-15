@@ -1785,6 +1785,7 @@ func proxyWithLinkMutationGuard(fn func(c echo.Context, inst *instance.Instance,
 				middlewares.SetActor(c, &middlewares.Actor{Kind: vfs.TrashedByKindAnonymousShare})
 			}
 			c.Request().Header.Set(echo.HeaderAuthorization, "Bearer "+token)
+			c.Request().Header.Set(files.HeaderResumableRelay, "1")
 			middlewares.ForcePermission(c, nil)
 			c.Set("claims", nil)
 			middlewares.SetInstance(c, owner)
@@ -1814,6 +1815,7 @@ func proxyWithLinkMutationGuard(fn func(c echo.Context, inst *instance.Instance,
 			req.URL.RawPath = c.Request().URL.RawPath
 			req.URL.RawQuery = c.Request().URL.RawQuery
 			req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
+			req.Header.Set(files.HeaderResumableRelay, "1")
 			req.Header.Del(echo.HeaderCookie)
 			req.Host = u.Host
 		}
