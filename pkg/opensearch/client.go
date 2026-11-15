@@ -58,6 +58,11 @@ func (c *Client) IndexName(name string) string {
 	return c.indexPrefix + "-" + name
 }
 
+// Ping checks that the cluster is reachable and accepts the credentials.
+func (c *Client) Ping(ctx context.Context) error {
+	return c.do(ctx, http.MethodGet, "/", "application/json", nil, nil)
+}
+
 // CreateIndex creates an index with the given settings and mappings.
 func (c *Client) CreateIndex(ctx context.Context, name string, body any) error {
 	return c.doJSON(ctx, http.MethodPut, "/"+c.IndexName(name), body, nil)
