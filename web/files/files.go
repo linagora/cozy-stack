@@ -2380,6 +2380,9 @@ func Routes(router *echo.Group) {
 	router.POST("/:file-id", CreationHandler)
 	router.PUT("/:file-id", OverwriteFileContentHandler)
 	router.POST("/upload/metadata", UploadMetadataHandler)
+	router.HEAD("/uploads/:upload-id", UploadOffsetHandler)
+	router.PATCH("/uploads/:upload-id", UploadAppendHandler)
+	router.DELETE("/uploads/:upload-id", UploadCancelHandler)
 	router.POST("/:file-id/copy", FileCopyHandler)
 
 	router.GET("/:file-id/thumbnails/:secret/:format", ThumbnailHandler)
