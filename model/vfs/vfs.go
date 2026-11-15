@@ -42,6 +42,12 @@ const (
 	// VersionsDirName is the path of the directory where old versions of files
 	// are persisted.
 	VersionsDirName = "/.cozy_versions"
+	// UploadsDirName is the path of the directory where the content of the
+	// resumable uploads in progress is kept, on the local file system.
+	UploadsDirName = "/.cozy_uploads"
+	// UploadsObjectPrefix is the prefix of the objects used by the resumable
+	// uploads, on Swift and S3.
+	UploadsObjectPrefix = "uploads/"
 )
 
 const conflictFormat = "%s (%s)"
