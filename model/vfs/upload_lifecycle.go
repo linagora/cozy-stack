@@ -100,11 +100,32 @@ func NewUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*U
 	if err := store.StartUpload(u); err != nil {
 		return nil, err
 	}
-	if err := couchdb.CreateNamedDocWithDB(fs, u); err != nil {
+	if err := createUploadDoc(fs, u); err != nil {
 		_ = store.AbortUpload(u)
 		return nil, err
 	}
 	return u, nil
+}
+
+// uploadsIndex finds the uploads in progress.
+var uploadsIndex = mango.MakeIndex(consts.FilesUploads, "by-completed", mango.IndexDef{Fields: []string{"completed"}})
+
+// createUploadDoc saves a new upload. The database and its index are created
+// with the first upload of the instance, and only then: the other requests
+// consider a missing database as having no upload.
+func createUploadDoc(fs VFS, u *Upload) error {
+	err := couchdb.CreateNamedDoc(fs, u)
+	if !couchdb.IsNoDatabaseError(err) {
+		return err
+	}
+	// Two first uploads can create the database at the same time.
+	if err := couchdb.CreateDB(fs, consts.FilesUploads); err != nil && !couchdb.IsFileExists(err) {
+		return err
+	}
+	if err := couchdb.DefineIndex(fs, uploadsIndex); err != nil {
+		return err
+	}
+	return couchdb.CreateNamedDoc(fs, u)
 }
 
 // GetUpload returns the upload with the given ID, or ErrUploadNotFound if it
@@ -356,10 +377,28 @@ func activeUploads(fs VFS) ([]*Upload, error) {
 		Limit:    1000,
 	}
 	err := couchdb.FindDocs(fs, consts.FilesUploads, req, &uploads)
+	if isMissingIndex(err) {
+		// The index of a database created by a stack that has stopped
+		// before defining it.
+		if err = couchdb.DefineIndex(fs, uploadsIndex); err == nil {
+			err = couchdb.FindDocs(fs, consts.FilesUploads, req, &uploads)
+		}
+	}
 	if err != nil && !couchdb.IsNoDatabaseError(err) {
 		return nil, err
 	}
 	return uploads, nil
+}
+
+// isMissingIndex tells if CouchDB has no index for the query: cozy-stack
+// returns no_index when CouchDB falls back to a full scan, and CouchDB returns
+// no_usable_index when it refuses the query.
+func isMissingIndex(err error) bool {
+	var couchErr *couchdb.Error
+	if !errors.As(err, &couchErr) {
+		return false
+	}
+	return couchErr.Name == "no_index" || couchErr.Name == "no_usable_index"
 }
 
 func listUploads(fs VFS) ([]*Upload, error) {

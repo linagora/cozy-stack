@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -390,4 +392,46 @@ func TestResumableUploadsHTTP(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestResumableUploadsDatabase checks that a new instance gets the
+// io.cozy.files.uploads database only with its first resumable upload.
+func TestResumableUploadsDatabase(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	require.NoError(t, loadLocale(), "Could not load default locale translations")
+	testutils.NeedCouchdb(t)
+	config.GetConfig().Fs.URL = &url.URL{Scheme: "file", Host: "localhost", Path: t.TempDir()}
+	setup := testutils.NewSetup(t, "upload-database")
+	inst := setup.GetTestInstance()
+	_, token := setup.GetTestClient(consts.Files)
+	c := &uploadClient{t: t, base: newUploadServer(t, inst).URL, token: token}
+	exists := func() bool {
+		_, err := couchdb.DBStatus(inst, consts.FilesUploads)
+		if couchdb.IsNoDatabaseError(err) {
+			return false
+		}
+		require.NoError(t, err)
+		return true
+	}
+	require.False(t, exists(), "a new instance has no database for the uploads")
+
+	assert.Equal(t, http.StatusNotFound, c.head("/files/uploads/unknown").StatusCode)
+	assert.Equal(t, http.StatusNotFound, c.patch("/files/uploads/unknown", 0, []byte("x"), true).StatusCode)
+	del, err := c.do(http.MethodDelete, "/files/uploads/unknown", nil, 0, nil)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, del.StatusCode)
+	_, err = vfs.CleanUploads(inst.VFS())
+	require.NoError(t, err)
+	assert.False(t, exists())
+
+	res, err := c.do(http.MethodPost, "/files/?Type=file&Name=first.bin", nil, 0, map[string]string{
+		"Upload-Draft-Interop-Version": "6",
+		"Upload-Complete":              "?0",
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+	assert.True(t, exists())
 }
