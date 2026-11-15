@@ -65,8 +65,12 @@ func setupSharedDrivesEnv(t *testing.T) *sharedDrivesEnv {
 }
 
 func setupSharedDrivesEnvWithOwnerOptions(t *testing.T, ownerOptions *lifecycle.Options) *sharedDrivesEnv {
+	return setupSharedDrivesEnvWithConfig(t, ownerOptions, nil)
+}
+
+func setupSharedDrivesEnvWithConfig(t *testing.T, ownerOptions *lifecycle.Options, configure func()) *sharedDrivesEnv {
 	t.Helper()
-	env := setupSharedDriveRoot(t, ownerOptions)
+	env := setupSharedDriveRoot(t, ownerOptions, configure)
 	eA := newSharingExpect(t, env.tsA.URL)
 
 	env.productDirID = createDirectory(t, eA, env.firstRootDirID, "Product", env.acmeToken)
@@ -76,9 +80,9 @@ func setupSharedDrivesEnvWithOwnerOptions(t *testing.T, ownerOptions *lifecycle.
 	return env
 }
 
-func setupSharedDriveRoot(t *testing.T, ownerOptions *lifecycle.Options) *sharedDrivesEnv {
+func setupSharedDriveRoot(t *testing.T, ownerOptions *lifecycle.Options, configure ...func()) *sharedDrivesEnv {
 	t.Helper()
-	env := setupSharedDriveParticipants(t, ownerOptions)
+	env := setupSharedDriveParticipants(t, ownerOptions, configure...)
 	env.rootDirName = "One More Shared Drive " + crypto.GenerateRandomString(1000)
 	env.firstSharingID, env.firstRootDirID, _ = createSharedDrive(t, DriveCreationMethodLegacy,
 		env.acme, env.acmeToken, env.tsA.URL, env.rootDirName, "One more Shared drive description", nil)
@@ -86,10 +90,17 @@ func setupSharedDriveRoot(t *testing.T, ownerOptions *lifecycle.Options) *shared
 	return env
 }
 
-func setupSharedDriveParticipants(t *testing.T, ownerOptions *lifecycle.Options) *sharedDrivesEnv {
+// setupSharedDriveParticipants calls configure on the test configuration
+// before the instances are created.
+func setupSharedDriveParticipants(t *testing.T, ownerOptions *lifecycle.Options, configure ...func()) *sharedDrivesEnv {
 	t.Helper()
 
 	config.UseTestFile(t)
+	for _, f := range configure {
+		if f != nil {
+			f()
+		}
+	}
 	build.BuildMode = build.ModeDev
 	config.GetConfig().Assets = "../../assets"
 	_ = web.LoadSupportedLocales()

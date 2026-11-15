@@ -751,6 +751,29 @@ func OverwriteFileContentHandler(c echo.Context, inst *instance.Instance, s *sha
 	return err
 }
 
+// UploadOffsetHandler handles HEAD requests to retrieve the offset of a
+// resumable upload.
+func UploadOffsetHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
+	return files.UploadOffsetHandler(c)
+}
+
+// UploadAppendHandler handles PATCH requests to append content to a
+// resumable upload.
+func UploadAppendHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
+	file, replaced, err := files.UploadAppend(c, s)
+	kind := driveactivity.Created
+	if replaced {
+		kind = driveactivity.Updated
+	}
+	driveactivity.Count(inst, s, GetSharedDriveMember(c), kind, file)
+	return err
+}
+
+// UploadCancelHandler handles DELETE requests to cancel a resumable upload.
+func UploadCancelHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
+	return files.UploadCancelHandler(c)
+}
+
 // RestoreTrashFileHandler handles POST requests to restore a file or directory
 // from the trash.
 func RestoreTrashFileHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
@@ -1646,6 +1669,9 @@ func drivesRoutes(router *echo.Group) {
 	drive.POST("/:file-id", proxy(CreationHandler, true))
 	drive.PUT("/:file-id", proxy(OverwriteFileContentHandler, true))
 	drive.POST("/upload/metadata", proxy(UploadMetadataHandler, true))
+	drive.HEAD("/uploads/:upload-id", proxy(UploadOffsetHandler, true))
+	drive.PATCH("/uploads/:upload-id", proxy(UploadAppendHandler, true))
+	drive.DELETE("/uploads/:upload-id", proxy(UploadCancelHandler, true))
 	drive.POST("/:file-id/copy", proxy(CopyFile, true))
 	drive.POST("/:file-id/drives", proxy(CreateNestedSharedDriveHandler, true), prepareNestedDriveRecipients)
 
@@ -1894,6 +1920,11 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	if strings.HasSuffix(route, "/open") {
 		return nil
 	}
+	// A resumable upload is checked against its target at each request, HEAD
+	// included, as it takes the upload over from the request that writes.
+	if strings.HasPrefix(c.Path(), "/sharings/drives/:id/uploads/") {
+		return checkUploadEffectiveAccess(inst, c.Param("upload-id"), member)
+	}
 	// Trashed files are outside every sharing scope: the effective access
 	// resolver cannot see them. Restore and destroy are authorized against
 	// the effective write access on the folder the file would be restored
@@ -1954,6 +1985,24 @@ func checkEffectiveAccessForMember(inst *instance.Instance, targetID string, ver
 		return jsonapi.Forbidden(errors.New("insufficient access on the target file or folder"))
 	}
 	return nil
+}
+
+// checkUploadEffectiveAccess requires the effective write access of the
+// member on the folder of a resumable upload, or on the file whose content it
+// replaces. A missing upload is left to the handler, which answers 404.
+func checkUploadEffectiveAccess(inst *instance.Instance, uploadID string, member *sharing.Member) error {
+	u, err := vfs.GetUpload(inst.VFS(), uploadID)
+	if errors.Is(err, vfs.ErrUploadNotFound) {
+		return nil
+	}
+	if err != nil {
+		return wrapErrors(err)
+	}
+	targetID := u.File.DirID
+	if u.OldFileID != "" {
+		targetID = u.OldFileID
+	}
+	return checkEffectiveAccessForMember(inst, targetID, permission.PUT, member)
 }
 
 // checkTrashEffectiveAccess authorizes a restore or destroy of a trashed

@@ -1,0 +1,387 @@
+package sharings_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/md5"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"math/rand"
+	"net/http"
+	"net/http/httptrace"
+	"net/textproto"
+	"path"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/cozy/cozy-stack/model/sharing"
+	"github.com/cozy/cozy-stack/model/vfs"
+	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/tests/testutils"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const driveUploadPartSize = 6 << 20
+
+func TestSharedDriveResumableUploads(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	backends := []struct {
+		name      string
+		configure func(t *testing.T)
+	}{
+		// The test configuration keeps afero in memory: the name of the drive
+		// is too long for a file system on disk.
+		{"afero", func(t *testing.T) {}},
+		{"s3", func(t *testing.T) {
+			fixture := testutils.StartMinio(t)
+			fs := config.Fs{
+				URL: fixture.FsURL(),
+				S3:  config.FsS3{Buckets: map[string]config.FsS3Bucket{"default": {Name: "drive-upload"}}},
+			}
+			require.NoError(t, config.InitS3Connection(fs))
+			config.GetConfig().Fs.URL = fs.URL
+			config.GetConfig().Fs.S3 = fs.S3
+		}},
+	}
+
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			env := setupSharedDrivesEnvWithConfig(t, nil, func() {
+				b.configure(t)
+				config.GetConfig().Fs.ResumableUploads = config.FsResumableUploads{
+					PartSize:       driveUploadPartSize,
+					MaxAge:         time.Hour,
+					MaxPerInstance: 20,
+				}
+			})
+			prefix := "/sharings/drives/" + env.firstSharingID
+			betty := &driveUploadClient{t: t, base: env.tsB.URL, token: env.bettyToken}
+
+			t.Run("RelayedCutThenResumed", func(t *testing.T) {
+				cutThenResumed(t, env, betty, prefix, "relayed.bin")
+			})
+
+			t.Run("SameStackCutThenResumed", func(t *testing.T) {
+				ownerOnTheSameStack(t, env)
+				cutThenResumed(t, env, betty, prefix, "same-stack.bin")
+			})
+
+			t.Run("ContentReplacedInSteps", func(t *testing.T) {
+				content := randomUploadBytes(driveUploadPartSize+10, 2)
+				res := betty.create(http.MethodPut, prefix+"/"+env.checklistID, nil, false)
+				require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+				location := res.Header.Get("Location")
+				assertDriveUploadLocation(t, prefix, location)
+
+				done := betty.patch(location, 0, content, true)
+				require.Equal(t, http.StatusOK, done.StatusCode, string(done.body))
+				assert.Equal(t, "?1", done.Header.Get("Upload-Complete"))
+				id, attrs := done.fileAttrs(t)
+				assert.Equal(t, env.checklistID, id)
+				assert.Equal(t, env.firstSharingID, attrs["driveId"])
+				assert.Equal(t, strconv.Itoa(len(content)), attrs["size"])
+				assertOwnerContent(t, env, id, content)
+			})
+
+			t.Run("CancelledThenGone", func(t *testing.T) {
+				res := betty.create(http.MethodPost, prefix+"/"+env.meetingsDirID+"?Type=file&Name=gone.bin", nil, false)
+				require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+				location := res.Header.Get("Location")
+
+				del := betty.do(http.MethodDelete, location, nil, 0, nil)
+				assert.Equal(t, http.StatusNoContent, del.StatusCode, string(del.body))
+				assert.Equal(t, http.StatusNotFound, betty.head(location).StatusCode)
+				gone := betty.patch(location, 0, []byte("late"), true)
+				assert.Equal(t, http.StatusNotFound, gone.StatusCode)
+				gone.problem(t)
+			})
+
+			t.Run("UploadOutsideTheDrive", func(t *testing.T) {
+				acme := &driveUploadClient{t: t, base: env.tsA.URL, token: env.acmeToken}
+				res := acme.create(http.MethodPost, "/files/"+env.outsideOfShareID+"?Type=file&Name=private.bin", nil, false)
+				require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+				location := prefix + "/uploads/" + path.Base(res.Header.Get("Location"))
+
+				assert.Equal(t, http.StatusNotFound, betty.head(location).StatusCode)
+				assert.Equal(t, http.StatusNotFound, betty.patch(location, 0, []byte("x"), true).StatusCode)
+				assert.Equal(t, http.StatusNotFound, betty.do(http.MethodDelete, location, nil, 0, nil).StatusCode)
+				assert.Equal(t, http.StatusNoContent, acme.head(res.Header.Get("Location")).StatusCode)
+			})
+
+			t.Run("ReadOnlyDuringUpload", func(t *testing.T) {
+				content := randomUploadBytes(driveUploadPartSize+10, 3)
+				res := betty.create(http.MethodPost, prefix+"/"+env.meetingsDirID+"?Type=file&Name=read-only.bin", nil, false)
+				require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+				location := res.Header.Get("Location")
+
+				setBettyReadOnly(t, env, true)
+				assert.Equal(t, http.StatusForbidden, betty.head(location).StatusCode)
+				assert.Equal(t, http.StatusForbidden, betty.patch(location, 0, content, true).StatusCode)
+				assert.Equal(t, http.StatusForbidden, betty.do(http.MethodDelete, location, nil, 0, nil).StatusCode)
+
+				setBettyReadOnly(t, env, false)
+				done := betty.patch(location, 0, content, true)
+				require.Equal(t, http.StatusCreated, done.StatusCode, string(done.body))
+			})
+
+			t.Run("RemovedDuringUpload", func(t *testing.T) {
+				res := betty.create(http.MethodPost, prefix+"/"+env.meetingsDirID+"?Type=file&Name=removed.bin", nil, false)
+				require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+				location := res.Header.Get("Location")
+
+				bettySharing, err := sharing.FindSharing(env.betty, env.firstSharingID)
+				require.NoError(t, err)
+				driveToken := bettySharing.Credentials[0].DriveToken
+				index := findSharingMemberIndexByEmail(t, env.acme, env.firstSharingID, "betty@example.net")
+				newSharingExpect(t, env.tsA.URL).
+					DELETE("/sharings/"+env.firstSharingID+"/recipients/"+strconv.Itoa(index)).
+					WithHeader("Authorization", "Bearer "+env.acmeToken).
+					Expect().Status(http.StatusNoContent)
+
+				assert.Equal(t, http.StatusForbidden, betty.head(location).StatusCode)
+				assert.Equal(t, http.StatusForbidden, betty.patch(location, 0, []byte("late"), true).StatusCode)
+				// The owner refuses the drive token of Betty, whatever her stack does.
+				direct := &driveUploadClient{t: t, base: env.tsA.URL, token: driveToken}
+				assert.Equal(t, http.StatusForbidden, direct.head(location).StatusCode)
+				assert.Equal(t, http.StatusForbidden, direct.patch(location, 0, []byte("late"), true).StatusCode)
+				assert.Equal(t, int64(0), ownerUpload(t, env, location).Offset)
+			})
+		})
+	}
+}
+
+func cutThenResumed(t *testing.T, env *sharedDrivesEnv, c *driveUploadClient, prefix, name string) {
+	content := randomUploadBytes(2*driveUploadPartSize+4321, 1)
+	cut := int64(driveUploadPartSize + 1234)
+	announced := make(chan struct{})
+	res, err := c.send(http.MethodPost, prefix+"/"+env.meetingsDirID+"?Type=file&Name="+name,
+		&cutUploadBody{bytes.NewReader(content), cut, announced}, int64(len(content)), map[string]string{
+			"Upload-Draft-Interop-Version": "6",
+			"Upload-Complete":              "?1",
+			"Content-MD5":                  md5Base64Of(content),
+			"Content-Type":                 "application/octet-stream",
+		}, announced)
+	require.Error(t, err)
+	location := res.interim
+	assertDriveUploadLocation(t, prefix, location)
+	require.Eventually(t, func() bool {
+		return ownerUpload(t, env, location).Offset == cut
+	}, 30*time.Second, 50*time.Millisecond)
+
+	head := c.head(location)
+	require.Equal(t, http.StatusNoContent, head.StatusCode, string(head.body))
+	assert.Equal(t, strconv.FormatInt(cut, 10), head.Header.Get("Upload-Offset"))
+	assert.Equal(t, "?0", head.Header.Get("Upload-Complete"))
+
+	done := c.patch(location, cut, content[cut:], true)
+	require.Equal(t, http.StatusCreated, done.StatusCode, string(done.body))
+	assert.Equal(t, "?1", done.Header.Get("Upload-Complete"))
+	id, attrs := done.fileAttrs(t)
+	assert.Equal(t, name, attrs["name"])
+	assert.Equal(t, env.firstSharingID, attrs["driveId"])
+	assert.Equal(t, md5Base64Of(content), attrs["md5sum"])
+	assertOwnerContent(t, env, id, content)
+
+	// The final response is lost: the same request gets it again.
+	again := c.patch(location, cut, content[cut:], true)
+	require.Equal(t, http.StatusCreated, again.StatusCode, string(again.body))
+	againID, _ := again.fileAttrs(t)
+	assert.Equal(t, id, againID)
+}
+
+// ownerOnTheSameStack makes Betty's stack serve the drive requests directly,
+// instead of relaying them over HTTP.
+func ownerOnTheSameStack(t *testing.T, env *sharedDrivesEnv) {
+	s, err := sharing.FindSharing(env.betty, env.firstSharingID)
+	require.NoError(t, err)
+	ownerURL := s.Members[0].Instance
+	s.Members[0].Instance = "http://" + env.acme.Domain
+	require.NoError(t, couchdb.UpdateDoc(env.betty, s))
+	t.Cleanup(func() {
+		s, err := sharing.FindSharing(env.betty, env.firstSharingID)
+		require.NoError(t, err)
+		s.Members[0].Instance = ownerURL
+		require.NoError(t, couchdb.UpdateDoc(env.betty, s))
+	})
+}
+
+func setBettyReadOnly(t *testing.T, env *sharedDrivesEnv, readOnly bool) {
+	index := findSharingMemberIndexByEmail(t, env.acme, env.firstSharingID, "betty@example.net")
+	e := newSharingExpect(t, env.tsA.URL)
+	target := "/sharings/" + env.firstSharingID + "/recipients/" + strconv.Itoa(index) + "/readonly"
+	if readOnly {
+		e.POST(target).WithHeader("Authorization", "Bearer "+env.acmeToken).Expect().Status(http.StatusNoContent)
+	} else {
+		e.DELETE(target).WithHeader("Authorization", "Bearer "+env.acmeToken).Expect().Status(http.StatusNoContent)
+	}
+	waitForSharingMemberReadOnly(t, env.acme, env.firstSharingID, "betty@example.net", readOnly)
+}
+
+func assertDriveUploadLocation(t *testing.T, prefix, location string) {
+	t.Helper()
+	require.NotEmpty(t, location)
+	assert.Equal(t, prefix+"/uploads", path.Dir(location))
+}
+
+func ownerUpload(t *testing.T, env *sharedDrivesEnv, location string) *vfs.Upload {
+	u := &vfs.Upload{}
+	require.NoError(t, couchdb.GetDoc(env.acme, consts.FilesUploads, path.Base(location), u))
+	return u
+}
+
+func assertOwnerContent(t *testing.T, env *sharedDrivesEnv, id string, content []byte) {
+	t.Helper()
+	fs := env.acme.VFS()
+	doc, err := fs.FileByID(id)
+	require.NoError(t, err)
+	f, err := fs.OpenFile(doc)
+	require.NoError(t, err)
+	got, err := io.ReadAll(f)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	assert.True(t, bytes.Equal(content, got), "content of %s", doc.DocName)
+}
+
+// driveUploadClient speaks the resumable upload protocol, like URLSession.
+type driveUploadClient struct {
+	t     *testing.T
+	base  string
+	token string
+}
+
+type driveUploadResponse struct {
+	*http.Response
+	body []byte
+	// interim is the Location announced by a 104 interim response.
+	interim string
+}
+
+// send closes announced, when given, at the 104 interim response.
+func (c *driveUploadClient) send(method, target string, body io.Reader, size int64, headers map[string]string, announced chan struct{}) (*driveUploadResponse, error) {
+	res := &driveUploadResponse{}
+	trace := &httptrace.ClientTrace{
+		Got1xxResponse: func(code int, header textproto.MIMEHeader) error {
+			if code == 104 && res.interim == "" {
+				res.interim = header.Get("Location")
+				if announced != nil {
+					close(announced)
+				}
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace), method, c.base+target, body)
+	require.NoError(c.t, err)
+	req.ContentLength = size
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return res, err
+	}
+	defer resp.Body.Close()
+	res.Response = resp
+	res.body, err = io.ReadAll(resp.Body)
+	require.NoError(c.t, err)
+	return res, nil
+}
+
+func (c *driveUploadClient) do(method, target string, body []byte, size int64, headers map[string]string) *driveUploadResponse {
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	res, err := c.send(method, target, r, size, headers, nil)
+	require.NoError(c.t, err)
+	return res
+}
+
+// create starts an upload, with the whole content or without any.
+func (c *driveUploadClient) create(method, target string, content []byte, complete bool) *driveUploadResponse {
+	return c.do(method, target, content, int64(len(content)), map[string]string{
+		"Upload-Draft-Interop-Version": "6",
+		"Upload-Complete":              sfBool(complete),
+		"Content-Type":                 "application/octet-stream",
+	})
+}
+
+func (c *driveUploadClient) head(location string) *driveUploadResponse {
+	return c.do(http.MethodHead, location, nil, 0, map[string]string{"Upload-Draft-Interop-Version": "6"})
+}
+
+func (c *driveUploadClient) patch(location string, offset int64, content []byte, complete bool) *driveUploadResponse {
+	return c.do(http.MethodPatch, location, content, int64(len(content)), map[string]string{
+		"Upload-Draft-Interop-Version": "6",
+		"Upload-Complete":              sfBool(complete),
+		"Upload-Offset":                strconv.FormatInt(offset, 10),
+		"Content-Type":                 "application/partial-upload",
+	})
+}
+
+func (r *driveUploadResponse) fileAttrs(t *testing.T) (string, map[string]interface{}) {
+	var doc struct {
+		Data struct {
+			ID         string                 `json:"id"`
+			Attributes map[string]interface{} `json:"attributes"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(r.body, &doc), string(r.body))
+	return doc.Data.ID, doc.Data.Attributes
+}
+
+func (r *driveUploadResponse) problem(t *testing.T) {
+	assert.Equal(t, "application/problem+json", r.Header.Get("Content-Type"), string(r.body))
+}
+
+// cutUploadBody loses the connection after n bytes, once the upload has been
+// announced: the 104 can take longer than the bytes through the relay.
+type cutUploadBody struct {
+	r         io.Reader
+	n         int64
+	announced <-chan struct{}
+}
+
+func (c *cutUploadBody) Read(p []byte) (int, error) {
+	if c.n <= 0 {
+		select {
+		case <-c.announced:
+		case <-time.After(10 * time.Second):
+		}
+		return 0, errors.New("connection lost")
+	}
+	if int64(len(p)) > c.n {
+		p = p[:c.n]
+	}
+	n, err := c.r.Read(p)
+	c.n -= int64(n)
+	return n, err
+}
+
+func sfBool(b bool) string {
+	if b {
+		return "?1"
+	}
+	return "?0"
+}
+
+func randomUploadBytes(size int, seed int64) []byte {
+	buf := make([]byte, size)
+	_, _ = rand.New(rand.NewSource(seed)).Read(buf)
+	return buf
+}
+
+func md5Base64Of(content []byte) string {
+	sum := md5.Sum(content)
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
