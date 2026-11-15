@@ -297,10 +297,21 @@ func committedFile(fs VFS, u *Upload) *FileDoc {
 		return nil
 	}
 	if u.File.InternalID != "" {
-		if doc.InternalID != u.File.InternalID {
+		if doc.InternalID == u.File.InternalID {
+			return doc
+		}
+		// The file may have a newer content since: the one of the upload is
+		// then a version.
+		versions, err := VersionsFor(fs, doc.ID())
+		if err != nil {
 			return nil
 		}
-		return doc
+		for _, v := range versions {
+			if v.DocID == doc.ID()+"/"+u.File.InternalID {
+				return doc
+			}
+		}
+		return nil
 	}
 	// The local file system has no internal ID: the content is known by its
 	// size and md5.

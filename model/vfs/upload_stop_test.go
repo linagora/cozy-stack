@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -103,5 +104,58 @@ func TestResumableUploadStoppedAtTheEnd(t *testing.T) {
 				assert.True(t, done.Completed)
 			})
 		}
+	}
+}
+
+// TestResumableUploadCleanedAfterANewVersion checks that the cleaning of an
+// upload, stopped after its indexing, does not remove its content once it
+// has become a version of the file.
+func TestResumableUploadCleanedAfterANewVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+	config.GetConfig().Fs.Versioning = config.FsVersioning{MaxNumberToKeep: 5}
+
+	for _, b := range uploadBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			fs := b.newFS()
+			content := randomContent(testPartSize+5000, 52)
+			u, err := vfs.NewUpload(fs, newUploadDoc(t, "versioned.bin", content), nil, "", -1)
+			require.NoError(t, err)
+			restore := vfs.StopUploadAfter("committed", errStopped)
+			_, err = vfs.AppendUpload(fs, u, bytes.NewReader(content), true)
+			restore()
+			require.ErrorIs(t, err, errStopped)
+
+			// The file gets a new content: the uploaded one becomes a version.
+			doc, err := fs.FileByID(u.File.ID())
+			require.NoError(t, err)
+			newdoc := newUploadDoc(t, doc.DocName, nil)
+			newdoc.ByteSize = 2
+			f, err := fs.CreateFile(newdoc, doc)
+			require.NoError(t, err)
+			_, err = f.Write([]byte("v2"))
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+
+			expireUpload(t, fs, u.UploadID)
+			_, err = vfs.CleanUploads(fs)
+			require.NoError(t, err)
+
+			doc, err = fs.FileByID(doc.ID())
+			require.NoError(t, err)
+			versions, err := vfs.VersionsFor(fs, doc.ID())
+			require.NoError(t, err)
+			require.Len(t, versions, 1)
+			old, err := fs.OpenFileVersion(doc, versions[0])
+			require.NoError(t, err, "the version must still be readable")
+			got, err := io.ReadAll(old)
+			require.NoError(t, err)
+			require.NoError(t, old.Close())
+			assert.True(t, bytes.Equal(content, got))
+		})
 	}
 }
