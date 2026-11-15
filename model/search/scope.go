@@ -161,10 +161,24 @@ func UpsertScope(ctx context.Context, client *opensearch.Client, doc *ScopeDocum
 	return client.Bulk(ctx, ScopesIndex, ndjson)
 }
 
-// DeleteScope removes the scope document of a shared drive. Deleting a
-// missing document is not an error: OpenSearch answers not_found without
+// DeleteScope removes the scope document of a shared drive, if it belongs to
+// the instance: a sharing has the same id on the instances of its owner and
+// of its recipients, and only the owner's one has a scope document. Deleting
+// a missing document is not an error: OpenSearch answers not_found without
 // failing the bulk.
-func DeleteScope(ctx context.Context, client *opensearch.Client, sharingID string) error {
+func DeleteScope(ctx context.Context, client *opensearch.Client, domain, sharingID string) error {
+	var res struct {
+		Docs []struct {
+			Found  bool          `json:"found"`
+			Source ScopeDocument `json:"_source"`
+		} `json:"docs"`
+	}
+	if err := client.Mget(ctx, ScopesIndex, []string{sharingID}, &res); err != nil {
+		return err
+	}
+	if len(res.Docs) == 0 || !res.Docs[0].Found || res.Docs[0].Source.OwnerInstanceID != domain {
+		return nil
+	}
 	action, err := json.Marshal(map[string]any{"delete": map[string]string{"_id": sharingID}})
 	if err != nil {
 		return err
