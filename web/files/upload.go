@@ -192,12 +192,14 @@ func checkUploadPerm(c echo.Context, fs vfs.VFS, u *vfs.Upload) error {
 // respondUploadCompleted writes the response of the request that has
 // completed an upload: the same as the request that has created it would have
 // written for the whole content.
-func respondUploadCompleted(c echo.Context, inst *instance.Instance, u *vfs.Upload, doc *vfs.FileDoc) error {
+func respondUploadCompleted(c echo.Context, inst *instance.Instance, u *vfs.Upload, doc *vfs.FileDoc, notify bool) error {
 	c.Response().Header().Set(headerUploadComplete, "?1")
 	if u.OldFileID != "" {
 		return FileData(c, http.StatusOK, doc, true, nil, nil)
 	}
-	maybeNotifyShareByLinkUpload(c, inst, doc.DocName, doc.ID(), doc.DirID, false)
+	if notify {
+		maybeNotifyShareByLinkUpload(c, inst, doc.DocName, doc.ID(), doc.DirID, false)
+	}
 	return FileData(c, http.StatusCreated, doc, false, nil, nil)
 }
 
@@ -284,8 +286,14 @@ func UploadAppendHandler(c echo.Context) error {
 	}
 	fs := inst.VFS()
 	if u.Completed {
-		// The final response may have been lost: send it again rather than
-		// letting the client upload the file a second time.
+		// The final response may have been lost: send it again for a request
+		// that completes the upload, rather than letting the client upload the
+		// file a second time (§8.2).
+		if !complete || (req.ContentLength >= 0 && offset+req.ContentLength != u.Offset) {
+			c.Response().Header().Set(headerUploadComplete, "?0")
+			return uploadProblem(c, http.StatusConflict, "about:blank", "Upload already completed",
+				"This upload is complete: only the request that has completed it can be sent again.", nil)
+		}
 		doc, err := fs.FileByID(u.File.ID())
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -294,7 +302,7 @@ func UploadAppendHandler(c echo.Context) error {
 			}
 			return WrapVfsError(err)
 		}
-		return respondUploadCompleted(c, inst, u, doc)
+		return respondUploadCompleted(c, inst, u, doc, false)
 	}
 
 	length := parseSFInteger(req.Header.Get(headerUploadLength))
@@ -334,7 +342,7 @@ func UploadAppendHandler(c echo.Context) error {
 		return uploadError(c, err)
 	}
 	if complete {
-		return respondUploadCompleted(c, inst, u, created)
+		return respondUploadCompleted(c, inst, u, created, true)
 	}
 	h := c.Response().Header()
 	h.Set(headerUploadComplete, "?0")

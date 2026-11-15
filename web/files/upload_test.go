@@ -272,6 +272,27 @@ func TestResumableUploadsHTTP(t *testing.T) {
 				assert.Empty(t, b.leftovers(t, inst, uploadIDOf(location)))
 			})
 
+			t.Run("InvalidRequestOnACompletedUpload", func(t *testing.T) {
+				content := randomBytes(uploadTestPartSize+10, 10)
+				res, err := c.do(http.MethodPost, "/files/?Type=file&Name=replayed.bin", nil, 0, map[string]string{
+					"Upload-Draft-Interop-Version": "6",
+					"Upload-Complete":              "?0",
+				})
+				require.NoError(t, err)
+				location := res.Header.Get("Location")
+				done := c.patch(location, 0, content, true)
+				require.Equal(t, http.StatusCreated, done.StatusCode, string(done.body))
+
+				// Only the request that completes the upload is replayed.
+				wrong := c.patch(location, 10, content[10:20], true)
+				assert.Equal(t, http.StatusConflict, wrong.StatusCode)
+				assert.Equal(t, "?0", wrong.Header.Get("Upload-Complete"))
+				notLast := c.patch(location, 0, content, false)
+				assert.Equal(t, http.StatusConflict, notLast.StatusCode)
+				replay := c.patch(location, 0, content, true)
+				assert.Equal(t, http.StatusCreated, replay.StatusCode)
+			})
+
 			t.Run("ResumedElsewhereIsNotComplete", func(t *testing.T) {
 				// A POST with the whole file is resumed by a HEAD, as URLSession
 				// does after a lost connection: the POST must not say that the
