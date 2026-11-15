@@ -18,7 +18,7 @@ jobs:
       group: ai-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 120
     permissions:
       contents: write # GitHub requires this to resolve review threads.
       pull-requests: write
@@ -63,6 +63,7 @@ jobs:
           done
       - name: Analyze with Warden
         id: warden
+        timeout-minutes: 110
         uses: getsentry/warden@9ac18f90e5287a8d59476448070e9c9257477aed # v0.53.0
         with:
           mode: analyze
@@ -145,9 +146,10 @@ jobs:
               await github.rest.pulls.updateReviewComment({ ...context.repo, comment_id: comment.id, body })
             }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() && steps.warden.outputs.findings-file != '' }}
+        if: ${{ !cancelled() && steps.warden.outcome != 'skipped' }}
         with:
           name: warden-review
-          path: ${{ steps.warden.outputs.findings-file }}
+          # shortcut: Warden v0.53 saves partial reports here; recheck on upgrades.
+          path: ${{ steps.warden.outputs.findings-file || 'warden-findings.json' }}
           retention-days: 3
           if-no-files-found: error
