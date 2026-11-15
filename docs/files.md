@@ -1053,7 +1053,8 @@ more informations about the references field.
 for HTTP](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.txt)
 protocol. An upload interrupted by a lost connection, a suspended app or a
 pause asked by the user goes on from the last byte received by the server,
-instead of starting again.
+instead of starting again. The design is explained in
+[Resumable uploads](files-resumable-upload.md).
 
 The protocol is used only when the request has the
 `Upload-Draft-Interop-Version` header set to `6` (draft -05, spoken by
