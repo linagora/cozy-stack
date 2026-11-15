@@ -126,7 +126,7 @@ func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h ha
 		return err
 	}
 	start := u.Offset
-	slot, err := u.reserveSlot(fs, start+received, received)
+	slot, err := u.reserveSlot(fs, start+received, received, tail)
 	if err != nil {
 		return err
 	}
@@ -314,7 +314,7 @@ func (u *Upload) finalize(fs VFS, store UploadStorage, received int64, h hash.Ha
 	start := u.Offset
 	var part *UploadPart
 	if size > 0 || len(u.Parts) == 0 {
-		slot, err := u.reserveSlot(fs, start+received, received)
+		slot, err := u.reserveSlot(fs, start+received, received, false)
 		if err != nil {
 			return err
 		}

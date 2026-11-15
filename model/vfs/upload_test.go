@@ -395,3 +395,41 @@ func TestResumableUploads(t *testing.T) {
 		})
 	}
 }
+
+// TestUploadSmallAppendsKeepThePartNumbers checks that the tails do not use
+// the numbers of the parts: S3 accepts at most 10,000 parts, whatever the size
+// of the requests.
+func TestUploadSmallAppendsKeepThePartNumbers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+
+	for _, b := range uploadBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			fs := b.newFS()
+			content := randomContent(2*testPartSize, 76)
+			u, err := vfs.NewUpload(fs, newUploadDoc(t, "small-appends.bin", content), nil, "", -1)
+			require.NoError(t, err)
+
+			// Ten small requests, then one that fills a part.
+			for i := range 10 {
+				_, err := vfs.AppendUpload(fs, u, bytes.NewReader(content[i*1000:(i+1)*1000]), false)
+				require.NoError(t, err)
+			}
+			_, err = vfs.AppendUpload(fs, u, bytes.NewReader(content[10000:testPartSize+20000]), false)
+			require.NoError(t, err)
+
+			u, err = vfs.GetUpload(fs, u.UploadID)
+			require.NoError(t, err)
+			require.Len(t, u.Parts, 1)
+			assert.Equal(t, 1, u.Parts[0].Number)
+
+			doc, err := vfs.AppendUpload(fs, u, bytes.NewReader(content[testPartSize+20000:]), true)
+			require.NoError(t, err)
+			assert.True(t, bytes.Equal(content, readContent(t, fs, doc)))
+		})
+	}
+}

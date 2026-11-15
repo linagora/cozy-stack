@@ -1082,7 +1082,10 @@ Upload Resumption Supported` interim response, with a `Location` header like
   `Upload-Offset`. It must be the offset of the server, or the response is a
   `409 Conflict` with the expected offset. `Upload-Complete: ?1` marks the last
   bytes: the response is then the same as for a normal upload (`201 Created`
-  for a new file, `200 OK` for a new version).
+  for a new file, `200 OK` for a new version). Any size works for a `PATCH`,
+  but a request smaller than the part size makes the server copy the bytes
+  received since the last part again: a client that sends the content in
+  slices should make them at least as large as the part size.
 - `DELETE /files/uploads/:upload-id` cancels the upload and frees the storage.
 
 The upload resource requires the same permissions as the request that has

@@ -63,9 +63,12 @@ type Upload struct {
 	// segments).
 	Tail      *UploadPart `json:"tail,omitempty"`
 	StorageID string      `json:"storage_id,omitempty"`
-	// NextPart is the last slot given to a part or a tail. Each write gets its
-	// own slot, so two requests never write the same object.
+	// NextPart and NextTail are the last slots given to a part and to a tail.
+	// Each write gets its own slot, so two requests never write the same
+	// object. The tails have their own slots: S3 accepts at most 10,000 part
+	// numbers.
 	NextPart int `json:"next_part,omitempty"`
+	NextTail int `json:"next_tail,omitempty"`
 	// Writing is the size of the write in progress, counted in the quota by
 	// the other uploads.
 	Writing int64 `json:"writing,omitempty"`
