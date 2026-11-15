@@ -13,6 +13,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
@@ -82,7 +83,12 @@ func sfBoolean(b bool) string {
 	return "?0"
 }
 
-func uploadLocation(u *vfs.Upload) string {
+// uploadLocation is a relative URL: a member of a shared drive resolves it
+// against the stack that relays the request, which serves the same path.
+func uploadLocation(u *vfs.Upload, sharedDrive *sharing.Sharing) string {
+	if sharedDrive != nil {
+		return "/sharings/drives/" + sharedDrive.ID() + "/uploads/" + u.UploadID
+	}
 	return "/files/uploads/" + u.UploadID
 }
 
@@ -112,10 +118,10 @@ func setUploadLimit(c echo.Context, fs vfs.VFS, u *vfs.Upload, interop string) {
 // sendInterimResponse announces the upload resource with a 104 (Upload
 // Resumption Supported) interim response. It is written on the underlying
 // writer, as echo would consider the response as sent.
-func sendInterimResponse(c echo.Context, fs vfs.VFS, u *vfs.Upload, interop string) {
+func sendInterimResponse(c echo.Context, fs vfs.VFS, u *vfs.Upload, interop string, sharedDrive *sharing.Sharing) {
 	h := c.Response().Header()
 	h.Set(headerInteropVersion, interop)
-	h.Set(echo.HeaderLocation, uploadLocation(u))
+	h.Set(echo.HeaderLocation, uploadLocation(u, sharedDrive))
 	setUploadLimit(c, fs, u, interop)
 	c.Response().Writer.WriteHeader(104)
 	h.Del(echo.HeaderLocation)
@@ -219,15 +225,15 @@ func checkUploadPerm(c echo.Context, fs vfs.VFS, u *vfs.Upload) error {
 // respondUploadCompleted writes the response of the request that has
 // completed an upload: the same as the request that has created it would have
 // written for the whole content.
-func respondUploadCompleted(c echo.Context, inst *instance.Instance, u *vfs.Upload, doc *vfs.FileDoc, notify bool) error {
+func respondUploadCompleted(c echo.Context, inst *instance.Instance, u *vfs.Upload, doc *vfs.FileDoc, notify bool, sharedDrive *sharing.Sharing) error {
 	c.Response().Header().Set(headerUploadComplete, "?1")
 	if u.OldFileID != "" {
-		return FileData(c, http.StatusOK, doc, true, nil, nil)
+		return FileData(c, http.StatusOK, doc, true, nil, sharedDrive)
 	}
 	if notify {
 		maybeNotifyShareByLinkUpload(c, inst, doc.DocName, doc.ID(), doc.DirID, false)
 	}
-	return FileData(c, http.StatusCreated, doc, false, nil, nil)
+	return FileData(c, http.StatusCreated, doc, false, nil, sharedDrive)
 }
 
 // loadUpload loads the upload of the request and checks the permissions.
@@ -279,37 +285,45 @@ func UploadOffsetHandler(c echo.Context) error {
 // UploadAppendHandler handles PATCH /files/uploads/:upload-id to append
 // content to an upload.
 func UploadAppendHandler(c echo.Context) error {
+	_, _, err := UploadAppend(c, nil)
+	return err
+}
+
+// UploadAppend appends content to an upload, in the given shared drive or in
+// the files of the instance. It returns the file when this request has
+// created it (replaced is true for a new content of an existing file).
+func UploadAppend(c echo.Context, sharedDrive *sharing.Sharing) (created *vfs.FileDoc, replaced bool, err error) {
 	req := c.Request()
 	interop := interopVersion(c)
 	if interop == "" {
-		return uploadProblem(c, http.StatusBadRequest, "about:blank", "Unsupported interop version",
+		return nil, false, uploadProblem(c, http.StatusBadRequest, "about:blank", "Unsupported interop version",
 			"Upload-Draft-Interop-Version must be 6 or 10.", nil)
 	}
 	c.Response().Header().Set(headerInteropVersion, interop)
 	complete, ok := parseSFBoolean(req.Header.Get(headerUploadComplete))
 	if !ok {
-		return uploadProblem(c, http.StatusBadRequest, "about:blank", "Missing Upload-Complete",
+		return nil, false, uploadProblem(c, http.StatusBadRequest, "about:blank", "Missing Upload-Complete",
 			"An append request must have the Upload-Complete header.", nil)
 	}
 	offset := parseSFInteger(req.Header.Get(headerUploadOffset))
 	if offset < 0 {
-		return uploadProblem(c, http.StatusBadRequest, "about:blank", "Missing Upload-Offset",
+		return nil, false, uploadProblem(c, http.StatusBadRequest, "about:blank", "Missing Upload-Offset",
 			"An append request must have the Upload-Offset header.", nil)
 	}
 	if ct, _, _ := strings.Cut(req.Header.Get(echo.HeaderContentType), ";"); strings.TrimSpace(ct) != partialUploadType {
 		c.Response().Header().Set(headerUploadComplete, "?0")
-		return uploadProblem(c, http.StatusUnsupportedMediaType, "about:blank", "Unsupported media type",
+		return nil, false, uploadProblem(c, http.StatusUnsupportedMediaType, "about:blank", "Unsupported media type",
 			"An append request must have the application/partial-upload content type.", nil)
 	}
 	if req.Header.Get(echo.HeaderContentEncoding) != "" {
 		c.Response().Header().Set(headerUploadComplete, "?0")
-		return uploadProblem(c, http.StatusUnsupportedMediaType, "about:blank", "Unsupported content coding",
+		return nil, false, uploadProblem(c, http.StatusUnsupportedMediaType, "about:blank", "Unsupported content coding",
 			"An append request cannot have a content coding.", nil)
 	}
 
 	inst, u, err := loadUpload(c)
 	if err != nil {
-		return uploadError(c, err)
+		return nil, false, uploadError(c, err)
 	}
 	fs := inst.VFS()
 	if u.Completed {
@@ -318,39 +332,39 @@ func UploadAppendHandler(c echo.Context) error {
 		// file a second time (§8.2).
 		if !complete || (req.ContentLength >= 0 && offset+req.ContentLength != u.Offset) {
 			c.Response().Header().Set(headerUploadComplete, "?0")
-			return uploadProblem(c, http.StatusConflict, "about:blank", "Upload already completed",
+			return nil, false, uploadProblem(c, http.StatusConflict, "about:blank", "Upload already completed",
 				"This upload is complete: only the request that has completed it can be sent again.", nil)
 		}
 		doc, err := fs.FileByID(u.File.ID())
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return uploadProblem(c, http.StatusNotFound, "about:blank", "File not found",
+				return nil, false, uploadProblem(c, http.StatusNotFound, "about:blank", "File not found",
 					"This upload is complete, but its file has been deleted since.", nil)
 			}
-			return WrapVfsError(err)
+			return nil, false, WrapVfsError(err)
 		}
-		return respondUploadCompleted(c, inst, u, doc, false)
+		return nil, false, respondUploadCompleted(c, inst, u, doc, false, sharedDrive)
 	}
 
 	length := parseSFInteger(req.Header.Get(headerUploadLength))
 	if complete && req.ContentLength >= 0 {
 		if length >= 0 && length != offset+req.ContentLength {
-			return uploadError(c, vfs.ErrUploadLength)
+			return nil, false, uploadError(c, vfs.ErrUploadLength)
 		}
 		length = offset + req.ContentLength
 	}
 	if length >= 0 && u.Length >= 0 && length != u.Length {
-		return uploadError(c, vfs.ErrUploadLength)
+		return nil, false, uploadError(c, vfs.ErrUploadLength)
 	}
 
 	if u, err = vfs.ClaimUpload(fs, u.UploadID); err != nil {
-		return uploadError(c, err)
+		return nil, false, uploadError(c, err)
 	}
 	if offset != u.Offset {
 		h := c.Response().Header()
 		h.Set(headerUploadOffset, strconv.FormatInt(u.Offset, 10))
 		h.Set(headerUploadComplete, "?0")
-		return uploadProblem(c, http.StatusConflict,
+		return nil, false, uploadProblem(c, http.StatusConflict,
 			"https://iana.org/assignments/http-problem-types#mismatching-upload-offset",
 			"offset from request does not match offset of resource",
 			"Retrieve the offset with a HEAD request, and resume from it.",
@@ -358,23 +372,23 @@ func UploadAppendHandler(c echo.Context) error {
 	}
 	if length >= 0 && u.Length < 0 {
 		if err := vfs.SetUploadLength(fs, u, length); err != nil {
-			return uploadError(c, err)
+			return nil, false, uploadError(c, err)
 		}
 	}
 
-	created, err := vfs.AppendUpload(fs, u, req.Body, complete)
+	created, err = vfs.AppendUpload(fs, u, req.Body, complete)
 	if err != nil {
 		inst.Logger().WithNamespace("files").
 			Infof("Resumable upload %s stopped at %d bytes: %s", u.UploadID, u.Offset, err)
-		return uploadError(c, err)
+		return nil, false, uploadError(c, err)
 	}
 	if complete {
-		return respondUploadCompleted(c, inst, u, created, true)
+		return created, u.OldFileID != "", respondUploadCompleted(c, inst, u, created, true, sharedDrive)
 	}
 	h := c.Response().Header()
 	h.Set(headerUploadComplete, "?0")
 	h.Set(headerUploadOffset, strconv.FormatInt(u.Offset, 10))
-	return c.NoContent(http.StatusNoContent)
+	return nil, false, c.NoContent(http.StatusNoContent)
 }
 
 // UploadCancelHandler handles DELETE /files/uploads/:upload-id to cancel an

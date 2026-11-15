@@ -177,7 +177,7 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 	}
 
 	isNote := filepath.Ext(doc.DocName) == ".cozy-note"
-	if sharedDrive != nil || isNote || c.QueryParam("SourceURL") != "" {
+	if isNote || c.QueryParam("SourceURL") != "" {
 		if refused, err := refuseResumableUpload(c); refused {
 			if err == nil {
 				err = errResponseSent
@@ -214,8 +214,8 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 		return NewFile(doc, inst, sharedDrive), nil
 	}
 
-	if sharedDrive == nil && c.QueryParam("SourceURL") == "" {
-		handled, created, err := startUpload(c, fs, doc, nil, "")
+	if c.QueryParam("SourceURL") == "" {
+		handled, created, err := startUpload(c, fs, doc, nil, "", sharedDrive)
 		if handled {
 			if err != nil {
 				return nil, err
@@ -400,7 +400,7 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 	}
 
 	isNote := filepath.Ext(newdoc.DocName) == ".cozy-note"
-	if sharedDrive != nil || isNote {
+	if isNote {
 		if refused, err := refuseResumableUpload(c); refused {
 			return nil, err
 		}
@@ -417,14 +417,12 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 		return newdoc, FileData(c, http.StatusOK, newdoc, true, nil, sharedDrive)
 	}
 
-	if sharedDrive == nil {
-		handled, updated, err := startUpload(c, instance.VFS(), newdoc, olddoc, wantedRev(c))
-		if handled {
-			if err != nil || updated == nil {
-				return nil, err
-			}
-			return updated, FileData(c, http.StatusOK, updated, true, nil, sharedDrive)
+	handled, updated, err := startUpload(c, instance.VFS(), newdoc, olddoc, wantedRev(c), sharedDrive)
+	if handled {
+		if err != nil || updated == nil {
+			return nil, err
 		}
+		return updated, FileData(c, http.StatusOK, updated, true, nil, sharedDrive)
 	}
 
 	file, err := instance.VFS().CreateFile(newdoc, olddoc)
