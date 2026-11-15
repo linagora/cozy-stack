@@ -139,7 +139,7 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 		if fresh.OldFileID != "" {
 			var err error
 			if olddoc, err = fs.FileByID(fresh.OldFileID); err != nil {
-				return deactivateLocked(fs, fresh, err)
+				return finishError(fs, fresh, err)
 			}
 			if fresh.OldRev != "" && olddoc.Rev() != fresh.OldRev {
 				return deactivateLocked(fs, fresh, ErrConflict)
@@ -167,7 +167,7 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 				newdoc.MD5Sum = nil
 			}
 			if err := createFile(fs, newdoc, olddoc, last()); err != nil {
-				return deactivateLocked(fs, fresh, err)
+				return finishError(fs, fresh, err)
 			}
 			if err := store.AbortUpload(fresh); err != nil {
 				return err
@@ -183,7 +183,7 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 			}
 			newdoc.MD5Sum = md5sum
 			if _, _, _, err := CheckAvailableDiskSpace(fs, newdoc); err != nil {
-				return deactivateLocked(fs, fresh, err)
+				return finishError(fs, fresh, err)
 			}
 			// The offset becomes the final size before anything is assembled:
 			// after a stop of the stack, the client sends an empty request to
@@ -209,7 +209,7 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 		}
 		_, _, capsize, err := CheckAvailableDiskSpace(fs, newdoc)
 		if err != nil {
-			return deactivateLocked(fs, fresh, err)
+			return finishError(fs, fresh, err)
 		}
 
 		if !fresh.Assembled {
@@ -229,8 +229,12 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 		if meta := NewMetaExtractor(newdoc); meta != nil {
 			extractMetadata(store, fresh, newdoc, meta)
 		}
-		if err := store.CommitUpload(fresh, olddoc, capsize); err != nil {
-			return deactivateLocked(fs, fresh, err)
+		err = uploadStep("commit")
+		if err == nil {
+			err = store.CommitUpload(fresh, olddoc, capsize)
+		}
+		if err != nil {
+			return finishError(fs, fresh, err)
 		}
 		if err := uploadStep("committed"); err != nil {
 			return err
@@ -239,6 +243,22 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 		return fresh.markCompleted(fs, newdoc)
 	})
 	return created, err
+}
+
+// finishError removes the upload when the error tells that the file cannot be
+// created, and keeps it resumable for a passing error: the client finishes it
+// later with an empty request.
+func finishError(fs VFS, u *Upload, err error) error {
+	for _, final := range []error{
+		os.ErrExist, os.ErrNotExist, ErrConflict, ErrFileTooBig, ErrMaxFileSize,
+		ErrParentDoesNotExist, ErrParentInTrash, ErrIllegalFilename,
+		ErrInvalidHash, ErrContentLengthMismatch,
+	} {
+		if errors.Is(err, final) {
+			return deactivateLocked(fs, u, err)
+		}
+	}
+	return err
 }
 
 // uploadStepHook is called after each step of the end of an upload. The tests

@@ -16,6 +16,40 @@ import (
 
 var errStopped = errors.New("the stack has stopped")
 
+// TestResumableUploadCommitFailsOnce checks that an upload stays resumable
+// when the indexing fails for a passing reason, like CouchDB being briefly
+// unavailable.
+func TestResumableUploadCommitFailsOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+
+	for _, b := range uploadBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			fs := b.newFS()
+			content := randomContent(testPartSize+5000, 51)
+			u, err := vfs.NewUpload(fs, newUploadDoc(t, "commit-fails.bin", content), nil, "", -1)
+			require.NoError(t, err)
+
+			restore := vfs.StopUploadAfter("commit", errors.New("CouchDB is unavailable"))
+			_, err = vfs.AppendUpload(fs, u, bytes.NewReader(content), true)
+			restore()
+			require.Error(t, err)
+
+			u, err = vfs.ClaimUpload(fs, u.UploadID)
+			require.NoError(t, err, "the upload must stay resumable")
+			assert.Equal(t, int64(len(content)), u.Offset)
+
+			doc, err := vfs.AppendUpload(fs, u, bytes.NewReader(nil), true)
+			require.NoError(t, err)
+			assert.True(t, bytes.Equal(content, readContent(t, fs, doc)))
+		})
+	}
+}
+
 // TestResumableUploadStoppedAtTheEnd stops the stack after each step of the
 // end of an upload, and checks that the client finishes it with an empty
 // request, without any byte written twice.
