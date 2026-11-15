@@ -13,9 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/search"
 	"github.com/cozy/cozy-stack/model/stack"
 	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/logger"
+	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/web"
 	"github.com/spf13/cobra"
@@ -97,6 +100,19 @@ example), you can use the --appdir flag like this:
 		processes, services, err := stack.Start()
 		if err != nil {
 			return err
+		}
+
+		// Search is auxiliary: create the missing indices, and warn without
+		// delaying or aborting the startup when OpenSearch is unreachable.
+		if client := opensearch.New(config.GetConfig().Search); client != nil {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := search.EnsureIndices(ctx, client); err != nil {
+					logger.WithNamespace("stack").Warnf(
+						"Could not set up OpenSearch, file search will not work: %s", err)
+				}
+			}()
 		}
 
 		var servers *web.Servers
