@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft
+Superseded by [ADR 008: Multi-Tenant Server-Side File Search with Normalized Directory Scopes](./008-adr-server-side-file-search-v2.md).
 
 Related to [personal recents](https://github.com/linagora/cozy-stack/pull/4949). We still need to
 choose the search engine, prove that permission filtering works at scale, and
