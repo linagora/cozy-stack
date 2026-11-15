@@ -17,6 +17,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/gofrs/uuid/v5"
 )
 
@@ -30,7 +31,7 @@ func NewUpload(fs VFS, newdoc, olddoc *FileDoc, oldRev string, length int64) (*U
 	}
 	cfg := uploadConfig()
 
-	uploads, err := listUploads(fs)
+	uploads, err := activeUploads(fs)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +206,7 @@ func CleanUploads(fs VFS) (int, error) {
 // upload, from the maximal file size and the quota (the other uploads in
 // progress count in the quota).
 func UploadSpaceLimit(fs VFS, u *Upload) (int64, error) {
-	uploads, err := listUploads(fs)
+	uploads, err := activeUploads(fs)
 	if err != nil {
 		return 0, err
 	}
@@ -332,6 +333,22 @@ func removeUpload(fs VFS, u *Upload) error {
 		}
 	}
 	return couchdb.DeleteDoc(fs, u)
+}
+
+// activeUploads returns the uploads that are not completed. It does not read
+// the records of the completed uploads, kept until they expire.
+func activeUploads(fs VFS) ([]*Upload, error) {
+	var uploads []*Upload
+	req := &couchdb.FindRequest{
+		UseIndex: "by-completed",
+		Selector: mango.Equal("completed", false),
+		Limit:    1000,
+	}
+	err := couchdb.FindDocs(fs, consts.FilesUploads, req, &uploads)
+	if err != nil && !couchdb.IsNoDatabaseError(err) {
+		return nil, err
+	}
+	return uploads, nil
 }
 
 func listUploads(fs VFS) ([]*Upload, error) {

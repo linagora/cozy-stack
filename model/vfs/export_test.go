@@ -12,3 +12,6 @@ func StopUploadAfter(step string, err error) func() {
 	}
 	return func() { uploadStepHook = nil }
 }
+
+// ActiveUploads returns the uploads that are not completed.
+var ActiveUploads = activeUploads

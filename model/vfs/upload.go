@@ -65,7 +65,7 @@ type Upload struct {
 	// after a stop of the stack.
 	Finalizing bool `json:"finalizing,omitempty"`
 	Assembled  bool `json:"assembled,omitempty"`
-	Completed  bool `json:"completed,omitempty"`
+	Completed  bool `json:"completed"`
 
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
