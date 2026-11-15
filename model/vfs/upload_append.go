@@ -375,9 +375,10 @@ func createdFile(fs VFS, u *Upload, size int64, md5sum []byte) *FileDoc {
 	return doc
 }
 
-// RejectedUploadError is the error of an upload whose whole content has been
-// received, but cannot become a file. It is the final answer for the upload,
-// unlike the other errors, after which the client can resume it.
+// RejectedUploadError is the error of an upload that has been removed because
+// it cannot become a file (too big, wrong length, md5 or name). It is the
+// final answer for the upload, unlike the other errors, after which the client
+// can resume it.
 type RejectedUploadError struct {
 	Err error
 }
@@ -395,11 +396,7 @@ func finishError(fs VFS, u *Upload, err error) error {
 		ErrInvalidHash, ErrContentLengthMismatch, ErrUploadLength,
 	} {
 		if errors.Is(err, final) {
-			err = deactivateUpload(fs, u, err)
-			if errors.Is(err, ErrUploadTakenOver) {
-				return err
-			}
-			return &RejectedUploadError{Err: err}
+			return deactivateUpload(fs, u, err)
 		}
 	}
 	return err

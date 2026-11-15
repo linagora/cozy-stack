@@ -564,6 +564,7 @@ func TestResumableUploadsByLink(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusRequestEntityTooLarge, res.StatusCode, string(res.body))
+		assert.Equal(t, "?1", res.Header.Get("Upload-Complete"))
 		assert.Equal(t, http.StatusNotFound, link.head(theirs).StatusCode)
 
 		done := owner.patch(mine, uploadTestPartSize, content[uploadTestPartSize:], true)
@@ -592,6 +593,21 @@ func TestResumableUploadsByLink(t *testing.T) {
 		require.Equal(t, http.StatusCreated, done.StatusCode, string(done.body))
 		_, attrs := done.fileAttrs(t)
 		assert.Equal(t, md5Base64(content), attrs["md5sum"])
+	})
+
+	t.Run("AboveTheQuotaIsFinal", func(t *testing.T) {
+		usage, err := inst.VFS().DiskUsage()
+		require.NoError(t, err)
+		inst.BytesDiskQuota = usage + uploadTestPartSize + 1000
+		defer func() { inst.BytesDiskQuota = 0 }()
+		dir := owner.mkdir("above-quota")
+
+		location := owner.startUpload(t, dir, "big.bin", -1)
+		res := owner.patch(location, 0, randomBytes(2*uploadTestPartSize, 23), false)
+		assert.Equal(t, http.StatusRequestEntityTooLarge, res.StatusCode, string(res.body))
+		// The upload is removed: the client must not resume it.
+		assert.Equal(t, "?1", res.Header.Get("Upload-Complete"))
+		assert.Equal(t, http.StatusNotFound, owner.head(location).StatusCode)
 	})
 }
 

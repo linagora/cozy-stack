@@ -408,7 +408,8 @@ func deactivateUpload(fs VFS, u *Upload, cause error) error {
 		return !fresh.Removed && !fresh.Completed && fresh.Owner == u.Owner
 	})
 	if err == nil || errors.Is(err, ErrUploadNotFound) {
-		return cause
+		// The upload does not exist anymore: the client must not resume it.
+		return &RejectedUploadError{Err: cause}
 	}
 	if errors.Is(err, errNotSelected) {
 		return ErrUploadTakenOver

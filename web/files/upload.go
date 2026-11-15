@@ -145,11 +145,10 @@ func uploadNotFound(c echo.Context) error {
 }
 
 // uploadError writes the response for an error on a resumable upload.
-// complete tells if the error comes from the processing of the whole content.
 //
-// Upload-Complete is ?1 only when the error comes from the processing of the
-// whole content: after the other errors (another request has resumed the
-// upload, storage error, lost connection), the client must resume it
+// Upload-Complete is ?1 only when the upload has been rejected and removed:
+// after the other errors (another request has resumed the upload, storage
+// error, lost connection), the client must resume it
 // (draft-ietf-httpbis-resumable-upload §4.2.1 and §11).
 func uploadError(c echo.Context, err error) error {
 	if errors.Is(err, errUploadHidden) {
