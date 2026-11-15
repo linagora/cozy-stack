@@ -1,0 +1,219 @@
+package search
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"slices"
+	"sort"
+
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/pkg/opensearch"
+)
+
+const (
+	// DefaultLimit is the number of hits of a page when no limit is given.
+	DefaultLimit = 20
+	// MaxLimit is the maximal number of hits of a page.
+	MaxLimit = 100
+)
+
+// termsChunkSize is the maximal number of folder keys in one terms filter, the
+// OpenSearch default of index.max_terms_count (a variable for the tests).
+var termsChunkSize = 65536
+
+// ErrInvalidCursor is returned for a cursor that was not given by Search.
+var ErrInvalidCursor = errors.New("search: invalid cursor")
+
+// SearchHit is a file or folder found by a search.
+type SearchHit struct {
+	DocID           string
+	OwnerInstanceID string
+	DirID           string
+	// DriveID is the id of the shared drive of the hit, empty for the files
+	// of the caller.
+	DriveID   string
+	Type      string
+	Name      string
+	Mime      string
+	Class     string
+	UpdatedAt string
+}
+
+// Results is a page of hits, with the cursor of the next page (empty on the
+// last page), and the shared drives the caller is a member of, by sharing id
+// (for VisiblePaths).
+type Results struct {
+	Hits   []SearchHit
+	Cursor string
+	Drives map[string]Drive
+}
+
+// Search looks for the files and folders whose name matches the query, among
+// the files of the caller and those of the shared drives they are a member
+// of. Trashed files are excluded. Hits are sorted by relevance.
+func Search(ctx context.Context, client *opensearch.Client, caller *instance.Instance, q string, limit int, cursor string) (*Results, error) {
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	limit = min(limit, MaxLimit)
+	after, err := decodeCursor(cursor)
+	if err != nil {
+		return nil, err
+	}
+
+	driveByKey, drives, err := memberScopes(ctx, client, caller.Domain)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(driveByKey))
+	for key := range driveByKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var res struct {
+		Hits struct {
+			Hits []struct {
+				Source FileDocument `json:"_source"`
+				Sort   []any        `json:"sort"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}
+	if err := client.Search(ctx, FilesIndex, buildQuery(caller.Domain, q, keys, limit, after), &res); err != nil {
+		return nil, err
+	}
+
+	out := &Results{Hits: make([]SearchHit, 0, len(res.Hits.Hits)), Drives: drives}
+	for _, h := range res.Hits.Hits {
+		doc := h.Source
+		hit := SearchHit{
+			DocID: doc.DocID, OwnerInstanceID: doc.OwnerInstanceID, DirID: doc.DirID,
+			Type: doc.Type, Name: doc.Name, Mime: doc.Mime, Class: doc.Class, UpdatedAt: doc.UpdatedAt,
+		}
+		if doc.OwnerInstanceID != caller.Domain {
+			hit.DriveID = driveByKey[doc.ScopedDirKey]
+		}
+		out.Hits = append(out.Hits, hit)
+	}
+	if n := len(res.Hits.Hits); n == limit {
+		if out.Cursor, err = encodeCursor(res.Hits.Hits[n-1].Sort); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// maxMemberDrives is the maximal number of drives of a member, the default
+// max result window of OpenSearch.
+const maxMemberDrives = 10000
+
+// memberScopes finds the scope docs that list the caller as a member, and
+// returns their folder keys, with the drive of each key, and the drives. The
+// scope docs are written by the instances of the owners: the recipient's copy
+// of a sharing is not read.
+//
+// shortcut: a member of more than maxMemberDrives drives does not find the
+// files of the others; page with search_after when that happens.
+func memberScopes(ctx context.Context, client *opensearch.Client, domain string) (map[string]string, map[string]Drive, error) {
+	var res struct {
+		Hits struct {
+			Hits []struct {
+				Source ScopeDocument `json:"_source"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}
+	query := map[string]any{
+		"size":  maxMemberDrives,
+		"query": map[string]any{"term": map[string]any{"active_member_principals": domain}},
+	}
+	if err := client.Search(ctx, ScopesIndex, query, &res); err != nil {
+		return nil, nil, err
+	}
+	driveByKey := make(map[string]string)
+	drives := make(map[string]Drive, len(res.Hits.Hits))
+	for _, hit := range res.Hits.Hits {
+		doc := hit.Source
+		drives[doc.SharingID] = Drive{OwnerInstanceID: doc.OwnerInstanceID, RootDirID: doc.RootDirID}
+		for _, key := range doc.SubtreeDirKeys {
+			if _, ok := driveByKey[key]; !ok {
+				driveByKey[key] = doc.SharingID
+			}
+		}
+	}
+	return driveByKey, drives, nil
+}
+
+// buildQuery returns the body of the search request on the files index.
+func buildQuery(domain, q string, dirKeys []string, limit int, after []any) map[string]any {
+	visible := []any{map[string]any{"term": map[string]any{"owner_instance_id": domain}}}
+	for chunk := range slices.Chunk(dirKeys, termsChunkSize) {
+		visible = append(visible, map[string]any{"terms": map[string]any{"scoped_dir_key": chunk}})
+	}
+	body := map[string]any{
+		"size": limit,
+		"query": map[string]any{"bool": map[string]any{
+			"must": []any{map[string]any{"bool": map[string]any{
+				"should": []any{
+					// Substrings, with the n-grams of the name
+					map[string]any{"match": map[string]any{"name": map[string]any{
+						"query": q, "minimum_should_match": "75%",
+					}}},
+					// Words being typed
+					map[string]any{"multi_match": map[string]any{
+						"query": q, "type": "bool_prefix",
+						"fields": []string{"name.prefix", "name.prefix._2gram", "name.prefix._3gram"},
+					}},
+					// The whole name
+					map[string]any{"match": map[string]any{"name.exact": map[string]any{
+						"query": q, "boost": 4,
+					}}},
+				},
+				"minimum_should_match": 1,
+			}}},
+			"filter": []any{map[string]any{"bool": map[string]any{
+				"should":               visible,
+				"minimum_should_match": 1,
+			}}},
+			"must_not": []any{map[string]any{"term": map[string]any{"trashed": true}}},
+		}},
+		"sort": []any{
+			map[string]any{"_score": "desc"},
+			map[string]any{"resource_key": "asc"},
+		},
+	}
+	if after != nil {
+		body["search_after"] = after
+	}
+	return body
+}
+
+func encodeCursor(sortValues []any) (string, error) {
+	data, err := json.Marshal(sortValues)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func decodeCursor(cursor string) ([]any, error) {
+	if cursor == "" {
+		return nil, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, ErrInvalidCursor
+	}
+	var after []any
+	if err := json.Unmarshal(data, &after); err != nil || len(after) != 2 {
+		return nil, ErrInvalidCursor
+	}
+	if _, ok := after[0].(float64); !ok {
+		return nil, ErrInvalidCursor
+	}
+	if _, ok := after[1].(string); !ok {
+		return nil, ErrInvalidCursor
+	}
+	return after, nil
+}
