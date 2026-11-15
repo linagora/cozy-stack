@@ -113,6 +113,11 @@ sequenceDiagram
 - A drive member whose stack does not relay `X-Cozy-Resumable-Relay` is
   answered as on a storage without resumable uploads (see [A member on an
   older stack](#a-member-on-an-older-stack)).
+- In a shared drive, the stack of the member checks that the stack of the
+  owner can resume before it relays a request with `Upload-Complete: ?0`, and
+  answers `501` otherwise (see [An owner on an older
+  stack](#an-owner-on-an-older-stack)). `OPTIONS
+  /sharings/drives/:id/uploads` is new.
 
 ## The io.cozy.files.uploads document
 
@@ -341,10 +346,43 @@ sequenceDiagram
 No web client speaks the protocol yet: this case becomes real when Drive
 web adopts it.
 
+### An owner on an older stack
+
 The `resumable_uploads` capability describes the stack of the member, not the
-stack of the owner. When the stack of the owner is older than the resumable
-uploads, a creation with `Upload-Complete: ?0` gets `201` without
-`Location`: the usual upload has created an empty file.
+stack of the owner. A stack of the owner older than the resumable uploads
+would make an empty file of a request with `Upload-Complete: ?0`. So the
+stack of the member asks the owner first:
+
+- `OPTIONS /sharings/drives/:id/uploads` answers with `Upload-Limit:
+  min-size=0` when the uploads to the drive can be resumable
+  ([§5.2](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.html#section-5.2)),
+  and without this header otherwise. An older stack has no such route.
+- Before it relays a `POST` or a `PUT` with `Upload-Complete: ?0`, the stack
+  of the member sends this request to the stack of the owner, with the drive
+  token. When the owner is on the same stack, it looks at the storage of the
+  owner instead.
+- The answer is kept 3 hours, by drive and address of the owner. A failure to
+  reach the owner is not kept, and the request gets `502`.
+- When the owner cannot resume, the request gets `501`, as on a storage
+  without resumable uploads: nothing is relayed, and the client sends the
+  whole content in one request.
+- A request with the whole content is relayed as it is: an older owner makes a
+  usual upload of it.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant M as Stack of the member
+    participant O as Older stack of the owner
+    C->>M: POST /sharings/drives/:id/:dir-id (Upload-Complete ?0)
+    M->>O: OPTIONS /sharings/drives/:id/uploads
+    O-->>M: 405, no Upload-Limit
+    M-->>C: 501, send the whole content in one request
+```
+
+A client asks the stack of the member the same way, with `OPTIONS` on this
+route, to know if the uploads to a drive can be resumable. A browser cannot:
+the stack answers the `OPTIONS` requests with an `Origin` as CORS preflights.
 
 ## Settings and limits
 
@@ -471,10 +509,3 @@ To remove the lock of the VFS later:
 
 - The `io.cozy.files.uploads` database is created at the first resumable
   upload of an instance, not on every instance.
-
-## Open questions
-
-- @Quentin: on a `201` without `Location` for a creation with
-  `Upload-Complete: ?0` in a shared drive, should the client send the content
-  with `PUT` on the file it gets, or should the drive routes announce the
-  capability of the owner?

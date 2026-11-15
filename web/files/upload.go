@@ -166,6 +166,36 @@ func uploadProblem(c echo.Context, status int, kind, title, detail string, extra
 	return c.Blob(status, problemType, data)
 }
 
+// UploadUnavailable answers a request without content that cannot become a
+// resumable upload: the client sends the whole content in one request.
+func UploadUnavailable(c echo.Context) error {
+	return uploadProblem(c, http.StatusNotImplemented, "about:blank", "Resumable upload unavailable",
+		"The upload cannot be resumable here: send the whole content in one request.", nil)
+}
+
+// IsUploadWithoutContent tells if a request creates a file, or replaces its
+// content, with Upload-Complete: ?0: a stack without resumable uploads would
+// make an empty file of it.
+func IsUploadWithoutContent(c echo.Context) bool {
+	req := c.Request()
+	if req.Method != http.MethodPost && req.Method != http.MethodPut {
+		return false
+	}
+	complete, ok := parseSFBoolean(req.Header.Get(headerUploadComplete))
+	return ok && !complete
+}
+
+// AnnounceUploads answers an OPTIONS request: an Upload-Limit header tells
+// that the target accepts the resumable uploads
+// (draft-ietf-httpbis-resumable-upload §5.2).
+func AnnounceUploads(c echo.Context, supported bool) error {
+	exposeUploadHeaders(c)
+	if supported {
+		c.Response().Header().Set(headerUploadLimit, "min-size=0")
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func uploadNotFound(c echo.Context) error {
 	return uploadProblem(c, http.StatusNotFound, "about:blank", "Upload not found",
 		"This upload does not exist: it has expired, it has been cancelled, or it has never existed. Start a new upload.", nil)

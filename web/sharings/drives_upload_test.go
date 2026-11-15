@@ -10,10 +10,14 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httptrace"
+	"net/http/httputil"
 	"net/textproto"
+	"net/url"
 	"path"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,6 +145,58 @@ func TestSharedDriveResumableUploads(t *testing.T) {
 				assert.Empty(t, res.Header.Get("Location"))
 				id, _ := res.fileAttrs(t)
 				assertOwnerContent(t, env, id, content)
+			})
+
+			t.Run("OwnerWithoutResumableUploads", func(t *testing.T) {
+				owner := newFakeOwner(t, env.tsA.URL, "old")
+				ownerBehind(t, env, owner.URL())
+				target := prefix + "/" + env.meetingsDirID + "?Type=file&Name=old-owner.bin"
+
+				res := betty.create(http.MethodPost, target, nil, false)
+				assert.Equal(t, http.StatusNotImplemented, res.StatusCode, string(res.body))
+				res.problem(t)
+				_, err := env.acme.VFS().FileByPath("/" + env.rootDirName + "/Meetings/old-owner.bin")
+				assert.Error(t, err)
+
+				before, err := env.acme.VFS().FileByID(env.checklistID)
+				require.NoError(t, err)
+				res = betty.create(http.MethodPut, prefix+"/"+env.checklistID, nil, false)
+				assert.Equal(t, http.StatusNotImplemented, res.StatusCode, string(res.body))
+				after, err := env.acme.VFS().FileByID(env.checklistID)
+				require.NoError(t, err)
+				assert.Equal(t, before.Rev(), after.Rev())
+
+				options := betty.do(http.MethodOptions, prefix+"/uploads", nil, 0, nil)
+				assert.Equal(t, http.StatusNoContent, options.StatusCode)
+				assert.Empty(t, options.Header.Get("Upload-Limit"))
+				assert.Equal(t, int32(1), owner.probes.Load(), "the answer of the owner is kept")
+			})
+
+			t.Run("OwnerWithResumableUploads", func(t *testing.T) {
+				owner := newFakeOwner(t, env.tsA.URL, "recent")
+				ownerBehind(t, env, owner.URL())
+				for i := range 2 {
+					res := betty.create(http.MethodPost, prefix+"/"+env.meetingsDirID+"?Type=file&Name=recent-owner-"+strconv.Itoa(i)+".bin", nil, false)
+					require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+					assertDriveUploadLocation(t, prefix, res.Header.Get("Location"))
+				}
+				options := betty.do(http.MethodOptions, prefix+"/uploads", nil, 0, nil)
+				assert.Equal(t, "min-size=0", options.Header.Get("Upload-Limit"))
+				assert.Equal(t, int32(1), owner.probes.Load(), "the answer of the owner is kept")
+			})
+
+			t.Run("OwnerUnreachable", func(t *testing.T) {
+				owner := newFakeOwner(t, env.tsA.URL, "down")
+				ownerBehind(t, env, owner.URL())
+				target := prefix + "/" + env.meetingsDirID + "?Type=file&Name=unreachable.bin"
+				res := betty.create(http.MethodPost, target, nil, false)
+				assert.Equal(t, http.StatusBadGateway, res.StatusCode, string(res.body))
+
+				// The failure is not kept: the next upload asks again.
+				owner.mode.Store("recent")
+				res = betty.create(http.MethodPost, target, nil, false)
+				require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+				assertDriveUploadLocation(t, prefix, res.Header.Get("Location"))
 			})
 
 			t.Run("UploadOfAnotherMember", func(t *testing.T) {
@@ -305,6 +361,57 @@ func ownerOnTheSameStack(t *testing.T, env *sharedDrivesEnv) {
 		s, err := sharing.FindSharing(env.betty, env.firstSharingID)
 		require.NoError(t, err)
 		s.Members[0].Instance = ownerURL
+		require.NoError(t, couchdb.UpdateDoc(env.betty, s))
+	})
+}
+
+// fakeOwner stands in front of the stack of the owner: "recent" relays every
+// request, "old" refuses OPTIONS like a stack without resumable uploads, and
+// "down" drops the connections.
+type fakeOwner struct {
+	srv    *httptest.Server
+	mode   atomic.Value
+	probes atomic.Int32
+}
+
+func newFakeOwner(t *testing.T, ownerURL, mode string) *fakeOwner {
+	target, err := url.Parse(ownerURL)
+	require.NoError(t, err)
+	relay := httputil.NewSingleHostReverseProxy(target)
+	f := &fakeOwner{}
+	f.mode.Store(mode)
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mode := f.mode.Load().(string)
+		if mode == "down" {
+			panic(http.ErrAbortHandler)
+		}
+		if r.Method == http.MethodOptions {
+			f.probes.Add(1)
+			if mode == "old" {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+		}
+		r.Host = target.Host
+		relay.ServeHTTP(w, r)
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeOwner) URL() string { return f.srv.URL }
+
+// ownerBehind makes Betty's stack reach the owner at the given URL.
+func ownerBehind(t *testing.T, env *sharedDrivesEnv, ownerURL string) {
+	s, err := sharing.FindSharing(env.betty, env.firstSharingID)
+	require.NoError(t, err)
+	previous := s.Members[0].Instance
+	s.Members[0].Instance = ownerURL
+	require.NoError(t, couchdb.UpdateDoc(env.betty, s))
+	t.Cleanup(func() {
+		s, err := sharing.FindSharing(env.betty, env.firstSharingID)
+		require.NoError(t, err)
+		s.Members[0].Instance = previous
 		require.NoError(t, couchdb.UpdateDoc(env.betty, s))
 	})
 }

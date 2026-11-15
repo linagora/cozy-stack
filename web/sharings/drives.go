@@ -2,8 +2,10 @@ package sharings
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/driveactivity"
@@ -772,6 +775,101 @@ func UploadAppendHandler(c echo.Context, inst *instance.Instance, s *sharing.Sha
 // UploadCancelHandler handles DELETE requests to cancel a resumable upload.
 func UploadCancelHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
 	return files.UploadCancelHandler(c)
+}
+
+// UploadOptionsHandler handles OPTIONS /sharings/drives/:id/uploads: an
+// Upload-Limit header tells that the uploads to the drive can be resumable,
+// on the stack of the owner.
+func UploadOptionsHandler(c echo.Context) error {
+	inst := middlewares.GetInstance(c)
+	if _, err := middlewares.GetPermission(c); err != nil {
+		return err
+	}
+	s, err := sharing.FindSharing(inst, c.Param("id"))
+	if err != nil {
+		return wrapErrors(err)
+	}
+	if !s.Drive {
+		return jsonapi.NotFound(errors.New("not a drive"))
+	}
+	if !s.Active {
+		return jsonapi.Forbidden(middlewares.ErrForbidden)
+	}
+	if s.Owner {
+		if _, err := sharedDriveInteractMember(c, inst, s); err != nil {
+			return err
+		}
+		return files.AnnounceUploads(c, vfs.SupportsUploads(inst.VFS()))
+	}
+	if len(s.Credentials) == 0 {
+		return jsonapi.InternalServerError(errors.New("no credentials"))
+	}
+	u, err := url.Parse(s.Members[0].Instance)
+	if err != nil {
+		return jsonapi.InternalServerError(err)
+	}
+	accepted, err := ownerAcceptsUploads(c.Request().Context(), s, u, s.Credentials[0].DriveToken)
+	if err != nil {
+		return jsonapi.NewError(http.StatusBadGateway, "cannot reach the owner of the drive")
+	}
+	return files.AnnounceUploads(c, accepted)
+}
+
+// ownerUploadsTTL is how long the answer of the stack of an owner is kept: it
+// changes only with a deployment.
+const ownerUploadsTTL = 3 * time.Hour
+
+var ownerUploads = struct {
+	sync.Mutex
+	until    map[string]time.Time
+	accepted map[string]bool
+}{until: map[string]time.Time{}, accepted: map[string]bool{}}
+
+var ownerUploadsClient = &http.Client{Timeout: 10 * time.Second}
+
+// ownerAcceptsUploads tells if the stack of the owner of a drive accepts the
+// resumable uploads. It asks it with OPTIONS, and keeps the answer by drive
+// and owner, but not a failure to reach it.
+func ownerAcceptsUploads(ctx context.Context, s *sharing.Sharing, ownerURL *url.URL, token string) (bool, error) {
+	if owner, err := lifecycle.GetInstance(ownerURL.Host); err == nil {
+		return vfs.SupportsUploads(owner.VFS()), nil
+	}
+	key := s.SID + " " + ownerURL.String()
+	ownerUploads.Lock()
+	accepted, cached := ownerUploads.accepted[key]
+	cached = cached && time.Now().Before(ownerUploads.until[key])
+	ownerUploads.Unlock()
+	if cached {
+		return accepted, nil
+	}
+
+	target := *ownerURL
+	target.Path = "/sharings/drives/" + s.SID + "/uploads"
+	target.RawQuery = ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, target.String(), nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
+	res, err := ownerUploadsClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer res.Body.Close()
+	switch {
+	case res.StatusCode < 300:
+		accepted = res.Header.Get("Upload-Limit") != ""
+	case res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusMethodNotAllowed:
+		// An older stack has no such route.
+		accepted = false
+	default:
+		return false, fmt.Errorf("the owner has answered %d", res.StatusCode)
+	}
+	ownerUploads.Lock()
+	ownerUploads.accepted[key] = accepted
+	ownerUploads.until[key] = time.Now().Add(ownerUploadsTTL)
+	ownerUploads.Unlock()
+	return accepted, nil
 }
 
 // RestoreTrashFileHandler handles POST requests to restore a file or directory
@@ -1672,6 +1770,7 @@ func drivesRoutes(router *echo.Group) {
 	drive.HEAD("/uploads/:upload-id", proxy(UploadOffsetHandler, true))
 	drive.PATCH("/uploads/:upload-id", proxy(UploadAppendHandler, true))
 	drive.DELETE("/uploads/:upload-id", proxy(UploadCancelHandler, true))
+	drive.OPTIONS("/uploads", UploadOptionsHandler)
 	drive.POST("/:file-id/copy", proxy(CopyFile, true))
 	drive.POST("/:file-id/drives", proxy(CreateNestedSharedDriveHandler, true), prepareNestedDriveRecipients)
 
@@ -1770,6 +1869,19 @@ func proxyWithLinkMutationGuard(fn func(c echo.Context, inst *instance.Instance,
 		u, err := url.Parse(s.Members[0].Instance)
 		if err != nil {
 			return jsonapi.InternalServerError(err)
+		}
+
+		// An owner without resumable uploads would create an empty file.
+		if files.IsUploadWithoutContent(c) {
+			accepted, err := ownerAcceptsUploads(c.Request().Context(), s, u, token)
+			if err != nil {
+				inst.Logger().WithNamespace("drive-proxy").
+					Infof("Cannot ask the owner of drive %s about the resumable uploads: %s", s.SID, err)
+				return jsonapi.NewError(http.StatusBadGateway, "cannot reach the owner of the drive")
+			}
+			if !accepted {
+				return files.UploadUnavailable(c)
+			}
 		}
 
 		// XXX Let's try to avoid one http request by cheating a bit. If the two

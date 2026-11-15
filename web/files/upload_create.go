@@ -21,8 +21,7 @@ func refuseResumableUpload(c echo.Context) (bool, error) {
 	if !ok || complete {
 		return false, nil
 	}
-	return true, uploadProblem(c, http.StatusNotImplemented, "about:blank", "Resumable upload unavailable",
-		"The upload cannot be resumable here: send the whole content in one request.", nil)
+	return true, UploadUnavailable(c)
 }
 
 // startUpload handles a request that creates a file (olddoc is nil) or
