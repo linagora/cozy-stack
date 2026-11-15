@@ -84,12 +84,8 @@ type manifestSegment struct {
 	SizeBytes int64  `json:"size_bytes"`
 }
 
-func (sfs *swiftVFSV3) AssembleUpload(u *vfs.Upload, last io.Reader, size int64) error {
-	if size > 0 || len(u.Parts) == 0 {
-		if err := sfs.WriteUploadPart(u, last, size); err != nil {
-			return err
-		}
-	}
+// AssembleUpload writes the manifest. Writing it again gives the same object.
+func (sfs *swiftVFSV3) AssembleUpload(u *vfs.Upload) error {
 	segments := make([]manifestSegment, len(u.Parts))
 	for i, p := range u.Parts {
 		segments[i] = manifestSegment{

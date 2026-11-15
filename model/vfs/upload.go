@@ -60,8 +60,12 @@ type Upload struct {
 	// segments).
 	Tail      *UploadPart `json:"tail,omitempty"`
 	StorageID string      `json:"storage_id,omitempty"`
-	Assembled bool        `json:"assembled,omitempty"`
-	Completed bool        `json:"completed,omitempty"`
+	// Finalizing is set once all the content is written: the offset is the
+	// final size, and the next steps (assembling, indexing) can be run again
+	// after a stop of the stack.
+	Finalizing bool `json:"finalizing,omitempty"`
+	Assembled  bool `json:"assembled,omitempty"`
+	Completed  bool `json:"completed,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -126,9 +130,9 @@ type UploadStorage interface {
 	OpenUploadTail(u *Upload) (io.ReadCloser, error)
 	// DeleteUploadTail removes a tail that has been replaced.
 	DeleteUploadTail(u *Upload, tail *UploadPart) error
-	// AssembleUpload writes the last bytes and puts the whole content at the
-	// place of the file.
-	AssembleUpload(u *Upload, last io.Reader, size int64) error
+	// AssembleUpload puts the parts together at the place of the file. It can
+	// be called again after a stop of the stack.
+	AssembleUpload(u *Upload) error
 	// OpenUploadContent returns the assembled content.
 	OpenUploadContent(u *Upload) (io.ReadCloser, error)
 	// CommitUpload adds the assembled file to the index, like the Close method

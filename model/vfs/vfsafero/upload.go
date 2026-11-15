@@ -75,8 +75,18 @@ func (afs *aferoVFS) DeleteUploadTail(u *vfs.Upload, tail *vfs.UploadPart) error
 	return nil
 }
 
-func (afs *aferoVFS) AssembleUpload(u *vfs.Upload, last io.Reader, size int64) error {
-	return afs.writeAt(u, last, size)
+// AssembleUpload drops the bytes after the final size, left by a write
+// interrupted before the end of the upload was recorded.
+func (afs *aferoVFS) AssembleUpload(u *vfs.Upload) error {
+	f, err := afs.fs.OpenFile(uploadPath(u), os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	err = f.Truncate(u.Offset)
+	if errc := f.Close(); err == nil {
+		err = errc
+	}
+	return err
 }
 
 func (afs *aferoVFS) OpenUploadContent(u *vfs.Upload) (io.ReadCloser, error) {

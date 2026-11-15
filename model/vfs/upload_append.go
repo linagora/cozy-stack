@@ -132,6 +132,9 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 		if fresh.Length >= 0 && total != fresh.Length {
 			return deactivateLocked(fs, fresh, ErrUploadLength)
 		}
+		if fresh.Finalizing && received > 0 {
+			return deactivateLocked(fs, fresh, ErrUploadLength)
+		}
 		var olddoc *FileDoc
 		if fresh.OldFileID != "" {
 			var err error
@@ -158,7 +161,7 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 
 		// A content that fits in one part goes through the usual upload, so
 		// that it is stored as a plain object.
-		if len(fresh.Parts) == 0 && fresh.Offset == fresh.TailSize() {
+		if !fresh.Finalizing && len(fresh.Parts) == 0 && fresh.Offset == fresh.TailSize() {
 			newdoc.InternalID = ""
 			if len(newdoc.MD5Sum) == 0 {
 				newdoc.MD5Sum = nil
@@ -173,35 +176,80 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 			return fresh.markCompleted(fs, newdoc)
 		}
 
-		md5sum := h.Sum(nil)
-		if len(newdoc.MD5Sum) > 0 && !bytes.Equal(newdoc.MD5Sum, md5sum) {
-			return deactivateLocked(fs, fresh, ErrInvalidHash)
+		if !fresh.Finalizing {
+			md5sum := h.Sum(nil)
+			if len(newdoc.MD5Sum) > 0 && !bytes.Equal(newdoc.MD5Sum, md5sum) {
+				return deactivateLocked(fs, fresh, ErrInvalidHash)
+			}
+			newdoc.MD5Sum = md5sum
+			if _, _, _, err := CheckAvailableDiskSpace(fs, newdoc); err != nil {
+				return deactivateLocked(fs, fresh, err)
+			}
+			// The offset becomes the final size before anything is assembled:
+			// after a stop of the stack, the client sends an empty request to
+			// finish, and no byte is written twice.
+			err := fresh.writeProgress(fs, store, received, h, func() error {
+				if inBuf > 0 || len(fresh.Parts) == 0 {
+					if err := store.WriteUploadPart(fresh, last(), inBuf); err != nil {
+						return err
+					}
+				}
+				fresh.Length = total
+				fresh.Finalizing = true
+				fresh.File.MD5Sum = md5sum
+				fresh.File.ByteSize = total
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if err := uploadStep("finalizing"); err != nil {
+				return err
+			}
 		}
-		newdoc.MD5Sum = md5sum
 		_, _, capsize, err := CheckAvailableDiskSpace(fs, newdoc)
 		if err != nil {
 			return deactivateLocked(fs, fresh, err)
 		}
 
-		if err := store.AssembleUpload(fresh, last(), inBuf); err != nil {
-			return err
-		}
-		fresh.Assembled = true
-		fresh.File = newdoc
-		if err := couchdb.UpdateDoc(fs, fresh); err != nil {
-			return err
+		if !fresh.Assembled {
+			if err := store.AssembleUpload(fresh); err != nil {
+				return err
+			}
+			fresh.Assembled = true
+			if err := couchdb.UpdateDoc(fs, fresh); err != nil {
+				return err
+			}
+			if err := uploadStep("assembled"); err != nil {
+				return err
+			}
 		}
 
+		fresh.File = newdoc
 		if meta := NewMetaExtractor(newdoc); meta != nil {
 			extractMetadata(store, fresh, newdoc, meta)
 		}
 		if err := store.CommitUpload(fresh, olddoc, capsize); err != nil {
 			return deactivateLocked(fs, fresh, err)
 		}
+		if err := uploadStep("committed"); err != nil {
+			return err
+		}
 		created = newdoc
 		return fresh.markCompleted(fs, newdoc)
 	})
 	return created, err
+}
+
+// uploadStepHook is called after each step of the end of an upload. The tests
+// use it to stop there, as a stop of the stack would.
+var uploadStepHook func(step string) error
+
+func uploadStep(step string) error {
+	if uploadStepHook == nil {
+		return nil
+	}
+	return uploadStepHook(step)
 }
 
 func createFile(fs VFS, newdoc, olddoc *FileDoc, content io.Reader) error {

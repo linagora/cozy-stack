@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"bytes"
 	"crypto/md5"
 	crand "crypto/rand"
 	"encoding"
@@ -288,11 +289,22 @@ func deactivateLocked(fs VFS, u *Upload, cause error) error {
 // already its content: the commit has succeeded, but the upload has not been
 // marked as completed. Its content must not be aborted.
 func committedFile(fs VFS, u *Upload) *FileDoc {
-	if !u.Assembled || u.File == nil || u.File.InternalID == "" {
+	if !u.Assembled || u.File == nil {
 		return nil
 	}
 	doc, err := fs.FileByID(u.File.ID())
-	if err != nil || doc.InternalID != u.File.InternalID {
+	if err != nil {
+		return nil
+	}
+	if u.File.InternalID != "" {
+		if doc.InternalID != u.File.InternalID {
+			return nil
+		}
+		return doc
+	}
+	// The local file system has no internal ID: the content is known by its
+	// size and md5.
+	if doc.ByteSize != u.File.ByteSize || !bytes.Equal(doc.MD5Sum, u.File.MD5Sum) {
 		return nil
 	}
 	return doc

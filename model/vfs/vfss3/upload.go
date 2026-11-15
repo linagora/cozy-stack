@@ -78,12 +78,7 @@ func (sfs *s3VFS) DeleteUploadTail(u *vfs.Upload, tail *vfs.UploadPart) error {
 	return sfs.client.RemoveObject(sfs.ctx, sfs.bucket, tail.Name, minio.RemoveObjectOptions{})
 }
 
-func (sfs *s3VFS) AssembleUpload(u *vfs.Upload, last io.Reader, size int64) error {
-	if size > 0 || len(u.Parts) == 0 {
-		if err := sfs.writePart(u, last, size); err != nil {
-			return err
-		}
-	}
+func (sfs *s3VFS) AssembleUpload(u *vfs.Upload) error {
 	parts := make([]minio.CompletePart, len(u.Parts))
 	for i, p := range u.Parts {
 		parts[i] = minio.CompletePart{PartNumber: p.Number, ETag: p.ETag}
@@ -92,6 +87,14 @@ func (sfs *s3VFS) AssembleUpload(u *vfs.Upload, last io.Reader, size int64) erro
 	_, err := core.CompleteMultipartUpload(sfs.ctx, sfs.bucket, sfs.uploadKey(u), u.StorageID, parts, minio.PutObjectOptions{
 		ContentType: u.File.Mime,
 	})
+	if minio.ToErrorResponse(err).Code == "NoSuchUpload" {
+		// The stack has stopped after completing the multipart upload, before
+		// recording it.
+		info, errs := sfs.client.StatObject(sfs.ctx, sfs.bucket, sfs.uploadKey(u), minio.StatObjectOptions{})
+		if errs == nil && info.Size == u.Offset {
+			err = nil
+		}
+	}
 	if err != nil {
 		return err
 	}
