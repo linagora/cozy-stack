@@ -38,6 +38,9 @@ type uploadBackend struct {
 	// newFS returns a new VFS on the same storage and database, as a stack
 	// that restarts would do.
 	newFS func() vfs.VFS
+	// newFSWithLock returns a VFS with its own lock, like the source of a
+	// storage migration.
+	newFSWithLock func(name string) vfs.VFS
 	// objects returns the names of what an upload keeps in the storage
 	// (segments, tails, temporary file), apart from the file itself.
 	objects func(u *vfs.Upload) []string
@@ -64,17 +67,19 @@ func aferoUploadBackend(t *testing.T) uploadBackend {
 	dir := t.TempDir()
 	db := &contexter{0, "upload.afero.example.org", "upload.afero.example.org", "cozy_beta"}
 	initUploadDB(t, db)
-	newFS := func() vfs.VFS {
+	withLock := func(name string) vfs.VFS {
 		fs, err := vfsafero.New(db, vfs.NewCouchdbIndexer(db), &diskImpl{},
-			config.Lock().ReadWrite(db, "vfs"),
+			config.Lock().ReadWrite(db, name),
 			&url.URL{Scheme: "file", Host: "localhost", Path: dir}, "upload-test")
 		require.NoError(t, err)
 		return fs
 	}
+	newFS := func() vfs.VFS { return withLock("vfs") }
 	require.NoError(t, newFS().InitFs())
 	return uploadBackend{
-		name:  "afero",
-		newFS: newFS,
+		name:          "afero",
+		newFS:         newFS,
+		newFSWithLock: withLock,
 		objects: func(u *vfs.Upload) []string {
 			p := path.Join(dir, "upload-test", vfs.UploadsDirName, u.UploadID)
 			entries, err := os.ReadDir(p)
@@ -100,16 +105,18 @@ func s3UploadBackend(t *testing.T) uploadBackend {
 		S3:  config.FsS3{Buckets: map[string]config.FsS3Bucket{"default": {Name: "upload-storage"}}},
 	}))
 	storage := config.GetS3Storage(config.S3StorageFiles)
-	newFS := func() vfs.VFS {
-		fs, err := vfss3.New(db, vfs.NewCouchdbIndexer(db), &diskImpl{}, config.Lock().ReadWrite(db, "vfs"))
+	withLock := func(name string) vfs.VFS {
+		fs, err := vfss3.New(db, vfs.NewCouchdbIndexer(db), &diskImpl{}, config.Lock().ReadWrite(db, name))
 		require.NoError(t, err)
 		return fs
 	}
+	newFS := func() vfs.VFS { return withLock("vfs") }
 	require.NoError(t, newFS().InitFs())
 	keyPrefix := storage.Prefix + db.DBPrefix() + "/"
 	return uploadBackend{
-		name:  "s3",
-		newFS: newFS,
+		name:          "s3",
+		newFS:         newFS,
+		newFSWithLock: withLock,
 		objects: func(u *vfs.Upload) []string {
 			var names []string
 			for obj := range storage.Client.ListObjects(context.Background(), storage.Bucket, minio.ListObjectsOptions{
@@ -144,16 +151,18 @@ func swiftUploadBackendAt(t *testing.T, swiftFixture *testutils.SwiftFixture) up
 	initUploadDB(t, db)
 	require.NoError(t, config.InitSwiftConnection(config.Fs{URL: swiftFixture.FsURL()}))
 	conn := config.GetSwiftConnection()
-	newFS := func() vfs.VFS {
-		fs, err := vfsswift.NewV3(db, vfs.NewCouchdbIndexer(db), &diskImpl{}, config.Lock().ReadWrite(db, "vfs"))
+	withLock := func(name string) vfs.VFS {
+		fs, err := vfsswift.NewV3(db, vfs.NewCouchdbIndexer(db), &diskImpl{}, config.Lock().ReadWrite(db, name))
 		require.NoError(t, err)
 		return fs
 	}
+	newFS := func() vfs.VFS { return withLock("vfs") }
 	require.NoError(t, newFS().InitFs())
 	container := "cozy-v3-" + db.DBPrefix()
 	return uploadBackend{
-		name:  "swift",
-		newFS: newFS,
+		name:          "swift",
+		newFS:         newFS,
+		newFSWithLock: withLock,
 		objects: func(u *vfs.Upload) []string {
 			names, err := conn.ObjectNamesAll(context.Background(), container, &swift.ObjectsOpts{
 				Prefix: vfs.UploadsObjectPrefix + u.UploadID + "/",

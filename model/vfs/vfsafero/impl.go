@@ -862,16 +862,21 @@ func (f *aferoFileCreation) Close() (err error) {
 		return vfs.ErrContentLengthMismatch
 	}
 
-	return f.afs.commitFile(newdoc, olddoc, f.tmppath, f.size, f.capsize)
+	return f.afs.commitFile(newdoc, olddoc, f.tmppath, f.size, f.capsize, nil)
 }
 
 // commitFile adds a file to the index and moves its content from tmppath to
-// its place.
-func (afs *aferoVFS) commitFile(newdoc, olddoc *vfs.FileDoc, tmppath string, size, capsize int64) error {
+// its place. check, when given, runs with the lock of the VFS held.
+func (afs *aferoVFS) commitFile(newdoc, olddoc *vfs.FileDoc, tmppath string, size, capsize int64, check func() error) error {
 	if lockerr := afs.mu.Lock(); lockerr != nil {
 		return lockerr
 	}
 	defer afs.mu.Unlock()
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 
 	// Check again that a file with the same path does not exist. It can happen
 	// when the same file is uploaded twice in parallel.

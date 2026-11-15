@@ -138,8 +138,8 @@ func (sfs *swiftVFSV3) OpenUploadContent(u *vfs.Upload) (io.ReadCloser, error) {
 	return f, err
 }
 
-func (sfs *swiftVFSV3) CommitUpload(u *vfs.Upload, olddoc *vfs.FileDoc, capsize int64) error {
-	return sfs.commitFile(u.File, olddoc, u.File.ByteSize, capsize, false)
+func (sfs *swiftVFSV3) CommitUpload(u *vfs.Upload, olddoc *vfs.FileDoc, capsize int64, check func() error) error {
+	return sfs.commitFile(u.File, olddoc, u.File.ByteSize, capsize, false, check)
 }
 
 func (sfs *swiftVFSV3) AbortUpload(u *vfs.Upload) error {

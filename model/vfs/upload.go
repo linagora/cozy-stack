@@ -143,8 +143,9 @@ type UploadStorage interface {
 	// OpenUploadContent returns the assembled content.
 	OpenUploadContent(u *Upload) (io.ReadCloser, error)
 	// CommitUpload adds the assembled file to the index, like the Close method
-	// of a file created with CreateFile.
-	CommitUpload(u *Upload, olddoc *FileDoc, capsize int64) error
+	// of a file created with CreateFile. check runs once the lock of the VFS
+	// is held, and stops the commit when it fails.
+	CommitUpload(u *Upload, olddoc *FileDoc, capsize int64, check func() error) error
 	// AbortUpload removes the content of an upload that is not completed.
 	AbortUpload(u *Upload) error
 }

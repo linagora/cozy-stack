@@ -1075,16 +1075,21 @@ func (f *s3FileCreation) Close() (err error) {
 		return vfs.ErrContentLengthMismatch
 	}
 
-	return f.fs.commitFile(newdoc, olddoc, f.size, f.capsize, f.allowTrash)
+	return f.fs.commitFile(newdoc, olddoc, f.size, f.capsize, f.allowTrash, nil)
 }
 
 // commitFile adds a file, whose content is already in its object, to the
-// index.
-func (sfs *s3VFS) commitFile(newdoc, olddoc *vfs.FileDoc, size, capsize int64, allowTrash bool) error {
+// index. check, when given, runs with the lock of the VFS held.
+func (sfs *s3VFS) commitFile(newdoc, olddoc *vfs.FileDoc, size, capsize int64, allowTrash bool, check func() error) error {
 	if lockerr := sfs.mu.Lock(); lockerr != nil {
 		return lockerr
 	}
 	defer sfs.mu.Unlock()
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 
 	// Check again that a file with the same path does not exist. It can happen
 	// when the same file is uploaded twice in parallel.

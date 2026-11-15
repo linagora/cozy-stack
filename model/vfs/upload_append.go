@@ -274,8 +274,15 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 	}
 	err = uploadStep("commit")
 	if err == nil {
-		// The commit takes the lock of the VFS, like the usual upload.
-		err = store.CommitUpload(&committing, olddoc, capsize)
+		// The commit takes the lock of the VFS, like the usual upload. The
+		// upload may have been removed while the request was waiting for it,
+		// by a storage migration for example.
+		err = store.CommitUpload(&committing, olddoc, capsize, func() error {
+			return ownsUpload(fs, u)
+		})
+	}
+	if errors.Is(err, ErrUploadNotFound) || errors.Is(err, ErrUploadTakenOver) {
+		return nil, err
 	}
 	if err != nil {
 		// Another request may have indexed the file in the meantime.

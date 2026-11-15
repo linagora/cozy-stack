@@ -10,6 +10,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -159,6 +160,77 @@ func TestUploadOrphanPartsRemoved(t *testing.T) {
 			for _, o := range orphans {
 				assert.NotContains(t, left, o, "the orphan part must be removed")
 			}
+		})
+	}
+}
+
+// TestUploadFinishedDuringAStorageMigration checks that a storage migration,
+// which holds the lock of the VFS and removes the uploads, does not wait for
+// an upload that is finishing, and that this upload is not indexed once its
+// content has been removed.
+func TestUploadFinishedDuringAStorageMigration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+
+	for _, b := range uploadBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			fs := b.newFS()
+			content := randomContent(testPartSize+100, 72)
+			name := "during-migration.bin"
+			u, err := vfs.NewUpload(fs, newUploadDoc(t, name, content), nil, "", -1)
+			require.NoError(t, err)
+
+			// The end of the upload stops just before the indexing, which takes
+			// the lock of the VFS.
+			reached := make(chan struct{})
+			release := make(chan struct{})
+			restore := vfs.SetUploadStepHook(func(step string) error {
+				if step == "commit" {
+					close(reached)
+					<-release
+				}
+				return nil
+			})
+			defer restore()
+			finished := make(chan error, 1)
+			go func() {
+				_, err := vfs.AppendUpload(fs, u, bytes.NewReader(content), true)
+				finished <- err
+			}()
+			<-reached
+
+			// What the storage migration does: the lock of the VFS, then the
+			// removal of the uploads.
+			migration := config.Lock().LongOperation(fs, "vfs")
+			require.NoError(t, migration.Lock())
+			source := b.newFSWithLock("vfs-migration-source")
+			removed := make(chan error, 1)
+			go func() {
+				_, err := vfs.RemoveAllUploads(source)
+				removed <- err
+			}()
+			select {
+			case err := <-removed:
+				require.NoError(t, err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("the removal of the uploads waits for the upload")
+			}
+			close(release)
+			migration.Unlock()
+
+			select {
+			case err := <-finished:
+				require.ErrorIs(t, err, vfs.ErrUploadNotFound)
+			case <-time.After(30 * time.Second):
+				t.Fatal("the upload does not finish")
+			}
+			exists, err := fs.DirChildExists(consts.RootDirID, name)
+			require.NoError(t, err)
+			assert.False(t, exists, "a removed upload must not be indexed")
 		})
 	}
 }

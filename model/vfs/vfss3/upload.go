@@ -96,8 +96,8 @@ func (sfs *s3VFS) OpenUploadContent(u *vfs.Upload) (io.ReadCloser, error) {
 	return sfs.client.GetObject(sfs.ctx, sfs.bucket, sfs.uploadKey(u), minio.GetObjectOptions{})
 }
 
-func (sfs *s3VFS) CommitUpload(u *vfs.Upload, olddoc *vfs.FileDoc, capsize int64) error {
-	return sfs.commitFile(u.File, olddoc, u.File.ByteSize, capsize, false)
+func (sfs *s3VFS) CommitUpload(u *vfs.Upload, olddoc *vfs.FileDoc, capsize int64, check func() error) error {
+	return sfs.commitFile(u.File, olddoc, u.File.ByteSize, capsize, false, check)
 }
 
 func (sfs *s3VFS) AbortUpload(u *vfs.Upload) error {

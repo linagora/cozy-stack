@@ -114,8 +114,8 @@ func (afs *aferoVFS) OpenUploadContent(u *vfs.Upload) (io.ReadCloser, error) {
 	return afs.fs.Open(uploadContentPath(u))
 }
 
-func (afs *aferoVFS) CommitUpload(u *vfs.Upload, olddoc *vfs.FileDoc, capsize int64) error {
-	if err := afs.commitFile(u.File, olddoc, uploadContentPath(u), u.File.ByteSize, capsize); err != nil {
+func (afs *aferoVFS) CommitUpload(u *vfs.Upload, olddoc *vfs.FileDoc, capsize int64, check func() error) error {
+	if err := afs.commitFile(u.File, olddoc, uploadContentPath(u), u.File.ByteSize, capsize, check); err != nil {
 		return err
 	}
 	_ = afs.fs.RemoveAll(uploadDir(u))
