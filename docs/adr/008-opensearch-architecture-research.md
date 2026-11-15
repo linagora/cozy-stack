@@ -42,11 +42,6 @@ PUT /cozy_files_v1
           "type": "custom",
           "tokenizer": "filename_ngram",
           "filter": ["lowercase", "asciifolding"]
-        },
-        "filename_search": {
-          "type": "custom",
-          "tokenizer": "standard",
-          "filter": ["lowercase", "asciifolding"]
         }
       }
     }
@@ -63,7 +58,7 @@ PUT /cozy_files_v1
       "name": {
         "type": "text",
         "analyzer": "filename_index",
-        "search_analyzer": "filename_search",
+        "search_analyzer": "filename_index",
         "fields": {
           "prefix": { "type": "search_as_you_type" },
           "exact":  { "type": "keyword", "normalizer": "LowercaseAscii" }
@@ -103,6 +98,8 @@ PUT /cozy_share_scopes_v1
 ---
 
 ## 2. Query-Time Permission Enforcement via Native `terms` Lookup
+
+> **Superseded:** `terms` lookups take a slot each in the node read queue and fail with 429 for users in many drives. The stack now sends the folder keys itself, see [ADR 008 §3](./008-adr-server-side-file-search-v2.md#3-two-stage-permission-checking-via-cozy_share_scopes_v1--roaring-bitmaps).
 
 When user `inst_alice` executes `POST /files/search`:
 
