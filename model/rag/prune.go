@@ -14,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/labstack/echo/v4"
 )
 
@@ -171,7 +172,7 @@ func resetCheckpoint(inst *instance.Instance) error {
 		return err
 	}
 	defer mu.Unlock()
-	return deleteCheckpoint(inst, consts.Files, checkpointDocID)
+	return couchdb.DeleteCheckpoint(inst, consts.Files, checkpointDocID)
 }
 
 // Reset drops the checkpoint and launches a rag-index job, forcing a full

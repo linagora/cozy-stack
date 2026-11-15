@@ -143,7 +143,7 @@ func Index(jobCtx context.Context, inst *instance.Instance, logger logger.Logger
 		return ctx.reconcileFolder(msg.ReconcileDirID)
 	}
 
-	cp, err := loadCheckpoint(inst, consts.Files, checkpointDocID)
+	cp, err := couchdb.LoadCheckpoint(inst, consts.Files, checkpointDocID)
 	if err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ type indexContext struct {
 // runBatch processes the (at most BatchSize) changes of the feed loaded after
 // the checkpoint, then advances the checkpoint unless the batch must be
 // retried.
-func (ctx *indexContext) runBatch(cp checkpoint, feed *couchdb.ChangesResponse) error {
+func (ctx *indexContext) runBatch(cp couchdb.Checkpoint, feed *couchdb.ChangesResponse) error {
 	ctx.logger.Infof("batch after checkpoint %s: %d change(s) up to %s, %d pending, attempt %d/%d",
 		cp.LastSeq, len(feed.Results), feed.LastSeq, feed.Pending, cp.Retries+1, MaxBatchRetries+1)
 	var errj error
@@ -206,7 +206,7 @@ func (ctx *indexContext) runBatch(cp checkpoint, feed *couchdb.ChangesResponse) 
 		cp.Retries++
 		ctx.logger.Warnf("checkpoint kept at %s: %d file(s) failed on a transient error (%v), the batch will be replayed (attempt %d/%d)",
 			cp.LastSeq, len(failed), failed, cp.Retries+1, MaxBatchRetries+1)
-		if err := saveCheckpoint(ctx.inst, consts.Files, checkpointDocID, cp); err != nil {
+		if err := couchdb.SaveCheckpoint(ctx.inst, consts.Files, checkpointDocID, cp); err != nil {
 			errj = errors.Join(errj, err)
 		}
 		return errj
@@ -218,7 +218,7 @@ func (ctx *indexContext) runBatch(cp checkpoint, feed *couchdb.ChangesResponse) 
 	previous := cp.LastSeq
 	cp.LastSeq = feed.LastSeq
 	cp.Retries = 0
-	if err := saveCheckpoint(ctx.inst, consts.Files, checkpointDocID, cp); err != nil {
+	if err := couchdb.SaveCheckpoint(ctx.inst, consts.Files, checkpointDocID, cp); err != nil {
 		return errors.Join(errj, err)
 	}
 	ctx.logger.Infof("checkpoint moved from %s to %s (%d failure(s) skipped for good)",
