@@ -276,9 +276,17 @@ func (u *Upload) updateAt(fs VFS, start int64, change func(fresh *Upload) error)
 	return lost, nil
 }
 
-// SetUploadLength records the length of the content, once it is known.
+// SetUploadLength records the length of the content, once it is known. Like
+// at the creation, it must fit in the space left.
 func SetUploadLength(fs VFS, u *Upload, length int64) error {
-	err := u.update(fs, func(fresh *Upload) error {
+	limit, err := UploadSpaceLimit(fs, u)
+	if err != nil {
+		return err
+	}
+	if length > limit {
+		return deactivateUpload(fs, u, ErrFileTooBig)
+	}
+	err = u.update(fs, func(fresh *Upload) error {
 		if fresh.Length >= 0 && fresh.Length != length {
 			return ErrUploadLength
 		}
@@ -426,6 +434,10 @@ func uploadSpaceLimit(fs VFS, uploads []*Upload, exclude string) (int64, error) 
 			continue
 		}
 		available -= max(u.Length, u.Offset+u.Writing)
+		if available <= 0 {
+			// Stop before the sum of the reservations overflows.
+			return 0, nil
+		}
 	}
 	return max(min(limit, available), 0), nil
 }

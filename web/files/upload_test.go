@@ -542,6 +542,51 @@ func TestResumableUploadsByLink(t *testing.T) {
 		res = start(owner, "by-owner.bin")
 		assert.Contains(t, res.Header.Get("Upload-Limit"), "max-size=")
 	})
+
+	t.Run("LengthAboveTheSpaceLeft", func(t *testing.T) {
+		inst.BytesDiskQuota = 100 << 20
+		defer func() { inst.BytesDiskQuota = 0 }()
+		drop := owner.mkdir("drop-length")
+		link := dropLink(t, inst, ts.URL, drop)
+
+		mine := owner.startUpload(t, drop, "mine.bin", 3*uploadTestPartSize)
+		content := randomBytes(3*uploadTestPartSize, 21)
+		first := owner.patch(mine, 0, content[:uploadTestPartSize], false)
+		require.Equal(t, http.StatusNoContent, first.StatusCode, string(first.body))
+
+		theirs := link.startUpload(t, drop, "theirs.bin", -1)
+		res, err := link.do(http.MethodPatch, theirs, nil, 0, map[string]string{
+			"Upload-Draft-Interop-Version": "6",
+			"Upload-Complete":              "?0",
+			"Upload-Offset":                "0",
+			"Upload-Length":                strconv.FormatInt(1<<62, 10),
+			"Content-Type":                 "application/partial-upload",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusRequestEntityTooLarge, res.StatusCode, string(res.body))
+		assert.Equal(t, http.StatusNotFound, link.head(theirs).StatusCode)
+
+		done := owner.patch(mine, uploadTestPartSize, content[uploadTestPartSize:], true)
+		require.Equal(t, http.StatusCreated, done.StatusCode, string(done.body))
+		_, attrs := done.fileAttrs(t)
+		assert.Equal(t, md5Base64(content), attrs["md5sum"])
+	})
+}
+
+// startUpload creates an upload of a file in dirID without its content, with
+// the announced length, or -1 for none, and returns its location.
+func (c *uploadClient) startUpload(t *testing.T, dirID, name string, length int64) string {
+	headers := map[string]string{
+		"Upload-Draft-Interop-Version": "6",
+		"Upload-Complete":              "?0",
+	}
+	if length >= 0 {
+		headers["Upload-Length"] = strconv.FormatInt(length, 10)
+	}
+	res, err := c.do(http.MethodPost, "/files/"+dirID+"?Type=file&Name="+name, nil, 0, headers)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, res.StatusCode, string(res.body))
+	return res.Header.Get("Location")
 }
 
 // TestResumableUploadNameTaken checks that a name already taken is refused

@@ -8,6 +8,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,6 +57,48 @@ func TestUploadLimits(t *testing.T) {
 		fs := b.newFS()
 		cleanAllUploads(t, fs)
 		require.Equal(t, 3, fill(t, fs, "instance-"))
+	})
+}
+
+// TestUploadLengthWithinTheSpaceLeft checks that a length announced after the
+// creation of an upload must fit in the space left, like at its creation.
+func TestUploadLengthWithinTheSpaceLeft(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+	b := aferoUploadBackend(t)
+	fs := b.newFS()
+	usage, err := fs.DiskUsage()
+	require.NoError(t, err)
+	diskQuota = usage + 10*testPartSize
+	defer func() { diskQuota = 0 }()
+
+	t.Run("AnnouncedOnAnAppend", func(t *testing.T) {
+		u, err := vfs.NewUpload(fs, newUploadDoc(t, "length-later.bin", nil), nil, "", -1)
+		require.NoError(t, err)
+		err = vfs.SetUploadLength(fs, u, 1<<62)
+		require.ErrorIs(t, err, vfs.ErrFileTooBig)
+		_, err = vfs.GetUpload(fs, u.UploadID)
+		require.ErrorIs(t, err, vfs.ErrUploadNotFound)
+	})
+
+	t.Run("ReservationsAddedWithoutOverflow", func(t *testing.T) {
+		for i := range 3 {
+			u, err := vfs.NewUpload(fs, newUploadDoc(t, "huge-"+strconv.Itoa(i)+".bin", nil), nil, "", -1)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = vfs.CancelUpload(fs, u.UploadID) })
+			u.Length = 1 << 62
+			require.NoError(t, couchdb.UpdateDoc(fs, u))
+		}
+		u, err := vfs.NewUpload(fs, newUploadDoc(t, "after-huge.bin", nil), nil, "", -1)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = vfs.CancelUpload(fs, u.UploadID) })
+		limit, err := vfs.UploadSpaceLimit(fs, u)
+		require.NoError(t, err)
+		assert.Zero(t, limit)
 	})
 }
 
