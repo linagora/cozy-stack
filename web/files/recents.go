@@ -34,7 +34,7 @@ func RecordActivityFor(actor, holder *instance.Instance, dir *vfs.DirDoc, file *
 			return
 		}
 		var err error
-		inDrive, err = sharing.ActivityDrive(actor, holder, dir, file)
+		inDrive, err = sharing.InDrive(actor, holder, dir, file)
 		if err != nil {
 			holder.Logger().WithNamespace("recents").
 				Warnf("Cannot find the drive of an activity of %s: %s", actor.Domain, err)
