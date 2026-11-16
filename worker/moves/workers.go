@@ -16,6 +16,7 @@ func init() {
 		Concurrency:  runtime.NumCPU(),
 		MaxExecCount: 1,
 		Timeout:      1 * time.Hour,
+		Reserved:     true,
 		WorkerFunc:   ExportWorker,
 	})
 
@@ -24,6 +25,7 @@ func init() {
 		Concurrency:  runtime.NumCPU(),
 		MaxExecCount: 1,
 		Timeout:      3 * time.Hour,
+		Reserved:     true,
 		WorkerFunc:   ImportWorker,
 	})
 }

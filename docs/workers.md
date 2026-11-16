@@ -308,22 +308,9 @@ Its options are:
 
 ### Permissions
 
-To use this worker from a client-side application, you will need to ask the
-permission. It is done by adding this to the manifest:
-
-```json
-{
-    "permissions": {
-        "mail-from-the-user": {
-            "description": "Required to create a export of the user's data",
-            "type": "io.cozy.jobs",
-            "verbs": ["POST"],
-            "selector": "worker",
-            "values": ["export"]
-        }
-    }
-}
-```
+The `export` and `import` workers are used only by the stack: clients cannot
+push jobs or create triggers for them. A client starts an export or an import
+with the [move routes](move.md).
 
 ## trash-files worker
 

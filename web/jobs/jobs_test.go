@@ -203,6 +203,29 @@ func TestJobs(t *testing.T) {
 			Expect().Status(403)
 	})
 
+	t.Run("CreateJobForMoveWorkers", func(t *testing.T) {
+		perms := &permission.Permission{Type: permission.TypeWebapp, SourceID: consts.Apps + "/move-test", Permissions: permission.Set{{Type: "*", Verbs: permission.ALL}}}
+		require.NoError(t, couchdb.CreateDoc(testInstance, perms))
+		appToken, err := testInstance.MakeJWT(consts.AppAudience, "move-test", "", "", time.Now())
+		require.NoError(t, err)
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		for _, worker := range []string{"export", "import"} {
+			e.POST("/jobs/queue/"+worker).
+				WithHeader("Authorization", "Bearer "+appToken).
+				WithHeader("Content-Type", "application/json").
+				WithBytes([]byte(`{"data": {"attributes": {"arguments": {}}}}`)).
+				Expect().Status(403)
+
+			e.POST("/jobs/triggers").
+				WithHeader("Authorization", "Bearer "+appToken).
+				WithJSON(map[string]interface{}{"data": map[string]interface{}{"attributes": map[string]interface{}{
+					"type": "@webhook", "worker": worker,
+				}}}).
+				Expect().Status(403)
+		}
+	})
+
 	t.Run("CreateJobNotExist", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
