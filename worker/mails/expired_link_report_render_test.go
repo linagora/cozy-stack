@@ -34,7 +34,7 @@ func TestExpiredLinkReportRendering(t *testing.T) {
 	reference.Parse(raw)
 	labels := map[string]struct{ downloaded, noActivity string }{
 		"en": {"Downloaded", "No activity recorded."},
-		"fr": {"Téléchargé", "Aucune activité enregistrée."},
+		"fr": {"Téléchargé", "Aucune activité enregistrée."}, //nolint:misspell // Keep the exact French translation.
 		"es": {"Descargado", "No se ha registrado actividad."},
 		"de": {"Heruntergeladen", "Keine Aktivität aufgezeichnet."},
 		"it": {"Scaricato", "Nessuna attività registrata."},

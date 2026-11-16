@@ -153,7 +153,7 @@ func reportMailPart(t *testing.T, raw, contentType string) (netmail.Header, stri
 			}
 		}
 	}
-	body := io.Reader(msg.Body)
+	body := msg.Body
 	if msg.Header.Get("Content-Transfer-Encoding") == "quoted-printable" {
 		body = quotedprintable.NewReader(body)
 	}
