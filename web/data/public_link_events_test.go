@@ -45,4 +45,16 @@ func TestPublicLinkEventsPrivate(t *testing.T) {
 	var saved publiclink.Report
 	require.NoError(t, couchdb.GetDoc(inst, consts.PublicLinkReports, state.ID(), &saved))
 	require.Equal(t, "pending", saved.Status)
+
+	dirID, err := inst.ResolveDirID(consts.Apps + "/reports")
+	require.NoError(t, err)
+	var binding couchdb.JSONDoc
+	require.NoError(t, couchdb.GetDoc(inst, consts.PublicLinkReports, "reports-directory", &binding))
+	e.GET("/data/"+consts.PublicLinkReports+"/reports-directory").WithHeader("Authorization", "Bearer "+token).Expect().Status(403)
+	e.PUT("/data/"+consts.PublicLinkReports+"/reports-directory").WithHeader("Authorization", "Bearer "+token).WithHeader("Content-Type", "application/json").WithJSON(map[string]string{"directory_id": "attacker-folder"}).Expect().Status(403)
+	e.DELETE("/data/"+consts.PublicLinkReports+"/reports-directory").WithHeader("Authorization", "Bearer "+token).WithHeader("If-Match", binding.Rev()).Expect().Status(403)
+	var unchanged couchdb.JSONDoc
+	require.NoError(t, couchdb.GetDoc(inst, consts.PublicLinkReports, "reports-directory", &unchanged))
+	require.Equal(t, binding.Rev(), unchanged.Rev())
+	require.Equal(t, dirID, unchanged.M["directory_id"])
 }

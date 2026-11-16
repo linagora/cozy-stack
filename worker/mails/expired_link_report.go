@@ -139,8 +139,11 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 	}
 	// Never recreate a file deliberately moved, trashed, deleted or overwritten
 	// after its publication. Without a checkpointed revision, fail closed.
-	if file.Trashed || (file.AntivirusScan != nil && file.AntivirusScan.Status == vfs.AVStatusInfected) || file.DirID != state.DirectoryID || file.Metadata["public_link_report"] != state.ID() || state.FileRev == "" || state.FileFingerprint == "" {
+	if file.Trashed || (file.AntivirusScan != nil && file.AntivirusScan.Status == vfs.AVStatusInfected) || file.Metadata["public_link_report"] != state.ID() || state.FileRev == "" || state.FileFingerprint == "" {
 		return errReportCancelled
+	}
+	if err := checkReportDirectoryBinding(inst, file, state); err != nil {
+		return err
 	}
 	if err := checkReportRevision(inst, file, state.FileRev, state.FileFingerprint); err != nil {
 		return err
@@ -196,6 +199,9 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 	if current.Trashed || (current.AntivirusScan != nil && current.AntivirusScan.Status == vfs.AVStatusInfected) {
 		return errReportCancelled
 	}
+	if err := checkReportDirectoryBinding(inst, current, state); err != nil {
+		return err
+	}
 	if err := checkReportRevision(inst, current, file.Rev(), state.FileFingerprint); err != nil {
 		return err
 	}
@@ -209,6 +215,20 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 		return err
 	}
 	state.Status = "sent"
+	return nil
+}
+
+func checkReportDirectoryBinding(inst *instance.Instance, file *vfs.FileDoc, state *publiclink.Report) error {
+	dirID, err := inst.ReportsDirectoryID()
+	if couchdb.IsNotFoundError(err) || os.IsNotExist(err) {
+		return errReportCancelled
+	}
+	if err != nil {
+		return err
+	}
+	if file.DirID != dirID || state.DirectoryID != dirID {
+		return errReportCancelled
+	}
 	return nil
 }
 
@@ -340,9 +360,18 @@ func createReportFile(ctx *job.TaskContext, state *publiclink.Report) (*vfs.File
 	if state.Status == "file-ready" {
 		return nil, errReportCancelled
 	}
-	dirID, err := inst.ResolveDirID(consts.Apps + "/reports")
+	var dirID string
+	var err error
+	if state.DirectoryID == "" {
+		dirID, err = inst.ResolveDirID(consts.Apps + "/reports")
+	} else {
+		dirID, err = inst.ReportsDirectoryID()
+	}
 	if err != nil {
 		return nil, err
+	}
+	if state.DirectoryID != "" && state.DirectoryID != dirID {
+		return nil, errReportCancelled
 	}
 	dir, err := fs.DirByID(dirID)
 	if err != nil {

@@ -307,6 +307,304 @@ func TestExpiredLinkReport(t *testing.T) {
 		require.Equal(t, rows, exported)
 	})
 
+	t.Run("restricted folder reference cannot select report destination", func(t *testing.T) {
+		setup := testutils.NewSetup(t, t.Name())
+		host := setup.GetTestInstance(&lifecycle.Options{Email: "destination-owner@example.net", Locale: "en"})
+		attackerDir, err := vfs.Mkdir(host.VFS(), "/unrelated", nil)
+		require.NoError(t, err)
+		source, err := vfs.Create(host.VFS(), "/private-source.txt")
+		require.NoError(t, err)
+		_, err = io.WriteString(source, "private source bytes")
+		require.NoError(t, err)
+		require.NoError(t, source.Close())
+		sourceDoc, err := host.VFS().FileByPath("/private-source.txt")
+		require.NoError(t, err)
+		_, token := setup.GetTestClient("io.cozy.files:GET:" + attackerDir.ID() + " io.cozy.files:PATCH:" + attackerDir.ID())
+		server := setup.GetTestServer("/files", files.Routes)
+		request := func(method, path, body string) (int, string) {
+			req, err := http.NewRequest(method, server.URL+path, strings.NewReader(body))
+			require.NoError(t, err)
+			req.Host = host.Domain
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", "application/vnd.api+json")
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			raw, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			return resp.StatusCode, string(raw)
+		}
+		status, raw := request("GET", "/files/download/"+sourceDoc.ID(), "")
+		require.Equal(t, http.StatusForbidden, status, raw)
+		status, raw = request("POST", "/files/"+attackerDir.ID()+"/relationships/referenced_by", `{"data":{"type":"io.cozy.apps","id":"io.cozy.apps/reports"}}`)
+		require.Equal(t, http.StatusOK, status, raw)
+		forged, err := host.VFS().DirByID(attackerDir.ID())
+		require.NoError(t, err)
+		require.Contains(t, forged.ReferencedBy, couchdb.DocReference{Type: consts.Apps, ID: consts.Apps + "/reports"})
+
+		p := newReportLink(t, host, expiry)
+		p.Permissions[0].Values = []string{sourceDoc.ID()}
+		require.NoError(t, couchdb.UpdateDoc(host, p))
+		require.NoError(t, couchdb.CreateDoc(host, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Second), IP: "192.0.2.42", Identity: "private-report-visitor"}))
+		require.NoError(t, runReport(t, host, p, expiry))
+		state := getReport(t, host, p, expiry)
+		require.Equal(t, "sent", state.Status)
+		rows, file := readReport(t, host, state)
+		require.Contains(t, rows[1], "private-report-visitor")
+		select {
+		case got := <-messages:
+			require.Contains(t, got.recipient, "destination-owner@example.net")
+			_, text := reportMailText(t, got.raw)
+			require.Contains(t, text, file.ID())
+		case <-time.After(time.Second):
+			t.Fatal("no destination report SMTP mail")
+		}
+		status, raw = request("GET", "/files/download/"+file.ID(), "")
+		t.Logf("folder-scoped HTTP download status=%d, attacker directory=%s, report directory=%s, leaked visitor=%t", status, attackerDir.ID(), file.DirID, strings.Contains(raw, "private-report-visitor"))
+		require.Equal(t, http.StatusForbidden, status, raw)
+		require.NotContains(t, raw, "private-report-visitor")
+		require.NotEqual(t, attackerDir.ID(), file.DirID)
+	})
+
+	t.Run("existing Reports folders are never adopted", func(t *testing.T) {
+		other := testutils.NewSetup(t, t.Name()).GetTestInstance(&lifecycle.Options{Email: "migration-owner@example.net", Locale: "en"})
+		fs := other.VFS()
+		legacy, err := vfs.NewDirDocWithPath("Reports", consts.RootDirID, "/", nil)
+		require.NoError(t, err)
+		legacy.AddReferencedBy(couchdb.DocReference{Type: consts.Apps, ID: consts.Apps + "/reports"})
+		require.NoError(t, fs.CreateDir(legacy))
+		_, err = vfs.Mkdir(fs, "/Reports (1)", nil)
+		require.NoError(t, err)
+		marker, err := vfs.Create(fs, "/Reports/keep.txt")
+		require.NoError(t, err)
+		_, err = io.WriteString(marker, "existing owner data")
+		require.NoError(t, err)
+		require.NoError(t, marker.Close())
+		before, err := fs.DirByID(legacy.ID())
+		require.NoError(t, err)
+
+		p := newReportLink(t, other, expiry)
+		require.NoError(t, runReport(t, other, p, expiry))
+		state := getReport(t, other, p, expiry)
+		rows, file := readReport(t, other, state)
+		require.Len(t, rows, 1)
+		require.Equal(t, "sent", state.Status)
+		dir, err := fs.DirByID(file.DirID)
+		require.NoError(t, err)
+		require.Equal(t, "/Reports (2)", dir.Fullpath)
+		bound, err := other.ReportsDirectoryID()
+		require.NoError(t, err)
+		require.Equal(t, file.DirID, bound)
+		after, err := fs.DirByID(legacy.ID())
+		require.NoError(t, err)
+		require.Equal(t, before.Rev(), after.Rev())
+		in, err := vfs.OpenFile(fs, "/Reports/keep.txt", os.O_RDONLY, 0)
+		require.NoError(t, err)
+		data, err := io.ReadAll(in)
+		require.NoError(t, err)
+		require.NoError(t, in.Close())
+		require.Equal(t, "existing owner data", string(data))
+		select {
+		case got := <-messages:
+			require.Contains(t, got.recipient, "migration-owner@example.net")
+			_, body := reportMailText(t, got.raw)
+			require.Contains(t, body, file.ID())
+		case <-time.After(time.Second):
+			t.Fatal("migration report mail missing")
+		}
+	})
+
+	t.Run("concurrent reports ignore competing references", func(t *testing.T) {
+		other := testutils.NewSetup(t, t.Name()).GetTestInstance(&lifecycle.Options{Email: "concurrent-owner@example.net", Locale: "en"})
+		fs := other.VFS()
+		for _, name := range []string{"unrelated-a", "unrelated-b"} {
+			dir, err := vfs.NewDirDocWithPath(name, consts.RootDirID, "/", nil)
+			require.NoError(t, err)
+			dir.AddReferencedBy(couchdb.DocReference{Type: consts.Apps, ID: consts.Apps + "/reports"})
+			require.NoError(t, fs.CreateDir(dir))
+		}
+		// Exercise binding initialization, not concurrent creation of the doctype.
+		require.NoError(t, couchdb.CreateDB(other, consts.PublicLinkReports))
+		const count = 4
+		links := make([]*permission.Permission, count)
+		for n := range links {
+			links[n] = newReportLink(t, other, expiry)
+			require.NoError(t, couchdb.CreateDoc(other, &publiclink.Event{LinkID: links[n].ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Second), Identity: fmt.Sprintf("concurrent-visitor-%d", n)}))
+		}
+		start := make(chan struct{})
+		results := make(chan error, count)
+		var wg sync.WaitGroup
+		for _, p := range links {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				results <- runReport(t, other, p, expiry)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		for range count {
+			require.NoError(t, <-results)
+		}
+		bound, err := other.ReportsDirectoryID()
+		require.NoError(t, err)
+		for n, p := range links {
+			state := getReport(t, other, p, expiry)
+			require.Equal(t, "sent", state.Status)
+			rows, file := readReport(t, other, state)
+			require.Equal(t, bound, file.DirID)
+			require.Equal(t, fmt.Sprintf("concurrent-visitor-%d", n), rows[1][2])
+			select {
+			case got := <-messages:
+				require.Contains(t, got.recipient, "concurrent-owner@example.net")
+			case <-time.After(time.Second):
+				t.Fatal("concurrent report mail missing")
+			}
+		}
+		dir, err := fs.DirByID(bound)
+		require.NoError(t, err)
+		require.Equal(t, "/Reports", dir.Fullpath)
+		_, err = fs.DirByPath("/Reports (1)")
+		require.True(t, os.IsNotExist(err), "concurrent initialization must not create extra folders")
+		old := dir.Clone().(*vfs.DirDoc)
+		dir.RemoveReferencedBy()
+		require.NoError(t, fs.UpdateDirDoc(old, dir))
+		resolved, err := other.ResolveDirID(consts.Apps + "/reports")
+		require.NoError(t, err)
+		require.Equal(t, bound, resolved, "references are decorative, not authority")
+	})
+
+	t.Run("invalid binding never redirects reports", func(t *testing.T) {
+		for _, change := range []string{"empty", "root", "trash", "wrong type", "deleted binding", "deleted directory", "trashed directory"} {
+			t.Run(change, func(t *testing.T) {
+				other := testutils.NewSetup(t, t.Name()).GetTestInstance()
+				id, err := other.ResolveDirID(consts.Apps + "/reports")
+				require.NoError(t, err)
+				binding := couchdb.JSONDoc{Type: consts.PublicLinkReports}
+				require.NoError(t, couchdb.GetDoc(other, consts.PublicLinkReports, "reports-directory", &binding))
+				switch change {
+				case "deleted binding":
+					require.NoError(t, couchdb.DeleteDoc(other, &binding))
+				case "deleted directory":
+					require.NoError(t, vfs.Remove(other.VFS(), "/Reports", other.VFS().EnsureErased))
+				case "trashed directory":
+					dir, err := other.VFS().DirByID(id)
+					require.NoError(t, err)
+					_, err = vfs.TrashDir(other.VFS(), dir)
+					require.NoError(t, err)
+				default:
+					values := map[string]interface{}{"empty": "", "root": consts.RootDirID, "trash": consts.TrashDirID, "wrong type": 42}
+					binding.M["directory_id"] = values[change]
+					require.NoError(t, couchdb.UpdateDoc(other, &binding))
+				}
+				_, err = other.ResolveDirID(consts.Apps + "/reports")
+				require.Error(t, err)
+				p := newReportLink(t, other, expiry)
+				require.Error(t, runReport(t, other, p, expiry))
+				state := getReport(t, other, p, expiry)
+				_, err = other.VFS().FileByID(state.FileID)
+				require.True(t, os.IsNotExist(err))
+				_, err = other.VFS().DirByPath("/Reports (1)")
+				require.True(t, os.IsNotExist(err))
+				var after couchdb.JSONDoc
+				err = couchdb.GetDoc(other, consts.PublicLinkReports, "reports-directory", &after)
+				if change == "deleted binding" {
+					require.True(t, couchdb.IsDeletedError(err), "binding tombstone must not be resurrected")
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, binding.Rev(), after.Rev())
+				}
+				select {
+				case <-messages:
+					t.Fatal("invalid destination report mailed")
+				default:
+				}
+			})
+		}
+	})
+
+	t.Run("legacy file ready without attestation is never adopted", func(t *testing.T) {
+		for _, initialize := range []bool{false, true} {
+			t.Run(fmt.Sprintf("new-binding=%t", initialize), func(t *testing.T) {
+				other := testutils.NewSetup(t, t.Name()).GetTestInstance()
+				fs := other.VFS()
+				legacy, err := vfs.Mkdir(fs, "/old-reports", nil)
+				require.NoError(t, err)
+				p := newReportLink(t, other, expiry)
+				key := publiclink.ReportID(p.ID(), expiry)
+				file, err := vfs.NewFileDoc("old.csv", legacy.ID(), -1, nil, "text/csv", "text", time.Now(), false, false, false, nil)
+				require.NoError(t, err)
+				file.DocID = "link-report-" + key
+				file.Metadata = vfs.Metadata{"public_link_report": key}
+				out, err := fs.CreateFile(file, nil)
+				require.NoError(t, err)
+				_, err = io.WriteString(out, "occurred_at,IP,identity,action\n2026-11-14T18:31:03Z,192.0.2.42,legacy-visitor,opened\n")
+				require.NoError(t, err)
+				require.NoError(t, out.Close())
+				file, err = fs.FileByID(file.ID())
+				require.NoError(t, err)
+				fingerprint, err := reportFileFingerprint(other, file)
+				require.NoError(t, err)
+				state := &publiclink.Report{DocID: key, ReportMessage: publiclink.ReportMessage{LinkID: p.ID(), Expiry: expiry}, FileID: file.ID(), FileRev: file.Rev(), FileFingerprint: fingerprint, DirectoryID: legacy.ID(), Status: "file-ready"}
+				require.NoError(t, couchdb.CreateNamedDocWithDB(other, state))
+				if initialize {
+					_, err = other.ResolveDirID(consts.Apps + "/reports")
+					require.NoError(t, err)
+				}
+				require.NoError(t, runReport(t, other, p, expiry))
+				require.Equal(t, "cancelled", getReport(t, other, p, expiry).Status)
+				after, err := fs.FileByID(file.ID())
+				require.NoError(t, err)
+				require.Equal(t, file.Rev(), after.Rev())
+				if !initialize {
+					_, err = other.ReportsDirectoryID()
+					require.True(t, couchdb.IsNotFoundError(err), "validating an old file must not initialize a binding")
+				}
+				select {
+				case <-messages:
+					t.Fatal("unattested legacy CSV mailed")
+				default:
+				}
+			})
+		}
+	})
+
+	t.Run("pending checkpoint cannot replace its destination", func(t *testing.T) {
+		for _, initialize := range []bool{false, true} {
+			t.Run(fmt.Sprintf("new-binding=%t", initialize), func(t *testing.T) {
+				other := testutils.NewSetup(t, t.Name()).GetTestInstance(&lifecycle.Options{Email: "pending-owner@example.net", Locale: "en"})
+				legacy, err := vfs.Mkdir(other.VFS(), "/old-reports", nil)
+				require.NoError(t, err)
+				p := newReportLink(t, other, expiry)
+				key := publiclink.ReportID(p.ID(), expiry)
+				state := &publiclink.Report{DocID: key, ReportMessage: publiclink.ReportMessage{LinkID: p.ID(), Expiry: expiry}, FileID: "link-report-" + key, DirectoryID: legacy.ID(), Status: "pending"}
+				require.NoError(t, couchdb.CreateNamedDocWithDB(other, state))
+				if initialize {
+					_, err = other.ResolveDirID(consts.Apps + "/reports")
+					require.NoError(t, err)
+				}
+				err = runReport(t, other, p, expiry)
+				if initialize {
+					require.NoError(t, err)
+					require.Equal(t, "cancelled", getReport(t, other, p, expiry).Status)
+				} else {
+					require.Error(t, err)
+					_, err = other.ReportsDirectoryID()
+					require.True(t, couchdb.IsNotFoundError(err))
+				}
+				require.Equal(t, legacy.ID(), getReport(t, other, p, expiry).DirectoryID)
+				_, err = other.VFS().FileByID(state.FileID)
+				require.True(t, os.IsNotExist(err))
+				select {
+				case <-messages:
+					t.Fatal("pending report redirected or mailed")
+				default:
+				}
+			})
+		}
+	})
+
 	t.Run("retained events authenticated file and hosting owner mail", func(t *testing.T) {
 		p := newReportLink(t, inst, expiry)
 		for i := 0; i < 6; i++ {
@@ -1157,6 +1455,7 @@ func TestExpiredLinkReport(t *testing.T) {
 	})
 
 	t.Run("concurrent duplicate jobs send once", func(t *testing.T) {
+		inst := testutils.NewSetup(t, t.Name()).GetTestInstance(&lifecycle.Options{Email: "duplicate-owner@example.net", Locale: "en"})
 		p := newReportLink(t, inst, expiry)
 		var wg sync.WaitGroup
 		errors := make(chan error, 2)

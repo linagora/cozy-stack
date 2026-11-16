@@ -457,9 +457,18 @@ or automatic login. The CSV is an ordinary file whose access follows the file
 permissions and sharing of its destination. Generation and delivery do not check
 whether the Reports folder (or its ancestors) is private: reports are generated
 and emailed even when that destination is shared publicly or by replication.
-The link owner is responsible for keeping `/Reports` private to protect the
-visitor IP addresses and identities it contains. Renaming/moving the magic
-folder is supported; a trashed folder is recreated by the magic-folder resolver.
+The link owner is responsible for the destination's sharing and the visitor IP
+addresses and identities it contains. The destination is attested by a private
+server-owned binding, never selected from writable file references or paths.
+On first use, a new root Reports folder is created, with a numeric suffix if
+needed; any pre-existing Reports folder and its contents remain untouched.
+Renaming, moving and deliberately sharing the bound folder are supported.
+A missing, deleted, malformed or trashed bound destination is not automatically
+replaced. Existing files without a valid binding cannot be reused for mail.
+Deleting the private binding fails closed while its CouchDB tombstone remains;
+complete administrative loss of the private database and its history cannot be
+distinguished from first use and requires operator recovery. A crash before the
+binding is committed may leave an empty, unbound folder, which is never adopted.
 Moving, editing, trashing or deleting an already published report cancels its
 pending mail. Destination trash and link-validity checks still apply; they do
 not enforce confidentiality or prevent the owner from sharing a report.
