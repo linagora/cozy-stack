@@ -1148,6 +1148,15 @@ func TestFiles(t *testing.T) {
 		attrs = obj.Path("$.data.attributes").Object()
 		attrs.ValueEqual("dir_id", destDirID)
 		attrs.ValueEqual("name", copyName)
+
+		// 7. A name that is not a valid filename is refused
+		for _, name := range []string{"../escaped.txt", "sub/escaped.txt", ".."} {
+			e.POST("/files/"+fileID+"/copy").
+				WithQuery("Name", name).
+				WithQuery("DirID", destDirID).
+				WithHeader("Authorization", "Bearer "+token).
+				Expect().Status(422)
+		}
 	})
 
 	t.Run("CopyFileWithoutReadOnSource", func(t *testing.T) {

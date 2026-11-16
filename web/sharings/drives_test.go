@@ -5080,6 +5080,18 @@ func TestSharedDriveFileCopy(t *testing.T) {
 			Path("$.data.attributes.name").String().IsEqual("MyCustomCopy.txt")
 	})
 
+	t.Run("CannotCopyWithIllegalName", func(t *testing.T) {
+		_, eB, _ := env.createClients(t)
+
+		for _, name := range []string{"../escaped.txt", "sub/escaped.txt", ".."} {
+			eB.POST("/sharings/drives/"+env.firstSharingID+"/"+env.checklistID+"/copy").
+				WithQuery("Name", name).
+				WithHeader("Authorization", "Bearer "+env.bettyToken).
+				WithBytes([]byte("")).
+				Expect().Status(422)
+		}
+	})
+
 	t.Run("CannotCopyUnsharedFile", func(t *testing.T) {
 		eA, eB, _ := env.createClients(t)
 

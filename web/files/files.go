@@ -438,7 +438,10 @@ func CopyFile(c echo.Context, inst *instance.Instance, sharedDrive *sharing.Shar
 	if copyName == "" {
 		copyName = fileCopyName(inst, olddoc.DocName)
 	}
-	newdoc := vfs.CreateFileDocCopy(olddoc, destinationDirID, copyName)
+	newdoc, err := vfs.CreateFileDocCopy(olddoc, destinationDirID, copyName)
+	if err != nil {
+		return WrapVfsError(err)
+	}
 
 	err = checkPerm(c, permission.POST, nil, newdoc)
 	if err != nil {

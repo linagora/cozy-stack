@@ -33,7 +33,10 @@ func EnsureFileForKey(inst *instance.Instance, key string) (*vfs.FileDoc, error)
 
 	// Manage the conflict
 	conflictName := vfs.ConflictName(fs, file.DirID, file.DocName, true)
-	newfile := vfs.CreateFileDocCopy(file, file.DirID, conflictName)
+	newfile, err := vfs.CreateFileDocCopy(file, file.DirID, conflictName)
+	if err != nil {
+		return nil, err
+	}
 	newfile.CozyMetadata = vfs.NewCozyMetadata(inst.PageURL("/", nil))
 	newfile.CozyMetadata.UpdatedAt = newfile.UpdatedAt
 	newfile.CozyMetadata.UploadedAt = &newfile.UpdatedAt

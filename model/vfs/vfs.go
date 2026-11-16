@@ -942,7 +942,7 @@ func OptionsAllowCreationInTrash(opts []CreateOptions) bool {
 	return false
 }
 
-func CreateFileDocCopy(doc *FileDoc, newDirID, copyName string) *FileDoc {
+func CreateFileDocCopy(doc *FileDoc, newDirID, copyName string) (*FileDoc, error) {
 	newdoc := doc.Clone().(*FileDoc)
 	newdoc.DocID = ""
 	newdoc.DocRev = ""
@@ -950,6 +950,9 @@ func CreateFileDocCopy(doc *FileDoc, newDirID, copyName string) *FileDoc {
 		newdoc.DirID = newDirID
 	}
 	if copyName != "" {
+		if err := checkFileName(copyName); err != nil {
+			return nil, err
+		}
 		newdoc.DocName = copyName
 		mime, class := ExtractMimeAndClassFromFilename(copyName)
 		newdoc.Mime = mime
@@ -963,7 +966,7 @@ func CreateFileDocCopy(doc *FileDoc, newDirID, copyName string) *FileDoc {
 	newdoc.ResetFullpath()
 	newdoc.Metadata.RemoveCertifiedMetadata()
 
-	return newdoc
+	return newdoc, nil
 }
 
 func CheckAvailableDiskSpace(fs VFS, doc *FileDoc) (newsize, maxsize, capsize int64, err error) {

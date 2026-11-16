@@ -1334,6 +1334,7 @@ Accept: application/vnd.api+json
 - 409 Conflict, when a file with the same name as the copy would have already exists
 - 413 Payload Too Large, when there is not enough available space on the cozy
   to copy the file
+- 422 Unprocessable Entity, when the `Name` parameter is not a valid filename
 
 #### Response
 

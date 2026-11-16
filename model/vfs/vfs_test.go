@@ -622,7 +622,8 @@ func TestVfs(t *testing.T) {
 				require.NoError(t, err)
 
 				newname := "file (copy).txt"
-				newdoc := vfs.CreateFileDocCopy(file, "12345", newname)
+				newdoc, err := vfs.CreateFileDocCopy(file, "12345", newname)
+				require.NoError(t, err)
 				assert.Empty(t, newdoc.DocID)
 				assert.Empty(t, newdoc.DocRev)
 				assert.Equal(t, "12345", newdoc.DirID)
@@ -633,6 +634,9 @@ func TestVfs(t *testing.T) {
 				assert.Equal(t, file.MD5Sum, newdoc.MD5Sum)
 				assert.NotEqual(t, file.CreatedAt, newdoc.CreatedAt)
 				assert.Empty(t, newdoc.ReferencedBy)
+
+				_, err = vfs.CreateFileDocCopy(file, "12345", "../file.txt")
+				assert.ErrorIs(t, err, vfs.ErrIllegalFilename)
 			})
 
 			t.Run("ConflictName", func(t *testing.T) {
