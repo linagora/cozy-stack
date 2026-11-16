@@ -219,6 +219,51 @@ func (f *Foo) Included() []Object {
 	return []Object{qux}
 }
 
+// Bare is a Foo that includes no other resource.
+type Bare struct{ Foo }
+
+func (b *Bare) Included() []Object { return nil }
+
+func TestDataListWithIncluded(t *testing.T) {
+	get := func(objs []Object) (*httptest.ResponseRecorder, map[string]interface{}) {
+		rec := httptest.NewRecorder()
+		c := echo.New().NewContext(httptest.NewRequest(http.MethodGet, "/", nil), rec)
+		links := &LinksList{Next: "/foos?page[skip]=2"}
+		assert.NoError(t, DataListWithIncluded(c, http.StatusOK, objs, links))
+		var body map[string]interface{}
+		assert.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		return rec, body
+	}
+	ids := func(list interface{}) []interface{} {
+		var ids []interface{}
+		items, _ := list.([]interface{})
+		for _, item := range items {
+			ids = append(ids, item.(map[string]interface{})["id"])
+		}
+		return ids
+	}
+
+	rec, body := get([]Object{&Foo{FID: "courge"}, &Foo{FID: "potiron"}})
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, ContentType, rec.Header().Get(echo.HeaderContentType))
+	assert.Equal(t, []interface{}{"courge", "potiron"}, ids(body["data"]))
+	assert.Equal(t, []interface{}{"qux", "qux"}, ids(body["included"]))
+	assert.Equal(t, map[string]interface{}{"count": float64(2)}, body["meta"])
+	assert.Equal(t, map[string]interface{}{"next": "/foos?page[skip]=2"}, body["links"])
+
+	objs := []Object{&Bare{Foo{FID: "courge"}}, &Bare{Foo{FID: "potiron"}}}
+	rec, body = get(objs)
+	assert.Equal(t, []interface{}{"courge", "potiron"}, ids(body["data"]))
+	assert.NotContains(t, body, "included")
+
+	// Without included resources, the response is the one of DataList.
+	list := httptest.NewRecorder()
+	c := echo.New().NewContext(httptest.NewRequest(http.MethodGet, "/", nil), list)
+	assert.NoError(t, DataList(c, http.StatusOK, objs, &LinksList{Next: "/foos?page[skip]=2"}))
+	assert.Equal(t, list.Body.String(), rec.Body.String())
+	assert.Equal(t, list.Header(), rec.Header())
+}
+
 func TestExtractPaginationCursorRejectsNonPositiveLimit(t *testing.T) {
 	for _, limit := range []string{"0", "-1", "-2147483648"} {
 		req := httptest.NewRequest(http.MethodGet, "/?page[limit]="+limit, nil)
