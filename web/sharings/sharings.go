@@ -50,6 +50,7 @@ func CreateSharing(c echo.Context) error {
 		return jsonapi.BadJSON()
 	}
 	s.Reference = nil
+	s.MovedFrom = ""
 
 	slug, err := checkCreatePermissions(c, &s)
 	if err != nil {

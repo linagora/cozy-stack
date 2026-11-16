@@ -99,6 +99,19 @@ func TestSharingRequestCannotForgeMovedToken(t *testing.T) {
 		JSON().Object()
 	client.NotContainsKey("client_kind")
 
+	e.PUT("/auth/register/"+client.Value("client_id").String().Raw()).
+		WithHeader("Accept", "application/json").
+		WithHeader("Authorization", "Bearer "+client.Value("registration_access_token").String().Raw()).
+		WithJSON(map[string]any{
+			"client_id":     client.Value("client_id").String().Raw(),
+			"redirect_uris": []string{"https://attacker.example/cb"},
+			"client_name":   "c",
+			"software_id":   "s",
+			"client_kind":   "sharing",
+		}).
+		Expect().Status(http.StatusOK).
+		JSON().Object().NotContainsKey("client_kind")
+
 	e.POST("/auth/access_token").
 		WithFormField("grant_type", "refresh_token").
 		WithFormField("client_id", client.Value("client_id").String().Raw()).

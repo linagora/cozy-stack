@@ -342,6 +342,11 @@ func ConvertOAuthClient(c *oauth.Client) *auth.Client {
 // CreateAccessToken creates an access token for the given OAuth client,
 // with a scope on this sharing.
 func CreateAccessToken(inst *instance.Instance, cli *oauth.Client, sharingID string, verb permission.VerbSet) (*auth.AccessToken, error) {
+	// The sharing ID comes from the sharer on a recipient, and it is written
+	// in the scope: a separator of the scope would add rules or values to it.
+	if strings.ContainsAny(sharingID, " :,") {
+		return nil, ErrInvalidSharing
+	}
 	scope := consts.Sharings + ":" + verb.String() + ":" + sharingID
 	cli.CouchID = cli.ClientID // XXX CouchID is required by CreateJWT
 	refresh, err := cli.CreateJWT(inst, consts.RefreshTokenAudience, scope)
@@ -842,8 +847,9 @@ func TryTokenForMovedSharing(i *instance.Instance, c *oauth.Client, token string
 		return "", claims, false
 	}
 	// The token is not verified here, and its scope is copied to the new
-	// tokens: it must not carry any other rule than the one of the sharing.
-	if rules, err := permission.UnmarshalScopeString(claims.Scope); err != nil || len(rules) != 1 {
+	// tokens: it must not carry any other rule or value than the sharing.
+	rules, err := permission.UnmarshalScopeString(claims.Scope)
+	if err != nil || len(rules) != 1 || len(rules[0].Values) != 1 {
 		return "", claims, false
 	}
 
@@ -883,10 +889,13 @@ func TryTokenForMovedSharing(i *instance.Instance, c *oauth.Client, token string
 	req.Header.Add(echo.HeaderContentType, echo.MIMEApplicationForm)
 	req.Header.Add(echo.HeaderAccept, echo.MIMEApplicationJSON)
 	res, err := safehttp.ClientWithKeepAlive.Do(req)
-	if err != nil || res.StatusCode != http.StatusOK {
+	if err != nil {
 		return "", claims, false
 	}
 	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return "", claims, false
+	}
 	body := &auth.AccessToken{}
 	if err = json.NewDecoder(res.Body).Decode(&body); err != nil || body.AccessToken == "" {
 		return "", claims, false

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/oauth"
+	"github.com/cozy/cozy-stack/model/permission"
 	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -47,7 +48,7 @@ func TestTryTokenForMovedSharing(t *testing.T) {
 
 	// The old instance accepts every refresh token.
 	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.NoError(t, r.ParseForm())
+		assert.NoError(t, r.ParseForm())
 		w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		_ = json.NewEncoder(w).Encode(map[string]string{"access_token": r.PostForm.Get("refresh_token")})
 	}))
@@ -101,4 +102,19 @@ func TestTryTokenForMovedSharing(t *testing.T) {
 		_, _, ok := TryTokenForMovedSharing(inst, cli, token(consts.Sharings+":ALL:"+s.SID))
 		assert.False(t, ok)
 	})
+
+	t.Run("a scope with several values is refused", func(t *testing.T) {
+		cli := newClient("owner4")
+		s := movedSharing("moved,other", cli)
+
+		_, _, ok := TryTokenForMovedSharing(inst, cli, token(consts.Sharings+":ALL:"+s.SID))
+		assert.False(t, ok)
+	})
+}
+
+func TestCreateAccessTokenRefusesScopeSeparators(t *testing.T) {
+	for _, id := range []string{"x " + consts.Files, "x,y", "x:y"} {
+		_, err := CreateAccessToken(nil, &oauth.Client{}, id, permission.ALL)
+		assert.ErrorIs(t, err, ErrInvalidSharing, id)
+	}
 }
