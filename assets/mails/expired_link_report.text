@@ -1,0 +1,13 @@
+{{define "action"}}{{if eq . "created"}}{{t "Mail Link Report Action Created"}}{{else if eq . "updated"}}{{t "Mail Link Report Action Updated"}}{{else if eq . "opened"}}{{t "Mail Link Report Action Opened"}}{{else if eq . "downloaded"}}{{t "Mail Link Report Action Downloaded"}}{{else}}{{.}}{{end}}{{end}}
+{{t "Mail Link Report Intro"}}
+{{t "Mail Link Report Expiry" .Expiry}}
+
+{{if .Events}}{{t "Mail Link Report Last Events"}}
+{{range .Events}}{{index . 0}} | {{index . 1}} | {{index . 2}} | {{template "action" (index . 3)}}
+{{end}}{{else}}{{t "Mail Link Report No Activity"}}
+{{end}}
+{{t "Mail Link Report Scope"}}
+{{t "Mail Link Report Authentication"}}
+{{.ReportURL}}
+
+{{t "Mail Link Report Automatic"}}

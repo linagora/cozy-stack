@@ -39,6 +39,14 @@ func SendMail(ctx *job.TaskContext) error {
 		return err
 	}
 
+	err = sendInstanceMail(ctx, &opts)
+	if err != nil {
+		ctx.Logger().Warnf("sendmail has failed: %s", err)
+	}
+	return err
+}
+
+func sendInstanceMail(ctx *job.TaskContext, opts *mail.Options) error {
 	from := config.GetConfig().NoReplyAddr
 	name := config.GetConfig().NoReplyName
 	replyTo := config.GetConfig().ReplyTo
@@ -130,7 +138,7 @@ func SendMail(ctx *job.TaskContext) error {
 			opts.ReplyTo = &mail.Address{Name: name, Email: replyTo}
 		}
 		opts.RecipientName = toAddr.Name
-		if err := sendSupportMail(ctx, &opts, ctx.Instance.Domain); err != nil {
+		if err := sendSupportMail(ctx, opts, ctx.Instance.Domain); err != nil {
 			return err
 		}
 	default:
@@ -139,10 +147,7 @@ func SendMail(ctx *job.TaskContext) error {
 	if opts.TemplateName != "" && opts.Locale == "" {
 		opts.Locale = ctx.Instance.Locale
 	}
-	if err = sendMail(ctx, &opts, ctx.Instance.Domain); err != nil {
-		ctx.Logger().Warnf("sendmail has failed: %s", err)
-	}
-	return err
+	return sendMail(ctx, opts, ctx.Instance.Domain)
 }
 
 func pendingAddress(i *instance.Instance) (*mail.Address, error) {
@@ -197,6 +202,9 @@ func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
 		}
 	}
 	if dialerOptions.Host == "-" {
+		if opts.RequireDelivery {
+			return errors.New("mail transport disabled")
+		}
 		return nil
 	}
 	var date time.Time
@@ -204,6 +212,9 @@ func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
 		date = time.Now()
 	} else {
 		date = *opts.Date
+	}
+	if opts.MessageID != "" {
+		email.SetHeader("Message-ID", opts.MessageID)
 	}
 	toAddresses := make([]string, len(opts.To))
 	for i, to := range opts.To {

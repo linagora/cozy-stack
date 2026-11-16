@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"net"
 	"net/textproto"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,12 +32,20 @@ const serverString = `220 hello world
 221 Goodbye
 `
 
+func TestMain(m *testing.M) {
+	// A report fixture starts background file triggers. Reloading the global
+	// configuration in a later test races their instance lookups.
+	if err := config.LoadTestFile(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
 func TestMails(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
 	}
-
-	config.UseTestFile(t)
 
 	setup := testutils.NewSetup(t, t.Name())
 

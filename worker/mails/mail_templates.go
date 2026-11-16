@@ -19,6 +19,7 @@ func initMailTemplates() {
 	mailTemplater = MailTemplater{
 		"passphrase_hint":              subjectEntry{"Mail Hint Subject", nil},
 		"passphrase_reset":             subjectEntry{"Mail Reset Passphrase Subject", nil},
+		"expired_link_report":          subjectEntry{"Mail Link Report Subject", nil},
 		"archiver":                     subjectEntry{"Mail Archive Subject", nil},
 		"import_success":               subjectEntry{"Mail Import Success Subject", nil},
 		"import_error":                 subjectEntry{"Mail Import Error Subject", nil},

@@ -1317,3 +1317,69 @@ msgstr "Asistente de IA"
 
 msgid "Banners Quota Exceeded Text"
 msgstr "Ha alcanzado el límite de su almacenamiento."
+
+msgid "Tree Reports"
+msgstr "Informes"
+
+msgid "Mail Link Report Subject"
+msgstr "Informe de actividad del enlace"
+
+msgid "Mail Link Report Intro"
+msgstr "Aquí tiene el informe de actividad de su enlace público caducado."
+
+msgid "Mail Link Report Scope"
+msgstr "El CSV contiene todos los eventos conservados del enlace hasta su caducidad, incluida la actividad anterior a la activación de los informes."
+
+msgid "Mail Link Report Last Events"
+msgstr "Últimos tres eventos registrados (UTC | IP | identidad | acción):"
+
+msgid "Mail Link Report No Activity"
+msgstr "No se ha registrado actividad."
+
+msgid "Mail Link Report Authentication"
+msgstr "Inicie sesión en la instancia de Twake que aloja el enlace para abrir el informe."
+
+msgid "Mail Link Report Open"
+msgstr "Abrir archivo CSV"
+
+msgid "Mail Link Report Activity"
+msgstr "Actividad"
+
+msgid "Mail Link Report Time"
+msgstr "Hora (UTC)"
+
+msgid "Mail Link Report IP"
+msgstr "Dirección IP"
+
+msgid "Mail Link Report User"
+msgstr "Usuario"
+
+msgid "Mail Link Report Action"
+msgstr "Acción"
+
+msgid "Mail Link Report Action Created"
+msgstr "Enlace creado"
+
+msgid "Mail Link Report Action Updated"
+msgstr "Enlace editado"
+
+msgid "Mail Link Report Action Opened"
+msgstr "Abierto"
+
+msgid "Mail Link Report Action Downloaded"
+msgstr "Descargado"
+
+msgid "Mail Link Report Context Title"
+msgstr "Abrir el archivo en Drive"
+
+msgid "Mail Link Report Context"
+msgstr "Consulte las estadísticas del enlace en el archivo"
+
+msgid "Mail Link Report Expiry"
+msgstr "Fecha de caducidad: %s"
+
+msgid "Mail Link Report CTA Title"
+msgstr "Abrir el archivo de estadísticas del enlace en Drive"
+
+msgid "Mail Link Report Automatic"
+msgstr "Este es un informe automático de Drive porque los informes de actividad están activados para su enlace público."

@@ -1473,3 +1473,69 @@ msgstr "Voir les détails du fichier"
 
 msgid "Banners Quota Exceeded Text"
 msgstr "Vous avez atteint la limite de votre espace de stockage."
+
+msgid "Tree Reports"
+msgstr "Reports"
+
+msgid "Mail Link Report Subject"
+msgstr "Rapport d’activité du lien"
+
+msgid "Mail Link Report Intro"
+msgstr "Voici le rapport d’activité de votre lien public expiré."
+
+msgid "Mail Link Report Scope"
+msgstr "Le CSV contient tous les événements conservés jusqu’à l’expiration, y compris avant l’activation du rapport."
+
+msgid "Mail Link Report Last Events"
+msgstr "Trois derniers événements enregistrés (UTC | IP | identité | action) :"
+
+msgid "Mail Link Report No Activity"
+msgstr "Aucune activité enregistrée."
+
+msgid "Mail Link Report Authentication"
+msgstr "Connectez-vous à l’instance Twake hébergeant le lien pour ouvrir le rapport."
+
+msgid "Mail Link Report Open"
+msgstr "Ouvrir le fichier CSV"
+
+msgid "Mail Link Report Activity"
+msgstr "Activité"
+
+msgid "Mail Link Report Time"
+msgstr "Date (UTC)"
+
+msgid "Mail Link Report IP"
+msgstr "Adresse IP"
+
+msgid "Mail Link Report User"
+msgstr "Utilisateur"
+
+msgid "Mail Link Report Action"
+msgstr "Action"
+
+msgid "Mail Link Report Action Created"
+msgstr "Lien créé"
+
+msgid "Mail Link Report Action Updated"
+msgstr "Lien modifié"
+
+msgid "Mail Link Report Action Opened"
+msgstr "Ouvert"
+
+msgid "Mail Link Report Action Downloaded"
+msgstr "Téléchargé"
+
+msgid "Mail Link Report Context Title"
+msgstr "Ouvrir le fichier dans Drive"
+
+msgid "Mail Link Report Context"
+msgstr "Consultez les statistiques du lien dans le fichier"
+
+msgid "Mail Link Report Expiry"
+msgstr "Date d’expiration : %s"
+
+msgid "Mail Link Report CTA Title"
+msgstr "Ouvrir le fichier de statistiques dans Drive"
+
+msgid "Mail Link Report Automatic"
+msgstr "Ce rapport est envoyé automatiquement par Drive car le suivi d’activité est activé pour votre lien public."
