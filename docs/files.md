@@ -1896,8 +1896,29 @@ What the list gives depends on what is found for the item:
 - an item that is not found was destroyed: it has no resource at all
 - an item that the user cannot read has an empty `file` relationship
   (`"data": null`) and no included document; it is listed with the name the
-  user knew, and cannot be opened. For now, this is the case of every item of
-  a shared drive owned by another instance (those with an `owner_domain`).
+  user knew, and cannot be opened
+
+An item with an `owner_domain` is in a shared drive owned by another instance,
+where it is read with the access of the user checked:
+
+- the document is included when a drive of which the user is a member who has
+  accepted it gives the item. It is what the shared drive routes give for the
+  item, with the `driveId` of this drive: when several drives give the item,
+  those where the user can write come first, then the outermost one. Its
+  `path` is relative to the root of the drive (`/Sub/hello.txt`), and the root
+  itself has no `path`. Its links are paths of the files routes
+  (`/files/:file-id`, `/files/:file-id/thumbnails/:secret/:format`), as for
+  an item of the user, with a thumbnail secret of the instance of the owner.
+- a trashed item is in no drive: it is included, with the `driveId`, when a
+  drive of the user gives the folder it would be restored into, so that the
+  user can restore it. Its `path` is the one it has under the trash of the
+  owner (`/.cozy_trash/Old/hello.txt`), which tells that a folder is
+  trashed, and it has no `restore_path`.
+- the `file` relationship is empty when no drive of the user gives the item
+  any more (the user was revoked, the item was moved out of the drive), or
+  when the instance of the owner is not found on the stack
+- the item has no resource when it is not found on the instance of its owner:
+  it was destroyed, or moved to another owner
 
 The route never writes or deletes rows.
 
@@ -2040,7 +2061,93 @@ Content-Type: application/vnd.api+json
 
 In this example, the file was renamed since the last activity of the user: the
 resource keeps the name they knew, and the included document has the current
-one.
+one. The second item is in a shared drive that the user cannot read any more.
+
+An item of a shared drive that the user can read has this resource, and this
+included document:
+
+```json
+{
+  "data": [
+    {
+      "type": "io.cozy.files.recents",
+      "id": "0c1116b0-6f7a-11e6-8b77-86f30ca893d3",
+      "meta": {
+        "rev": "1-ff3beeb4"
+      },
+      "attributes": {
+        "owner_domain": "alice.example.net",
+        "last_viewed_at": "2026-11-04T16:20:11Z",
+        "last_activity_at": "2026-11-04T16:20:11Z",
+        "name": "Meeting notes.cozy-note",
+        "type": "file",
+        "mime": "text/vnd.cozy.note+markdown",
+        "class": "text"
+      },
+      "relationships": {
+        "file": {
+          "data": {
+            "type": "io.cozy.files",
+            "id": "0c1116b0-6f7a-11e6-8b77-86f30ca893d3"
+          }
+        }
+      }
+    }
+  ],
+  "meta": {
+    "count": 1
+  },
+  "included": [
+    {
+      "type": "io.cozy.files",
+      "id": "0c1116b0-6f7a-11e6-8b77-86f30ca893d3",
+      "meta": {
+        "rev": "4-7b2d9a10"
+      },
+      "attributes": {
+        "type": "file",
+        "name": "Meeting notes.cozy-note",
+        "dir_id": "357b8a5c-6f7a-11e6-9b1c-8fbb1e4ae5a1",
+        "path": "/Meetings/Meeting notes.cozy-note",
+        "driveId": "b4e58d039c03d01742085de5e505284e",
+        "trashed": false,
+        "md5sum": "1B2M2Y8AsgTpgAmY7PhCfg==",
+        "created_at": "2026-10-20T14:02:11Z",
+        "updated_at": "2026-11-04T16:20:11Z",
+        "tags": [],
+        "size": "1024",
+        "executable": false,
+        "class": "text",
+        "mime": "text/vnd.cozy.note+markdown"
+      },
+      "relationships": {
+        "parent": {
+          "links": {
+            "related": "/files/357b8a5c-6f7a-11e6-9b1c-8fbb1e4ae5a1"
+          },
+          "data": {
+            "type": "io.cozy.files",
+            "id": "357b8a5c-6f7a-11e6-9b1c-8fbb1e4ae5a1"
+          }
+        },
+        "referenced_by": {
+          "links": {
+            "self": "/files/0c1116b0-6f7a-11e6-8b77-86f30ca893d3/relationships/references"
+          },
+          "data": null
+        }
+      },
+      "links": {
+        "self": "/files/0c1116b0-6f7a-11e6-8b77-86f30ca893d3"
+      }
+    }
+  ]
+}
+```
+
+On the instance of the owner, this file is at
+`/Teams/Product/Meetings/Meeting notes.cozy-note`, in the drive whose root is
+`/Teams/Product`.
 
 The attributes of a resource are the stored fields of its row:
 
