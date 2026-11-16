@@ -27,6 +27,7 @@ type memScheduler struct {
 	share   *ShareGroupTrigger
 	av      *AntivirusTrigger
 	recents *RecentsSyncTrigger
+	reports *ExpiredLinksTrigger
 	mu      sync.RWMutex
 	log     *logger.Entry
 }
@@ -60,6 +61,12 @@ func (s *memScheduler) StartScheduler(b Broker) error {
 	go s.av.Schedule()
 	s.recents = NewRecentsSyncTrigger(s.broker)
 	go s.recents.Schedule()
+	s.reports = NewExpiredLinksTrigger(s.broker)
+	reportCtx, cancel := context.WithCancel(context.Background())
+	s.reports.cancel = cancel
+	if _, skip := os.LookupEnv("COZY_SKIP_LOADING_TRIGGERS"); !skip {
+		go s.reports.Schedule(reportCtx)
+	}
 
 	// XXX The memory scheduler loads the triggers from CouchDB when the stack
 	// is started. This can cause some stability issues when running system
@@ -129,6 +136,7 @@ func (s *memScheduler) ShutdownScheduler(ctx context.Context) error {
 	s.share.Unschedule()
 	s.av.Unschedule()
 	s.recents.Unschedule()
+	s.reports.cancel()
 	fmt.Println("ok.")
 	return nil
 }

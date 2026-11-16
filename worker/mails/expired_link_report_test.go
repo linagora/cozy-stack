@@ -37,8 +37,10 @@ import (
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/files"
+	webpermissions "github.com/cozy/cozy-stack/web/permissions"
 	_ "github.com/cozy/cozy-stack/web/statik"
 	"github.com/cozy/gomail"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
 
@@ -229,6 +231,81 @@ func TestExpiredLinkReport(t *testing.T) {
 	config.GetConfig().Mail = dialer
 	t.Cleanup(func() { config.GetConfig().Mail = original })
 	expiry := time.Now().Add(-48 * time.Hour).UTC().Truncate(time.Second)
+
+	t.Run("HTTP collection scanner and actual mail worker end to end", func(t *testing.T) {
+		setup := testutils.NewSetup(t, t.Name())
+		host := setup.GetTestInstance(&lifecycle.Options{Email: "pipeline-owner@example.net", Locale: "en"})
+		host.FeatureFlags = map[string]interface{}{publiclink.FlagEnabled: true}
+		require.NoError(t, instance.Update(host))
+		source, err := vfs.Create(host.VFS(), "/source.txt")
+		require.NoError(t, err)
+		_, err = io.WriteString(source, "real source bytes")
+		require.NoError(t, err)
+		require.NoError(t, source.Close())
+		doc, err := host.VFS().FileByPath("/source.txt")
+		require.NoError(t, err)
+		_, ownerToken := setup.GetTestClient("io.cozy.files:GET")
+		server := setup.GetTestServerMultipleRoutes(map[string]func(*echo.Group){
+			"/permissions": webpermissions.Routes, "/files": files.Routes,
+		})
+		request := func(method, path, body, bearer string) (int, []byte) {
+			req, err := http.NewRequest(method, server.URL+path, strings.NewReader(body))
+			require.NoError(t, err)
+			req.Host = host.Domain
+			req.Header.Set("Authorization", "Bearer "+bearer)
+			req.Header.Set("Content-Type", "application/vnd.api+json")
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			raw, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			return resp.StatusCode, raw
+		}
+		body := fmt.Sprintf(`{"data":{"type":"io.cozy.permissions","attributes":{"activity_report_enabled":true,"expires_at":%q,"permissions":{"files":{"type":"io.cozy.files","verbs":["GET"],"values":[%q]}}}}}`, time.Now().Add(time.Hour).UTC().Format(time.RFC3339), doc.ID())
+		status, raw := request("POST", "/permissions?codes=link", body, ownerToken)
+		require.Equal(t, http.StatusOK, status, string(raw))
+		var created struct{ Data struct{ ID string } }
+		require.NoError(t, json.Unmarshal(raw, &created))
+		p, err := permission.GetPermissionByIDIncludingExpired(host, created.Data.ID)
+		require.NoError(t, err)
+		status, raw = request("GET", "/files/download/"+doc.ID()+"?Dl=1", "", p.Codes["link"])
+		require.Equal(t, http.StatusOK, status)
+		require.Equal(t, "real source bytes", string(raw))
+		var events []publiclink.Event
+		require.Eventually(t, func() bool {
+			events = nil
+			err := publiclink.ForEachEvent(context.Background(), host, p.ID(), func(e publiclink.Event) error { events = append(events, e); return nil })
+			return err == nil && len(events) == 2
+		}, 5*time.Second, 10*time.Millisecond)
+		require.Equal(t, publiclink.Created, events[0].Action)
+		require.Equal(t, publiclink.Downloaded, events[1].Action)
+		at := time.Now().UTC()
+		p.ExpiresAt = at
+		require.NoError(t, couchdb.UpdateDoc(host, p))
+		status, _ = request("GET", "/files/download/"+doc.ID()+"?Dl=1", "", p.Codes["link"])
+		require.NotEqual(t, http.StatusOK, status)
+		require.NoError(t, job.QueueExpiredLinkReports(context.Background(), job.System(), host, time.Now()))
+		var state publiclink.Report
+		require.Eventually(t, func() bool {
+			err := couchdb.GetDoc(host, consts.PublicLinkReports, publiclink.ReportID(p.ID(), at), &state)
+			return err == nil && state.Status == "sent"
+		}, 10*time.Second, 20*time.Millisecond)
+		rows, file := readReport(t, host, &state)
+		require.Len(t, rows, 3)
+		for i, event := range events {
+			require.Equal(t, []string{event.OccurredAt.UTC().Format(time.RFC3339Nano), event.IP, event.Identity, string(event.Action)}, rows[i+1])
+		}
+		got := <-messages
+		require.Contains(t, got.recipient, "pipeline-owner@example.net")
+		_, text := reportMailText(t, got.raw)
+		require.Contains(t, text, file.ID())
+		require.NotContains(t, text, p.Codes["link"])
+		status, raw = request("GET", "/files/download/"+file.ID(), "", ownerToken)
+		require.Equal(t, http.StatusOK, status)
+		exported, err := csv.NewReader(strings.NewReader(string(raw))).ReadAll()
+		require.NoError(t, err)
+		require.Equal(t, rows, exported)
+	})
 
 	t.Run("retained events authenticated file and hosting owner mail", func(t *testing.T) {
 		p := newReportLink(t, inst, expiry)

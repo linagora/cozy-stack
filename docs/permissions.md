@@ -431,6 +431,13 @@ A report-only PATCH does not change the password, expiry or file rules:
 {"data":{"type":"io.cozy.permissions","attributes":{"activity_report_enabled":true}}}
 ```
 
+Only opted-in file links with a valid expired `expires_at` and a remaining
+public code are processed. A reconciliation runs at startup and every five
+minutes across all instances, including inactive instances and deadlines missed
+during downtime. Changing the expiry to a distinct instant creates a new report;
+equivalent timezone spellings do not. Revocation, disabling or changing the
+deadline cancels stale work.
+
 The recipient is the owner of the **instance hosting the permission**, even if a
 shared-drive recipient created the link. A CSV in the new
 `io.cozy.apps/reports` magic folder (initially `/Reports`) contains all retained
@@ -463,7 +470,7 @@ The private `io.cozy.public_links.reports` checkpoint survives instance moves an
 is inaccessible through the data API or realtime subscriptions. Jobs contain
 only the permission ID and canonical expiry, never sharecodes or event data.
 
-Failures retry at most eight times, with exponential
+Failures retry through reconciliation at most eight times, with exponential
 backoff capped at six hours. Quota/export/upload failures never publish a partial
 report. SMTP-disabled mode is not considered a successful send. A published file
 is reused after a crash. Completion is recorded only after SMTP accepts the
