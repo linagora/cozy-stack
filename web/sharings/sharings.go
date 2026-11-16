@@ -116,7 +116,7 @@ func PutSharing(c echo.Context) error {
 	s.SID = obj.ID
 	s.Reference = nil
 	s.ShortcutID = ""
-	s.Reference = nil
+	s.MovedFrom = ""
 
 	if err := s.CreateRequest(inst); err != nil {
 		return wrapErrors(err)

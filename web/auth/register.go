@@ -15,6 +15,8 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+const sharingClientKind = "sharing"
+
 func registerClient(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
 	err := config.GetRateLimiter().CheckRateLimit(instance, limits.OAuthClientType)
@@ -32,6 +34,10 @@ func registerClient(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusUnauthorized,
 				"Not authorized to create client with given parameters")
 		}
+	}
+	// The clients of a sharing are created by the stack, never registered.
+	if client.ClientKind == sharingClientKind {
+		client.ClientKind = ""
 	}
 	if err := client.Create(instance); err != nil {
 		return c.JSON(err.Code, err)
@@ -74,6 +80,9 @@ func updateClient(c echo.Context) error {
 	client := new(oauth.Client)
 	if err := json.NewDecoder(c.Request().Body).Decode(client); err != nil {
 		return err
+	}
+	if client.ClientKind == sharingClientKind {
+		client.ClientKind = oldClient.ClientKind
 	}
 	if err := client.Update(instance, oldClient); err != nil {
 		return c.JSON(err.Code, err)

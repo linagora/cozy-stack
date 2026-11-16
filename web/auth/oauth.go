@@ -1009,7 +1009,7 @@ func accessToken(c echo.Context) error {
 	case "refresh_token":
 		token := c.FormValue("refresh_token")
 		claims, ok := client.ValidToken(instance, consts.RefreshTokenAudience, token)
-		if !ok && client.ClientKind == "sharing" {
+		if !ok && client.ClientKind == sharingClientKind {
 			out.Refresh, claims, ok = sharing.TryTokenForMovedSharing(instance, client, token)
 		}
 		if !ok {

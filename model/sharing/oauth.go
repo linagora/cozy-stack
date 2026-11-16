@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -840,10 +841,25 @@ func TryTokenForMovedSharing(i *instance.Instance, c *oauth.Client, token string
 	if len(parts) != 3 || parts[0] != consts.Sharings {
 		return "", claims, false
 	}
+	// The token is not verified here, and its scope is copied to the new
+	// tokens: it must not carry any other rule than the one of the sharing.
+	if rules, err := permission.UnmarshalScopeString(claims.Scope); err != nil || len(rules) != 1 {
+		return "", claims, false
+	}
 
 	// Find the sharing and check that it has been moved from another instance
 	s, err := FindSharing(i, parts[2])
 	if err != nil || s.MovedFrom == "" {
+		return "", claims, false
+	}
+	clientID := c.ClientID
+	if clientID == "" {
+		clientID = c.CouchID
+	}
+	isInbound := slices.ContainsFunc(s.Credentials, func(cred Credentials) bool {
+		return cred.InboundClientID != "" && cred.InboundClientID == clientID
+	})
+	if !isInbound {
 		return "", claims, false
 	}
 	validUntil := s.UpdatedAt.Add(consts.AccessTokenValidityDuration)
@@ -856,11 +872,8 @@ func TryTokenForMovedSharing(i *instance.Instance, c *oauth.Client, token string
 	q := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {token},
-		"client_id":     {c.ClientID},
+		"client_id":     {clientID},
 		"client_secret": {c.ClientSecret},
-	}
-	if c.ClientID == "" {
-		q.Set("client_id", c.CouchID)
 	}
 	payload := strings.NewReader(q.Encode())
 	req, err := http.NewRequest("POST", s.MovedFrom+"/auth/access_token", payload)
