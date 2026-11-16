@@ -111,9 +111,12 @@ func finalSaveFile(inst *instance.Instance, key, downloadURL string) error {
 		return ErrInvalidKey
 	}
 
-	_, err = saveFile(inst, *detector, downloadURL)
+	saved, err := saveFile(inst, *detector, downloadURL)
 	if err == nil {
+		// Read before the removal, which forgets the participants.
+		participants := sessionParticipants(inst, key)
 		_ = GetStore().RemoveDoc(inst, key)
+		recordSaveActivity(inst, saved.ID, participants)
 	}
 	return err
 }
@@ -127,6 +130,7 @@ func forceSaveFile(inst *instance.Instance, key, downloadURL string) error {
 	updated, err := saveFile(inst, *detector, downloadURL)
 	if err == nil {
 		_ = GetStore().UpdateDoc(inst, key, *updated)
+		recordSaveActivity(inst, updated.ID, sessionParticipants(inst, key))
 	}
 	return err
 }
