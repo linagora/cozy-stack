@@ -1,6 +1,9 @@
 package vfs
 
-import "time"
+import (
+	"sync/atomic"
+	"time"
+)
 
 // StopUploadAfter makes the end of the uploads stop after the given step with
 // err, as a stop of the stack would. It returns a function to restore the
@@ -21,6 +24,19 @@ func SetClaimWait(d time.Duration) func() {
 	previous := claimWait
 	claimWait = d
 	return func() { claimWait = previous }
+}
+
+// CountClaimReads counts the reads of the uploads made by the requests that
+// wait for an older one. It returns the counter and a function to restore the
+// normal behavior.
+func CountClaimReads() (*atomic.Int64, func()) {
+	var reads atomic.Int64
+	previous := pollUpload
+	pollUpload = func(fs VFS, id string) (*Upload, error) {
+		reads.Add(1)
+		return previous(fs, id)
+	}
+	return &reads, func() { pollUpload = previous }
 }
 
 // ActiveUploads returns the uploads that are not completed.

@@ -17,6 +17,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/gofrs/uuid/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 // The state of an upload is guarded by the _rev of its document: each change
@@ -236,6 +237,9 @@ func (u *Upload) update(fs VFS, change func(fresh *Upload) error) error {
 // bytes it has received.
 var claimWait = 5 * time.Second
 
+// pollUpload reads the upload while a new request waits for an older one.
+var pollUpload = GetUpload
+
 // ClaimUpload loads an upload and makes the calling request its owner. When an
 // older request is still running for this upload, often a request cut by the
 // client that has not saved its last bytes yet, it waits for it, at most
@@ -259,24 +263,43 @@ func ClaimUpload(fs VFS, id string) (*Upload, error) {
 	if err != nil || u.Completed || u.Previous == "" {
 		return u, err
 	}
-	deadline := time.Now().Add(claimWait)
-	for u.Previous != "" && time.Now().Before(deadline) {
-		time.Sleep(claimWait / 50)
-		if u, err = GetUpload(fs, id); err != nil {
-			return nil, err
-		}
+	// The requests of this stack that wait for the same upload, like several
+	// HEAD of a client, share one wait.
+	waited, err, _ := claimWaits.Do(fs.DBPrefix()+"/"+id, func() (interface{}, error) {
+		return waitPrevious(fs, id)
+	})
+	if err != nil {
+		return nil, err
 	}
-	if u.Previous != "" {
-		u, err = updateUpload(fs, id, func(fresh *Upload) error {
-			fresh.Previous = ""
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
+	u = waited.(*Upload).Clone().(*Upload)
 	u.Owner = owner
 	return u, nil
+}
+
+var claimWaits singleflight.Group
+
+// waitPrevious waits until the older request of an upload has saved its
+// bytes, at most claimWait, then removes its right to write. It reads the
+// upload more and more rarely.
+func waitPrevious(fs VFS, id string) (*Upload, error) {
+	deadline := time.Now().Add(claimWait)
+	pause := claimWait / 100
+	for {
+		u, err := pollUpload(fs, id)
+		if err != nil || u.Previous == "" {
+			return u, err
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			break
+		}
+		time.Sleep(min(pause, left))
+		pause = min(2*pause, claimWait/10)
+	}
+	return updateUpload(fs, id, func(fresh *Upload) error {
+		fresh.Previous = ""
+		return nil
+	})
 }
 
 // start marks the request as running, so that a newer request waits for it

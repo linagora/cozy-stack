@@ -299,7 +299,9 @@ The state of an upload:
   The new request then answers an offset that no older request can move: the
   draft forbids outdated offsets, and recommends to stop the older request
   ([§10](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.html#section-10)).
-  The state lives in CouchDB, so this works across stacks.
+  The state lives in CouchDB, so this works across stacks. The requests of a
+  stack that wait for the same upload share one wait, which reads the
+  document more and more rarely (from 50 ms to 500 ms).
 - Out of any lock: the writes of the parts and tails to the storage, the
   assembling, and the extraction of the metadata. Each write has its own slot
   and object, so the uploads of an instance, and two requests on one upload,

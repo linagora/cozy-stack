@@ -430,3 +430,58 @@ func TestUploadCutThenResumedAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestUploadClaimsShareTheirWait checks that the requests that wait for an
+// older one, like several HEAD of a client, read the upload a few times only.
+func TestUploadClaimsShareTheirWait(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+	defer vfs.SetClaimWait(time.Second)()
+
+	b := aferoUploadBackend(t)
+	fs := b.newFS()
+	content := randomContent(testPartSize, 77)
+	u, err := vfs.NewUpload(fs, newUploadDoc(t, "shared-wait.bin", content), nil, "", -1)
+	require.NoError(t, err)
+
+	// The older request stays stuck with its last bytes.
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	var first atomic.Bool
+	restore := vfs.SetUploadStepHook(func(step string) error {
+		if step == "received" && first.CompareAndSwap(false, true) {
+			close(reached)
+			<-release
+		}
+		return nil
+	})
+	defer restore()
+	done := make(chan error, 1)
+	go func() {
+		_, err := vfs.AppendUpload(fs, u, &cutReader{bytes.NewReader(content), 1000, errCut}, false)
+		done <- err
+	}()
+	<-reached
+
+	reads, restoreReads := vfs.CountClaimReads()
+	defer restoreReads()
+	const n = 8
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			head, err := vfs.ClaimUpload(fs, u.UploadID)
+			assert.NoError(t, err)
+			assert.Zero(t, head.Offset)
+		}()
+	}
+	wg.Wait()
+	close(release)
+	require.ErrorIs(t, <-done, vfs.ErrUploadTakenOver)
+	assert.LessOrEqual(t, reads.Load(), int64(20), "%d reads for %d requests", reads.Load(), n)
+}
