@@ -7,11 +7,11 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 )
 
-// ActivityDrive tells, on the holder of an item, whether a drive gives this
-// item to the actor, from the position of the item and never from the route or
-// the code of the request. It is false for an item outside of the drives of the
+// InDrive tells, on the holder of an item, whether a drive gives this item to
+// the actor, from the position of the item and never from the route or the
+// code of the request. It is false for an item outside of the drives of the
 // actor, in a classic sharing for example.
-func ActivityDrive(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs.FileDoc) (bool, error) {
+func InDrive(actor, holder *instance.Instance, dir *vfs.DirDoc, file *vfs.FileDoc) (bool, error) {
 	var id string
 	if dir != nil {
 		id = dir.ID()
