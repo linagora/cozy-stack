@@ -133,4 +133,71 @@ func TestMemScheduler(t *testing.T) {
 		err = sch.ShutdownScheduler(context.Background())
 		assert.NoError(t, err)
 	})
+
+	t.Run("OneShotTriggerIsDeletedOnceFired", func(t *testing.T) {
+		var called int32
+		bro := job.NewMemBroker()
+		require.NoError(t, bro.StartWorkers(job.WorkersList{{
+			WorkerType:   "one-shot",
+			Concurrency:  1,
+			MaxExecCount: 1,
+			Timeout:      time.Second,
+			WorkerFunc: func(_ *job.TaskContext) error {
+				atomic.AddInt32(&called, 1)
+				return nil
+			},
+		}}))
+		sch := job.NewMemScheduler()
+		require.NoError(t, sch.StartScheduler(bro))
+		t.Cleanup(func() { _ = sch.ShutdownScheduler(context.Background()) })
+
+		infos := job.TriggerInfos{Type: "@in", WorkerType: "one-shot", Arguments: "10ms"}
+		trigger, err := job.NewTrigger(testInstance, infos, nil)
+		require.NoError(t, err)
+		require.NoError(t, sch.AddTrigger(trigger))
+		require.Eventually(t, func() bool {
+			return atomic.LoadInt32(&called) == 1 && !sch.HasTrigger(testInstance, infos)
+		}, 5*time.Second, 10*time.Millisecond, "a fired @in trigger no longer counts as pending")
+		_, err = sch.GetTrigger(testInstance, trigger.ID())
+		require.ErrorIs(t, err, job.ErrNotFoundTrigger)
+	})
+
+	t.Run("HasTriggerWhileOneShotTriggersFire", func(t *testing.T) {
+		const n = 20
+		var called int32
+		bro := job.NewMemBroker()
+		require.NoError(t, bro.StartWorkers(job.WorkersList{{
+			WorkerType:   "one-shot-race",
+			Concurrency:  1,
+			MaxExecCount: 1,
+			Timeout:      time.Second,
+			WorkerFunc: func(_ *job.TaskContext) error {
+				atomic.AddInt32(&called, 1)
+				return nil
+			},
+		}}))
+		sch := job.NewMemScheduler()
+		require.NoError(t, sch.StartScheduler(bro))
+		t.Cleanup(func() { _ = sch.ShutdownScheduler(context.Background()) })
+
+		infos := job.TriggerInfos{Type: "@in", WorkerType: "one-shot-race", Arguments: "1ms"}
+		done := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					sch.HasTrigger(testInstance, infos)
+				}
+			}
+		}()
+		defer close(done)
+		for range n {
+			trigger, err := job.NewTrigger(testInstance, infos, nil)
+			require.NoError(t, err)
+			require.NoError(t, sch.AddTrigger(trigger))
+		}
+		require.Eventually(t, func() bool { return atomic.LoadInt32(&called) == n }, 5*time.Second, 10*time.Millisecond)
+	})
 }
