@@ -361,7 +361,8 @@ stack of the member asks the owner first:
   of the member sends this request to the stack of the owner, with the drive
   token. When the owner is on the same stack, it looks at the storage of the
   owner instead.
-- The answer is kept 3 hours, by drive and address of the owner. A failure to
+- The answer is kept 3 hours, by drive and address of the owner, in the
+  memory of the stack; each new answer removes the expired ones. A failure to
   reach the owner is not kept, and the request gets `502`.
 - A redirection is not followed, as it would send the drive token to another
   address: it counts as an owner that cannot resume, and is not kept.

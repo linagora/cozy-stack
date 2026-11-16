@@ -829,11 +829,44 @@ func UploadOptionsHandler(c echo.Context) error {
 // changes only with a deployment.
 const ownerUploadsTTL = 3 * time.Hour
 
-var ownerUploads = struct {
+// ownerUploadsCache keeps the answers of the stacks of the owners, by drive
+// and address of the owner. Each new answer removes the expired ones.
+type ownerUploadsCache struct {
 	sync.Mutex
-	until    map[string]time.Time
-	accepted map[string]bool
-}{until: map[string]time.Time{}, accepted: map[string]bool{}}
+	entries map[string]ownerUploadsEntry
+}
+
+type ownerUploadsEntry struct {
+	accepted bool
+	until    time.Time
+}
+
+func newOwnerUploadsCache() *ownerUploadsCache {
+	return &ownerUploadsCache{entries: map[string]ownerUploadsEntry{}}
+}
+
+func (c *ownerUploadsCache) get(key string, now time.Time) (accepted, ok bool) {
+	c.Lock()
+	defer c.Unlock()
+	e, ok := c.entries[key]
+	if !ok || !now.Before(e.until) {
+		return false, false
+	}
+	return e.accepted, true
+}
+
+func (c *ownerUploadsCache) put(key string, accepted bool, now time.Time) {
+	c.Lock()
+	defer c.Unlock()
+	for k, e := range c.entries {
+		if !now.Before(e.until) {
+			delete(c.entries, k)
+		}
+	}
+	c.entries[key] = ownerUploadsEntry{accepted: accepted, until: now.Add(ownerUploadsTTL)}
+}
+
+var ownerUploads = newOwnerUploadsCache()
 
 // ownerUploadsClient does not follow the redirections: it would send the
 // drive token to another address.
@@ -852,10 +885,7 @@ func ownerAcceptsUploads(ctx context.Context, s *sharing.Sharing, ownerURL *url.
 		return vfs.SupportsUploads(owner.VFS()), nil
 	}
 	key := s.SID + " " + ownerURL.String()
-	ownerUploads.Lock()
-	accepted, cached := ownerUploads.accepted[key]
-	cached = cached && time.Now().Before(ownerUploads.until[key])
-	ownerUploads.Unlock()
+	accepted, cached := ownerUploads.get(key, time.Now())
 	if cached {
 		return accepted, nil
 	}
@@ -885,10 +915,7 @@ func ownerAcceptsUploads(ctx context.Context, s *sharing.Sharing, ownerURL *url.
 	default:
 		return false, fmt.Errorf("the owner has answered %d", res.StatusCode)
 	}
-	ownerUploads.Lock()
-	ownerUploads.accepted[key] = accepted
-	ownerUploads.until[key] = time.Now().Add(ownerUploadsTTL)
-	ownerUploads.Unlock()
+	ownerUploads.put(key, accepted, time.Now())
 	return accepted, nil
 }
 

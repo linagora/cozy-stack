@@ -10,11 +10,27 @@ import (
 	"net/textproto"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOwnerUploadsCache(t *testing.T) {
+	cache := newOwnerUploadsCache()
+	now := time.Now()
+	cache.put("a", true, now)
+	accepted, ok := cache.get("a", now.Add(ownerUploadsTTL-time.Second))
+	assert.True(t, ok)
+	assert.True(t, accepted)
+	_, ok = cache.get("a", now.Add(ownerUploadsTTL+time.Second))
+	assert.False(t, ok)
+
+	// An entry that has expired is removed by the next one.
+	cache.put("b", false, now.Add(ownerUploadsTTL+time.Second))
+	assert.Len(t, cache.entries, 1)
+}
 
 func TestRelayInterimResponse(t *testing.T) {
 	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
