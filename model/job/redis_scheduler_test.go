@@ -336,7 +336,7 @@ func TestRedisScheduler(t *testing.T) {
 		// Simulate a previously saved trigger, bypassing new-trigger validation.
 		trigger, err := job.NewEventTrigger(&job.TriggerInfos{
 			Type: "@event", WorkerType: "private-event-test",
-			Arguments: consts.PublicLinkEvents + " io.cozy.foos",
+			Arguments: consts.PublicLinkEvents + " " + consts.PublicLinkReports + " io.cozy.foos",
 			Domain:    testInstance.DomainName(), Prefix: testInstance.DBPrefix(), Cluster: testInstance.DBCluster(),
 		})
 		require.NoError(t, err)
@@ -352,6 +352,7 @@ func TestRedisScheduler(t *testing.T) {
 			t.Fatal("control event not delivered")
 		}
 		realtime.GetHub().Publish(testInstance, realtime.EventCreate, private, nil)
+		realtime.GetHub().Publish(testInstance, realtime.EventCreate, &couchdb.JSONDoc{Type: consts.PublicLinkReports, M: map[string]interface{}{"_id": "checkpoint", "status": "pending"}}, nil)
 		select {
 		case id := <-received:
 			t.Fatalf("private event delivered: %s", id)

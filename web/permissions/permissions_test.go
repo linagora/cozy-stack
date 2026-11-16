@@ -366,6 +366,48 @@ func TestPermissions(t *testing.T) {
 		patchLink(consts.RootDirID, "ALL").Status(403)
 	})
 
+	t.Run("LimitedSubsetCannotGrantWholeDoctype", func(t *testing.T) {
+		_, limitedToken := setup.GetTestClient("io.cozy.files:GET:file-a")
+		target, err := permission.CreateWebappSet(testInstance, "subset-target", permission.Set{}, "1.0.0")
+		require.NoError(t, err)
+		before, err := permission.GetByID(testInstance, target.ID())
+		require.NoError(t, err)
+		count, err := couchdb.CountNormalDocs(testInstance, consts.Permissions)
+		require.NoError(t, err)
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		for _, rule := range []string{
+			`{"type":"io.cozy.files","verbs":["GET"]}`,
+			`{"type":"io.cozy.files","verbs":["GET"],"selector":"_id"}`,
+		} {
+			body := []byte(`{"data":{"attributes":{"permissions":{"files":` + rule + `}}}}`)
+			e.POST("/permissions").WithQuery("codes", "link").WithHeader("Authorization", "Bearer "+limitedToken).
+				WithHeader("Content-Type", "application/json").WithBytes(body).Expect().Status(403)
+			e.PATCH("/permissions/apps/subset-target").WithHeader("Authorization", "Bearer "+limitedToken).
+				WithHeader("Content-Type", "application/json").WithBytes(body).Expect().Status(403)
+			after, err := permission.GetByID(testInstance, target.ID())
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			afterCount, err := couchdb.CountNormalDocs(testInstance, consts.Permissions)
+			require.NoError(t, err)
+			require.Equal(t, count, afterCount)
+		}
+
+		bounded := []byte(`{"data":{"attributes":{"permissions":{"files":{"type":"io.cozy.files","verbs":["GET"],"values":["file-a"]}}}}}`)
+		e.POST("/permissions").WithQuery("codes", "link").WithHeader("Authorization", "Bearer "+limitedToken).
+			WithHeader("Content-Type", "application/json").WithBytes(bounded).Expect().Status(200)
+		afterCount, err := couchdb.CountNormalDocs(testInstance, consts.Permissions)
+		require.NoError(t, err)
+		require.Equal(t, count+1, afterCount)
+		e.PATCH("/permissions/apps/subset-target").WithHeader("Authorization", "Bearer "+limitedToken).
+			WithHeader("Content-Type", "application/json").WithBytes(bounded).Expect().Status(200)
+		updated, err := permission.GetByID(testInstance, target.ID())
+		require.NoError(t, err)
+		require.Len(t, updated.Permissions, 1)
+		require.Equal(t, consts.Files, updated.Permissions[0].Type)
+		require.Equal(t, []string{"file-a"}, updated.Permissions[0].Values)
+	})
+
 	t.Run("CreateSubPermission", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
@@ -1077,7 +1119,7 @@ func TestPermissions(t *testing.T) {
 			// Assert a cozyMetadata has been added
 		meta := obj.Path("$.data.attributes.cozyMetadata").Object()
 		meta.ValueEqual("createdByApp", "drive")
-		meta.ValueEqual("doctypeVersion", "1")
+		meta.ValueEqual("doctypeVersion", permission.DocTypeVersion)
 		meta.ValueEqual("metadataVersion", 1)
 		meta.Value("createdAt").String().AsDateTime(time.RFC3339).
 			InRange(time.Now().Add(-5*time.Second), time.Now().Add(5*time.Second))
@@ -1143,7 +1185,7 @@ func TestPermissions(t *testing.T) {
 		// Assert a cozyMetadata has been added
 		meta := obj.Path("$.data.attributes.cozyMetadata").Object()
 		meta.ValueEqual("createdByApp", "foobar")
-		meta.ValueEqual("doctypeVersion", "1")
+		meta.ValueEqual("doctypeVersion", permission.DocTypeVersion)
 		meta.ValueEqual("metadataVersion", 1)
 
 		// Clean

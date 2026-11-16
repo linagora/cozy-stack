@@ -57,7 +57,7 @@ func TestValidateSharedDrivePermissionPatch(t *testing.T) {
 
 	t.Run("RejectsNoAttributes", func(t *testing.T) {
 		err := sharingsweb.ValidateSharedDrivePermissionPatch(permission.Permission{})
-		assertJSONAPIError(t, err, http.StatusBadRequest, "password, expires_at, or permissions must be provided")
+		assertJSONAPIError(t, err, http.StatusBadRequest, "password, expires_at, permissions, or activity_report_enabled must be provided")
 	})
 
 	t.Run("RejectsInvalidPasswordType", func(t *testing.T) {

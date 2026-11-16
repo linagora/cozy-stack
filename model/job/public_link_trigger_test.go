@@ -17,6 +17,8 @@ func TestPublicLinkEventTrigger(t *testing.T) {
 	db := prefixer.NewPrefixer(0, "trigger-test", "trigger-test")
 	for _, args := range []string{
 		consts.PublicLinkEvents,
+		consts.PublicLinkReports,
+		"io.cozy.foos:CREATED " + consts.PublicLinkReports + ":UPDATED",
 		consts.PublicLinkEvents + ":CREATED",
 		"io.cozy.foos:CREATED " + consts.PublicLinkEvents + ":UPDATED",
 	} {
@@ -30,7 +32,7 @@ func TestPublicLinkEventTrigger(t *testing.T) {
 
 	// Reconstruct a trigger saved before this doctype was protected.
 	trigger, err := NewEventTrigger(&TriggerInfos{
-		Type: "@event", Arguments: consts.PublicLinkEvents + " io.cozy.foos", Domain: db.DomainName(), Prefix: db.DBPrefix(),
+		Type: "@event", Arguments: consts.PublicLinkEvents + " " + consts.PublicLinkReports + " io.cozy.foos", Domain: db.DomainName(), Prefix: db.DBPrefix(),
 	})
 	require.NoError(t, err)
 	jobs := trigger.Schedule()
@@ -55,6 +57,7 @@ func TestPublicLinkEventTrigger(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 
 	realtime.GetHub().Publish(db, realtime.EventCreate, private, nil)
+	realtime.GetHub().Publish(db, realtime.EventCreate, &couchdb.JSONDoc{Type: consts.PublicLinkReports, M: map[string]interface{}{"_id": "checkpoint", "status": "pending"}}, nil)
 	select {
 	case <-jobs:
 		t.Fatal("private public-link event was delivered to a persisted trigger")

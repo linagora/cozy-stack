@@ -417,6 +417,23 @@ Content-Type: application/vnd.api+json
 }
 ```
 
+### Expiration activity reports for public file links
+
+On `POST /permissions?codes=email` and `PATCH /permissions/:id`, the optional
+boolean `activity_report_enabled` enables an expiration report. It defaults to
+false; omitting it on PATCH preserves the current setting, while explicit false
+disables it. Null, strings and other non-booleans are rejected. Changing the
+setting requires permission to manage the link (including the shared-drive
+owner/member API); possession of its public sharecode is insufficient.
+A report-only PATCH does not change the password, expiry or file rules:
+
+```json
+{"data":{"type":"io.cozy.permissions","attributes":{"activity_report_enabled":true}}}
+```
+
+The Stack API and worker do not enable this automatically in Drive: the
+cozy-sharing/Drive settings UI must separately expose and persist the opt-in.
+
 ### GET /permissions/:id/statistics
 
 Download the retained events for one public file link as CSV. The permission ID
