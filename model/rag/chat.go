@@ -719,9 +719,9 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 }
 
 // withInstructions adds the instructions of the client to the messages, as a
-// system message after the prompt of the assistant: the LLM gets it as it is
-// without the documents, and openRAG takes the leading system messages as
-// custom instructions.
+// system message after the prompt of the assistant: openRAG takes the leading
+// system messages as custom instructions, joinSystemMessages joins them for the
+// LLM alone.
 func withInstructions(messages []ragMessage, instructions string) []ragMessage {
 	if instructions == "" {
 		return messages
@@ -738,11 +738,10 @@ func withInstructions(messages []ragMessage, instructions string) []ragMessage {
 
 // directLLMPayload is the body of a chat completion without the documents.
 // openRAG takes a request without a partition as its model as one for the LLM
-// itself: it gets the messages as they are, with no retrieval and no system
-// prompt of openRAG.
+// itself: no retrieval and no system prompt of openRAG.
 func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]interface{}) map[string]interface{} {
 	payload := map[string]interface{}{
-		"messages":    messages,
+		"messages":    joinSystemMessages(messages),
 		"stream":      stream,
 		"temperature": Temperature,
 		"top_p":       TopP,
@@ -759,6 +758,26 @@ func directLLMPayload(messages []ragMessage, stream bool, metadata map[string]in
 		payload["metadata"] = kept
 	}
 	return payload
+}
+
+// joinSystemMessages makes one system message of the leading ones (prompt of
+// the assistant, instructions of the client, rules of the tools): the chat
+// template of some LLMs, like Mistral, refuses more than one system message.
+// openRAG joins them itself when it answers from the documents.
+func joinSystemMessages(messages []ragMessage) []ragMessage {
+	i := 0
+	for i < len(messages) && messages[i].Role == SystemRole {
+		i++
+	}
+	if i < 2 {
+		return messages
+	}
+	contents := make([]string, i)
+	for j, msg := range messages[:i] {
+		contents[j] = msg.Content
+	}
+	system := ragMessage{Role: SystemRole, Content: strings.Join(contents, "\n\n")}
+	return append([]ragMessage{system}, messages[i:]...)
 }
 
 // withTools gives the LLM the actions as its tools. One action per message:
