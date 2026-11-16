@@ -73,13 +73,13 @@ sequenceDiagram
   reject any further request
   ([§4.1](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.html#section-4.1))
   without naming a status code.
-- A new request on an upload makes it the only writer: an older request still
-  running stops
+- A new request on an upload (`HEAD` or `PATCH`) makes it the only writer.
+  When an older request is still running, the new one waits for it to save
+  the bytes it has received, at most 5 seconds, then the older one cannot
+  write anymore. The offset answered is never outdated
   ([§10](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.html#section-10)),
-  after saving at most its last write, when it starts at the current offset.
-  The bytes of a request cut by a pause or a lost connection are kept even if
-  the client resumes at once
-  ([§8.2](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.html#section-8.2)).
+  and the bytes of a request cut by a pause or a lost connection are kept
+  even if the client resumes at once.
 
 ## Compatibility
 
@@ -126,6 +126,9 @@ fields:
   `Content-MD5` on the whole file without reading it again.
 - `owner`: a token of the request that may write. A new request takes it,
   and the writes of the older one do not count.
+- `running`: the request of the owner is appending.
+- `previous_owner`: the token of an older request still running, that may
+  save the bytes it has received while the new one waits for it.
 - `by_link`: the upload is made through a sharing by link.
 - `parts`: the parts written to the storage (slot, name, ETag, size).
 - `tail`: the bytes after the last part, kept in a temporary object until the
@@ -282,13 +285,21 @@ The state of an upload:
   saves it with its `_rev`. On a conflict, the change is evaluated again on
   the new state.
 - A cut request often learns about the cut after the client has resumed: the
-  `HEAD` of the client has taken the upload before the stack has saved the
-  bytes received. The cut request can still save this last write if it starts
-  at the current offset, so no byte is lost and no hole is made
-  ([§6.2](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.html#section-6.2),
-  [§8.2](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.html#section-8.2)),
-  then it stops. The newer request, if it has started from the older offset,
-  gets a `409`, and the client asks for the offset again.
+  `HEAD` of the client arrives before the stack has saved the bytes received.
+  A request marks the upload as `running` while it appends. A new request
+  takes the upload, keeps the token of the running one in `previous_owner`,
+  and waits, at most 5 seconds, until this field is empty:
+  - the older request can still save the bytes it has received, at the
+    current offset, and empties the field in the same `_rev` update, then
+    stops;
+  - after the wait, the new request empties the field itself: the older
+    request, stuck or on a stopped stack, cannot write anymore, and its write
+    in progress is removed.
+
+  The new request then answers an offset that no older request can move: the
+  draft forbids outdated offsets, and recommends to stop the older request
+  ([§10](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.html#section-10)).
+  The state lives in CouchDB, so this works across stacks.
 - Out of any lock: the writes of the parts and tails to the storage, the
   assembling, and the extraction of the metadata. Each write has its own slot
   and object, so the uploads of an instance, and two requests on one upload,

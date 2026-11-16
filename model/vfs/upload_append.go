@@ -35,6 +35,11 @@ func AppendUpload(fs VFS, u *Upload, r io.Reader, complete bool) (*FileDoc, erro
 	if err != nil {
 		return nil, err
 	}
+	stop, err := u.start(fs)
+	if err != nil {
+		return nil, err
+	}
+	defer stop()
 
 	h := md5.New()
 	if err := h.(encoding.BinaryUnmarshaler).UnmarshalBinary(u.MD5State); err != nil {
@@ -147,7 +152,13 @@ func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h ha
 	}
 	replaced := u.Tail
 	written := *u
+	owner := u.Owner
 	lost, err := u.updateAt(fs, start, func(fresh *Upload) error {
+		if fresh.Owner != owner {
+			// The last write of an older request: the newer one stops
+			// waiting for it.
+			fresh.Previous = ""
+		}
 		if tail {
 			fresh.Tail = &part
 		} else {
@@ -168,7 +179,6 @@ func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h ha
 		_ = store.DeleteUploadPart(u, *replaced)
 	}
 	if lost {
-		// The write is kept, but a newer request owns the upload now.
 		return ErrUploadTakenOver
 	}
 	return nil

@@ -232,17 +232,76 @@ func (u *Upload) update(fs VFS, change func(fresh *Upload) error) error {
 	return nil
 }
 
-// ClaimUpload loads an upload and makes the calling request its owner. An
-// older request still running for this upload will not count its next writes
+// claimWait bounds the time a new request waits for an older one to save the
+// bytes it has received.
+var claimWait = 5 * time.Second
+
+// ClaimUpload loads an upload and makes the calling request its owner. When an
+// older request is still running for this upload, often a request cut by the
+// client that has not saved its last bytes yet, it waits for it, at most
+// claimWait, then the older request cannot write anymore. The offset returned
+// is then durable: the server must not answer an outdated offset, and the
+// recommended way is to stop the older request
 // (draft-ietf-httpbis-resumable-upload §10).
 func ClaimUpload(fs VFS, id string) (*Upload, error) {
-	return updateUpload(fs, id, func(fresh *Upload) error {
+	owner := crand.Text()
+	u, err := updateUpload(fs, id, func(fresh *Upload) error {
 		if fresh.Completed {
 			return nil
 		}
-		fresh.Owner = crand.Text()
+		if fresh.Running {
+			fresh.Previous = fresh.Owner
+			fresh.Running = false
+		}
+		fresh.Owner = owner
 		return nil
 	})
+	if err != nil || u.Completed || u.Previous == "" {
+		return u, err
+	}
+	deadline := time.Now().Add(claimWait)
+	for u.Previous != "" && time.Now().Before(deadline) {
+		time.Sleep(claimWait / 50)
+		if u, err = GetUpload(fs, id); err != nil {
+			return nil, err
+		}
+	}
+	if u.Previous != "" {
+		u, err = updateUpload(fs, id, func(fresh *Upload) error {
+			fresh.Previous = ""
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	u.Owner = owner
+	return u, nil
+}
+
+// start marks the request as running, so that a newer request waits for it
+// to save the bytes it has received. The returned function marks its end.
+func (u *Upload) start(fs VFS) (func(), error) {
+	if err := u.update(fs, func(fresh *Upload) error {
+		fresh.Running = true
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	owner := u.Owner
+	return func() {
+		_, _ = updateUpload(fs, u.UploadID, func(fresh *Upload) error {
+			switch {
+			case fresh.Owner == owner && fresh.Running:
+				fresh.Running = false
+			case fresh.Previous == owner:
+				fresh.Previous = ""
+			default:
+				return errNotSelected
+			}
+			return nil
+		})
+	}, nil
 }
 
 // reserveSlot gives a slot to the next write of the request, after checking
@@ -272,16 +331,17 @@ func (u *Upload) reserveSlot(fs VFS, end, size int64, tail bool) (int, error) {
 }
 
 // updateAt applies change to the upload if nobody has written to it since the
-// offset start. A request that has lost the upload to a newer one can still
-// save a write that starts at the current offset: the draft asks to keep as
-// much of an interrupted request as possible, without discontinuities
-// (draft-ietf-httpbis-resumable-upload §6.2 and §8.2). lost tells the request
-// that it must stop after this write.
+// offset start. A request that a newer one is waiting for (see ClaimUpload)
+// can still save the bytes it has received; lost tells it that it must stop
+// after this write.
 func (u *Upload) updateAt(fs VFS, start int64, change func(fresh *Upload) error) (bool, error) {
 	owner := u.Owner
 	lost := false
 	saved, err := updateUpload(fs, u.UploadID, func(fresh *Upload) error {
 		if fresh.Completed || fresh.Finalizing || fresh.Offset != start {
+			return ErrUploadTakenOver
+		}
+		if fresh.Owner != owner && fresh.Previous != owner {
 			return ErrUploadTakenOver
 		}
 		lost = fresh.Owner != owner

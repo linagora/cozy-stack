@@ -1095,7 +1095,9 @@ of the `201 Created` response, then sends the content with `PATCH` requests.
 
 To pause, the client stops the request in progress. To resume, it asks the
 offset with `HEAD`, and sends the rest with `PATCH`. When a request is
-interrupted, the server keeps the bytes received so far. When the offset
+interrupted, the server keeps the bytes received so far: just after a cut, the
+`HEAD` can take a few seconds, while the server waits for the interrupted
+request to save them. When the offset
 returned by `HEAD` is the size of the file but `Upload-Complete` is `?0`, the
 server has received everything but has not finished creating the file: the
 client sends a `PATCH` with no content and `Upload-Complete: ?1`.

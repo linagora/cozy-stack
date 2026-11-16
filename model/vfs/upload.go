@@ -51,8 +51,14 @@ type Upload struct {
 	Offset   int64  `json:"offset"`
 	MD5State []byte `json:"md5_state,omitempty"`
 	// Owner is the token of the last request that has created or resumed the
-	// upload. Only this request can write.
+	// upload. Only this request can write, apart from Previous.
 	Owner string `json:"owner,omitempty"`
+	// Running is set while the request of the owner appends to the upload.
+	Running bool `json:"running,omitempty"`
+	// Previous is the token of an older request still running when a newer
+	// one has taken the upload: it can save the bytes it has received until
+	// the newer one stops waiting for it.
+	Previous string `json:"previous_owner,omitempty"`
 	// ByLink is set for an upload made through a sharing by link: its length
 	// does not reserve space in the quota, only its written bytes count.
 	ByLink bool `json:"by_link,omitempty"`

@@ -162,23 +162,17 @@ func TestResumableUploads(t *testing.T) {
 				content := randomContent(testPartSize+100, 7)
 				u, err := vfs.NewUpload(fs, newUploadDoc(t, "taken.bin", nil), nil, "", -1)
 				require.NoError(t, err)
-				// A newer request resumes the upload: the older one saves only
-				// its next write, contiguous to the offset, then stops.
+				// A newer request resumes the upload: the older one, which was
+				// not running, cannot write anymore.
 				newer, err := vfs.ClaimUpload(fs, u.UploadID)
 				require.NoError(t, err)
 				_, err = vfs.AppendUpload(fs, u, bytes.NewReader(content), false)
 				require.ErrorIs(t, err, vfs.ErrUploadTakenOver)
 				fresh, err := vfs.GetUpload(fs, u.UploadID)
 				require.NoError(t, err)
-				assert.Equal(t, int64(testPartSize), fresh.Offset)
+				assert.Zero(t, fresh.Offset)
 
-				// The newer request still has the old offset: it is told that
-				// the offset has moved, and the client resumes from the new one.
-				_, err = vfs.AppendUpload(fs, newer, bytes.NewReader(content), true)
-				require.ErrorIs(t, err, vfs.ErrUploadTakenOver)
-				newer, err = vfs.ClaimUpload(fs, u.UploadID)
-				require.NoError(t, err)
-				doc, err := vfs.AppendUpload(fs, newer, bytes.NewReader(content[newer.Offset:]), true)
+				doc, err := vfs.AppendUpload(fs, newer, bytes.NewReader(content), true)
 				require.NoError(t, err)
 				assert.Equal(t, content, readContent(t, fs, doc))
 			})

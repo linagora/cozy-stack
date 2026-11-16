@@ -337,10 +337,11 @@ func TestUploadCancelledDuringItsCommit(t *testing.T) {
 	}
 }
 
-// TestUploadCutThenResumedAtOnce checks that the bytes of a cut request are
-// kept when the client resumes the upload before the stack has saved them:
-// the HEAD of the client takes the upload, but the cut request still saves
-// its last write, contiguous to the offset.
+// TestUploadCutThenResumedAtOnce checks that the offset answered to a client
+// that resumes just after a cut is durable: the new request waits for the cut
+// one to save the bytes it has received, or stops it after a while, and an
+// append from this offset is accepted (draft-ietf-httpbis-resumable-upload
+// §10).
 func TestUploadCutThenResumedAtOnce(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
@@ -351,59 +352,81 @@ func TestUploadCutThenResumedAtOnce(t *testing.T) {
 
 	for _, b := range uploadBackends(t) {
 		for _, cut := range []int64{1000, testPartSize + 1000} {
-			t.Run(fmt.Sprintf("%s/%d", b.name, cut), func(t *testing.T) {
-				fs := b.newFS()
-				content := randomContent(2*testPartSize+500, 74)
-				u, err := vfs.NewUpload(fs, newUploadDoc(t, fmt.Sprintf("cut-%d.bin", cut), content), nil, "", -1)
-				require.NoError(t, err)
-
-				// The request is cut after cut bytes; the stack sees the end of
-				// the body, but the HEAD of the client arrives before it saves
-				// the bytes.
-				reached := make(chan struct{})
-				release := make(chan struct{})
-				var first atomic.Bool
-				restore := vfs.SetUploadStepHook(func(step string) error {
-					if step == "received" && first.CompareAndSwap(false, true) {
-						close(reached)
-						<-release
-					}
-					return nil
-				})
-				defer restore()
-				done := make(chan error, 1)
-				go func() {
-					_, err := vfs.AppendUpload(fs, u, &cutReader{bytes.NewReader(content), cut, errCut}, false)
-					done <- err
-				}()
-				<-reached
-				head, err := vfs.ClaimUpload(fs, u.UploadID)
-				require.NoError(t, err)
-				assert.LessOrEqual(t, head.Offset, cut)
-				close(release)
-				require.Error(t, <-done)
-
-				// The bytes of the cut request are kept.
-				fresh, err := vfs.GetUpload(fs, u.UploadID)
-				require.NoError(t, err)
-				assert.Equal(t, cut, fresh.Offset)
-
-				// The client resumes from the offset of its HEAD: the stack
-				// answers that the offset has moved, and the client resumes
-				// from the new one.
-				if head.Offset != fresh.Offset {
-					_, err = vfs.AppendUpload(fs, head, bytes.NewReader(content[head.Offset:]), true)
-					require.ErrorIs(t, err, vfs.ErrUploadTakenOver)
+			for _, stuck := range []bool{false, true} {
+				name := fmt.Sprintf("%s/%d/saved", b.name, cut)
+				if stuck {
+					name = fmt.Sprintf("%s/%d/stuck", b.name, cut)
 				}
-				resumed, err := vfs.ClaimUpload(fs, u.UploadID)
-				require.NoError(t, err)
-				require.Equal(t, cut, resumed.Offset)
-				doc, err := vfs.AppendUpload(fs, resumed, bytes.NewReader(content[cut:]), true)
-				require.NoError(t, err)
-				assert.True(t, bytes.Equal(content, readContent(t, fs, doc)))
-				sum := md5.Sum(content)
-				assert.Equal(t, sum[:], doc.MD5Sum)
-			})
+				t.Run(name, func(t *testing.T) {
+					defer vfs.SetClaimWait(time.Second)()
+					fs := b.newFS()
+					content := randomContent(2*testPartSize+500, 74)
+					u, err := vfs.NewUpload(fs, newUploadDoc(t, fmt.Sprintf("cut-%d-%t.bin", cut, stuck), content), nil, "", -1)
+					require.NoError(t, err)
+
+					// The request is cut after cut bytes; the stack sees the
+					// end of the body, but the HEAD of the client arrives
+					// before it saves the bytes.
+					reached := make(chan struct{})
+					release := make(chan struct{})
+					var first atomic.Bool
+					restore := vfs.SetUploadStepHook(func(step string) error {
+						if step == "received" && first.CompareAndSwap(false, true) {
+							close(reached)
+							<-release
+						}
+						return nil
+					})
+					defer restore()
+					done := make(chan error, 1)
+					go func() {
+						_, err := vfs.AppendUpload(fs, u, &cutReader{bytes.NewReader(content), cut, errCut}, false)
+						done <- err
+					}()
+					<-reached
+
+					claimed := make(chan *vfs.Upload, 1)
+					go func() {
+						head, err := vfs.ClaimUpload(fs, u.UploadID)
+						assert.NoError(t, err)
+						claimed <- head
+					}()
+					var head *vfs.Upload
+					want := cut
+					if stuck {
+						// The cut request stays stuck longer than the wait: it
+						// cannot write anymore, its last bytes are lost.
+						head = <-claimed
+						close(release)
+						require.ErrorIs(t, <-done, vfs.ErrUploadTakenOver)
+						want = cut / testPartSize * testPartSize
+					} else {
+						// The HEAD has taken the upload, and waits.
+						require.Eventually(t, func() bool {
+							fresh, err := vfs.GetUpload(fs, u.UploadID)
+							return err == nil && fresh.Previous != ""
+						}, 5*time.Second, 10*time.Millisecond)
+						close(release)
+						head = <-claimed
+						require.Error(t, <-done)
+					}
+					require.NotNil(t, head)
+					assert.Equal(t, want, head.Offset)
+
+					// The answer of the HEAD is not outdated: the client
+					// resumes from it.
+					fresh, err := vfs.GetUpload(fs, u.UploadID)
+					require.NoError(t, err)
+					assert.Equal(t, head.Offset, fresh.Offset)
+					assert.Empty(t, fresh.Previous)
+					doc, err := vfs.AppendUpload(fs, head, bytes.NewReader(content[head.Offset:]), true)
+					require.NoError(t, err)
+					assert.True(t, bytes.Equal(content, readContent(t, fs, doc)))
+					sum := md5.Sum(content)
+					assert.Equal(t, sum[:], doc.MD5Sum)
+					assert.Empty(t, tails(b.objects(head)))
+				})
+			}
 		}
 	}
 }
