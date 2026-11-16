@@ -1934,57 +1934,14 @@ func checkTrashEffectiveAccess(inst *instance.Instance, fileID string, member *s
 		return files.WrapVfsError(err)
 	}
 
-	var restorePath, docPath string
-	if dir != nil {
-		restorePath = dir.RestorePath
-		docPath = dir.Fullpath
-	} else {
-		restorePath = file.RestorePath
-		docPath, err = file.Path(fs)
-		if err != nil {
-			return files.WrapVfsError(err)
-		}
+	ancestor, err := sharing.RestoreFolder(fs, dir, file)
+	if errors.Is(err, sharing.ErrNoRestoreFolder) {
+		return jsonapi.Forbidden(errors.New("insufficient access on the target file or folder"))
 	}
-
-	// A file trashed with its parent hierarchy has no restore path of its
-	// own: resolve it from the trashed root folder, like getRestoreDir does.
-	if restorePath == "" {
-		rel := strings.TrimPrefix(docPath, vfs.TrashDirName+"/")
-		split := strings.Index(rel, "/")
-		if split < 0 {
-			// ponytail: no resolvable restore root; getRestoreDir would fall
-			// back to the instance root, which is in no sharing scope.
-			return jsonapi.Forbidden(errors.New("insufficient access on the target file or folder"))
-		}
-		root, err := fs.DirByPath(vfs.TrashDirName + "/" + rel[:split])
-		if err != nil {
-			return files.WrapVfsError(err)
-		}
-		rest := path.Dir(rel[split+1:])
-		restorePath = path.Join(root.RestorePath, root.DocName, rest)
+	if err != nil {
+		return files.WrapVfsError(err)
 	}
-	// The restore path is the folder the file or directory is restored into
-	// (and the directory itself is recreated inside it): that is where the
-	// write happens.
-	parentPath := restorePath
-
-	// Walk up to the first existing ancestor: the restore recreates the
-	// missing hierarchy under it, so that ancestor is where the write
-	// actually happens.
-	for {
-		ancestor, err := fs.DirByPath(parentPath)
-		if err == nil {
-			return checkEffectiveAccessForMember(inst, ancestor.ID(), permission.POST, member)
-		}
-		if !os.IsNotExist(err) {
-			return files.WrapVfsError(err)
-		}
-		next := path.Dir(parentPath)
-		if next == parentPath {
-			return jsonapi.Forbidden(errors.New("insufficient access on the target file or folder"))
-		}
-		parentPath = next
-	}
+	return checkEffectiveAccessForMember(inst, ancestor.ID(), permission.POST, member)
 }
 
 func sharedDrivePermissionCheck(method, path string) (shouldCheck bool, requireWrite bool) {
