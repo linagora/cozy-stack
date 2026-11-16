@@ -796,10 +796,20 @@ func UploadOptionsHandler(c echo.Context) error {
 		return jsonapi.Forbidden(middlewares.ErrForbidden)
 	}
 	if s.Owner {
-		if _, err := sharedDriveInteractMember(c, inst, s); err != nil {
+		member, err := sharedDriveInteractMember(c, inst, s)
+		if err != nil {
 			return err
 		}
+		if member == nil {
+			if err := middlewares.AllowWholeType(c, permission.GET, consts.Files); err != nil {
+				return err
+			}
+		}
 		return files.AnnounceUploads(c, vfs.SupportsUploads(inst.VFS()))
+	}
+	// The same right as the relay, checked before asking the owner.
+	if err := middlewares.AllowWholeType(c, permission.GET, consts.Files); err != nil {
+		return err
 	}
 	if len(s.Credentials) == 0 {
 		return jsonapi.InternalServerError(errors.New("no credentials"))

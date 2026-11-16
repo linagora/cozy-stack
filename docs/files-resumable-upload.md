@@ -383,7 +383,9 @@ sequenceDiagram
 ```
 
 A client asks the stack of the member the same way, with `OPTIONS` on this
-route, to know if the uploads to a drive can be resumable. A browser cannot:
+route, to know if the uploads to a drive can be resumable. Its token needs
+the same right as for the other drive routes, on `io.cozy.files`, checked
+before the owner is asked. A browser cannot:
 the stack answers the `OPTIONS` requests with an `Origin` as CORS preflights.
 
 ## Settings and limits

@@ -193,6 +193,15 @@ func TestSharedDriveResumableUploads(t *testing.T) {
 				assert.Equal(t, int32(1), owner.probes.Load(), "the answer of the owner is kept")
 			})
 
+			t.Run("OptionsWithoutTheRightOnFiles", func(t *testing.T) {
+				owner := newFakeOwner(t, env.tsA.URL, "recent")
+				ownerBehind(t, env, owner.URL())
+				contacts := &driveUploadClient{t: t, base: env.tsB.URL, token: generateAppToken(env.betty, "contacts", consts.Contacts)}
+				res := contacts.do(http.MethodOptions, prefix+"/uploads", nil, 0, nil)
+				assert.Equal(t, http.StatusForbidden, res.StatusCode)
+				assert.Equal(t, int32(0), owner.probes.Load(), "the owner is not asked")
+			})
+
 			t.Run("OwnerRedirects", func(t *testing.T) {
 				// The stack of the member does not follow a redirection with
 				// the drive token, and does not keep this answer.
