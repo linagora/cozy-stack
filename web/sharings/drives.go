@@ -825,7 +825,14 @@ var ownerUploads = struct {
 	accepted map[string]bool
 }{until: map[string]time.Time{}, accepted: map[string]bool{}}
 
-var ownerUploadsClient = &http.Client{Timeout: 10 * time.Second}
+// ownerUploadsClient does not follow the redirections: it would send the
+// drive token to another address.
+var ownerUploadsClient = &http.Client{
+	Timeout: 10 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // ownerAcceptsUploads tells if the stack of the owner of a drive accepts the
 // resumable uploads. It asks it with OPTIONS, and keeps the answer by drive
@@ -859,6 +866,9 @@ func ownerAcceptsUploads(ctx context.Context, s *sharing.Sharing, ownerURL *url.
 	switch {
 	case res.StatusCode < 300:
 		accepted = res.Header.Get("Upload-Limit") != ""
+	case res.StatusCode < 400:
+		// A redirection may not last: it is not kept.
+		return false, nil
 	case res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusMethodNotAllowed:
 		// An older stack has no such route.
 		accepted = false

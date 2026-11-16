@@ -193,6 +193,18 @@ func TestSharedDriveResumableUploads(t *testing.T) {
 				assert.Equal(t, int32(1), owner.probes.Load(), "the answer of the owner is kept")
 			})
 
+			t.Run("OwnerRedirects", func(t *testing.T) {
+				// The stack of the member does not follow a redirection with
+				// the drive token, and does not keep this answer.
+				owner := newFakeOwner(t, env.tsA.URL, "redirect")
+				ownerBehind(t, env, owner.URL())
+				for i := range 2 {
+					res := betty.create(http.MethodPost, prefix+"/"+env.meetingsDirID+"?Type=file&Name=redirected-"+strconv.Itoa(i)+".bin", nil, false)
+					assert.Equal(t, http.StatusNotImplemented, res.StatusCode, string(res.body))
+				}
+				assert.Equal(t, int32(2), owner.probes.Load())
+			})
+
 			t.Run("OwnerUnreachable", func(t *testing.T) {
 				owner := newFakeOwner(t, env.tsA.URL, "down")
 				ownerBehind(t, env, owner.URL())
@@ -395,8 +407,12 @@ func newFakeOwner(t *testing.T, ownerURL, mode string) *fakeOwner {
 		}
 		if r.Method == http.MethodOptions {
 			f.probes.Add(1)
-			if mode == "old" {
+			switch mode {
+			case "old":
 				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			case "redirect":
+				http.Redirect(w, r, ownerURL+r.URL.Path, http.StatusTemporaryRedirect)
 				return
 			}
 		}

@@ -363,6 +363,8 @@ stack of the member asks the owner first:
   owner instead.
 - The answer is kept 3 hours, by drive and address of the owner. A failure to
   reach the owner is not kept, and the request gets `502`.
+- A redirection is not followed, as it would send the drive token to another
+  address: it counts as an owner that cannot resume, and is not kept.
 - When the owner cannot resume, the request gets `501`, as on a storage
   without resumable uploads: nothing is relayed, and the client sends the
   whole content in one request.
