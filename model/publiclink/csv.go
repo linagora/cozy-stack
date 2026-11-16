@@ -8,6 +8,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 )
 
@@ -15,6 +17,22 @@ import (
 func WriteCSV(ctx context.Context, out io.Writer, db prefixer.Prefixer, linkID string) error {
 	return writeCSV(out, func(visit func(Event) error) error {
 		return ForEachEvent(ctx, db, linkID, visit)
+	})
+}
+
+// WriteReportCSV exports retained events up to expiry using the same CSV
+// encoding as the interactive export. The mail preview reads this saved file.
+func WriteReportCSV(ctx context.Context, out io.Writer, db prefixer.Prefixer, linkID string, expiry time.Time) error {
+	if err := couchdb.EnsureDBExist(db, consts.PublicLinkEvents); err != nil {
+		return err
+	}
+	return writeCSV(out, func(visit func(Event) error) error {
+		return ForEachEvent(ctx, db, linkID, func(event Event) error {
+			if event.OccurredAt.After(expiry) {
+				return nil
+			}
+			return visit(event)
+		})
 	})
 }
 

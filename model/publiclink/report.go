@@ -40,3 +40,6 @@ func (r *Report) Rev() string        { return r.DocRev }
 func (r *Report) SetID(id string)    { r.DocID = id }
 func (r *Report) SetRev(rev string)  { r.DocRev = rev }
 func (r *Report) Clone() couchdb.Doc { clone := *r; return &clone }
+func (r *Report) Terminal() bool {
+	return r.Status == "sent" || r.Status == "no-email" || r.Status == "cancelled" || r.Status == "failed"
+}
