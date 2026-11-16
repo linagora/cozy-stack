@@ -99,6 +99,38 @@ func TestVfs(t *testing.T) {
 				assert.Error(t, err)
 			})
 
+			t.Run("CreateEmptyFileThenWrite", func(t *testing.T) {
+				for _, size := range []int64{0, -1} {
+					name := fmt.Sprintf("empty-file-%d", size)
+					doc, err := vfs.NewFileDoc(name, "", size, nil, "text/plain", "text", time.Now(), false, false, false, []string{})
+					require.NoError(t, err)
+
+					file, err := fs.CreateFile(doc, nil)
+					require.NoError(t, err)
+					_, err = file.Write([]byte{})
+					assert.NoError(t, err)
+					require.NoError(t, file.Close())
+
+					created, err := fs.FileByPath("/" + name)
+					require.NoError(t, err)
+					assert.Equal(t, int64(0), created.ByteSize)
+				}
+			})
+
+			t.Run("CreateEmptyFileThenWriteContent", func(t *testing.T) {
+				doc, err := vfs.NewFileDoc("not-empty-file", "", 0, nil, "text/plain", "text", time.Now(), false, false, false, []string{})
+				require.NoError(t, err)
+
+				file, err := fs.CreateFile(doc, nil)
+				require.NoError(t, err)
+				_, err = file.Write([]byte("hello"))
+				assert.ErrorIs(t, err, vfs.ErrContentLengthMismatch)
+				assert.ErrorIs(t, file.Close(), vfs.ErrContentLengthMismatch)
+
+				_, err = fs.FileByPath("/not-empty-file")
+				assert.Error(t, err)
+			})
+
 			t.Run("Remove", func(t *testing.T) {
 				err := vfs.Remove(fs, "foo/bar", fs.EnsureErased)
 				assert.Error(t, err)
