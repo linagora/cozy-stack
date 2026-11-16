@@ -231,15 +231,19 @@ func TestQuerySendsTheInstructionsOfTheClientAsASystemMessage(t *testing.T) {
 	require.Contains(t, lastCompletion(t, r.fake), "model")
 	require.Equal(t, expected, lastCompletionMessages(t, r.fake))
 
-	// Without the documents: the LLM gets them as they are. The instructions
-	// are not saved: the first query has left none in the conversation.
+	// Without the documents: the LLM gets them as one system message. The
+	// instructions are not saved: the first query has left none in the
+	// conversation.
 	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, chat.ID(), &chat))
 	chat.Messages = chat.Messages[:1]
 	require.NoError(t, couchdb.UpdateDoc(r.inst, &chat))
 	query.DirectLLM = true
 	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
 	require.NotContains(t, lastCompletion(t, r.fake), "model")
-	require.Equal(t, expected, lastCompletionMessages(t, r.fake))
+	require.Equal(t, []completionMessage{
+		{Role: rag.SystemRole, Content: "Answer as a lawyer.\n\nAnswer with the text only."},
+		{Role: rag.UserRole, Content: "Make it shorter"},
+	}, lastCompletionMessages(t, r.fake))
 }
 
 func TestChatLimitsTheInstructionsOfTheClient(t *testing.T) {

@@ -661,6 +661,20 @@ func TestRAGRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"tools":[{"function"`, "the LLM alone gets the tools too")
 	assert.Contains(t, string(body), `"parallel_tool_calls":false`, "one call at a time when the server asks for it")
+
+	// The chat template of Mistral refuses a second system message
+	withSystems := withInstructions(withInstructions([]ragMessage{
+		{Role: SystemRole, Content: "prompt"},
+		{Role: UserRole, Content: "Hello"},
+	}, "instructions"), "rules")
+	require.Len(t, withSystems, 4)
+	direct = directLLMPayload(withSystems, false, map[string]interface{}{})
+	assert.Equal(t, []ragMessage{
+		{Role: SystemRole, Content: "prompt\n\ninstructions\n\nrules"},
+		{Role: UserRole, Content: "Hello"},
+	}, direct["messages"])
+	direct = directLLMPayload(messages, false, map[string]interface{}{})
+	assert.Equal(t, messages, direct["messages"], "nothing to join")
 }
 
 func TestChatConversationJSON(t *testing.T) {
