@@ -27,7 +27,7 @@ func Open(c echo.Context) error {
 func OpenWithReadOnly(c echo.Context, readOnly bool) error {
 	inst := middlewares.GetInstance(c)
 	fileID := c.Param("file-id")
-	open, err := sharing.OpenOffice(inst, fileID)
+	open, err := sharing.OpenOffice(inst, fileID, files.ActorInstance(c))
 	if err != nil {
 		return wrapError(err)
 	}

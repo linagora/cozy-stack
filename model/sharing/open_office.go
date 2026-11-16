@@ -116,10 +116,15 @@ func (o *onlyOffice) GetAudience() (jwt.ClaimStrings, error)       { return nil,
 // OfficeOpener can be used to find the parameters for opening an office document.
 type OfficeOpener struct {
 	*FileOpener
+	// User is the person opening the document as their instance, or nil when
+	// the opener is not a person (anonymous share, service token).
+	User *instance.Instance
 }
 
-// Open will return an OfficeOpener for the given file.
-func OpenOffice(inst *instance.Instance, fileID string) (*OfficeOpener, error) {
+// Open will return an OfficeOpener for the given file. user is the person
+// opening the document, or nil when the opener is not a person: it records the
+// personal recent of the opening.
+func OpenOffice(inst *instance.Instance, fileID string, user *instance.Instance) (*OfficeOpener, error) {
 	file, err := inst.VFS().FileByID(fileID)
 	if err != nil {
 		return nil, err
@@ -134,7 +139,7 @@ func OpenOffice(inst *instance.Instance, fileID string) (*OfficeOpener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &OfficeOpener{opener}, nil
+	return &OfficeOpener{FileOpener: opener, User: user}, nil
 }
 
 // GetResult looks if the file can be opened locally or not, which code can be
@@ -215,6 +220,7 @@ func (o *OfficeOpener) openLocalDocument(memberIndex int, readOnly bool) (*apiOf
 			Infof("Cannot add doc to store: %s", err)
 		return nil, ErrInternalServerError
 	}
+	office.OpenSession(o.Inst, o.User, o.File, o.activityDrive(), key)
 	publicName, _ := settings.PublicName(o.Inst)
 	doc.PublicName = publicName
 	doc.OO = &onlyOffice{
@@ -272,6 +278,21 @@ func (o *OfficeOpener) openSharedDocument(prepared *PreparedRequest) (*apiOffice
 	doc.PublicName = publicName
 	doc.OO = nil
 	return &doc, nil
+}
+
+// activityDrive tells, on the owner of the document, whether a drive gives the
+// document to the opening user: it is called on the instance of the owner, as
+// the shared drive proxy forwards the opening to the /office route of the
+// owner. It is false when the user owns the document, or opens it outside of a
+// drive (a classic sharing). The drive comes from the position of the document,
+// never from the route or the code of the request.
+func (o *OfficeOpener) activityDrive() bool {
+	if o.User == nil || o.User.Domain == o.Inst.Domain {
+		return false
+	}
+	// Without a drive, error included, the opening records nothing.
+	inDrive, _ := ActivityDrive(o.User, o.Inst, nil, o.File)
+	return inDrive
 }
 
 // downloadURL returns an URL where the Document Server can download the file.
