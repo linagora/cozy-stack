@@ -46,7 +46,7 @@ type ReconcileReport struct {
 // organization instance and did not send again since the given time, to catch
 // the DELETE messages the stack missed.
 // The paths and count must describe the same completed source republication.
-func ReconcileOrganizationContacts(ctx context.Context, organizationID string, since time.Time, expectedContacts int, paths []string, dryRun bool) (*ReconcileReport, error) {
+func ReconcileOrganizationContacts(ctx context.Context, organizationID string, since time.Time, expectedContacts int, paths []string, dryRun bool) (_ *ReconcileReport, resultErr error) {
 	if time.Since(since) > maxReconcileAge {
 		return nil, ErrSinceTooOld
 	}
@@ -111,6 +111,12 @@ func ReconcileOrganizationContacts(ctx context.Context, organizationID string, s
 		return nil, fmt.Errorf("%w: got %d, expected %d; refusing to remove %d contacts", ErrIncompleteRepublication, report.Kept, expectedContacts, len(stale))
 	}
 
+	// Also enqueue after a partial deletion or a retry with no stale contacts left.
+	if !dryRun && orgInst.HasCentralizedOrgDirectory() {
+		defer func() {
+			resultErr = errors.Join(resultErr, QueueGroupPropagation(ctx, orgInst.OrgID, orgInst.OrgDomain))
+		}()
+	}
 	for _, doc := range stale {
 		if err := ctx.Err(); err != nil {
 			return report, err
