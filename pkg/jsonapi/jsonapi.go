@@ -81,6 +81,30 @@ func DataList(c echo.Context, statusCode int, objs []Object, links *LinksList) e
 // DataListWithMeta can be called to send a list of Objects with meta like a
 // count, useful to indicate total number of results with pagination.
 func DataListWithMeta(c echo.Context, statusCode int, meta Meta, objs []Object, links *LinksList) error {
+	return writeDataList(c, statusCode, meta, objs, links, nil)
+}
+
+// DataListWithIncluded can be called to send a list of Objects, like DataList,
+// with the resources returned by the Included method of each object in the
+// included member of the document. They are written in the order of the
+// objects, without deduplication, and the member is omitted when no object
+// includes anything.
+func DataListWithIncluded(c echo.Context, statusCode int, objs []Object, links *LinksList) error {
+	var included []interface{}
+	for _, o := range objs {
+		for _, inc := range o.Included() {
+			data, err := MarshalObject(inc)
+			if err != nil {
+				return InternalServerError(err)
+			}
+			included = append(included, &data)
+		}
+	}
+	count := len(objs)
+	return writeDataList(c, statusCode, Meta{Count: &count}, objs, links, included)
+}
+
+func writeDataList(c echo.Context, statusCode int, meta Meta, objs []Object, links *LinksList, included []interface{}) error {
 	objsMarshaled := make([]json.RawMessage, len(objs))
 	for i, o := range objs {
 		j, err := MarshalObject(o)
@@ -96,9 +120,10 @@ func DataListWithMeta(c echo.Context, statusCode int, meta Meta, objs []Object, 
 	}
 
 	doc := Document{
-		Data:  (*json.RawMessage)(&data),
-		Meta:  &meta,
-		Links: links,
+		Data:     (*json.RawMessage)(&data),
+		Meta:     &meta,
+		Links:    links,
+		Included: included,
 	}
 
 	resp := c.Response()
