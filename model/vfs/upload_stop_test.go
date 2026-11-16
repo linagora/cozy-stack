@@ -159,3 +159,51 @@ func TestResumableUploadCleanedAfterANewVersion(t *testing.T) {
 		})
 	}
 }
+
+// failingReads is a VFS whose reads of the index fail, like a lock of the VFS
+// that times out while another request holds it.
+type failingReads struct {
+	vfs.VFS
+	vfs.UploadStorage
+}
+
+var errReadTimeout = errors.New("timeout while waiting for the lock")
+
+func (failingReads) FileByID(string) (*vfs.FileDoc, error) { return nil, errReadTimeout }
+
+// TestUploadRemovalKeepsAnIndexedFile checks that the removal of an upload
+// keeps its content when it cannot tell if the file has been indexed.
+func TestUploadRemovalKeepsAnIndexedFile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setUploadConfig(t, 20)
+
+	for _, b := range uploadBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			fs := b.newFS()
+			content := randomContent(testPartSize+5000, 52)
+			u, err := vfs.NewUpload(fs, newUploadDoc(t, "removal-keeps.bin", content), nil, "", -1)
+			require.NoError(t, err)
+
+			// The file is indexed, but the upload is not marked as completed.
+			restore := vfs.StopUploadAfter("committed", errStopped)
+			_, err = vfs.AppendUpload(fs, u, bytes.NewReader(content), true)
+			restore()
+			require.ErrorIs(t, err, errStopped)
+
+			err = vfs.CancelUpload(failingReads{fs, fs.(vfs.UploadStorage)}, u.UploadID)
+			require.ErrorIs(t, err, errReadTimeout)
+			doc, err := fs.FileByID(u.File.ID())
+			require.NoError(t, err)
+			assert.True(t, bytes.Equal(content, readContent(t, fs, doc)))
+
+			// The cleaning finishes the removal, and keeps the file.
+			_, err = vfs.CleanUploads(fs)
+			require.NoError(t, err)
+			assert.True(t, bytes.Equal(content, readContent(t, fs, doc)))
+		})
+	}
+}

@@ -392,7 +392,12 @@ func removeUpload(fs VFS, id string, selected func(u *Upload) bool) error {
 			return err
 		}
 	}
-	if !u.Completed && committedFile(fs, u) == nil {
+	committed, err := committedFile(fs, u)
+	if err != nil {
+		// The mark stays: the cleaning will finish the removal.
+		return err
+	}
+	if !u.Completed && committed == nil {
 		store, err := uploadStorage(fs)
 		if err != nil {
 			return err
@@ -401,7 +406,7 @@ func removeUpload(fs VFS, id string, selected func(u *Upload) bool) error {
 			return err
 		}
 	}
-	err := couchdb.DeleteDoc(fs, u)
+	err = couchdb.DeleteDoc(fs, u)
 	if couchdb.IsNotFoundError(err) {
 		return nil
 	}
@@ -468,38 +473,43 @@ func uploadSpaceLimit(fs VFS, uploads []*Upload, exclude string) (int64, error) 
 
 // committedFile returns the file when the assembled content of the upload is
 // already its content: the commit has succeeded, but the upload has not been
-// marked as completed. Its content must not be aborted.
-func committedFile(fs VFS, u *Upload) *FileDoc {
+// marked as completed. Its content must not be aborted. Only a file that is
+// not found tells that the content is not committed: on any other error, the
+// caller must keep the content.
+func committedFile(fs VFS, u *Upload) (*FileDoc, error) {
 	if !u.Assembled || u.File == nil {
-		return nil
+		return nil, nil
 	}
 	doc, err := fs.FileByID(u.File.ID())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	if u.File.InternalID != "" {
 		if doc.InternalID == u.File.InternalID {
-			return doc
+			return doc, nil
 		}
 		// The file may have a newer content since: the one of the upload is
 		// then a version.
 		versions, err := VersionsFor(fs, doc.ID())
-		if err != nil {
-			return nil
+		if err != nil && !couchdb.IsNoDatabaseError(err) {
+			return nil, err
 		}
 		for _, v := range versions {
 			if v.DocID == doc.ID()+"/"+u.File.InternalID {
-				return doc
+				return doc, nil
 			}
 		}
-		return nil
+		return nil, nil
 	}
 	// The local file system has no internal ID: the content is known by its
 	// size and md5.
 	if doc.ByteSize != u.File.ByteSize || !bytes.Equal(doc.MD5Sum, u.File.MD5Sum) {
-		return nil
+		return nil, nil
 	}
-	return doc
+	return doc, nil
 }
 
 // activeUploads returns the uploads that are not completed. It does not read

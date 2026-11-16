@@ -175,7 +175,10 @@ func (u *Upload) writeProgress(fs VFS, store UploadStorage, received int64, h ha
 }
 
 func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, received int64, h hash.Hash) (*FileDoc, error) {
-	if doc := committedFile(fs, u); doc != nil {
+	if doc, err := committedFile(fs, u); err != nil || doc != nil {
+		if err != nil {
+			return nil, err
+		}
 		return doc, u.markCompleted(fs, doc)
 	}
 	total := u.Offset + received
@@ -293,8 +296,13 @@ func finishUpload(fs VFS, store UploadStorage, u *Upload, buf *os.File, inBuf, r
 		return nil, err
 	}
 	if err != nil {
-		// Another request may have indexed the file in the meantime.
-		if doc := committedFile(fs, u); doc != nil {
+		// Another request may have indexed the file in the meantime. When
+		// this is unknown, the upload stays resumable.
+		doc, errc := committedFile(fs, u)
+		if errc != nil {
+			return nil, errc
+		}
+		if doc != nil {
 			return doc, u.markCompleted(fs, doc)
 		}
 		return nil, finishError(fs, u, err)
