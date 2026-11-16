@@ -918,6 +918,25 @@ func (f *s3FileCreation) Write(p []byte) (int, error) {
 	if f.err != nil {
 		return 0, f.err
 	}
+	// An empty write would block until PutObject reads or closes the pipe,
+	// and PutObject never reads when the announced size is 0.
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	// Check the sizes before writing: once PutObject has read the announced
+	// size, it closes the pipe and a write would fail with ErrClosedPipe.
+	if f.maxsize >= 0 && f.w+int64(len(p)) > f.maxsize {
+		f.err = vfs.ErrFileTooBig
+		_ = f.pw.CloseWithError(f.err)
+		return 0, f.err
+	}
+
+	if f.size >= 0 && f.w+int64(len(p)) > f.size {
+		f.err = vfs.ErrContentLengthMismatch
+		_ = f.pw.CloseWithError(f.err)
+		return 0, f.err
+	}
 
 	if f.meta != nil {
 		if _, err := (*f.meta).Write(p); err != nil && !errors.Is(err, io.ErrClosedPipe) {
@@ -936,18 +955,6 @@ func (f *s3FileCreation) Write(p []byte) (int, error) {
 	}
 
 	f.w += int64(n)
-	if f.maxsize >= 0 && f.w > f.maxsize {
-		f.err = vfs.ErrFileTooBig
-		_ = f.pw.CloseWithError(f.err)
-		return n, f.err
-	}
-
-	if f.size >= 0 && f.w > f.size {
-		f.err = vfs.ErrContentLengthMismatch
-		_ = f.pw.CloseWithError(f.err)
-		return n, f.err
-	}
-
 	return n, nil
 }
 
