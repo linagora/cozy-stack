@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,6 +15,15 @@ import (
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/redis/go-redis/v9"
 )
+
+// Participant is a person who opened an OnlyOffice editing session: the
+// document server save callbacks credit them all. InDrive tells that a shared
+// drive gives the document to this participant: a save is recorded for a
+// participant who does not own the document only then.
+type Participant struct {
+	Domain  string
+	InDrive bool
+}
 
 type ConflictDetector struct {
 	ID     string
@@ -35,6 +45,14 @@ type Store interface {
 	AddDoc(db prefixer.Prefixer, payload ConflictDetector) (string, error)
 	GetDoc(db prefixer.Prefixer, secret string) (*ConflictDetector, error)
 	UpdateDoc(db prefixer.Prefixer, secret string, payload ConflictDetector) error
+	// AddParticipant remembers a person who opened the editing session, once:
+	// a later opening by the same person keeps what the first one stored. The
+	// participants are kept apart from the session, so an opening never writes
+	// the session, and a save never writes the participants.
+	AddParticipant(db prefixer.Prefixer, secret, domain string, inDrive bool) error
+	// GetParticipants returns the people who opened the editing session, in no
+	// particular order.
+	GetParticipants(db prefixer.Prefixer, secret string) ([]Participant, error)
 	RemoveDoc(db prefixer.Prefixer, secret string) error
 }
 
@@ -71,17 +89,19 @@ type memRef struct {
 
 func newMemStore() Store {
 	store := &memStore{
-		vals: make(map[string]*memRef),
-		byID: make(map[string]string),
+		vals:  make(map[string]*memRef),
+		byID:  make(map[string]string),
+		parts: make(map[string][]Participant),
 	}
 	go store.cleaner()
 	return store
 }
 
 type memStore struct {
-	mu   sync.Mutex
-	vals map[string]*memRef
-	byID map[string]string // id -> secret
+	mu    sync.Mutex
+	vals  map[string]*memRef
+	byID  map[string]string        // id -> secret
+	parts map[string][]Participant // docKey -> participants, live with vals
 }
 
 func (s *memStore) cleaner() {
@@ -94,6 +114,7 @@ func (s *memStore) cleaner() {
 					delete(s.byID, v.val.ID)
 				}
 				delete(s.vals, k)
+				delete(s.parts, k)
 			}
 		}
 		s.mu.Unlock()
@@ -158,6 +179,34 @@ func (s *memStore) UpdateDoc(db prefixer.Prefixer, secret string, payload Confli
 	return nil
 }
 
+func (s *memStore) AddParticipant(db prefixer.Prefixer, secret, domain string, inDrive bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := docKey(db, secret)
+	ref, ok := s.vals[key]
+	if !ok || time.Now().After(ref.exp) {
+		return nil
+	}
+	for _, p := range s.parts[key] {
+		if p.Domain == domain {
+			return nil
+		}
+	}
+	s.parts[key] = append(s.parts[key], Participant{Domain: domain, InDrive: inDrive})
+	return nil
+}
+
+func (s *memStore) GetParticipants(db prefixer.Prefixer, secret string) ([]Participant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := docKey(db, secret)
+	ref, ok := s.vals[key]
+	if !ok || time.Now().After(ref.exp) {
+		return nil, nil
+	}
+	return slices.Clone(s.parts[key]), nil
+}
+
 func (s *memStore) RemoveDoc(db prefixer.Prefixer, secret string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -168,6 +217,7 @@ func (s *memStore) RemoveDoc(db prefixer.Prefixer, secret string) error {
 		}
 	}
 	delete(s.vals, key)
+	delete(s.parts, key)
 	return nil
 }
 
@@ -241,7 +291,36 @@ func (s *redisStore) UpdateDoc(db prefixer.Prefixer, secret string, payload Conf
 	if err = s.c.Set(s.ctx, key, v, storeTTL).Err(); err != nil {
 		return err
 	}
+	// The participants live as long as the session.
+	_ = s.c.Expire(s.ctx, participantsKey(db, secret), storeTTL)
 	return nil
+}
+
+// AddParticipant writes the participant in a hash of its own, with HSETNX: it
+// is atomic, so concurrent openings are all kept, and the first opening of a
+// person wins. An opening racing the removal of the session can leave an
+// orphan hash, which expires with storeTTL.
+func (s *redisStore) AddParticipant(db prefixer.Prefixer, secret, domain string, inDrive bool) error {
+	key := participantsKey(db, secret)
+	_, err := s.c.TxPipelined(s.ctx, func(pipe redis.Pipeliner) error {
+		pipe.HSetNX(s.ctx, key, domain, strconv.FormatBool(inDrive))
+		pipe.Expire(s.ctx, key, storeTTL)
+		return nil
+	})
+	return err
+}
+
+func (s *redisStore) GetParticipants(db prefixer.Prefixer, secret string) ([]Participant, error) {
+	values, err := s.c.HGetAll(s.ctx, participantsKey(db, secret)).Result()
+	if err != nil {
+		return nil, err
+	}
+	participants := make([]Participant, 0, len(values))
+	for domain, inDrive := range values {
+		parsed, _ := strconv.ParseBool(inDrive)
+		participants = append(participants, Participant{Domain: domain, InDrive: parsed})
+	}
+	return participants, nil
 }
 
 func (s *redisStore) RemoveDoc(db prefixer.Prefixer, secret string) error {
@@ -253,11 +332,17 @@ func (s *redisStore) RemoveDoc(db prefixer.Prefixer, secret string) error {
 		}
 	}
 	key := docKey(db, secret)
-	return s.c.Del(s.ctx, key).Err()
+	return s.c.Del(s.ctx, key, participantsKey(db, secret)).Err()
 }
 
 func docKey(db prefixer.Prefixer, suffix string) string {
 	return db.DBPrefix() + ":oodoc:" + suffix
+}
+
+// participantsKey is the redis key of the hash of the participants of a
+// session: domain -> inDrive.
+func participantsKey(db prefixer.Prefixer, secret string) string {
+	return docKey(db, secret) + ":participants"
 }
 
 func makeSecret() string {
