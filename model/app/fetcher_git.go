@@ -244,9 +244,10 @@ func (g *gitFetcher) doFetchWithGit(
 	// The git fetcher needs to update the actual version of the application to
 	// reflect the git version of the repository.
 	man.SetVersion(version)
+	man.SetChecksum(sourceChecksum("git", srcStr))
 
 	// If the application folder already exists, we can bail early.
-	exists, err := fs.Start(slug, version, "")
+	exists, err := fs.Start(slug, version, man.Checksum())
 	if err != nil || exists {
 		return err
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	semver "github.com/Masterminds/semver/v3"
@@ -565,6 +566,15 @@ func (i *Installer) ReadManifest(state State) (Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The version is a segment of the key under which the files are stored
+	// for all the instances: with a slash, it could point inside the files of
+	// another app.
+	version := newManifest.Version()
+	if version == "." || version == ".." || strings.Contains(version, "/") {
+		return nil, ErrBadManifest
+	}
+	// The checksum is the last part of that key: only the fetcher sets it.
+	newManifest.SetChecksum("")
 	newManifest.SetState(state)
 
 	set := newManifest.Permissions()

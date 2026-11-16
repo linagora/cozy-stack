@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os/exec"
+	"path"
 	"strconv"
 	"testing"
 
@@ -72,6 +73,10 @@ func manifestKonnector() string {
   "type": "konnector",
   "version": "` + localVersion + `"
 }`
+}
+
+func storedDir(man app.Manifest) string {
+	return path.Join("/", man.Slug(), man.Version()+"-"+man.Checksum())
 }
 
 func serveGitRep(t *testing.T) (string, context.CancelFunc) {

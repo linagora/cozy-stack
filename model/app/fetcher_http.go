@@ -106,7 +106,16 @@ func (f *httpFetcher) Fetch(src *url.URL, fs appfs.Copier, man Manifest) (err er
 	if frag := src.Fragment; frag != "" {
 		shasum, _ = hex.DecodeString(frag)
 	}
+	man.SetChecksum(sourceChecksum("url", src.String()))
 	return fetchHTTP(src, shasum, fs, man, f.prefix)
+}
+
+// The files are stored once for all the instances, under a key made of the
+// slug, the version and the checksum. What the source says of itself is not
+// trusted for the checksum: it could claim the key of another source.
+func sourceChecksum(kind, src string) string {
+	sum := sha256.Sum256([]byte(src))
+	return kind + "-" + hex.EncodeToString(sum[:])
 }
 
 func fetchHTTP(src *url.URL, shasum []byte, fs appfs.Copier, man Manifest, prefix string) (err error) {

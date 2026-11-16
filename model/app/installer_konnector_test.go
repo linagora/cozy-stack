@@ -140,10 +140,10 @@ func TestInstallerKonnector(t *testing.T) {
 			state = man.State()
 		}
 
-		ok, err := afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"))
+		ok, err := afero.Exists(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"), []byte("1.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"), []byte("1.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
 
@@ -204,10 +204,10 @@ func TestInstallerKonnector(t *testing.T) {
 			}
 		}
 
-		ok, err := afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"))
+		ok, err := afero.Exists(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"), []byte("1.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"), []byte("1.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
 
@@ -246,10 +246,10 @@ func TestInstallerKonnector(t *testing.T) {
 			state = man.State()
 		}
 
-		ok, err = afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"))
+		ok, err = afero.Exists(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"), []byte("2.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"), []byte("2.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
 	})
@@ -364,10 +364,10 @@ func TestInstallerKonnector(t *testing.T) {
 			state = man.State()
 		}
 
-		ok, err := afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"))
+		ok, err := afero.Exists(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"), []byte("3.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"), []byte("3.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
 
@@ -407,10 +407,10 @@ func TestInstallerKonnector(t *testing.T) {
 			state = man.State()
 		}
 
-		ok, err = afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"))
+		ok, err = afero.Exists(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.KonnectorManifestName+".br"), []byte("4.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.KonnectorManifestName+".br"), []byte("4.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
 	})

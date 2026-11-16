@@ -197,10 +197,10 @@ func TestInstallerWebApp(t *testing.T) {
 			state = man.State()
 		}
 
-		ok, err := afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"))
+		ok, err := afero.Exists(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"), []byte("1.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"), []byte("1.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
 
@@ -439,10 +439,10 @@ func TestInstallerWebApp(t *testing.T) {
 		man, err := inst.RunSync()
 		assert.NoError(t, err)
 
-		ok, err := afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"))
+		ok, err := afero.Exists(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"), []byte("1.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"), []byte("1.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
 		version1 := man.Version()
@@ -495,10 +495,10 @@ func TestInstallerWebApp(t *testing.T) {
 
 		t.Log("versions: ", version1, version2)
 
-		ok, err = afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"))
+		ok, err = afero.Exists(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"), []byte("2.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"), []byte("2.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
 		manWebapp = man.(*app.WebappManifest)
@@ -739,13 +739,13 @@ func TestInstallerWebApp(t *testing.T) {
 			state = man.State()
 		}
 
-		ok, err := afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"))
+		ok, err := afero.Exists(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"), []byte("3.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"), []byte("3.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
-		ok, err = afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), "branch.br"))
+		ok, err = afero.Exists(baseFS, path.Join(storedDir(man), "branch.br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The good branch was checked out")
 
@@ -785,13 +785,13 @@ func TestInstallerWebApp(t *testing.T) {
 			state = man.State()
 		}
 
-		ok, err = afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"))
+		ok, err = afero.Exists(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"), []byte("4.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"), []byte("4.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
-		ok, err = afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), "branch.br"))
+		ok, err = afero.Exists(baseFS, path.Join(storedDir(man), "branch.br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The good branch was checked out")
 
@@ -810,13 +810,13 @@ func TestInstallerWebApp(t *testing.T) {
 
 		assert.Equal(t, gitURL, man.Source())
 
-		ok, err = afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"))
+		ok, err = afero.Exists(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest is present")
-		ok, err = compressedFileContainsBytes(baseFS, path.Join("/", man.Slug(), man.Version(), app.WebappManifestName+".br"), []byte("5.0.0"))
+		ok, err = compressedFileContainsBytes(baseFS, path.Join(storedDir(man), app.WebappManifestName+".br"), []byte("5.0.0"))
 		assert.NoError(t, err)
 		assert.True(t, ok, "The manifest has the right version")
-		ok, err = afero.Exists(baseFS, path.Join("/", man.Slug(), man.Version(), "branch.br"))
+		ok, err = afero.Exists(baseFS, path.Join(storedDir(man), "branch.br"))
 		assert.NoError(t, err)
 		assert.False(t, ok, "The good branch was checked out")
 	})

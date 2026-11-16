@@ -12,6 +12,7 @@ import (
 
 	"github.com/cozy/cozy-stack/pkg/appfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,4 +97,51 @@ func TestFetchHTTPCopiesFiles(t *testing.T) {
 		"/app/1.0.0/manifest.webapp.br",
 		"/app/1.0.0/assets/icon.svg.br",
 	}, storedFiles(t, fs))
+}
+
+func TestHTTPFetcherIgnoresManifestChecksum(t *testing.T) {
+	config.UseTestFile(t)
+	const registrySum = "3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855a"
+	fs := afero.NewBasePathFs(afero.NewOsFs(), t.TempDir())
+	fetch := func() string {
+		src := serveTarball(t, tarballFile{name: "manifest.webapp", content: `{"slug":"app"}`})
+		man := &WebappManifest{}
+		man.SetSlug("app")
+		man.SetVersion("1.0.0")
+		man.SetChecksum(registrySum)
+		require.NoError(t, newHTTPFetcher("manifest.webapp", nil).Fetch(src, appfs.NewAferoCopier(fs), man))
+		return man.Checksum()
+	}
+
+	first, second := fetch(), fetch()
+	assert.Regexp(t, "^url-[0-9a-f]{64}$", first)
+	assert.NotEqual(t, first, second)
+	assert.ElementsMatch(t, []string{
+		"/app/1.0.0-" + first + "/manifest.webapp.br",
+		"/app/1.0.0-" + second + "/manifest.webapp.br",
+	}, storedFiles(t, fs))
+}
+
+func readManifest(t *testing.T, content string) (Manifest, error) {
+	src := serveTarball(t, tarballFile{name: "manifest.webapp", content: content})
+	inst := &Installer{
+		fetcher: newHTTPFetcher(WebappManifestName, nil),
+		man:     &WebappManifest{doc: &couchdb.JSONDoc{M: map[string]interface{}{}}},
+		src:     src,
+		slug:    "app",
+	}
+	return inst.ReadManifest(Installing)
+}
+
+func TestReadManifestRejectsVersionLeavingItsSegment(t *testing.T) {
+	for _, version := range []string{"1.0.0-3b0c44298fc1c149/assets", ".", ".."} {
+		_, err := readManifest(t, `{"slug":"app","version":"`+version+`"}`)
+		assert.ErrorIs(t, err, ErrBadManifest, version)
+	}
+}
+
+func TestReadManifestDropsManifestChecksum(t *testing.T) {
+	man, err := readManifest(t, `{"slug":"app","version":"1.0.0","checksum":"3b0c44298fc1c149"}`)
+	require.NoError(t, err)
+	assert.Empty(t, man.Checksum())
 }
