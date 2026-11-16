@@ -373,6 +373,28 @@ func TestSubset(t *testing.T) {
 	s6 := Set{Rule{Type: "io.cozy.events", Selector: "calendar", Values: []string{"foo"}}}
 	assert.True(t, s6.IsSubSetOf(s5))
 	assert.False(t, s5.IsSubSetOf(s6))
+
+	assert.False(t, s.IsSubSetOf(s3))
+	assert.False(t, s.IsSubSetOf(s5))
+	s7 := Set{Rule{Type: "io.cozy.events", Selector: "calendar"}}
+	assert.False(t, s7.IsSubSetOf(s5))
+	assert.True(t, s7.IsSubSetOf(s))
+	assert.True(t, s.IsSubSetOf(s7))
+	assert.True(t, s3.IsSubSetOf(s7))
+	assert.True(t, s5.IsSubSetOf(s7))
+
+	s8 := Set{Rule{Type: "io.cozy.*", Values: []string{"foo"}}}
+	assert.True(t, s4.IsSubSetOf(s8))
+	assert.False(t, s.IsSubSetOf(s8))
+
+	s9 := Set{
+		Rule{Type: "io.cozy.events", Verbs: Verbs(GET)},
+		Rule{Type: "io.cozy.events", Values: []string{"foo"}},
+	}
+	assert.False(t, s.IsSubSetOf(s9))
+	assert.True(t, s4.IsSubSetOf(s9))
+	s10 := Set{Rule{Type: "io.cozy.events", Verbs: Verbs(GET)}}
+	assert.True(t, s10.IsSubSetOf(s9))
 }
 
 func TestShareSetPermissions(t *testing.T) {

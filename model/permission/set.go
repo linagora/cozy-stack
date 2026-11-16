@@ -146,7 +146,7 @@ func (s Set) Some(predicate func(Rule) bool) bool {
 	return false
 }
 
-// RuleInSubset returns true if any document allowed by the rule
+// RuleInSubset returns true if every document allowed by the rule
 // is allowed by the set.
 func (s *Set) RuleInSubset(r2 Rule) bool {
 	if s.IsMaximal() {
@@ -162,8 +162,13 @@ func (s *Set) RuleInSubset(r2 Rule) bool {
 			continue
 		}
 
-		if r.Selector == "" && len(r.Values) == 0 {
+		// A rule with no values is for the whole doctype, with or without a
+		// selector: only a rule of the same kind can contain it.
+		if len(r.Values) == 0 {
 			return true
+		}
+		if len(r2.Values) == 0 {
+			continue
 		}
 
 		if r.Selector != r2.Selector {
@@ -178,7 +183,7 @@ func (s *Set) RuleInSubset(r2 Rule) bool {
 	return false
 }
 
-// IsSubSetOf returns true if any document allowed by the set
+// IsSubSetOf returns true if every document allowed by the set
 // would have been allowed by parent.
 func (s *Set) IsSubSetOf(parent Set) bool {
 	if s.IsMaximal() {
