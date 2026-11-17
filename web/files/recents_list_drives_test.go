@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/recents"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -91,11 +92,16 @@ func (o *driveOwner) update(t *testing.T, id string, change func(*vfs.FileDoc)) 
 }
 
 // countRequests returns the number of requests that fn sends to the databases
-// of the member and of the owner. The jobs of the triggers on the files of the
-// owner, which run in the background, only write in the databases of the jobs
-// and read the global one.
+// of the member and of the owner. The triggers on the files of the owner run
+// jobs in the background. A thumbnail job reads the parent folder of its image
+// to open it, so the count starts once these jobs are over. The other jobs
+// only write in the databases of the jobs and read the global one.
 func (o *driveOwner) countRequests(t *testing.T, fn func()) int {
 	t.Helper()
+	testutils.WaitForOrFail(t, 10*time.Second, func() bool {
+		jobs, err := job.GetQueuedJobs(o.inst, "thumbnail")
+		return err == nil && len(jobs) == 0
+	})
 	member := "/" + o.member.DBPrefix() + "/"
 	owner := "/" + o.inst.DBPrefix() + "/"
 	return countRequests(t, func(path string) bool {
