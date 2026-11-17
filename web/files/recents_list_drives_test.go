@@ -1,9 +1,7 @@
 package files
 
 import (
-	"net/http"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,7 +9,6 @@ import (
 	"github.com/cozy/cozy-stack/model/recents"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
-	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/tests/testutils"
@@ -93,19 +90,20 @@ func (o *driveOwner) update(t *testing.T, id string, change func(*vfs.FileDoc)) 
 	require.NoError(t, couchdb.UpdateDoc(o.inst, doc))
 }
 
-// countCouchRequests returns the number of requests that fn sends to CouchDB.
-func countCouchRequests(t *testing.T, fn func()) int {
+// countRequests returns the number of requests that fn sends to the databases
+// of the member and of the owner. The jobs of the triggers on the files of the
+// owner, which run in the background, only write in the databases of the jobs
+// and read the global one.
+func (o *driveOwner) countRequests(t *testing.T, fn func()) int {
 	t.Helper()
-	client := config.CouchClient()
-	original := client.Transport
-	defer func() { client.Transport = original }()
-	var count atomic.Int32
-	client.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
-		count.Add(1)
-		return original.RoundTrip(r)
-	})
-	fn()
-	return int(count.Load())
+	member := "/" + o.member.DBPrefix() + "/"
+	owner := "/" + o.inst.DBPrefix() + "/"
+	return countRequests(t, func(path string) bool {
+		if strings.Contains(path, "/io-cozy-jobs") {
+			return false
+		}
+		return strings.HasPrefix(path, member) || strings.HasPrefix(path, owner)
+	}, fn)
 }
 
 // getRecents returns the whole list, and its raw body.
@@ -216,7 +214,7 @@ func TestRecentsListCompletesTheDriveItems(t *testing.T) {
 
 	t.Run("the requests do not depend on the number of rows of an owner", func(t *testing.T) {
 		count := func(limit string) (requests int, ids []string) {
-			requests = countCouchRequests(t, func() {
+			requests = owner.countRequests(t, func() {
 				ids = idsOf(env.getPage(t, "page[limit]="+limit), "included")
 			})
 			return requests, ids
