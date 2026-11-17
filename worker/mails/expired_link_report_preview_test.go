@@ -2,6 +2,7 @@ package mails
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -13,9 +14,9 @@ func TestFormatReportPreview(t *testing.T) {
 		{"2026-10-29T14:10:00.123Z", "192.0.2.3", "Carol", "downloaded"},
 	}
 	require.Equal(t, [][]string{
-		{"2026-10-29 14:10 UTC", "192.0.2.3", "Carol", "downloaded"},
-		{"2026-10-29 09:25 UTC", "192.0.2.2", "Bob", "opened"},
-		{"2026-10-28 18:02 UTC", "192.0.2.1", "Alice", "updated"},
-	}, formatReportPreview(rows))
-	require.Empty(t, formatReportPreview(nil))
+		{"2026-10-29 14:10 UTC +00:00", "192.0.2.3", "Carol", "downloaded"},
+		{"2026-10-29 09:25 UTC +00:00", "192.0.2.2", "Bob", "opened"},
+		{"2026-10-28 18:02 UTC +00:00", "192.0.2.1", "Alice", "updated"},
+	}, formatReportPreview(rows, time.UTC))
+	require.Empty(t, formatReportPreview(nil, time.UTC))
 }

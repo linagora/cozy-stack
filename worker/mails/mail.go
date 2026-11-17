@@ -265,6 +265,11 @@ func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
 		if err = addPart(email, part); err != nil {
 			return err
 		}
+		if opts.TemplateName == "expired_link_report" && part.Type == "text/html" {
+			if err := embedReportImages(email, ctx.Instance.ContextName); err != nil {
+				return err
+			}
+		}
 	}
 
 	for _, attachment := range opts.Attachments {

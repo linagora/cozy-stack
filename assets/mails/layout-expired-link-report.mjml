@@ -1,0 +1,19 @@
+<mjml>
+  <mj-head>
+    <mj-defaults></mj-defaults>
+  </mj-head>
+  <mj-body background-color="#fff">
+    <mj-section padding="24px 24px 0">
+      <mj-column>
+        <mj-text padding="0" font-size="24px" font-weight="700" color="#000">
+          <img src="cid:report-drive.png" width="28" height="28" alt="" role="presentation" style="vertical-align:middle;border:0;" /> Twake <span style="color:#ff4154;">Drive</span>
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section padding="24px 0 8px">
+      <mj-column>
+        {{template "content" .}}
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

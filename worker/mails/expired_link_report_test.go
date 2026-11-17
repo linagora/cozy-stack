@@ -3,9 +3,11 @@ package mails
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	stdhtml "html"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -16,6 +18,7 @@ import (
 	"net/textproto"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -148,29 +151,53 @@ func reportMailText(t *testing.T, raw string) (netmail.Header, string) {
 
 func reportMailPart(t *testing.T, raw, contentType string) (netmail.Header, string) {
 	t.Helper()
-	msg, err := netmail.ReadMessage(strings.NewReader(raw))
-	require.NoError(t, err)
-	media, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
-	require.NoError(t, err)
-	if strings.HasPrefix(media, "multipart/") {
-		parts := multipart.NewReader(msg.Body, params["boundary"])
-		for {
-			p, err := parts.NextPart()
-			require.NoError(t, err)
-			if strings.HasPrefix(p.Header.Get("Content-Type"), contentType) {
-				b, err := io.ReadAll(p)
-				require.NoError(t, err)
-				return msg.Header, string(b)
-			}
+	header, parts := reportMailParts(t, raw)
+	for _, part := range parts {
+		if strings.HasPrefix(part.header.Get("Content-Type"), contentType) {
+			return header, string(part.body)
 		}
 	}
-	body := msg.Body
-	if msg.Header.Get("Content-Transfer-Encoding") == "quoted-printable" {
-		body = quotedprintable.NewReader(body)
-	}
-	b, err := io.ReadAll(body)
+	t.Fatalf("missing MIME part %s", contentType)
+	return nil, ""
+}
+
+type reportMailLeaf struct {
+	header textproto.MIMEHeader
+	body   []byte
+}
+
+func reportMailParts(t *testing.T, raw string) (netmail.Header, []reportMailLeaf) {
+	t.Helper()
+	msg, err := netmail.ReadMessage(strings.NewReader(raw))
 	require.NoError(t, err)
-	return msg.Header, string(b)
+	var leaves []reportMailLeaf
+	var walk func(textproto.MIMEHeader, io.Reader)
+	walk = func(header textproto.MIMEHeader, body io.Reader) {
+		media, params, err := mime.ParseMediaType(header.Get("Content-Type"))
+		require.NoError(t, err)
+		if strings.HasPrefix(media, "multipart/") {
+			parts := multipart.NewReader(body, params["boundary"])
+			for {
+				part, err := parts.NextRawPart()
+				if err == io.EOF {
+					return
+				}
+				require.NoError(t, err)
+				walk(part.Header, part)
+			}
+		}
+		switch header.Get("Content-Transfer-Encoding") {
+		case "quoted-printable":
+			body = quotedprintable.NewReader(body)
+		case "base64":
+			body = base64.NewDecoder(base64.StdEncoding, body)
+		}
+		b, err := io.ReadAll(body)
+		require.NoError(t, err)
+		leaves = append(leaves, reportMailLeaf{header, b})
+	}
+	walk(textproto.MIMEHeader(msg.Header), msg.Body)
+	return msg.Header, leaves
 }
 
 func newReportLink(t *testing.T, inst *instance.Instance, at time.Time) *permission.Permission {
@@ -763,9 +790,19 @@ func TestExpiredLinkReport(t *testing.T) {
 	})
 
 	t.Run("retained events authenticated file and hosting owner mail", func(t *testing.T) {
+		settings, err := inst.SettingsDocument()
+		require.NoError(t, err)
+		settings.M["tz"] = "Europe/Paris"
+		require.NoError(t, couchdb.UpdateDoc(inst, settings))
 		p := newReportLink(t, inst, expiry)
 		for i := 0; i < 6; i++ {
-			require.NoError(t, couchdb.CreateDoc(inst, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(time.Duration(i-4) * time.Second), IP: "192.0.2." + strconv.Itoa(i), Identity: fmt.Sprintf("visitor-%d <tag>", i)}))
+			identity := fmt.Sprintf("visitor-%d <tag>", i)
+			if i == 2 {
+				identity = "\t "
+			} else if i == 3 {
+				identity = ""
+			}
+			require.NoError(t, couchdb.CreateDoc(inst, &publiclink.Event{LinkID: p.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(time.Duration(i-4) * time.Second), IP: "192.0.2." + strconv.Itoa(i), Identity: identity}))
 		}
 		require.NoError(t, runReport(t, inst, p, expiry))
 		state := getReport(t, inst, p, expiry)
@@ -773,6 +810,9 @@ func TestExpiredLinkReport(t *testing.T) {
 		rows, file := readReport(t, inst, state)
 		require.Len(t, rows, 6)
 		require.Equal(t, "192.0.2.4", rows[5][1])
+		require.Equal(t, "'\t ", rows[3][2], "CSV control-whitespace protection must remain unchanged")
+		require.Empty(t, rows[4][2], "anonymous display must not change the persisted CSV")
+		require.Equal(t, expiry.Add(-time.Second).Format(time.RFC3339Nano), rows[4][0])
 		directory, err := inst.VFS().DirByID(file.DirID)
 		require.NoError(t, err)
 		require.Equal(t, "/Reports", directory.Fullpath)
@@ -787,8 +827,16 @@ func TestExpiredLinkReport(t *testing.T) {
 		require.NotContains(t, got.recipient, "recipient-other-instance")
 		require.NotEmpty(t, header.Get("Message-ID"))
 		_, html := reportMailPart(t, got.raw, "text/html")
-		require.Contains(t, html, `alt="Twake Workplace"`)
-		require.Contains(t, html, "https://blog.cozy.io/")
+		require.Contains(t, html, `src="cid:report-drive.png"`)
+		require.NotContains(t, html, "https://blog.cozy.io/")
+		paris, err := time.LoadLocation("Europe/Paris")
+		require.NoError(t, err)
+		for _, rendered := range []string{body, stdhtml.UnescapeString(html)} {
+			require.Contains(t, rendered, expiry.In(paris).Format("2006-01-02 15:04 MST -07:00"))
+			require.Equal(t, 2, strings.Count(rendered, "Anonymous"), "raw empty and CSV-protected whitespace identities both render anonymously")
+		}
+		require.Contains(t, html, "visitor-4 &lt;tag&gt;")
+		require.NotContains(t, html, "visitor-4 <tag>")
 		server := setup.GetTestServer("/files", files.Routes)
 		_, ownerToken := setup.GetTestClient("io.cozy.files:GET")
 		_, narrowToken := setup.GetTestClient("io.cozy.files:GET:unrelated-file")
@@ -814,10 +862,15 @@ func TestExpiredLinkReport(t *testing.T) {
 				require.NotContains(t, string(raw), "visitor-4")
 			}
 		}
-		require.Contains(t, body, "visitor-2")
+		for _, index := range []int{2, 3} {
+			at := expiry.Add(time.Duration(index-4) * time.Second).In(paris).Format("2006-01-02 15:04 MST -07:00")
+			require.Contains(t, body, fmt.Sprintf("%s | 192.0.2.%d | Anonymous", at, index))
+			require.Regexp(t, regexp.QuoteMeta(at)+fmt.Sprintf(`</td>\s*<td[^>]*>192\.0\.2\.%d</td>\s*<td[^>]*>Anonymous`, index), stdhtml.UnescapeString(html))
+		}
 		require.Contains(t, body, "visitor-4")
-		require.Less(t, strings.Index(body, "visitor-4"), strings.Index(body, "visitor-3"))
-		require.Less(t, strings.Index(body, "visitor-3"), strings.Index(body, "visitor-2"))
+		require.Contains(t, body, "192.0.2.4")
+		require.Less(t, strings.Index(body, "192.0.2.4"), strings.Index(body, "192.0.2.3"))
+		require.Less(t, strings.Index(body, "192.0.2.3"), strings.Index(body, "192.0.2.2"))
 		require.Contains(t, body, "Opened")
 		require.NotContains(t, body, "visitor-0")
 		require.NotContains(t, body, "visitor-1")
@@ -837,6 +890,67 @@ func TestExpiredLinkReport(t *testing.T) {
 		case <-messages:
 			t.Fatal("duplicate report mail")
 		default:
+		}
+	})
+
+	t.Run("persisted recipient locale and timezone format actual event MIME", func(t *testing.T) {
+		for _, tc := range []struct {
+			name                  string
+			zone                  interface{}
+			first, second, expiry string
+		}{
+			{"DST repeated hour", "Europe/Paris", "2026-10-25 02:30 CEST +02:00", "2026-10-25 02:30 CET +01:00", "2026-10-25 03:00 CET +01:00"},
+			{"absent preference", nil, "2026-10-25 00:30 UTC +00:00", "2026-10-25 01:30 UTC +00:00", "2026-10-25 02:00 UTC +00:00"},
+			{"invalid preference", "Not/AZone", "2026-10-25 00:30 UTC +00:00", "2026-10-25 01:30 UTC +00:00", "2026-10-25 02:00 UTC +00:00"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				owner := testutils.NewSetup(t, t.Name()).GetTestInstance(&lifecycle.Options{Email: "french-owner@example.net", Locale: "fr"})
+				settings, err := owner.SettingsDocument()
+				require.NoError(t, err)
+				if tc.zone == nil {
+					delete(settings.M, "tz")
+				} else {
+					settings.M["tz"] = tc.zone
+				}
+				require.NoError(t, couchdb.UpdateDoc(owner, settings))
+				deadline := time.Date(2026, 10, 25, 2, 0, 0, 0, time.UTC)
+				p := newReportLink(t, owner, deadline)
+				first := deadline.Add(-90 * time.Minute)
+				second := deadline.Add(-30 * time.Minute)
+				for _, event := range []*publiclink.Event{
+					{LinkID: p.ID(), OccurredAt: first, IP: "192.0.2.10", Identity: "Alice <alice@example.test>", Action: publiclink.Opened},
+					{LinkID: p.ID(), OccurredAt: second, IP: "192.0.2.11", Action: publiclink.Downloaded},
+				} {
+					require.NoError(t, couchdb.CreateDoc(owner, event))
+				}
+				require.NoError(t, runReport(t, owner, p, deadline))
+				rows, _ := readReport(t, owner, getReport(t, owner, p, deadline))
+				require.Equal(t, first.Format(time.RFC3339Nano), rows[1][0])
+				require.Equal(t, second.Format(time.RFC3339Nano), rows[2][0])
+				require.Equal(t, "Alice <alice@example.test>", rows[1][2])
+				require.Empty(t, rows[2][2])
+				var got capturedReportMail
+				select {
+				case got = <-messages:
+				case <-time.After(time.Second):
+					t.Fatal("no localized SMTP report")
+				}
+				require.Contains(t, got.recipient, "french-owner@example.net")
+				_, plain := reportMailText(t, got.raw)
+				_, html := reportMailPart(t, got.raw, "text/html")
+				for _, body := range []string{plain, stdhtml.UnescapeString(html)} {
+					require.Contains(t, body, tc.expiry)
+					require.Contains(t, body, "Anonyme")
+					require.NotContains(t, body, "Anonymous")
+					require.Contains(t, body, "Téléchargé")
+				}
+				require.Contains(t, plain, tc.first+" | 192.0.2.10 | Alice <alice@example.test>")
+				require.Contains(t, plain, tc.second+" | 192.0.2.11 | Anonyme")
+				require.Contains(t, html, "Alice &lt;alice@example.test&gt;")
+				require.NotContains(t, html, "Alice <alice@example.test>")
+				require.Regexp(t, regexp.QuoteMeta(tc.first)+`</td>\s*<td[^>]*>192\.0\.2\.10</td>\s*<td[^>]*>`+regexp.QuoteMeta("Alice <alice@example.test>"), stdhtml.UnescapeString(html))
+				require.Regexp(t, regexp.QuoteMeta(tc.second)+`</td>\s*<td[^>]*>192\.0\.2\.11</td>\s*<td[^>]*>Anonyme`, stdhtml.UnescapeString(html))
+			})
 		}
 	})
 

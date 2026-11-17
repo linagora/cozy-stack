@@ -173,19 +173,22 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 	if err := revalidateReport(ctx, state.ReportMessage); err != nil {
 		return err
 	}
-	if !state.NoEmail {
-		settings, err := inst.SettingsDocument()
-		if err != nil {
-			return err
-		}
-		email, _ := settings.M["email"].(string)
-		state.NoEmail = strings.TrimSpace(email) == ""
-	}
 	if state.NoEmail {
 		state.Status = "no-email"
 		return nil
 	}
-	last, err := reportPreview(ctx, inst, file, state.FileFingerprint)
+	settings, err := inst.SettingsDocument()
+	if err != nil {
+		return err
+	}
+	email, _ := settings.M["email"].(string)
+	state.NoEmail = strings.TrimSpace(email) == ""
+	if state.NoEmail {
+		state.Status = "no-email"
+		return nil
+	}
+	location := reportMailLocation(settings.M["tz"])
+	last, err := reportPreview(ctx, inst, file, state.FileFingerprint, location)
 	if err != nil {
 		return err
 	}
@@ -195,8 +198,8 @@ func generateAndSendReport(ctx *job.TaskContext, state *publiclink.Report) error
 		Mode: mail.ModeFromStack, RequireDelivery: true,
 		MessageID:      "<link-report-" + state.ID() + "@" + strings.Split(inst.Domain, ":")[0] + ">",
 		TemplateName:   "expired_link_report",
-		Layout:         mail.DefaultLayout,
-		TemplateValues: map[string]interface{}{"Expiry": state.Expiry.UTC().Format("2006-01-02 15:04 UTC"), "ReportURL": u.String(), "Events": last},
+		Layout:         "layout-expired-link-report",
+		TemplateValues: map[string]interface{}{"Expiry": formatReportMailTime(state.Expiry, location), "ReportURL": u.String(), "Events": last},
 	}
 	// The existing sender resolves settings on the hosting instance, not creator
 	// metadata. Event previews are constructed here and never stored in a job.
@@ -543,7 +546,7 @@ func checkReportDestination(fs vfs.VFS, target vfs.Fetcher) error {
 	}
 }
 
-func reportPreview(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc, expected string) ([][]string, error) {
+func reportPreview(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc, expected string, location *time.Location) ([][]string, error) {
 	in, err := inst.VFS().OpenFile(file)
 	if err != nil {
 		return nil, err
@@ -569,7 +572,7 @@ func reportPreview(ctx context.Context, inst *instance.Instance, file *vfs.FileD
 			if actual != expected {
 				return nil, errReportCancelled
 			}
-			return formatReportPreview(last), nil
+			return formatReportPreview(last, location), nil
 		}
 		if err != nil {
 			return nil, err
@@ -581,14 +584,37 @@ func reportPreview(ctx context.Context, inst *instance.Instance, file *vfs.FileD
 	}
 }
 
-func formatReportPreview(rows [][]string) [][]string {
+// Missing or invalid preferences must not silently use the server timezone.
+func reportMailLocation(value interface{}) *time.Location {
+	name, _ := value.(string)
+	if name != "" && name != "Local" {
+		if location, err := time.LoadLocation(name); err == nil {
+			return location
+		}
+	}
+	return time.UTC
+}
+
+func formatReportMailTime(at time.Time, location *time.Location) string {
+	return at.In(location).Format("2006-01-02 15:04 MST -07:00")
+}
+
+func formatReportPreview(rows [][]string, location *time.Location) [][]string {
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
 		rows[i], rows[j] = rows[j], rows[i]
 	}
 	for _, row := range rows {
 		if len(row) == 4 {
+			identity := row[2]
+			// CSV protection prefixes leading control whitespace with an apostrophe.
+			if len(identity) > 1 && identity[0] == '\'' && strings.ContainsRune("\t\r\n", rune(identity[1])) {
+				identity = identity[1:]
+			}
+			if strings.TrimSpace(identity) == "" {
+				row[2] = ""
+			}
 			if at, err := time.Parse(time.RFC3339Nano, row[0]); err == nil {
-				row[0] = at.UTC().Format("2006-01-02 15:04 UTC")
+				row[0] = formatReportMailTime(at, location)
 			}
 		}
 	}

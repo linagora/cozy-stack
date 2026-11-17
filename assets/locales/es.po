@@ -1331,7 +1331,7 @@ msgid "Mail Link Report Scope"
 msgstr "El CSV contiene todos los eventos conservados del enlace hasta su caducidad, incluida la actividad anterior a la activación de los informes."
 
 msgid "Mail Link Report Last Events"
-msgstr "Últimos tres eventos registrados (UTC | IP | identidad | acción):"
+msgstr "Últimos tres eventos registrados (fecha y hora | IP | identidad | acción):"
 
 msgid "Mail Link Report No Activity"
 msgstr "No se ha registrado actividad."
@@ -1346,7 +1346,7 @@ msgid "Mail Link Report Activity"
 msgstr "Actividad"
 
 msgid "Mail Link Report Time"
-msgstr "Hora (UTC)"
+msgstr "Fecha y hora"
 
 msgid "Mail Link Report IP"
 msgstr "Dirección IP"
@@ -1383,3 +1383,9 @@ msgstr "Abrir el archivo de estadísticas del enlace en Drive"
 
 msgid "Mail Link Report Automatic"
 msgstr "Este es un informe automático de Drive porque los informes de actividad están activados para su enlace público."
+
+msgid "Mail Link Report Anonymous"
+msgstr "Anónimo"
+
+msgid "Mail Link Report Download"
+msgstr "O haga clic en el enlace para descargar el archivo CSV"
