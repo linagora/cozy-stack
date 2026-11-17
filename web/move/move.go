@@ -141,7 +141,7 @@ func createImport(c echo.Context) error {
 	}
 
 	inst := middlewares.GetInstance(c)
-	if err := move.ScheduleImport(inst, options); err != nil {
+	if err := move.ScheduleImport(c.Request().Context(), inst, options); err != nil {
 		return c.Render(http.StatusInternalServerError, "error.html", echo.Map{
 			"Domain":         inst.ContextualDomain(),
 			"ContextName":    inst.ContextName,

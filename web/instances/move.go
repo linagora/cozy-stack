@@ -91,17 +91,8 @@ func importer(c echo.Context) error {
 		return wrapError(err)
 	}
 
-	options := move.ImportOptions{
+	err = move.ScheduleImportFromManifest(c.Request().Context(), inst, move.ImportOptions{
 		ManifestURL: c.QueryParam("manifest_url"),
-	}
-	msg, err := job.NewMessage(options)
-	if err != nil {
-		return wrapError(err)
-	}
-
-	_, err = job.System().PushJob(inst, &job.JobRequest{
-		WorkerType: "import",
-		Message:    msg,
 	})
 	if err != nil {
 		return wrapError(err)

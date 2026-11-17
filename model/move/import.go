@@ -1,11 +1,14 @@
 package move
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
@@ -14,6 +17,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
+	"github.com/cozy/cozy-stack/pkg/lock"
 	"github.com/cozy/cozy-stack/pkg/mail"
 	"github.com/cozy/cozy-stack/pkg/safehttp"
 	multierror "github.com/hashicorp/go-multierror"
@@ -21,10 +25,11 @@ import (
 
 // ImportOptions contains the options for launching the import worker.
 type ImportOptions struct {
-	SettingsURL string       `json:"url,omitempty"`
-	ManifestURL string       `json:"manifest_url,omitempty"`
-	Vault       bool         `json:"vault,omitempty"`
-	MoveFrom    *FromOptions `json:"move_from,omitempty"`
+	SettingsURL      string       `json:"url,omitempty"`
+	ManifestURL      string       `json:"manifest_url,omitempty"`
+	Vault            bool         `json:"vault,omitempty"`
+	MoveFrom         *FromOptions `json:"move_from,omitempty"`
+	ReportGeneration string       `json:"report_generation,omitempty"`
 }
 
 // FromOptions is used when the import finishes to notify the source Cozy.
@@ -56,13 +61,38 @@ func CheckImport(inst *instance.Instance, settingsURL string) error {
 
 // ScheduleImport blocks the instance and adds a job to import the data from
 // the given URL.
-func ScheduleImport(inst *instance.Instance, options ImportOptions) error {
+func ScheduleImport(ctx context.Context, inst *instance.Instance, options ImportOptions) error {
 	manifestURL, err := transformSettingsURLToManifestURL(options.SettingsURL)
 	if err != nil {
 		return ErrExportNotFound
 	}
 	options.ManifestURL = manifestURL
+	return ScheduleImportFromManifest(ctx, inst, options)
+}
+
+// ScheduleImportFromManifest admits an admin import with a direct manifest URL.
+func ScheduleImportFromManifest(ctx context.Context, inst *instance.Instance, options ImportOptions) error {
+	if options.ManifestURL == "" {
+		return ErrExportNotFound
+	}
+	admission, err := lockImportAdmission(ctx, inst)
+	if err != nil {
+		return err
+	}
+	defer admission.Unlock()
 	options.SettingsURL = ""
+	options.ReportGeneration, err = inst.PauseReportsForImport()
+	if err != nil {
+		return err
+	}
+	settings, err := inst.SettingsDocument()
+	if err != nil {
+		return err
+	}
+	settings.M["importing"] = true
+	if err = couchdb.UpdateDoc(inst, settings); err != nil {
+		return err
+	}
 	msg, err := job.NewMessage(options)
 	if err != nil {
 		return err
@@ -71,17 +101,7 @@ func ScheduleImport(inst *instance.Instance, options ImportOptions) error {
 		WorkerType: "import",
 		Message:    msg,
 	})
-	if err != nil {
-		return err
-	}
-
-	settings, err := inst.SettingsDocument()
-	if err != nil {
-		return nil
-	}
-	settings.M["importing"] = true
-	_ = couchdb.UpdateDoc(inst, settings)
-	return nil
+	return err
 }
 
 func transformSettingsURLToManifestURL(settingsURL string) (string, error) {
@@ -131,12 +151,46 @@ func fetchManifest(manifestURL string) (*ExportDoc, error) {
 // Import downloads the documents and files from an export and add them to the
 // local instance. It returns the list of slugs for apps/konnectors that have
 // not been installed.
-func Import(inst *instance.Instance, options ImportOptions) ([]string, error) {
+func Import(ctx context.Context, inst *instance.Instance, options ImportOptions) (notInstalled []string, err error) {
+	admission, err := lockImportAdmission(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	defer admission.Unlock()
+	if err = inst.AdmitReportImport(options.ReportGeneration); err != nil {
+		return nil, err
+	}
+	generation := inst.ReportImportID
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err = lifecycle.Block(inst, instance.BlockedImporting.Code); err != nil {
+		return nil, err
+	}
+	structuralSuccess := false
+	allowDelete := false
 	defer func() {
-		settings, err := inst.SettingsDocument()
-		if err == nil {
+		if allowDelete {
+			if cleanupErr := GetStore().ClearAllowDeleteAccounts(inst); cleanupErr != nil {
+				err = multierror.Append(err, cleanupErr)
+			}
+		}
+		settings, cleanupErr := inst.SettingsDocument()
+		if cleanupErr == nil {
 			delete(settings.M, "importing")
-			_ = couchdb.UpdateDoc(inst, settings)
+			cleanupErr = couchdb.UpdateDoc(inst, settings)
+		}
+		if cleanupErr != nil {
+			err = multierror.Append(err, cleanupErr)
+		}
+		if unblockErr := unblockAfterImport(inst); unblockErr != nil {
+			err = multierror.Append(err, unblockErr)
+		}
+		// A nil named error during panic unwinding is not import success.
+		if structuralSuccess && err == nil {
+			if err = ctx.Err(); err == nil {
+				err = inst.CompleteReportImport(ctx, generation)
+			}
 		}
 	}()
 
@@ -148,12 +202,17 @@ func Import(inst *instance.Instance, options ImportOptions) ([]string, error) {
 	if err = GetStore().SetAllowDeleteAccounts(inst); err != nil {
 		return nil, err
 	}
+	allowDelete = true
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err = lifecycle.Reset(inst); err != nil {
 		return nil, err
 	}
 	if err = GetStore().ClearAllowDeleteAccounts(inst); err != nil {
 		return nil, err
 	}
+	allowDelete = false
 
 	im := &importer{
 		inst:            inst,
@@ -166,6 +225,9 @@ func Import(inst *instance.Instance, options ImportOptions) ([]string, error) {
 		return nil, err
 	}
 	for _, cursor := range doc.PartsCursors {
+		if erri := ctx.Err(); erri != nil {
+			return nil, multierror.Append(err, erri)
+		}
 		if erri := im.importPart(cursor); erri != nil {
 			err = multierror.Append(err, erri)
 		}
@@ -179,7 +241,46 @@ func Import(inst *instance.Instance, options ImportOptions) ([]string, error) {
 		inError = append(inError, slug)
 	}
 	sort.Strings(inError)
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	structuralSuccess = true
 	return inError, nil
+}
+
+// Import waits behind an admitted report, including its SMTP and checkpoint,
+// while a healthy Redis lease can take more than one acquisition window.
+func lockImportAdmission(ctx context.Context, inst *instance.Instance) (lock.ErrorLocker, error) {
+	admission := inst.ReportAdmissionLock()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		err := admission.Lock()
+		if errors.Is(err, lock.ErrTooManyRetries) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			admission.Unlock()
+			return nil, err
+		}
+		return admission, nil
+	}
+}
+
+func unblockAfterImport(inst *instance.Instance) error {
+	if err := lifecycle.Unblock(inst); err == nil {
+		return nil
+	}
+	time.Sleep(10 * time.Second)
+	latest, err := instance.Get(inst.Domain)
+	if err != nil {
+		return err
+	}
+	return lifecycle.Unblock(latest)
 }
 
 // ImportIsFinished returns true unless an import is running

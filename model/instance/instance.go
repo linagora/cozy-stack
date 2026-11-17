@@ -75,6 +75,9 @@ type Instance struct {
 	BlockingReason  string   `json:"blocking_reason,omitempty"` // Why the instance is blocked
 	NoAutoUpdate    bool     `json:"no_auto_update,omitempty"`  // Whether or not the instance has auto updates for its applications
 
+	ReportImportID      string `json:"report_import_id,omitempty"`
+	ReportImportPending bool   `json:"report_import_pending,omitempty"`
+
 	OnboardingFinished bool  `json:"onboarding_finished,omitempty"` // Whether or not the onboarding is complete.
 	PasswordDefined    *bool `json:"password_defined"`              // 3 possibles states: true, false, and unknown (for legacy reasons)
 

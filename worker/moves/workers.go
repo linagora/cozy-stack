@@ -1,11 +1,12 @@
 package moves
 
 import (
+	"context"
+	"errors"
 	"runtime"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
-	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/move"
 )
@@ -75,22 +76,12 @@ func ImportWorker(c *job.TaskContext) error {
 		return err
 	}
 
-	if err := lifecycle.Block(c.Instance, instance.BlockedImporting.Code); err != nil {
-		return err
+	inError, err := move.Import(c.Context, c.Instance, opts)
+	if errors.Is(err, instance.ErrStaleReportImport) {
+		return nil
 	}
-
-	inError, err := move.Import(c.Instance, opts)
-
-	if erru := lifecycle.Unblock(c.Instance); erru != nil {
-		// Try again
-		time.Sleep(10 * time.Second)
-		inst, errg := instance.Get(c.Instance.Domain)
-		if errg == nil {
-			erru = lifecycle.Unblock(inst)
-		}
-		if err == nil {
-			err = erru
-		}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
 	}
 
 	status := move.StatusImportSuccess

@@ -43,6 +43,25 @@ func expiredLinkReport(ctx *job.TaskContext) error {
 		return errors.New("invalid link report identifiers")
 	}
 	inst := ctx.Instance
+	paused, err := inst.ReportsPaused()
+	if err != nil {
+		return errors.New("link report admission unavailable")
+	}
+	if paused {
+		return nil
+	}
+	admission := inst.ReportAdmissionLock()
+	if err := admission.Lock(); err != nil {
+		return errors.New("link report admission unavailable")
+	}
+	defer admission.Unlock()
+	paused, err = inst.ReportsPaused()
+	if err != nil {
+		return errors.New("link report admission unavailable")
+	}
+	if paused {
+		return nil
+	}
 	key := publiclink.ReportID(msg.LinkID, msg.Expiry)
 	mu := config.Lock().LongOperation(inst, "public-link-report/"+key)
 	if err := mu.Lock(); err != nil {
@@ -51,7 +70,7 @@ func expiredLinkReport(ctx *job.TaskContext) error {
 	defer mu.Unlock()
 
 	state := &publiclink.Report{}
-	err := couchdb.GetDoc(inst, consts.PublicLinkReports, key, state)
+	err = couchdb.GetDoc(inst, consts.PublicLinkReports, key, state)
 	if couchdb.IsNotFoundError(err) || couchdb.IsNoDatabaseError(err) {
 		if err = revalidateReport(ctx, msg); err != nil {
 			return nil

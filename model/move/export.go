@@ -456,6 +456,8 @@ func writeInstanceDoc(in *instance.Instance, name string, now time.Time, tw *tar
 	clone.SwiftLayout = 0
 	clone.CouchCluster = 0
 	clone.IndexViewsVersion = 0
+	clone.ReportImportID = ""
+	clone.ReportImportPending = false
 	return writeDoc("", name, clone, now, tw)
 }
 

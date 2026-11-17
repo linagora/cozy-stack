@@ -48,6 +48,19 @@ func (t *ExpiredLinksTrigger) Schedule(ctx context.Context) {
 // QueueExpiredLinkReports paginates all permissions rather than limiting the
 // first page of expired links (which would starve newer expirations).
 func QueueExpiredLinkReports(ctx context.Context, b Broker, inst *instance.Instance, now time.Time) error {
+	paused, err := inst.ReportsPaused()
+	if err != nil || paused {
+		return err
+	}
+	admission := inst.ReportAdmissionLock()
+	if err := admission.Lock(); err != nil {
+		return err
+	}
+	defer admission.Unlock()
+	paused, err = inst.ReportsPaused()
+	if err != nil || paused {
+		return err
+	}
 	return couchdb.ForeachDocs(inst, consts.Permissions, func(_ string, raw json.RawMessage) error {
 		if err := ctx.Err(); err != nil {
 			return err

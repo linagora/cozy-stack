@@ -25,6 +25,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/move"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/model/sharing"
@@ -34,6 +35,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/i18n"
+	"github.com/cozy/cozy-stack/pkg/lock"
 	"github.com/cozy/cozy-stack/pkg/metadata"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/files"
@@ -66,6 +68,11 @@ func (tr *reportTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 // A real local SMTP boundary: assertions below inspect MIME delivered over TCP,
 // not an intercepted sendMail call or configured mock result.
 func reportSMTP(t *testing.T) (*gomail.DialerOptions, <-chan capturedReportMail) {
+	t.Helper()
+	return reportSMTPBeforeAccept(t, nil)
+}
+
+func reportSMTPBeforeAccept(t *testing.T, beforeAccept func()) (*gomail.DialerOptions, <-chan capturedReportMail) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -108,6 +115,10 @@ func reportSMTP(t *testing.T) (*gomail.DialerOptions, <-chan capturedReportMail)
 						raw, err := r.ReadDotBytes()
 						if err != nil {
 							return
+						}
+						if beforeAccept != nil {
+							_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+							beforeAccept()
 						}
 						select {
 						case messages <- capturedReportMail{to, string(raw)}:
@@ -231,6 +242,152 @@ func TestExpiredLinkReport(t *testing.T) {
 	config.GetConfig().Mail = dialer
 	t.Cleanup(func() { config.GetConfig().Mail = original })
 	expiry := time.Now().Add(-48 * time.Hour).UTC().Truncate(time.Second)
+
+	t.Run("import pause preserves queued reports after the legacy marker disappears", func(t *testing.T) {
+		setup := testutils.NewSetup(t, t.Name())
+		host := setup.GetTestInstance(&lifecycle.Options{Email: "paused-owner@example.net", Locale: "en"})
+		p := newReportLink(t, host, expiry)
+		state := &publiclink.Report{
+			DocID:         publiclink.ReportID(p.ID(), expiry),
+			ReportMessage: publiclink.ReportMessage{LinkID: p.ID(), Expiry: expiry},
+			FileID:        "link-report-" + publiclink.ReportID(p.ID(), expiry), Status: "pending",
+		}
+		require.NoError(t, couchdb.CreateNamedDocWithDB(host, state))
+		before := *state
+		admission := host.ReportAdmissionLock()
+		require.NoError(t, admission.Lock())
+		msg, err := job.NewMessage(publiclink.ReportMessage{LinkID: p.ID(), Expiry: expiry})
+		require.NoError(t, err)
+		queued, err := job.System().PushJob(host, &job.JobRequest{WorkerType: "expired-link-report", Message: msg})
+		require.NoError(t, err)
+		generation, pauseErr := host.PauseReportsForImport()
+		admission.Unlock()
+		require.NoError(t, pauseErr)
+		require.NotEmpty(t, generation)
+		settings, err := host.SettingsDocument()
+		require.NoError(t, err)
+		delete(settings.M, "importing")
+		require.NoError(t, couchdb.UpdateDoc(host, settings))
+		stale := host.Clone().(*instance.Instance)
+		stale.ReportImportPending = false
+		stale.ReportImportID = ""
+		require.Eventually(t, func() bool {
+			var j job.Job
+			return couchdb.GetDoc(host, consts.Jobs, queued.ID(), &j) == nil && j.State == job.Done
+		}, 5*time.Second, 10*time.Millisecond)
+		jobs := reportJobIDs(t, host)
+		require.NoError(t, job.QueueExpiredLinkReports(context.Background(), job.System(), stale, time.Now()))
+		require.NoError(t, runReport(t, stale, p, expiry))
+		require.Equal(t, jobs, reportJobIDs(t, host))
+		require.Equal(t, before, *getReport(t, host, p, expiry))
+		_, err = host.VFS().FileByID(state.FileID)
+		require.True(t, os.IsNotExist(err), "paused jobs must not publish a CSV: %v", err)
+		_, err = host.ReportsDirectoryID()
+		require.True(t, couchdb.IsNotFoundError(err) || couchdb.IsNoDatabaseError(err))
+		select {
+		case got := <-messages:
+			t.Fatalf("paused report delivered mail: %s", got.recipient)
+		default:
+		}
+	})
+
+	t.Run("import admission waits for real SMTP and completion checkpoint", func(t *testing.T) {
+		setup := testutils.NewSetup(t, t.Name())
+		host := setup.GetTestInstance(&lifecycle.Options{Email: "admitted-owner@example.net", Locale: "en"})
+		p := newReportLink(t, host, expiry)
+		admittedState := make(chan string, 1)
+		opts := reportImportSource(t, func(w http.ResponseWriter) bool {
+			admittedState <- getReport(t, host, p, expiry).Status
+			http.Error(w, "fixture stops before Reset", http.StatusServiceUnavailable)
+			return false
+		}, nil)
+		checkpointEntered, checkpointGate := make(chan struct{}), make(chan struct{})
+		var checkpointOnce sync.Once
+		releaseCheckpoint := func() { checkpointOnce.Do(func() { close(checkpointGate) }) }
+		t.Cleanup(releaseCheckpoint)
+		client := config.CouchClient()
+		transport := client.Transport
+		client.Transport = &reportTransport{base: transport, before: func(req *http.Request) {
+			if req.Method != http.MethodPut || req.GetBody == nil || !strings.HasSuffix(req.URL.Path, publiclink.ReportID(p.ID(), expiry)) {
+				return
+			}
+			in, err := req.GetBody()
+			if err != nil {
+				return
+			}
+			defer in.Close()
+			var state publiclink.Report
+			if json.NewDecoder(in).Decode(&state) == nil && state.Status == "sent" {
+				close(checkpointEntered)
+				<-checkpointGate
+			}
+		}}
+		defer func() { client.Transport = transport }()
+		entered, gate := make(chan struct{}), make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(gate) }) }
+		blockedDialer, captured := reportSMTPBeforeAccept(t, func() { close(entered); <-gate })
+		t.Cleanup(release)
+		previous := config.GetConfig().Mail
+		config.GetConfig().Mail = blockedDialer
+		defer func() { config.GetConfig().Mail = previous }()
+		delivered := make(chan error, 1)
+		go func() { delivered <- runReport(t, host, p, expiry) }()
+		select {
+		case <-entered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("real SMTP DATA was not reached")
+		}
+		require.Equal(t, "file-ready", getReport(t, host, p, expiry).Status)
+		waiting, paused := make(chan struct{}), make(chan error, 1)
+		importContext, cancel := context.WithTimeout(context.Background(), time.Minute)
+		t.Cleanup(cancel)
+		go func() {
+			close(waiting)
+			_, err := move.Import(importContext, host, opts)
+			paused <- err
+		}()
+		<-waiting
+		wait := 100 * time.Millisecond
+		if _, redis := config.Lock().(*lock.RedisLockGetter); redis {
+			wait = lock.LockTimeout + time.Second
+		}
+		select {
+		case err := <-paused:
+			t.Fatalf("import admitted during SMTP: %v", err)
+		case <-time.After(wait):
+		}
+		t.Logf("production import admission waited %s behind real SMTP DATA", wait)
+		release()
+		select {
+		case <-checkpointEntered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("real completion checkpoint write was not reached")
+		}
+		require.Equal(t, "file-ready", getReport(t, host, p, expiry).Status)
+		require.False(t, freshReportAuthority(t, host).ReportImportPending)
+		select {
+		case err := <-paused:
+			t.Fatalf("import admitted before completion checkpoint: %v", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+		releaseCheckpoint()
+		require.NoError(t, <-delivered)
+		require.ErrorIs(t, <-paused, move.ErrExportNotFound)
+		require.Equal(t, "sent", <-admittedState)
+		state := getReport(t, host, p, expiry)
+		require.Equal(t, "sent", state.Status)
+		require.Equal(t, 1, state.Attempts)
+		got := <-captured
+		require.Contains(t, got.recipient, "admitted-owner@example.net")
+		_, body := reportMailText(t, got.raw)
+		require.Contains(t, body, state.FileID)
+		isPaused, err := host.ReportsPaused()
+		require.NoError(t, err)
+		require.True(t, isPaused)
+	})
+
+	t.Run("import lifecycle pause and resume", testExpiredLinkReportImport)
 
 	t.Run("HTTP collection scanner and actual mail worker end to end", func(t *testing.T) {
 		setup := testutils.NewSetup(t, t.Name())

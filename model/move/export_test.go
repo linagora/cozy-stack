@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -24,6 +25,24 @@ type Stats struct {
 	TotalSize int64
 	Dirs      map[string]struct{}
 	Files     map[string][]byte
+}
+
+func TestExportOmitsReportImportAuthority(t *testing.T) {
+	inst := &instance.Instance{ReportImportID: "local-generation", ReportImportPending: true}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_, err := writeInstanceDoc(inst, "instance", time.Now(), tw)
+	assert.NoError(t, err)
+	assert.NoError(t, tw.Close())
+	tr := tar.NewReader(&buf)
+	_, err = tr.Next()
+	assert.NoError(t, err)
+	raw, err := io.ReadAll(tr)
+	assert.NoError(t, err)
+	assert.NotContains(t, string(raw), "report_import_id")
+	assert.NotContains(t, string(raw), "report_import_pending")
+	assert.Equal(t, "local-generation", inst.ReportImportID)
+	assert.True(t, inst.ReportImportPending)
 }
 
 func TestExport(t *testing.T) {
