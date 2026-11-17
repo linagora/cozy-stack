@@ -120,23 +120,35 @@ type roundTripper func(*http.Request) (*http.Response, error)
 
 func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// countFilesRequests returns the number of requests that fn sends to the
-// databases of the files and of the recents. The other requests of a call
-// (token, permissions, flags) do not depend on the page.
-func countFilesRequests(t *testing.T, fn func()) int {
+// countRequests returns the number of requests that fn sends to CouchDB on a
+// path accepted by match. The triggers on the files run jobs in the background
+// while fn runs, and those jobs send their own requests: match must keep them
+// out of the count.
+func countRequests(t *testing.T, match func(path string) bool, fn func()) int {
 	t.Helper()
 	client := config.CouchClient()
 	original := client.Transport
 	defer func() { client.Transport = original }()
 	var count atomic.Int32
 	client.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
-		if strings.Contains(r.URL.Path, "io-cozy-files") {
+		if match(r.URL.Path) {
 			count.Add(1)
 		}
 		return original.RoundTrip(r)
 	})
 	fn()
 	return int(count.Load())
+}
+
+// countFilesRequests returns the number of requests that fn sends to the
+// databases of the files and of the recents of the instance. The other
+// requests of a call (token, permissions, flags) do not depend on the page.
+func (env *recentsEnv) countFilesRequests(t *testing.T, fn func()) int {
+	t.Helper()
+	files := "/" + env.inst.DBPrefix() + "/io-cozy-files"
+	return countRequests(t, func(path string) bool {
+		return strings.HasPrefix(path, files)
+	}, fn)
 }
 
 // idsOf returns the IDs of the "data" or of the "included" member of a page,
@@ -183,8 +195,8 @@ func TestRecentsListPagination(t *testing.T) {
 		// The files are in the same folder: the path of a file asks for its
 		// parent folder, once per folder.
 		var one, all *httpexpect.Object
-		small := countFilesRequests(t, func() { one = env.getPage(t, "page[limit]=1") })
-		large := countFilesRequests(t, func() { all = env.getPage(t, "page[limit]=7") })
+		small := env.countFilesRequests(t, func() { one = env.getPage(t, "page[limit]=1") })
+		large := env.countFilesRequests(t, func() { all = env.getPage(t, "page[limit]=7") })
 		assert.Len(t, idsOf(one, "included"), 1)
 		assert.Len(t, idsOf(all, "included"), 7)
 		// One request for the marker of the seed, one for the rows, and one
