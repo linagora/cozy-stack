@@ -384,6 +384,33 @@ func emailsFixer(c echo.Context) error {
 	return c.JSON(http.StatusOK, lifecycle.BackfillEmails(insts, dryRun))
 }
 
+func personalContactsFixer(c echo.Context) error {
+	var insts []*instance.Instance
+	if c.QueryParam("domain") != "" && c.QueryParam("context") != "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "use either context or domain")
+	}
+	if domain := c.QueryParam("domain"); domain != "" {
+		inst, err := lifecycle.GetInstance(domain)
+		if err != nil {
+			return wrapError(err)
+		}
+		insts = append(insts, inst)
+	} else {
+		all, err := instance.List()
+		if err != nil {
+			return wrapError(err)
+		}
+		contextName := c.QueryParam("context")
+		for _, inst := range all {
+			if contextName == "" || inst.ContextName == contextName {
+				insts = append(insts, inst)
+			}
+		}
+	}
+	dryRun := c.QueryParam("dry_run") == "true"
+	return c.JSON(http.StatusOK, sharing.PublishPersonalContacts(insts, dryRun))
+}
+
 func memberCopiesFixer(c echo.Context) error {
 	dryRun := c.QueryParam("dry_run") == "true"
 	report, err := orgdirectory.RemoveMemberCopies(c.Request().Context(), c.Param("org_id"), dryRun)

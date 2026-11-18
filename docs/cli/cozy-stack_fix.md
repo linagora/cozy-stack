@@ -34,6 +34,7 @@ cozy-stack fix <command> [flags]
 * [cozy-stack fix org-contacts](cozy-stack_fix_org-contacts.md)	 - Remove the contacts Sabre no longer has from the organization instance
 * [cozy-stack fix orphan-account](cozy-stack_fix_orphan-account.md)	 - Remove the orphan accounts
 * [cozy-stack fix password-defined](cozy-stack_fix_password-defined.md)	 - Set the password_defined setting
+* [cozy-stack fix personal-contacts](cozy-stack_fix_personal-contacts.md)	 - Publish to Sabre the personal contacts that only exist in the stack
 * [cozy-stack fix redis](cozy-stack_fix_redis.md)	 - Rebuild scheduling data strucutures in redis
 * [cozy-stack fix service-triggers](cozy-stack_fix_service-triggers.md)	 - Clean the triggers for webapp services
 * [cozy-stack fix sharings](cozy-stack_fix_sharings.md)	 - Fix the issues found by the check of the io.cozy.sharings documents
