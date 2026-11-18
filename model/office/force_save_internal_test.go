@@ -69,7 +69,7 @@ func forceSaveStores(t *testing.T) map[string][2]Store {
 		return stores
 	}
 	stack := func() Store {
-		opt, err := redis.ParseURL("redis://localhost:6379/15")
+		opt, err := redis.ParseURL(redisTestURL())
 		require.NoError(t, err)
 		cli := redis.NewClient(opt)
 		t.Cleanup(func() { _ = cli.Close() })
