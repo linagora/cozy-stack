@@ -18,7 +18,7 @@
     <strong style="font-size:14px;">{{t "Mail Link Report Context Title"}}</strong><br /><br />
     {{t "Mail Link Report Context"}}<br />
     <table role="presentation" style="width:100%;border-collapse:collapse;margin-top:8px;">
-      <tr><td style="width:24px;vertical-align:top;padding:2px 0 8px;"><img src="cid:report-link.png" width="14" height="14" alt="" role="presentation" style="display:block;border:0;" /></td><td style="padding-bottom:8px;"><a href="{{.ReportURL}}" style="color:#297ef2;">{{.ReportURL}}</a></td></tr>
+      <tr><td style="width:24px;vertical-align:top;padding:2px 0 8px;"><img src="cid:report-link.png" width="14" height="14" alt="" role="presentation" style="display:block;border:0;" /></td><td style="padding-bottom:8px;"><a href="{{.ReportURL}}" style="color:#297ef2;overflow-wrap:anywhere;word-break:break-all;">{{.ReportURL}}</a></td></tr>
       <tr><td style="width:24px;vertical-align:top;padding-top:2px;"><img src="cid:report-clock.png" width="14" height="14" alt="" role="presentation" style="display:block;border:0;" /></td><td>{{t "Mail Link Report Expiry" .Expiry}}</td></tr>
     </table>
   </td></tr>
