@@ -10,7 +10,12 @@ import (
 	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/lock"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 )
+
+// Memory queues are local to the process, regardless of the configured instance locks.
+var localScanLocks = lock.NewInMemory()
 
 // ExpiredLinksTrigger reconciles all instances, even inactive ones, on startup
 // and every five minutes. Unlike @at this catches arbitrarily long downtime.
@@ -27,15 +32,8 @@ func (t *ExpiredLinksTrigger) Schedule(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for {
-		if err := instance.ForeachInstances(func(inst *instance.Instance) error {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			// One broken instance must not starve the following instances.
-			_ = QueueExpiredLinkReports(ctx, t.broker, inst, time.Now())
-			return nil
-		}); err != nil && ctx.Err() == nil {
-			joblog.Warn("Could not enumerate instances for link reports")
+		if err := t.scan(ctx); err != nil && err != ErrUnknownWorker && ctx.Err() == nil {
+			joblog.Warn("Could not scan expired link reports")
 		}
 		select {
 		case <-ctx.Done():
@@ -43,6 +41,47 @@ func (t *ExpiredLinksTrigger) Schedule(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (t *ExpiredLinksTrigger) scan(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var locks lock.Getter = localScanLocks
+	depthOf := t.broker.WorkerQueueLen
+	if broker, ok := t.broker.(*redisBroker); ok {
+		// The lock configuration can use a different backend than the job queue.
+		locks = broker.scanLocks
+		depthOf = broker.primaryQueueLen
+	}
+	mu := locks.LongOperation(prefixer.GlobalPrefixer, "expired-link-report-scan")
+	if err := mu.Lock(); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Wait for the previous wave to leave the queue. Jobs already handed to a
+	// worker do not appear here and can be rediscovered after a crash.
+	depth, err := depthOf("expired-link-report")
+	if err != nil {
+		return err
+	}
+	if depth > 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return instance.ForeachInstances(func(inst *instance.Instance) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// One broken instance must not starve the following instances.
+		_ = QueueExpiredLinkReports(ctx, t.broker, inst, time.Now())
+		return ctx.Err()
+	})
 }
 
 // QueueExpiredLinkReports paginates all permissions rather than limiting the

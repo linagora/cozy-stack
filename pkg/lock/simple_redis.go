@@ -47,8 +47,8 @@ var (
 )
 
 var redislocksMu sync.Mutex
-var redisRng *rand.Rand
-var redisLogger logger.Logger
+var redisRng = rand.New(rand.NewSource(time.Now().UnixNano()))
+var redisLogger = logger.WithNamespace("redis-lock")
 
 type RedisLockGetter struct {
 	client redis.UniversalClient
@@ -56,9 +56,6 @@ type RedisLockGetter struct {
 }
 
 func NewRedisLockGetter(client redis.UniversalClient) *RedisLockGetter {
-	redisRng = rand.New(rand.NewSource(time.Now().UnixNano()))
-	redisLogger = logger.WithNamespace("redis-lock")
-
 	return &RedisLockGetter{
 		client: client,
 		locks:  new(sync.Map),

@@ -335,6 +335,8 @@ redis:
 
   # databases number for each part of the stack using a specific database.
   databases:
+    # Restricted jobs ACLs also need SET and EVAL (GET, PEXPIRE, DEL) on
+    # locks:global/expired-link-report-scan to coordinate report scanners.
     jobs: 0
     cache: 1
     lock: 2

@@ -12,6 +12,7 @@ import (
 
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/limits"
+	"github.com/cozy/cozy-stack/pkg/lock"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	multierror "github.com/hashicorp/go-multierror"
@@ -27,6 +28,7 @@ const (
 
 type redisBroker struct {
 	client         redis.UniversalClient
+	scanLocks      lock.Getter
 	ctx            context.Context
 	workers        []*Worker
 	workersRunning []*Worker
@@ -39,9 +41,10 @@ type redisBroker struct {
 // the jobs among several cozy-stack processes.
 func NewRedisBroker(client redis.UniversalClient) Broker {
 	return &redisBroker{
-		client: client,
-		ctx:    context.Background(),
-		closed: make(chan struct{}),
+		client:    client,
+		scanLocks: lock.NewRedisLockGetter(client),
+		ctx:       context.Background(),
+		closed:    make(chan struct{}),
 	}
 }
 
@@ -267,16 +270,33 @@ func (b *redisBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, erro
 // QueueLen returns the size of the number of elements in queue of the
 // specified worker type.
 func (b *redisBroker) WorkerQueueLen(workerType string) (int, error) {
+	return b.queueLen(workerType, false)
+}
+
+func (b *redisBroker) primaryQueueLen(workerType string) (int, error) {
+	return b.queueLen(workerType, true)
+}
+
+func (b *redisBroker) queueLen(workerType string, primaryOnly bool) (int, error) {
 	key := redisPrefix + workerType
-	l1, err := b.client.LLen(b.ctx, key).Result()
-	if err != nil {
-		return 0, err
+	var depth int64
+	for _, k := range []string{key, key + redisHighPrioritySuffix} {
+		client := b.client
+		if cluster, ok := client.(*redis.ClusterClient); ok && primaryOnly && cluster.Options().ReadOnly {
+			// A lagging replica could report an empty queue and admit another wave.
+			primary, err := cluster.MasterForKey(b.ctx, k)
+			if err != nil {
+				return 0, err
+			}
+			client = primary
+		}
+		n, err := client.LLen(b.ctx, k).Result()
+		if err != nil {
+			return 0, err
+		}
+		depth += n
 	}
-	l2, err := b.client.LLen(b.ctx, key+redisHighPrioritySuffix).Result()
-	if err != nil {
-		return 0, err
-	}
-	return int(l1 + l2), nil
+	return int(depth), nil
 }
 
 func (b *redisBroker) WorkerIsReserved(workerType string) (bool, error) {
