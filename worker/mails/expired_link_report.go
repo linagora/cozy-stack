@@ -75,11 +75,10 @@ func expiredLinkReport(ctx *job.TaskContext) error {
 		if err = revalidateReport(ctx, msg); err != nil {
 			return nil
 		}
-		settings, serr := inst.SettingsDocument()
+		email, serr := inst.SettingsEMail()
 		if serr != nil {
 			return errors.New("link report settings unavailable")
 		}
-		email, _ := settings.M["email"].(string)
 		state = &publiclink.Report{
 			DocID: key, ReportMessage: msg, FileID: "link-report-" + key,
 			Status: "pending", NoEmail: strings.TrimSpace(email) == "",

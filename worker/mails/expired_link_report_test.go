@@ -1046,6 +1046,43 @@ func TestExpiredLinkReport(t *testing.T) {
 		}
 	})
 
+	t.Run("initial email values determine checkpoint eligibility", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			value   interface{}
+			noEmail bool
+		}{
+			{"null", nil, true},
+			{"number", 42, true},
+			{"empty", "", true},
+			{"whitespace", " \t\n", true},
+			{"address", "owner@example.net", false},
+			{"padded address", " owner@example.net ", false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				other := testutils.NewSetup(t, t.Name()).GetTestInstance()
+				settings, err := other.SettingsDocument()
+				require.NoError(t, err)
+				settings.M["email"] = tc.value
+				require.NoError(t, couchdb.UpdateDoc(other, settings))
+				p := newReportLink(t, other, expiry)
+				config.GetConfig().Mail = &gomail.DialerOptions{Host: "-"}
+				err = runReport(t, other, p, expiry)
+				config.GetConfig().Mail = dialer
+				state := getReport(t, other, p, expiry)
+				require.Equal(t, tc.noEmail, state.NoEmail)
+				if tc.noEmail {
+					require.NoError(t, err)
+					require.Equal(t, "no-email", state.Status)
+				} else {
+					require.Error(t, err)
+					require.Equal(t, "file-ready", state.Status)
+				}
+				_, _ = readReport(t, other, state)
+			})
+		}
+	})
+
 	t.Run("email removed during retries permanently suppresses delivery", func(t *testing.T) {
 		other := testutils.NewSetup(t, t.Name()).GetTestInstance(&lifecycle.Options{Email: "before@example.net"})
 		p := newReportLink(t, other, expiry)
