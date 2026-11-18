@@ -7809,3 +7809,52 @@ func TestSharedDriveItemLinks(t *testing.T) {
 		owner.Path("$.relationships.parent.links.related").String().IsEqual(filePrefix + consts.RootDirID)
 	})
 }
+
+// TestSharedDriveThumbnailRoute checks that the thumbnail link of a drive item
+// works with its secret alone: a plain image request carries no token.
+func TestSharedDriveThumbnailRoute(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, env.firstSharingID)
+	eA, eB, eD := env.createClients(t)
+	prefix := "/sharings/drives/" + env.firstSharingID + "/"
+	photoID := createFileWithMime(t, eA, env.meetingsDirID, "photo.jpg", env.acmeToken, "image/jpeg")
+
+	smallLink := func(e *httpexpect.Expect, token string) string {
+		return e.GET(prefix+photoID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.links.small").String().NotEmpty().Raw()
+	}
+
+	// The thumbnail may not be generated yet, and the placeholder is then
+	// served with a 404: both tell that the secret was accepted.
+	expectImage := func(t *testing.T, e *httpexpect.Expect, link string) {
+		res := e.GET(link).Expect()
+		assert.Contains(t, []int{http.StatusOK, http.StatusNotFound}, res.Raw().StatusCode)
+		contentType := res.Header("Content-Type").Raw()
+		assert.True(t, strings.HasPrefix(contentType, "image/"), contentType)
+	}
+
+	t.Run("a member loads a thumbnail without a token", func(t *testing.T) {
+		expectImage(t, eB, smallLink(eB, env.bettyToken))
+	})
+
+	t.Run("a read-only member loads a thumbnail without a token", func(t *testing.T) {
+		expectImage(t, eD, smallLink(eD, env.daveToken))
+	})
+
+	t.Run("a wrong secret is refused", func(t *testing.T) {
+		eB.GET(prefix + photoID + "/thumbnails/wrong-secret/small").
+			Expect().Status(http.StatusBadRequest)
+	})
+
+	t.Run("the secret of another file is refused", func(t *testing.T) {
+		link := strings.Replace(smallLink(eB, env.bettyToken), prefix+photoID, prefix+env.checklistID, 1)
+		eB.GET(link).Expect().Status(http.StatusBadRequest)
+	})
+}

@@ -1649,7 +1649,7 @@ func drivesRoutes(router *echo.Group) {
 	drive.POST("/:file-id/copy", proxy(CopyFile, true))
 	drive.POST("/:file-id/drives", proxy(CreateNestedSharedDriveHandler, true), prepareNestedDriveRecipients)
 
-	drive.GET("/:file-id/thumbnails/:secret/:format", proxy(ThumbnailHandler, true))
+	drive.GET("/:file-id/thumbnails/:secret/:format", proxy(ThumbnailHandler, false))
 
 	drive.POST("/downloads", proxy(FileDownloadCreateHandler, true))
 	drive.GET("/downloads/:secret/:fake-name", proxy(FileDownloadHandler, false))
