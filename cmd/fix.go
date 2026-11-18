@@ -21,6 +21,7 @@ import (
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
 	"github.com/cozy/cozy-stack/model/orgdirectory"
+	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 
@@ -34,6 +35,8 @@ var (
 	sinceFlag            string
 	expectedContactsFlag int
 	contactPathsFlag     string
+	fixContextFlag       string
+	fixDomainFlag        string
 )
 
 var fixerCmdGroup = &cobra.Command{
@@ -533,6 +536,71 @@ If a settings email can't be read, nothing is written and the command fails.
 	},
 }
 
+var personalContactsFixer = &cobra.Command{
+	Use:   "personal-contacts",
+	Short: "Publish to Sabre the personal contacts that only exist in the stack",
+	Long: `
+This fixer publishes on twake:contacts:collected the personal contacts that
+have an email and no CardDAV path, with their name, emails and phones. Run it
+before configuring contacts_search for a context, as the share suggestions then
+come from Sabre only.
+Each contact is marked external, so the card coming back from the
+twake:contacts:common feed updates it instead of creating a duplicate. From
+then on, its name, emails and phones come from Sabre.
+Member copies, the user's own contact and trashed contacts are left out.
+Instances without common_contacts or an email are skipped. It is safe to run
+twice.
+`,
+	Example: `$ cozy-stack fix personal-contacts --context linagora_default --dry-run`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if fixContextFlag != "" && fixDomainFlag != "" {
+			return errors.New("use either --context or --domain")
+		}
+		if !dryRunFlag && !forceFlag {
+			if err := askForConfirmation("Publish the personal contacts to Sabre?"); err != nil {
+				return err
+			}
+		}
+		c := newAdminClient()
+		q := url.Values{}
+		if dryRunFlag {
+			q.Set("dry_run", "true")
+		}
+		if fixContextFlag != "" {
+			q.Set("context", fixContextFlag)
+		}
+		if fixDomainFlag != "" {
+			q.Set("domain", fixDomainFlag)
+		}
+		res, err := c.Req(&request.Options{
+			Method:  "POST",
+			Path:    "/instances/fixers/personal-contacts",
+			Queries: q,
+		})
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		var report sharing.PersonalContactsReport
+		if err := json.NewDecoder(res.Body).Decode(&report); err != nil {
+			return err
+		}
+		for _, e := range report.Errors {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", e)
+		}
+		published := "Published"
+		if dryRunFlag {
+			published = "Would publish"
+		}
+		fmt.Fprintf(os.Stdout, "Scanned: %d\nSkipped: %d\n%s: %d\nErrors: %d\n",
+			report.Scanned, report.Skipped, published, report.Published, len(report.Errors))
+		if len(report.Errors) > 0 {
+			return fmt.Errorf("%d errors, see above", len(report.Errors))
+		}
+		return nil
+	},
+}
+
 var memberCopiesFixer = &cobra.Command{
 	Use:   "member-copies <org-id>",
 	Short: "Remove the members copied into the instances of an organization",
@@ -668,6 +736,10 @@ func init() {
 	redisFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before fixing redis on all instances")
 	emailsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would change without writing")
 	emailsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before writing")
+	personalContactsFixer.Flags().StringVar(&fixContextFlag, "context", "", "Only the instances of this context")
+	personalContactsFixer.Flags().StringVar(&fixDomainFlag, "domain", "", "Only this instance")
+	personalContactsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be published without writing")
+	personalContactsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before publishing")
 	memberCopiesFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
 	memberCopiesFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
 	orgContactsFixer.Flags().StringVar(&sinceFlag, "since", "", "A few minutes before the republication (RFC 3339)")
@@ -688,6 +760,7 @@ func init() {
 	fixerCmdGroup.AddCommand(sharingsFixer)
 	fixerCmdGroup.AddCommand(indexesFixer)
 	fixerCmdGroup.AddCommand(emailsFixer)
+	fixerCmdGroup.AddCommand(personalContactsFixer)
 	fixerCmdGroup.AddCommand(memberCopiesFixer)
 	fixerCmdGroup.AddCommand(orgContactsFixer)
 
