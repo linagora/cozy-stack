@@ -929,7 +929,7 @@ func TestPublishCollectedContacts(t *testing.T) {
 	}
 	// The contacts created by a request go in a single message.
 	fake := &fakePublisher{}
-	require.NoError(t, PublishCollectedContacts(ctx, alice, fake, []string{"dave@unknown.example", "erin@unknown.example"}))
+	require.NoError(t, PublishCollectedContacts(ctx, alice, fake, CollectedContactsMsg{Emails: []string{"dave@unknown.example", "erin@unknown.example"}}))
 	require.Len(t, fake.requests, 1)
 	req := fake.requests[0]
 	assert.Equal(t, alice.ContextName, req.ContextName)
@@ -941,20 +941,52 @@ func TestPublishCollectedContacts(t *testing.T) {
 	require.Len(t, msg.CollectedContacts, 2)
 	assert.Equal(t, "dave@unknown.example", address(msg.CollectedContacts[0]))
 	assert.Equal(t, "erin@unknown.example", address(msg.CollectedContacts[1]))
+	assert.NotContains(t, msg.CollectedContacts[0], "name")
+
+	// A full contact carries every field the feed writes back, so the round
+	// trip through Sabre loses nothing.
+	full := &fakePublisher{}
+	require.NoError(t, PublishCollectedContacts(ctx, alice, full, CollectedContactsMsg{
+		Contacts: []CollectedContact{
+			{Name: "Bob Martin", GivenName: "Bob", FamilyName: "Martin", Emails: []string{"dave@unknown.example", "[REDACTED-EMAIL-f2c9bdb2]"}, Phones: []string{"+33600000000"}},
+			{Emails: []string{"erin@unknown.example"}},
+		},
+	}))
+	require.Len(t, full.requests, 1)
+	cards := full.requests[0].Payload.(rabbitmq.CollectedContactsMessage).CollectedContacts
+	require.Len(t, cards, 2)
+	assert.Equal(t, map[string]interface{}{
+		"@type": "Card",
+		"name": map[string]interface{}{"@type": "Name", "full": "Bob Martin", "components": []interface{}{
+			map[string]interface{}{"kind": "given", "value": "Bob"},
+			map[string]interface{}{"kind": "surname", "value": "Martin"},
+		}},
+		"emails": map[string]interface{}{
+			"e1": map[string]interface{}{"address": "dave@unknown.example", "pref": 1},
+			"e2": map[string]interface{}{"address": "[REDACTED-EMAIL-f2c9bdb2]"},
+		},
+		"phones": map[string]interface{}{
+			"p1": map[string]interface{}{"number": "+33600000000", "pref": 1},
+		},
+	}, cards[0])
+	assert.Equal(t, map[string]interface{}{
+		"@type":  "Card",
+		"emails": map[string]interface{}{"e1": map[string]interface{}{"address": "erin@unknown.example", "pref": 1}},
+	}, cards[1])
 
 	// A publish error is returned, so the job can retry.
 	failing := &fakePublisher{err: errors.New("broker down")}
-	err := PublishCollectedContacts(ctx, alice, failing, []string{"dave@unknown.example"})
+	err := PublishCollectedContacts(ctx, alice, failing, CollectedContactsMsg{Emails: []string{"dave@unknown.example"}})
 	assert.ErrorIs(t, err, failing.err)
-	err = PublishCollectedContacts(ctx, alice, nil, []string{"dave@unknown.example"})
+	err = PublishCollectedContacts(ctx, alice, nil, CollectedContactsMsg{Emails: []string{"dave@unknown.example"}})
 	assert.ErrorIs(t, err, errNoCollectedPublisher)
 
 	// Nothing is published without contacts, common contacts or an email.
 	silent := &fakePublisher{}
-	require.NoError(t, PublishCollectedContacts(ctx, alice, silent, nil))
+	require.NoError(t, PublishCollectedContacts(ctx, alice, silent, CollectedContactsMsg{}))
 	standalone := newInstance("bob", "", "bob-"+suffix+"@acme.example")
-	require.NoError(t, PublishCollectedContacts(ctx, standalone, silent, []string{"erin@unknown.example"}))
+	require.NoError(t, PublishCollectedContacts(ctx, standalone, silent, CollectedContactsMsg{Emails: []string{"erin@unknown.example"}}))
 	noEmail := newInstance("carol", "collected-on", "")
-	require.NoError(t, PublishCollectedContacts(ctx, noEmail, silent, []string{"erin@unknown.example"}))
+	require.NoError(t, PublishCollectedContacts(ctx, noEmail, silent, CollectedContactsMsg{Emails: []string{"erin@unknown.example"}}))
 	assert.Empty(t, silent.requests)
 }

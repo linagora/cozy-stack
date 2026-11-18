@@ -130,8 +130,8 @@ func WorkerCollectedContacts(ctx *job.TaskContext) error {
 		return err
 	}
 	ctx.Instance.Logger().WithNamespace("share").
-		Debugf("CollectedContacts %d contacts", len(msg.Emails))
-	err := sharing.PublishCollectedContacts(ctx, ctx.Instance, ctx.Publisher, msg.Emails)
+		Debugf("CollectedContacts %d contacts", len(msg.Emails)+len(msg.Contacts))
+	err := sharing.PublishCollectedContacts(ctx, ctx.Instance, ctx.Publisher, msg)
 	// No retry: RabbitMQ is not configured.
 	if errors.Is(err, rabbitmq.ErrNotConfigured) {
 		ctx.SetNoRetry()
