@@ -2764,7 +2764,44 @@ func TestTokenExchange(t *testing.T) {
 			Expect().
 			Status(http.StatusBadRequest).
 			JSON().Object().
+			ValueEqual("error", "admin authorization is required")
+	})
+
+	t.Run("ExchangesTokenIssuedToAConfiguredApp", func(t *testing.T) {
+		idToken := makeTokenExchangeSignedJWT(t, privateKey, kid, map[string]interface{}{
+			"iss":        issuer,
+			"aud":        []string{"admin", clientID},
+			"azp":        "admin",
+			"sub":        "admin-user",
+			"sid":        "admin-client-sid",
+			"iat":        time.Now().Unix(),
+			"exp":        time.Now().Add(time.Hour).Unix(),
+			"org_id":     testInstance.OrgID,
+			"org_domain": testInstance.OrgDomain,
+			"org_role":   "owner",
+		})
+		exchange := func(status int) *httpexpect.Response {
+			return e.POST("/auth/token_exchange").
+				WithHost(testInstance.Domain).
+				WithHeader("Accept", "application/json").
+				WithHeader("Origin", "https://admin.example.com").
+				WithJSON(map[string]string{
+					"id_token": idToken,
+					"scope":    "io.cozy.files",
+				}).
+				Expect().
+				Status(status)
+		}
+
+		exchange(http.StatusBadRequest).JSON().Object().
 			ValueEqual("error", "invalid token audience")
+
+		entries := oidcConfig["app_token_exchange"].(map[string]interface{})
+		entries["admin"] = map[string]interface{}{"software_id": "registry://admin"}
+		t.Cleanup(func() { delete(entries, "admin") })
+
+		exchange(http.StatusOK).JSON().Object().
+			ValueEqual("scope", "io.cozy.files")
 	})
 
 	t.Run("RejectsAppTokenScopeParameter", func(t *testing.T) {

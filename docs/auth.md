@@ -1075,6 +1075,9 @@ The target Cozy instance is the request host. The exchanged `id_token` must:
 
 For admin exchanges, the `id_token` must also:
 
+- be issued to the `oidc.client_id` of the stack configuration, or to a client
+  present in `oidc.app_token_exchange`. That client is found the same way as
+  for user app exchanges below
 - contain an `org_id` claim equal to the target instance organization id
 - contain an `org_role` claim equal to `owner` or `admin`
 
