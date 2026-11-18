@@ -475,9 +475,15 @@ not enforce confidentiality or prevent the owner from sharing a report.
 
 If the hosting instance has no email when processing first begins, the file is
 created but no mail is sent, including after an address is subsequently added.
-The private `io.cozy.public_links.reports` checkpoint survives instance moves and
-is inaccessible through the data API or realtime subscriptions. Jobs contain
-only the permission ID and canonical expiry, never sharecodes or event data.
+The private `io.cozy.public_links.reports` checkpoints and folder bindings are
+local to the instance. They are not restored from an import and are inaccessible
+through the data API or realtime subscriptions. Moved public links start with
+automatic reporting off, even if their expiry is still in the future. Already
+published CSVs are imported as ordinary files under the usual permissions, and
+retained events are still imported. An authorized user can explicitly opt a
+moved link back in; a new report can use retained events but will not adopt an
+imported CSV. Jobs contain only the permission ID and canonical expiry, never
+sharecodes or event data.
 
 Failures retry through reconciliation at most eight times, with exponential
 backoff capped at six hours. Quota/export/upload failures never publish a partial

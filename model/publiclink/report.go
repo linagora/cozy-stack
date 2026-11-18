@@ -15,7 +15,7 @@ type ReportMessage struct {
 	Expiry time.Time `json:"expiry"`
 }
 
-// Report is an ordinary private document so checkpoints survive instance moves.
+// Report is a private checkpoint local to the instance that created it.
 type Report struct {
 	DocID  string `json:"_id,omitempty"`
 	DocRev string `json:"_rev,omitempty"`

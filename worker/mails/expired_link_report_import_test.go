@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -29,11 +30,13 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	webinstances "github.com/cozy/cozy-stack/web/instances"
 	"github.com/cozy/cozy-stack/worker/moves"
+	"github.com/cozy/gomail"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +115,160 @@ func reportImportSource(t *testing.T, beforeManifest func(http.ResponseWriter) b
 	return move.ImportOptions{SettingsURL: server.URL + "/#/exports/r2", ManifestURL: server.URL + "/move/exports/r2"}
 }
 
+// reportExportArchive keeps the real exporter output under t.TempDir, even
+// when the instance's VFS uses the in-memory backend.
+type reportExportArchive string
+
+func (a reportExportArchive) OpenArchive(*instance.Instance, *move.ExportDoc) (io.ReadCloser, error) {
+	return os.Open(string(a))
+}
+
+func (a reportExportArchive) CreateArchive(*move.ExportDoc) (io.WriteCloser, error) {
+	return os.Create(string(a))
+}
+
+func (a reportExportArchive) RemoveArchives([]*move.ExportDoc) error {
+	return os.Remove(string(a))
+}
+
+func testMovedExpiredLinkReport(t *testing.T, expiry time.Time, messages <-chan capturedReportMail) {
+	source := testutils.NewSetup(t, t.Name()+"-source").GetTestInstance(&lifecycle.Options{Email: "source-owner@example.net", Locale: "en"})
+	futureExpiry := expiry.Add(48 * time.Hour)
+	past := newReportLink(t, source, expiry)
+	future := newReportLink(t, source, futureExpiry)
+	event := &publiclink.Event{LinkID: past.ID(), Action: publiclink.Opened, OccurredAt: expiry.Add(-time.Minute), IP: "192.0.2.42"}
+	require.NoError(t, couchdb.CreateDoc(source, event))
+
+	// Publish a real CSV but leave its delivery pending on the source.
+	func() {
+		previous := config.GetConfig().Mail
+		config.GetConfig().Mail = &gomail.DialerOptions{Host: "-"}
+		defer func() { config.GetConfig().Mail = previous }()
+		require.Error(t, runReport(t, source, past, expiry))
+	}()
+	state := getReport(t, source, past, expiry)
+	require.Equal(t, "file-ready", state.Status)
+	rows, _ := readReport(t, source, state)
+	require.Len(t, rows, 2)
+	sourceDir, err := source.ReportsDirectoryID()
+	require.NoError(t, err)
+
+	archiver := reportExportArchive(filepath.Join(t.TempDir(), "export.tar.gz"))
+	exported, err := move.CreateExport(source, move.ExportOptions{WithDoctypes: []string{
+		consts.Files, consts.Permissions, consts.PublicLinkEvents, consts.PublicLinkReports,
+	}}, archiver)
+	require.NoError(t, err)
+	require.Empty(t, exported.PartsCursors, "the small fixture must fit in one part")
+	cursor, err := move.ParseCursor(exported, "")
+	require.NoError(t, err)
+	var archive bytes.Buffer
+	require.NoError(t, move.ExportCopyData(&archive, source, exported, archiver, cursor))
+	zr, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
+	require.NoError(t, err)
+	reportPrefix := move.ExportDataDir + "/" + consts.PublicLinkReports + "/"
+	var reportEntries []string
+	for _, file := range zr.File {
+		if strings.HasPrefix(file.Name, reportPrefix) {
+			reportEntries = append(reportEntries, strings.TrimPrefix(file.Name, reportPrefix))
+		}
+	}
+	require.ElementsMatch(t, []string{state.ID() + ".json", "reports-directory.json"}, reportEntries)
+
+	e := echo.New()
+	e.GET("/move/exports/report", func(c echo.Context) error {
+		return jsonapi.Data(c, http.StatusOK, exported, nil)
+	})
+	e.GET("/move/exports/data/report", func(c echo.Context) error {
+		return c.Blob(http.StatusOK, "application/zip", archive.Bytes())
+	})
+	server := httptest.NewServer(e)
+	t.Cleanup(server.Close)
+	previous := safehttp.ClientWithKeepAlive
+	safehttp.ClientWithKeepAlive = server.Client()
+	t.Cleanup(func() { safehttp.ClientWithKeepAlive = previous })
+
+	for _, mode := range []string{"move", "restore"} {
+		t.Run(mode, func(t *testing.T) {
+			dest := testutils.NewSetup(t, t.Name()).GetTestInstance(&lifecycle.Options{Email: "moved-owner@example.net", Locale: "en"})
+			opts := move.ImportOptions{ManifestURL: server.URL + "/move/exports/report"}
+			if mode == "move" {
+				opts.MoveFrom = &move.FromOptions{URL: server.URL}
+			}
+			_, err := move.Import(context.Background(), dest, opts)
+			require.NoError(t, err)
+			paused, err := dest.ReportsPaused()
+			require.NoError(t, err)
+			require.False(t, paused)
+
+			importedRows, imported := readReport(t, dest, state)
+			require.Equal(t, sourceDir, imported.DirID)
+			require.Equal(t, rows, importedRows)
+			var historical publiclink.Event
+			require.NoError(t, couchdb.GetDoc(dest, consts.PublicLinkEvents, event.ID(), &historical))
+			require.Equal(t, event.LinkID, historical.LinkID)
+			require.Equal(t, event.IP, historical.IP)
+			require.Equal(t, event.Action, historical.Action)
+			require.True(t, event.OccurredAt.Equal(historical.OccurredAt))
+			_, err = dest.ReportsDirectoryID()
+			require.True(t, couchdb.IsNotFoundError(err), "imported binding must not be authoritative: %v", err)
+			var checkpoint publiclink.Report
+			err = couchdb.GetDoc(dest, consts.PublicLinkReports, state.ID(), &checkpoint)
+			require.True(t, couchdb.IsNotFoundError(err), "imported checkpoint must not be authoritative: %v", err)
+
+			for _, link := range []*permission.Permission{past, future} {
+				p, err := permission.GetPermissionByIDIncludingExpired(dest, link.ID())
+				if mode == "restore" {
+					require.True(t, couchdb.IsNotFoundError(err), "a restore must not import public links: %v", err)
+					continue
+				}
+				require.NoError(t, err)
+				require.Equal(t, link.ExpiresAt.(time.Time).Format(time.RFC3339Nano), p.ExpiresAt)
+				require.True(t, strings.HasPrefix(p.Rev(), "1-"), "opt-in must be removed on the first write, not in a later update")
+				require.Nil(t, p.ActivityReportEnabled)
+				require.NotEmpty(t, p.Codes["link"])
+				require.NotEqual(t, link.Codes["link"], p.Codes["link"])
+				_, enabled := p.ActivityReportExpiry()
+				require.False(t, enabled, "no moved link may opt in automatically, including future expirations")
+			}
+
+			// Sweep past both expirations, then execute the message a job could
+			// have queued before reset. Neither path creates new authority.
+			jobs := reportJobIDs(t, dest)
+			require.NoError(t, job.QueueExpiredLinkReports(context.Background(), job.System(), dest, futureExpiry.Add(time.Second)))
+			require.Equal(t, jobs, reportJobIDs(t, dest))
+			require.NoError(t, runReport(t, dest, past, expiry))
+			unchanged, err := dest.VFS().FileByID(imported.ID())
+			require.NoError(t, err)
+			require.Equal(t, imported.Rev(), unchanged.Rev())
+			require.NoError(t, dest.VFS().DestroyFile(unchanged))
+			require.NoError(t, runReport(t, dest, past, expiry))
+			_, err = dest.VFS().FileByID(imported.ID())
+			require.True(t, os.IsNotExist(err), "a removed imported CSV must not be regenerated: %v", err)
+			err = couchdb.GetDoc(dest, consts.PublicLinkReports, state.ID(), &checkpoint)
+			require.True(t, couchdb.IsNotFoundError(err))
+			select {
+			case got := <-messages:
+				t.Fatalf("inherited report sent mail: %s", got.recipient)
+			default:
+			}
+
+			local := newReportLink(t, dest, expiry)
+			require.NoError(t, runReport(t, dest, local, expiry))
+			localState := getReport(t, dest, local, expiry)
+			require.Equal(t, "sent", localState.Status)
+			require.NotEqual(t, sourceDir, localState.DirectoryID, "a new local report must not adopt an imported directory")
+			select {
+			case got := <-messages:
+				require.Contains(t, got.recipient, "moved-owner@example.net")
+				_, body := reportMailText(t, got.raw)
+				require.Contains(t, body, localState.FileID)
+			case <-time.After(5 * time.Second):
+				t.Fatal("new locally authorized report was not delivered over SMTP")
+			}
+		})
+	}
+}
+
 func assertReportImportPaused(t *testing.T, inst *instance.Instance) {
 	t.Helper()
 	latest := freshReportAuthority(t, inst)
@@ -135,6 +292,10 @@ func testExpiredLinkReportImport(t *testing.T) {
 	config.GetConfig().Mail = dialer
 	t.Cleanup(func() { config.GetConfig().Mail = previous })
 	expiry := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+
+	t.Run("move preserves CSV and history but never inherits automatic report mail", func(t *testing.T) {
+		testMovedExpiredLinkReport(t, expiry, messages)
+	})
 
 	t.Run("legacy importing is durable and unreadable settings fail closed", func(t *testing.T) {
 		host := testutils.NewSetup(t, t.Name()).GetTestInstance()

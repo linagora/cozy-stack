@@ -3,6 +3,7 @@ package move
 import (
 	"archive/zip"
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -12,6 +13,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestImportRoutesReportDoctypeAliases(t *testing.T) {
+	for _, doctype := range []string{consts.PublicLinkReports, consts.Permissions} {
+		physical := couchdb.EscapeCouchdbName(doctype)
+		for _, spelling := range []string{doctype, physical, strings.ToUpper(physical)} {
+			require.Equal(t, doctype, reportImportDoctype(spelling))
+		}
+	}
+	require.Equal(t, consts.PublicLinkEvents, reportImportDoctype(consts.PublicLinkEvents))
+}
 
 func TestImportSkipsRecents(t *testing.T) {
 	if testing.Short() {
