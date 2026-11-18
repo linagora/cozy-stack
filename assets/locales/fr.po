@@ -32,6 +32,18 @@ msgstr "Notes"
 msgid "Tree Mail"
 msgstr "Mail"
 
+msgid "Tree Downloads"
+msgstr "Téléchargements"
+
+msgid "Tree Calendar"
+msgstr "Agenda"
+
+msgid "Tree Chat"
+msgstr "Chat"
+
+msgid "Tree Meeting Recordings"
+msgstr "Enregistrements de réunions"
+
 msgid "Tree Shared Drives"
 msgstr "Drives"
 

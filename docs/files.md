@@ -31,17 +31,37 @@ These endpoints accept a magic folder ID in the directory path parameter:
 - `GET /files/:dir-id/relationships/contents`
 - `GET /files/:dir-id/size`
 
-The supported IDs are `io.cozy.apps/mail` and `io.cozy.apps/notes`.
+The supported IDs are:
+
+| ID                       | Directory                        |
+| ------------------------ | -------------------------------- |
+| `io.cozy.apps/notes`     | `/Notes`                         |
+| `io.cozy.apps/downloads` | `/Downloads`                     |
+| `io.cozy.apps/calendar`  | `/Downloads/Calendar`            |
+| `io.cozy.apps/chat`      | `/Downloads/Chat`                |
+| `io.cozy.apps/mail`      | `/Downloads/Mail`                |
+| `io.cozy.apps/meetings`  | `/Downloads/Meeting Recordings`  |
+
 Encode the slash in application IDs, for example:
 
 ```http
 POST /files/io.cozy.apps%2Fmail?Type=file&Name=attachment.txt HTTP/1.1
 ```
 
-The stack resolves application IDs through the matching `referenced_by`, even
-after a rename or move. It uses the first match. If none exists, or the directory
-is trashed, it creates a directory at the root with a translated name, or reuses
-an existing directory with that name. Trashed directories are left untouched.
+The stack resolves application IDs through the matching `referenced_by`. If no
+directory matches, or the directory is trashed, it creates a directory with a
+translated name, or reuses an existing directory with that name. Trashed
+directories are left untouched.
+
+The notes directory is found even after a rename or a move, and is created at
+the root.
+
+The downloads directory and the directories inside it are bound to their
+location: the downloads directory only counts at the root, and the others only
+directly inside it. Missing parents are created on the way. Renaming or moving
+one of them removes its reference: it becomes an ordinary directory and a new
+one is created on the next resolution.
+
 The legacy `io.cozy.files.shared-drives-dir` is an ordinary directory ID.
 Reading it does not create a missing directory.
 

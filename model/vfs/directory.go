@@ -272,6 +272,9 @@ func ModifyDirMetadata(fs VFS, olddoc *DirDoc, patch *DocPatch) (*DirDoc, error)
 	newdoc.CreatedAt = cdate
 	newdoc.UpdatedAt = *patch.UpdatedAt
 	newdoc.ReferencedBy = olddoc.ReferencedBy
+	if newdoc.DocName != olddoc.DocName || newdoc.DirID != olddoc.DirID {
+		newdoc.ReferencedBy = withoutPlacedMagicRefs(olddoc.ReferencedBy)
+	}
 	newdoc.NotSynchronizedOn = olddoc.NotSynchronizedOn
 	newdoc.Metadata = olddoc.Metadata
 	if patch.Metadata != nil {

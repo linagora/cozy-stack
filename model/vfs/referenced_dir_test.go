@@ -23,7 +23,6 @@ type referencedDirFS struct {
 	createErr, updateErr error
 }
 
-func (fs *referencedDirFS) DirByID(string) (*vfs.DirDoc, error)   { return fs.dir, nil }
 func (fs *referencedDirFS) DirByPath(string) (*vfs.DirDoc, error) { return fs.dir, nil }
 func (fs *referencedDirFS) UpdateDirDoc(_, _ *vfs.DirDoc) error   { return fs.updateErr }
 func (fs *referencedDirFS) CreateDir(dir *vfs.DirDoc) error {
@@ -37,9 +36,11 @@ func TestEnsureReferencedDir(t *testing.T) {
 	failure := errors.New("storage failure")
 	ref := couchdb.DocReference{Type: consts.Apps, ID: consts.Apps + "/mail"}
 	db := prefixer.NewPrefixer(0, "referenced-dir-test.local", "referenced-dir-test")
+	downloads := &vfs.DirDoc{DocID: "downloads", Type: consts.DirType, DirID: consts.RootDirID, Fullpath: "/Downloads"}
 	for _, tt := range []struct {
 		name, wantID                  string
 		docs                          []vfs.DirDoc
+		parent                        *vfs.DirDoc
 		createErr, updateErr, wantErr error
 	}{
 		{name: "create", wantID: "created"},
@@ -51,6 +52,17 @@ func TestEnsureReferencedDir(t *testing.T) {
 		}},
 		{name: "leave trash untouched", wantID: "created", docs: []vfs.DirDoc{
 			{DocID: "trashed", Type: consts.DirType, Fullpath: vfs.TrashDirName + "/Mail"},
+		}},
+		{name: "only count a directory in its parent", wantID: "inside", parent: downloads, docs: []vfs.DirDoc{
+			{DocID: "outside", Type: consts.DirType, DirID: consts.RootDirID, Fullpath: "/Mail"},
+			{DocID: "inside", Type: consts.DirType, DirID: downloads.DocID, Fullpath: "/Downloads/Mail"},
+		}},
+		{name: "skip a referenced file", wantID: "inside", parent: downloads, docs: []vfs.DirDoc{
+			{DocID: "file", Type: consts.FileType, DirID: downloads.DocID},
+			{DocID: "inside", Type: consts.DirType, DirID: downloads.DocID, Fullpath: "/Downloads/Mail"},
+		}},
+		{name: "create in the parent", wantID: "created", parent: downloads, docs: []vfs.DirDoc{
+			{DocID: "outside", Type: consts.DirType, DirID: consts.RootDirID, Fullpath: "/Mail"},
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -70,16 +82,16 @@ func TestEnsureReferencedDir(t *testing.T) {
 				dir:       &vfs.DirDoc{DocID: "existing", Type: consts.DirType, Fullpath: "/Mail"},
 				createErr: tt.createErr, updateErr: tt.updateErr,
 			}
-			if len(tt.docs) > 0 {
-				fs.dir = &tt.docs[0]
-			}
-			dir, err := vfs.EnsureReferencedDir(db, fs, ref, "Mail", "")
+			dir, err := vfs.EnsureReferencedDir(db, fs, ref, tt.parent, "Mail", "")
 			require.ErrorIs(t, err, tt.wantErr)
 			if tt.wantErr == nil {
 				require.NotNil(t, dir)
 				assert.Equal(t, tt.wantID, dir.ID())
-				if len(tt.docs) == 0 {
+				if len(tt.docs) == 0 || tt.wantID == "created" {
 					assert.Contains(t, dir.ReferencedBy, ref)
+				}
+				if tt.parent != nil {
+					assert.Equal(t, tt.parent.DocID, dir.DirID)
 				}
 			}
 		})

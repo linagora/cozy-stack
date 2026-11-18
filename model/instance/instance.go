@@ -346,26 +346,35 @@ func (i *Instance) ThumbsFS() vfs.Thumbser {
 	}
 }
 
-var magicFolders = map[string]string{
-	consts.Apps + "/" + consts.NotesSlug: "Tree Notes",
-	consts.Apps + "/mail":                "Tree Mail",
-}
-
 // ResolveDirID resolves a known magic folder to its concrete directory ID.
 // Missing magic folders are created without checking caller permissions;
 // callers must authorize the requested operation on the resolved directory.
 // Ordinary IDs are returned unchanged, without accessing the VFS.
 func (i *Instance) ResolveDirID(id string) (string, error) {
-	key, ok := magicFolders[id]
-	if !ok {
+	if _, ok := vfs.MagicDirs[id]; !ok {
 		return id, nil
 	}
-	ref := couchdb.DocReference{Type: consts.Apps, ID: id}
-	dir, err := vfs.EnsureReferencedDir(i, i.VFS(), ref, i.Translate(key), i.PageURL("/", nil))
+	dir, err := i.ensureMagicDir(i.VFS(), id)
 	if err != nil {
 		return "", err
 	}
 	return dir.ID(), nil
+}
+
+func (i *Instance) ensureMagicDir(fs vfs.VFS, id string) (*vfs.DirDoc, error) {
+	magic, ok := vfs.MagicDirs[id]
+	if !ok {
+		return fs.DirByID(id)
+	}
+	var parent *vfs.DirDoc
+	if magic.Parent != "" {
+		var err error
+		if parent, err = i.ensureMagicDir(fs, magic.Parent); err != nil {
+			return nil, err
+		}
+	}
+	ref := couchdb.DocReference{Type: consts.Apps, ID: id}
+	return vfs.EnsureReferencedDir(i, fs, ref, parent, i.Translate(magic.Name), i.PageURL("/", nil))
 }
 
 // EnsureSharedDrivesDir supports the legacy creation endpoint with an ordinary
