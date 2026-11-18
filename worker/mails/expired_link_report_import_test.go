@@ -27,6 +27,7 @@ import (
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/publiclink"
 	"github.com/cozy/cozy-stack/model/vfs"
+	"github.com/cozy/cozy-stack/model/vfs/vfsafero"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -38,6 +39,7 @@ import (
 	"github.com/cozy/cozy-stack/worker/moves"
 	"github.com/cozy/gomail"
 	"github.com/labstack/echo/v4"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/require"
 )
 
@@ -190,6 +192,15 @@ func testMovedExpiredLinkReport(t *testing.T, expiry time.Time, messages <-chan 
 	for _, mode := range []string{"move", "restore"} {
 		t.Run(mode, func(t *testing.T) {
 			dest := testutils.NewSetup(t, t.Name()).GetTestInstance(&lifecycle.Options{Email: "moved-owner@example.net", Locale: "en"})
+			// Reset drops the index, but Delete keeps the in-memory VFS contents.
+			if dest.StorageScheme() == config.SchemeMem {
+				fs := vfsafero.GetMemFS(dest.DomainName())
+				entries, err := afero.ReadDir(fs, "/")
+				require.NoError(t, err)
+				for _, entry := range entries {
+					require.NoError(t, fs.RemoveAll(filepath.Join("/", entry.Name())))
+				}
+			}
 			opts := move.ImportOptions{ManifestURL: server.URL + "/move/exports/report"}
 			if mode == "move" {
 				opts.MoveFrom = &move.FromOptions{URL: server.URL}
