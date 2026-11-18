@@ -18,6 +18,18 @@ msgstr "Заметки"
 msgid "Tree Mail"
 msgstr "Почта"
 
+msgid "Tree Downloads"
+msgstr "Загрузки"
+
+msgid "Tree Calendar"
+msgstr "Календарь"
+
+msgid "Tree Chat"
+msgstr "Чат"
+
+msgid "Tree Meeting Recordings"
+msgstr "Записи встреч"
+
 msgid "Tree Shared Drives"
 msgstr "Диски"
 

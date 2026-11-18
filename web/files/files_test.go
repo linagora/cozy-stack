@@ -3965,7 +3965,7 @@ func TestFiles(t *testing.T) {
 		// WithURL preserves the encoded slash in the request path.
 		// Resolving a missing folder requires authentication.
 		e.GET("").WithURL(ts.URL + magicPath).Expect().Status(http.StatusUnauthorized)
-		_, err := testInstance.VFS().DirByPath("/Mail")
+		_, err := testInstance.VFS().DirByPath("/Downloads")
 		require.ErrorIs(t, err, os.ErrNotExist)
 
 		upload := func(name string) *httpexpect.Object {
@@ -3980,7 +3980,7 @@ func TestFiles(t *testing.T) {
 				Object()
 		}
 
-		// The first upload creates the folder at the root
+		// The first upload creates the folder and the Downloads folder it lives in
 		dirID := upload("first.txt").Path("$.data.attributes.dir_id").String().NotEmpty().Raw()
 		require.NotEqual(t, "io.cozy.apps/mail", dirID)
 
@@ -3992,7 +3992,11 @@ func TestFiles(t *testing.T) {
 		obj.Path("$.data.id").String().Equal(dirID)
 		attrs := obj.Path("$.data.attributes").Object()
 		attrs.ValueEqual("name", "Mail")
-		attrs.ValueEqual("dir_id", consts.RootDirID)
+		downloads, err := testInstance.VFS().DirByPath("/Downloads")
+		require.NoError(t, err)
+		attrs.ValueEqual("dir_id", downloads.ID())
+		assert.Equal(t, consts.RootDirID, downloads.DirID)
+		assert.Contains(t, downloads.ReferencedBy, couchdb.DocReference{Type: consts.Apps, ID: "io.cozy.apps/downloads"})
 		ref := obj.Path("$.data.relationships.referenced_by.data").Array().First().Object()
 		ref.ValueEqual("id", "io.cozy.apps/mail")
 		ref.ValueEqual("type", consts.Apps)
@@ -4027,16 +4031,47 @@ func TestFiles(t *testing.T) {
 		obj.Path("$.data.attributes.size").String().Equal("3")
 		obj.Path("$.data.attributes.files_count").Number().Equal(1)
 
-		// The next uploads reuse the folder, even after it has been renamed
+		// The next uploads reuse the folder
 		upload("second.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
 
-		e.PATCH("/files/"+dirID).
-			WithHeader("Content-Type", "application/vnd.api+json").
-			WithHeader("Authorization", "Bearer "+token).
-			WithBytes([]byte(`{"data":{"type":"io.cozy.files","id":"` + dirID + `","attributes":{"name":"Attachments"}}}`)).
-			Expect().Status(200)
+		patch := func(id, attributes string) {
+			e.PATCH("/files/"+id).
+				WithHeader("Content-Type", "application/vnd.api+json").
+				WithHeader("Authorization", "Bearer "+token).
+				WithBytes([]byte(`{"data":{"type":"io.cozy.files","id":"` + id + `","attributes":` + attributes + `}}`)).
+				Expect().Status(200)
+		}
+		requireOrdinaryDir := func(id string) {
+			dir, err := testInstance.VFS().DirByID(id)
+			require.NoError(t, err)
+			require.Empty(t, dir.ReferencedBy)
+		}
 
-		upload("third.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
+		// A renamed or moved folder becomes an ordinary one, and is replaced
+		patch(dirID, `{"name":"Attachments"}`)
+		requireOrdinaryDir(dirID)
+		renamedID := dirID
+		dirID = upload("third.txt").Path("$.data.attributes.dir_id").String().NotEqual(renamedID).Raw()
+
+		patch(dirID, `{"dir_id":"`+renamedID+`"}`)
+		requireOrdinaryDir(dirID)
+		movedID := dirID
+		dirID = upload("moved.txt").Path("$.data.attributes.dir_id").String().NotEqual(movedID).Raw()
+
+		// A referenced folder out of Downloads is ignored
+		legacy, err := vfs.NewDirDocWithPath("Legacy Mail", consts.RootDirID, "/", nil)
+		require.NoError(t, err)
+		legacy.AddReferencedBy(couchdb.DocReference{Type: consts.Apps, ID: "io.cozy.apps/mail"})
+		require.NoError(t, testInstance.VFS().CreateDir(legacy))
+		upload("legacy.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
+
+		// The same goes for the Downloads folder itself
+		patch(downloads.ID(), `{"name":"Old downloads"}`)
+		requireOrdinaryDir(downloads.ID())
+		dirID = upload("downloads.txt").Path("$.data.attributes.dir_id").String().NotEqual(dirID).Raw()
+		newDownloads, err := testInstance.VFS().DirByPath("/Downloads")
+		require.NoError(t, err)
+		require.NotEqual(t, downloads.ID(), newDownloads.ID())
 
 		// A new Mail folder leaves the trashed one untouched.
 		e.DELETE("/files/"+dirID).

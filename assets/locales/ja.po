@@ -22,6 +22,18 @@ msgstr "メモ"
 msgid "Tree Mail"
 msgstr "メール"
 
+msgid "Tree Downloads"
+msgstr "ダウンロード"
+
+msgid "Tree Calendar"
+msgstr "カレンダー"
+
+msgid "Tree Chat"
+msgstr "チャット"
+
+msgid "Tree Meeting Recordings"
+msgstr "会議の録画"
+
 msgid "Tree Shared Drives"
 msgstr "Drives"
 

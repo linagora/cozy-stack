@@ -18,6 +18,18 @@ msgstr "Ghi chú"
 msgid "Tree Mail"
 msgstr "Thư"
 
+msgid "Tree Downloads"
+msgstr "Tải xuống"
+
+msgid "Tree Calendar"
+msgstr "Lịch"
+
+msgid "Tree Chat"
+msgstr "Trò chuyện"
+
+msgid "Tree Meeting Recordings"
+msgstr "Bản ghi cuộc họp"
+
 msgid "Tree Shared Drives"
 msgstr "Ổ đĩa được chia sẻ"
 
