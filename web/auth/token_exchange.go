@@ -305,7 +305,7 @@ func validateTokenExchangeAdminToken(inst *instance.Instance, conf *oidcprovider
 			Warnf("admin token exchange disabled for context %s: missing client_id in OIDC config", inst.ContextName)
 		return errTokenExchangeDisabled
 	}
-	if !tokenExchangeAudienceMatches(claims, conf.ClientID) {
+	if !tokenExchangeAudienceMatches(claims, conf.ClientID) && !tokenExchangeIssuedToConfiguredApp(inst.ContextName, claims) {
 		return errors.New("invalid token audience")
 	}
 	if !tokenExchangeHasAdminRole(claims) {
@@ -523,6 +523,15 @@ func buildTokenExchangeResponse(inst *instance.Instance, client *oauth.Client, s
 func tokenExchangeAudienceMatches(claims jwt.MapClaims, clientID string) bool {
 	client, ok := tokenExchangeAuthorizedParty(claims)
 	return ok && client == clientID
+}
+
+func tokenExchangeIssuedToConfiguredApp(contextName string, claims jwt.MapClaims) bool {
+	appExchangeConfig, err := config.GetOIDCAppTokenExchange(contextName)
+	if err != nil {
+		return false
+	}
+	_, ok := tokenExchangeMatchingAppConfig(claims, appExchangeConfig.Apps)
+	return ok
 }
 
 // tokenExchangeMatchingAppConfig returns the app exchange config of the client
