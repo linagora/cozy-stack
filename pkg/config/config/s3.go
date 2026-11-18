@@ -82,12 +82,7 @@ func InitS3Connection(fs Fs) error {
 		client := clients[connection]
 		if client == nil {
 			var err error
-			// Build IPv4-only transport if prefer_ipv4 is enabled and no custom transport provided
-			transport := fs.Transport
-			if transport == nil && fs.S3.PreferIPv4 {
-				transport = newIPv4OnlyTransport()
-			}
-			client, err = newS3Client(u, transport)
+			client, err = newS3Client(u, newS3Transport(fs.Transport, fs.S3.PreferIPv4))
 			if err != nil {
 				return fmt.Errorf("s3: invalid connection URL for bucket %q", entry.Name)
 			}
@@ -125,25 +120,34 @@ func InitS3Connection(fs Fs) error {
 	return nil
 }
 
-func newIPv4OnlyTransport() http.RoundTripper {
-	dialer := &net.Dialer{
-		Timeout:   30 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}
+// s3ResponseHeaderTimeout matches the default transport of minio-go: a frozen
+// S3 accepts connections and never answers.
+var s3ResponseHeaderTimeout = time.Minute
 
-	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		// Force IPv4-only connections by using "tcp4" network
-		// Useful for environments with broken IPv6 connectivity
-		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "tcp4", addr)
-		},
+// newS3Transport returns nil, for the default transport of minio-go, when
+// there is nothing to change.
+func newS3Transport(base http.RoundTripper, preferIPv4 bool) http.RoundTripper {
+	var transport *http.Transport
+	switch t := base.(type) {
+	case nil:
+		if !preferIPv4 {
+			return nil
+		}
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	case *http.Transport:
+		transport = t.Clone()
+	default:
+		return base
 	}
+	transport.ResponseHeaderTimeout = s3ResponseHeaderTimeout
+	if preferIPv4 {
+		dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+		// Useful for environments with broken IPv6 connectivity
+		transport.DialContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp4", addr)
+		}
+	}
+	return transport
 }
 
 func newS3Client(u *url.URL, transport http.RoundTripper) (*minio.Client, error) {
