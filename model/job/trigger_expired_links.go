@@ -61,7 +61,46 @@ func QueueExpiredLinkReports(ctx context.Context, b Broker, inst *instance.Insta
 	if err != nil || paused {
 		return err
 	}
-	return couchdb.ForeachDocs(inst, consts.Permissions, func(_ string, raw json.RawMessage) error {
+	const batchSize = 100
+	batch := make([]publiclink.ReportMessage, 0, batchSize)
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		keys := make([]string, len(batch))
+		for i, msg := range batch {
+			keys[i] = publiclink.ReportID(msg.LinkID, msg.Expiry)
+		}
+		var reports []*publiclink.Report
+		err := couchdb.GetAllDocs(inst, consts.PublicLinkReports, &couchdb.AllDocsRequest{Keys: keys}, &reports)
+		if err != nil && !couchdb.IsNoDatabaseError(err) {
+			return err
+		}
+		states := make(map[string]*publiclink.Report, len(reports))
+		for _, report := range reports {
+			if report != nil {
+				states[report.DocID] = report
+			}
+		}
+		for i, msg := range batch {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if state := states[keys[i]]; state != nil && (state.Terminal() || state.NextAttempt.After(now)) {
+				continue
+			}
+			body, _ := json.Marshal(msg)
+			if _, err := b.PushJob(inst, &JobRequest{WorkerType: "expired-link-report", Message: body}); err != nil {
+				return err
+			}
+		}
+		batch = batch[:0]
+		return nil
+	}
+	err = couchdb.ForeachDocs(inst, consts.Permissions, func(_ string, raw json.RawMessage) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -73,16 +112,14 @@ func QueueExpiredLinkReports(ctx context.Context, b Broker, inst *instance.Insta
 		if !ok || at.After(now) {
 			return nil
 		}
-		var state publiclink.Report
-		err := couchdb.GetDoc(inst, consts.PublicLinkReports, publiclink.ReportID(p.ID(), at), &state)
-		if err == nil && (state.Terminal() || state.NextAttempt.After(now)) {
-			return nil
+		batch = append(batch, publiclink.ReportMessage{LinkID: p.ID(), Expiry: at})
+		if len(batch) == batchSize {
+			return flush()
 		}
-		if err != nil && !couchdb.IsNotFoundError(err) && !couchdb.IsNoDatabaseError(err) {
-			return err
-		}
-		msg, _ := json.Marshal(publiclink.ReportMessage{LinkID: p.ID(), Expiry: at})
-		_, err = b.PushJob(inst, &JobRequest{WorkerType: "expired-link-report", Message: msg})
-		return err
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	return flush()
 }
