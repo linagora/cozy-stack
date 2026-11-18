@@ -73,6 +73,39 @@ func TestCreateDBConflictIsFileExists(t *testing.T) {
 	assert.True(t, IsFileExists(err), "got %v", err)
 }
 
+func TestUpsertLosingDatabaseCreationRace(t *testing.T) {
+	config.UseTestFile(t)
+	t.Cleanup(func() { config.UseTestFile(t) })
+
+	// The database is missing when the doc is read, but another request
+	// creates it before this one does.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not_found","reason":"Database does not exist."}`))
+		case strings.HasSuffix(r.URL.Path, "/doc1"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"ok":true,"id":"doc1","rev":"1-abc"}`))
+		default:
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_, _ = w.Write([]byte(`{"error":"file_exists","reason":"The database could not be created, the file already exists."}`))
+		}
+	}))
+	t.Cleanup(ts.Close)
+	u, err := url.Parse(ts.URL + "/")
+	require.NoError(t, err)
+	cfg := config.GetConfig()
+	cfg.CouchDB.Client = ts.Client()
+	cfg.CouchDB.Global = config.CouchDBCluster{URL: u}
+	cfg.CouchDB.Clusters = nil
+
+	doc := &testDoc{TestID: "doc1", Test: "upsert"}
+	require.NoError(t, Upsert(TestPrefix, doc))
+	assert.Equal(t, "1-abc", doc.Rev())
+}
+
 func TestCouchdb(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a couchdb is required for this test: test skipped due to the use of --short flag")

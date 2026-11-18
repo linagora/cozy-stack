@@ -687,7 +687,7 @@ func CreateNamedDocWithDB(db prefixer.Prefixer, doc Doc) error {
 	err := CreateNamedDoc(db, doc)
 	if IsNoDatabaseError(err) {
 		err = CreateDB(db, doc.DocType())
-		if err != nil {
+		if err != nil && !IsFileExists(err) {
 			return err
 		}
 		return CreateNamedDoc(db, doc)
@@ -705,8 +705,9 @@ func Upsert(db prefixer.Prefixer, doc Doc) error {
 	var old JSONDoc
 	err = GetDoc(db, doc.DocType(), id, &old)
 	if IsNoDatabaseError(err) {
+		// A concurrent request may have just created the database.
 		err = CreateDB(db, doc.DocType())
-		if err != nil {
+		if err != nil && !IsFileExists(err) {
 			return err
 		}
 		return CreateNamedDoc(db, doc)
