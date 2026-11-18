@@ -496,6 +496,54 @@ Content-Type: application/json
 }
 ```
 
+### POST /instances/fixers/personal-contacts
+
+Publish on `twake:contacts:collected` the personal contacts that only exist in
+the stack, so that the contacts search of the calendar side service finds
+them. Run it before `contacts_search` is configured for a context: the share
+suggestions then come from Sabre only.
+
+A contact is published when it has an email and no CardDAV path, and is not
+the user's own contact, trashed, or a member copy. A contact sharing an email
+with a card, an external contact or another published contact is left out, so
+each email keeps a single external contact. Its name, emails and phones
+go in the card. It is marked external first, so the card coming back on
+`twake:contacts:common` updates it instead of creating a duplicate. Instances
+without `common_contacts` or an email are counted in `skipped`. The contacts
+of an instance are sent in jobs of 100. It is safe to run again: a contact
+whose card came back has a CardDAV path and is left out, and the others are
+sent again, which Sabre stores once.
+
+#### Query-String
+
+| Parameter | Description                                            |
+| --------- | ------------------------------------------------------ |
+| context   | only the instances of this context                     |
+| domain    | only this instance                                     |
+| dry_run   | `true` to count the contacts, but not publish them     |
+
+#### Request
+
+```http
+POST /instances/fixers/personal-contacts?context=linagora_default&dry_run=true HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "scanned": 12,
+  "skipped": 1,
+  "published": 87,
+  "errors": []
+}
+```
+
 ### POST /instances/fixers/member-copies/:org_id
 
 Delete directory copies after enabling `centralized_org_directory` and populating
