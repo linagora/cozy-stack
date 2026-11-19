@@ -1,8 +1,7 @@
 # Sources and licenses
 
 Updated on 2026-11-15. These local prompts adapt selected ideas from the sources
-below. No remote skills are fetched. Warden adds its own framework instructions
-from the pinned action, as described below.
+below. No remote skills are fetched.
 
 | Source and author | Version read | What we used | License |
 | --- | --- | --- | --- |
@@ -11,7 +10,7 @@ from the pinned action, as described below.
 | [Code review](https://github.com/anthropics/claude-plugins-official/blob/main/plugins/code-review/commands/code-review.md), Anthropic | Plugin 1.0.1 | Separate review passes, verification and inline reporting | [Apache-2.0](https://github.com/anthropics/claude-plugins-official/blob/main/plugins/code-review/LICENSE) |
 | [Code simplifier](https://github.com/anthropics/claude-plugins-official/blob/main/plugins/pr-review-toolkit/agents/code-simplifier.md) and [test analyzer](https://github.com/anthropics/claude-plugins-official/blob/main/plugins/pr-review-toolkit/agents/pr-test-analyzer.md), Anthropic | Plugin 1.0.1 | Simplification without behavior changes; useful test gaps | [Apache-2.0](https://github.com/anthropics/claude-plugins-official/blob/main/plugins/pr-review-toolkit/LICENSE) |
 
-The gateway setup and cozy-stack checks are local additions.
+The cozy-stack checks are local additions.
 License texts are linked above rather than bundled. These links do not replace
 the repository license or settle upstream redistribution requirements.
 
@@ -25,18 +24,3 @@ the repository license or settle upstream redistribution requirements.
 - Made design advice optional. Removed style rules, automatic hardening requests,
   mandatory error wrapping and JavaScript-specific assumptions.
 - Followed cozy-stack's existing tests and dependencies.
-
-## Runtime dependency
-
-The workflow uses [Warden v0.53.0](https://github.com/getsentry/warden/tree/9ac18f90e5287a8d59476448070e9c9257477aed),
-pinned to `9ac18f90e5287a8d59476448070e9c9257477aed`.
-It is source-available under [FSL-1.1-ALv2](https://github.com/getsentry/warden/blob/9ac18f90e5287a8d59476448070e9c9257477aed/LICENSE).
-
-Warden provides diff preparation, read-only review tools, verification,
-consolidation and the output schema. We supply the shared rules and five direction
-prompts. Its internal [analysis](https://github.com/getsentry/warden/blob/9ac18f90e5287a8d59476448070e9c9257477aed/packages/warden/src/sdk/prompt.ts),
-[verification](https://github.com/getsentry/warden/blob/9ac18f90e5287a8d59476448070e9c9257477aed/packages/warden/src/sdk/verify.ts)
-and [consolidation](https://github.com/getsentry/warden/blob/9ac18f90e5287a8d59476448070e9c9257477aed/packages/warden/src/sdk/extract.ts)
-prompts remain in that dependency. Fully local ownership of those instructions
-would need an upstream extension or a fork. Warden's native publisher formats
-the inline comments and Checks and handles follow-up threads.

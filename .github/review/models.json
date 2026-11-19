@@ -1,9 +1,0 @@
-{
-  "providers": {
-    "deepseek": {
-      "modelOverrides": {
-        "deepseek-v4-pro": { "maxTokens": 65536 }
-      }
-    }
-  }
-}
