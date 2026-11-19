@@ -711,14 +711,14 @@ func TestSearchConfig(t *testing.T) {
 		cfg.Set("search.opensearch.url", "https://opensearch.example.net:9200")
 		cfg.Set("search.opensearch.username", "admin")
 		cfg.Set("search.opensearch.password", "secret")
-		cfg.Set("search.opensearch.index_prefix", "prod")
+		cfg.Set("search.opensearch.index_prefix", "prod-eu_1")
 		require.NoError(t, UseViper(cfg))
 		search := GetConfig().Search
 		require.NotNil(t, search.URL)
 		assert.Equal(t, "opensearch.example.net:9200", search.URL.Host)
 		assert.Equal(t, "admin", search.Username)
 		assert.Equal(t, "secret", search.Password)
-		assert.Equal(t, "prod", search.IndexPrefix)
+		assert.Equal(t, "prod-eu_1", search.IndexPrefix)
 		assert.NotNil(t, search.Client)
 	})
 
@@ -729,6 +729,15 @@ func TestSearchConfig(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid search.opensearch.url config")
 	})
+
+	for _, prefix := range []string{"Cozy", "my stack", "_prod", "-prod", "+prod", "prod*"} {
+		t.Run("invalid prefix "+prefix, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.Set("search.opensearch.url", "https://opensearch.example.net:9200")
+			cfg.Set("search.opensearch.index_prefix", prefix)
+			require.ErrorContains(t, UseViper(cfg), "search.opensearch.index_prefix")
+		})
+	}
 
 	t.Run("missing root_ca file makes UseViper fail", func(t *testing.T) {
 		cfg := viper.New()
