@@ -486,6 +486,12 @@ func (c *Client) Create(i *instance.Instance, opts ...CreateOptions) *ClientRegi
 	c.RegistrationToken = ""
 	c.GrantTypes = []string{"authorization_code", "refresh_token"}
 	c.ResponseTypes = []string{"code"}
+	// These fields are set by the stack after attestation, onboarding or an
+	// OIDC login, never by the registration request.
+	c.Flagship = false
+	c.CertifiedFromStore = false
+	c.CreatedAtOnboarding = false
+	c.OIDCSessionID = ""
 
 	// Adding Metadata
 	md := metadata.New()
@@ -613,6 +619,9 @@ func (c *Client) Update(i *instance.Instance, old *Client) *ClientRegistrationEr
 
 	c.Flagship = old.Flagship
 	c.CertifiedFromStore = old.CertifiedFromStore
+	c.CreatedAtOnboarding = old.CreatedAtOnboarding
+	c.OIDCSessionID = old.OIDCSessionID
+	c.Pending = old.Pending
 
 	// Updating metadata
 	md := metadata.New()

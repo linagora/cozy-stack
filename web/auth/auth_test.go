@@ -951,6 +951,92 @@ func TestAuth(t *testing.T) {
 			Contains("The origin of this application is not certified.")
 	})
 
+	var selfDeclaredClientID, selfDeclaredRegistrationToken string
+
+	t.Run("RegisterClientIgnoresServerFlags", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		obj := e.POST("/auth/register").
+			WithHost(domain).
+			WithHeader("Accept", "application/json").
+			WithJSON(map[string]interface{}{
+				"redirect_uris":         []string{"https://example.org/oauth/callback"},
+				"client_name":           "cozy-test-self-declared",
+				"software_id":           "github.com/cozy/cozy-test",
+				"flagship":              true,
+				"certified_from_store":  true,
+				"created_at_onboarding": true,
+				"oidc_session_id":       "some-sid",
+				"pending":               false,
+			}).
+			Expect().Status(201).
+			JSON().Object()
+
+		obj.NotContainsKey("flagship")
+		obj.NotContainsKey("certified_from_store")
+		obj.NotContainsKey("created_at_onboarding")
+		obj.NotContainsKey("oidc_session_id")
+		selfDeclaredClientID = obj.Value("client_id").String().NotEmpty().Raw()
+		selfDeclaredRegistrationToken = obj.Value("registration_access_token").String().NotEmpty().Raw()
+
+		stored, err := oauth.FindClient(testInstance, selfDeclaredClientID)
+		require.NoError(t, err)
+		assert.False(t, stored.Flagship)
+		assert.False(t, stored.CertifiedFromStore)
+		assert.False(t, stored.CreatedAtOnboarding)
+		assert.Empty(t, stored.OIDCSessionID)
+		assert.True(t, stored.Pending)
+	})
+
+	t.Run("AuthorizeFormSelfDeclaredFlagship", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		e.GET("/auth/authorize").
+			WithRedirectPolicy(httpexpect.DontFollowRedirects).
+			WithQuery("response_type", "code").
+			WithQuery("state", "123456").
+			WithQuery("redirect_uri", "https://example.org/oauth/callback").
+			WithQuery("client_id", selfDeclaredClientID).
+			WithQuery("scope", "*").
+			WithQuery("code_challenge", "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM").
+			WithQuery("code_challenge_method", "S256").
+			WithCookie(session.CookieName(testInstance), sessionID).
+			WithHost(domain).
+			Expect().Status(200).
+			ContentType("text/html", "utf-8").
+			Body().
+			Contains("The origin of this application is not certified.")
+	})
+
+	t.Run("UpdateClientIgnoresServerFlags", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		e.PUT("/auth/register/"+selfDeclaredClientID).
+			WithHost(domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Authorization", "Bearer "+selfDeclaredRegistrationToken).
+			WithJSON(map[string]interface{}{
+				"client_id":             selfDeclaredClientID,
+				"client_name":           "cozy-test-self-declared",
+				"redirect_uris":         []string{"https://example.org/oauth/callback"},
+				"software_id":           "github.com/cozy/cozy-test",
+				"flagship":              true,
+				"certified_from_store":  true,
+				"created_at_onboarding": true,
+				"oidc_session_id":       "some-sid",
+				"pending":               false,
+			}).
+			Expect().Status(200)
+
+		stored, err := oauth.FindClient(testInstance, selfDeclaredClientID)
+		require.NoError(t, err)
+		assert.False(t, stored.Flagship)
+		assert.False(t, stored.CertifiedFromStore)
+		assert.False(t, stored.CreatedAtOnboarding)
+		assert.Empty(t, stored.OIDCSessionID)
+		assert.True(t, stored.Pending)
+	})
+
 	t.Run("AuthorizeWhenNotLoggedIn", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
@@ -1946,9 +2032,11 @@ func TestAuth(t *testing.T) {
 				RedirectURIs: []string{"cozy://client"},
 				ClientName:   "oauth-client",
 				SoftwareID:   "github.com/cozy/cozy-stack/testing/client",
-				Flagship:     true,
 			}
 			require.Nil(t, oauthClient.Create(testInstance, oauth.NotPending))
+			storedClient, err := oauth.FindClient(testInstance, oauthClient.ClientID)
+			require.NoError(t, err)
+			require.NoError(t, storedClient.SetFlagship(testInstance))
 
 			// Give it the maximal permission
 			token, err := testInstance.MakeJWT(consts.AccessTokenAudience,
@@ -2007,9 +2095,11 @@ func TestAuth(t *testing.T) {
 				RedirectURIs: []string{"cozy://client"},
 				ClientName:   "oauth-client",
 				SoftwareID:   "github.com/cozy/cozy-stack/testing/client",
-				Flagship:     true,
 			}
 			require.Nil(t, oauthClient.Create(testInstance, oauth.NotPending))
+			storedClient, err := oauth.FindClient(testInstance, oauthClient.ClientID)
+			require.NoError(t, err)
+			require.NoError(t, storedClient.SetFlagship(testInstance))
 
 			// Give it the maximal permission
 			token, err := testInstance.MakeJWT(consts.AccessTokenAudience,

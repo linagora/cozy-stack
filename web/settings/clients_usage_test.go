@@ -34,9 +34,11 @@ func TestClientsUsage(t *testing.T) {
 		ClientName:   "flagship-app",
 		ClientKind:   "mobile",
 		SoftwareID:   "github.com/cozy/cozy-stack/testing/flagship",
-		Flagship:     true,
 	}
 	require.Nil(t, flagship.Create(testInstance, oauth.NotPending))
+	storedFlagship, err := oauth.FindClient(testInstance, flagship.ClientID)
+	require.NoError(t, err)
+	require.NoError(t, storedFlagship.SetFlagship(testInstance))
 
 	t.Run("WithoutLimit", func(t *testing.T) {
 		testutils.WithFlag(t, testInstance, "cozy.oauthclients.max", float64(-1))

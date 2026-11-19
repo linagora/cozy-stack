@@ -328,9 +328,11 @@ func TestApps(t *testing.T) {
 			ClientName:   "flagship-app",
 			ClientKind:   "mobile",
 			SoftwareID:   "github.com/cozy/cozy-stack/testing/flagship",
-			Flagship:     true,
 		}
 		require.Nil(t, flagship.Create(testInstance, oauth.NotPending))
+		storedFlagship, err := oauth.FindClient(testInstance, flagship.ClientID)
+		require.NoError(t, err)
+		require.NoError(t, storedFlagship.SetFlagship(testInstance))
 
 		testutils.WithFlag(t, testInstance, "cozy.oauthclients.max", float64(0))
 
@@ -715,9 +717,11 @@ func TestApps(t *testing.T) {
 			RedirectURIs: []string{"cozy://flagship"},
 			ClientName:   "flagship-app",
 			SoftwareID:   "github.com/cozy/cozy-stack/testing/flagship",
-			Flagship:     true,
 		}
 		assert.Nil(t, flagship.Create(testInstance, oauth.NotPending))
+		storedFlagship, err := oauth.FindClient(testInstance, flagship.ClientID)
+		require.NoError(t, err)
+		require.NoError(t, storedFlagship.SetFlagship(testInstance))
 
 		// Create a maximal permission for it
 		token, err := testInstance.MakeJWT(consts.AccessTokenAudience,
@@ -917,9 +921,11 @@ func TestApps(t *testing.T) {
 			RedirectURIs: []string{"cozy://flagship"},
 			ClientName:   "flagship-app",
 			SoftwareID:   "github.com/cozy/cozy-stack/testing/flagship",
-			Flagship:     true,
 		}
 		require.Nil(t, flagship.Create(testInstance, oauth.NotPending))
+		storedFlagship, err := oauth.FindClient(testInstance, flagship.ClientID)
+		require.NoError(t, err)
+		require.NoError(t, storedFlagship.SetFlagship(testInstance))
 
 		// Create a maximal permission for it
 		token, err := testInstance.MakeJWT(consts.AccessTokenAudience,
@@ -1068,9 +1074,11 @@ func TestApps(t *testing.T) {
 			RedirectURIs: []string{"cozy://flagship"},
 			ClientName:   "flagship-app",
 			SoftwareID:   "github.com/cozy/cozy-stack/testing/flagship",
-			Flagship:     true,
 		}
 		require.Nil(t, flagship.Create(testInstance, oauth.NotPending))
+		storedFlagship, err := oauth.FindClient(testInstance, flagship.ClientID)
+		require.NoError(t, err)
+		require.NoError(t, storedFlagship.SetFlagship(testInstance))
 
 		// Give it the maximal permission
 		token, err := testInstance.MakeJWT(consts.AccessTokenAudience, flagship.ClientID, "*", "", time.Now())

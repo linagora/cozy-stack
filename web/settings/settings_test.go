@@ -1610,9 +1610,11 @@ func TestSettings(t *testing.T) {
 			ClientName:   "flagship-app",
 			ClientKind:   "mobile",
 			SoftwareID:   "github.com/cozy/cozy-stack/testing/flagship",
-			Flagship:     true,
 		}
 		require.Nil(t, flagship.Create(testInstance, oauth.NotPending))
+		storedFlagship, err := oauth.FindClient(testInstance, flagship.ClientID)
+		require.NoError(t, err)
+		require.NoError(t, storedFlagship.SetFlagship(testInstance))
 		defer flagship.Delete(testInstance)
 
 		e.GET("/settings/clients/limit-exceeded").
