@@ -74,6 +74,18 @@ unit-tests:
 	@go test -p 1 -timeout 2m -short ./...
 .PHONY: unit-tests
 
+TEST_ARGS ?= -p 1 -timeout 10m ./...
+
+## docker-tests: run all the Go tests in Docker, like the CI (TEST_ARGS='-run TestX ./web/sharings/' to narrow)
+docker-tests:
+	@docker compose -f docker-compose.test.yml run --rm --build tests go test $(TEST_ARGS)
+.PHONY: docker-tests
+
+## docker-tests-down: stop the services of docker-tests and drop their CouchDB databases
+docker-tests-down:
+	@docker compose -f docker-compose.test.yml down
+.PHONY: docker-tests-down
+
 ## system-tests: run the tests
 system-tests:
 	@scripts/system-test.sh

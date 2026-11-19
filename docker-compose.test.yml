@@ -1,0 +1,104 @@
+# Runs the Go tests locally in the environment of the CI
+# (.github/workflows/go-tests.yml): `make docker-tests`. Not used by the CI.
+#
+# The tests run in a container rather than on the host because of name
+# resolution: the sharing tests post to the URL of the test instances
+# (<name><random>.cozy.local), which the CI resolves at once to NXDOMAIN. On a
+# desktop, mDNS (nss-mdns, systemd-resolved) takes over .local names and hangs
+# for seconds, so the inter-instance requests time out and the tests fail.
+name: cozy-stack-tests
+
+services:
+  # Owns the network namespace of the other services and serves their DNS:
+  # .local names fail at once as on the CI, .localhost names resolve to
+  # loopback as systemd-resolved does on the CI, and everything else (Go
+  # modules) is forwarded to public resolvers. CouchDB and Redis join the
+  # namespace, so the tests reach them on localhost, where the defaults of the
+  # stack and the hardcoded Redis URLs of the tests expect them.
+  coredns:
+    image: coredns/coredns:1.15.0@sha256:0a9d8c8ddf34347eb59aad9a8784f0710de88d6d112726d11d271f9bc6daca26
+    dns: [127.0.0.1]
+    command: ["-conf", "/etc/coredns/Corefile"]
+    configs:
+      - source: corefile
+        target: /etc/coredns/Corefile
+
+  couchdb:
+    image: couchdb:3.3.3
+    network_mode: "service:coredns"
+    # Every test instance opens tens of databases: with the default soft limit
+    # of 1024 open files, CouchDB fails past a few dozen instances
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    # The databases of the test instances are throwaway (about 100 MB after the
+    # full suite), and on disk their creation outlasts the HTTP timeout of the
+    # stack under the load of the sharing tests
+    tmpfs:
+      - /opt/couchdb/data
+    environment:
+      COUCHDB_USER: admin
+      COUCHDB_PASSWORD: password
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5984/_up || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7
+    network_mode: "service:coredns"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  tests:
+    build: scripts/docker/test
+    network_mode: "service:coredns"
+    depends_on:
+      couchdb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    working_dir: /src
+    environment:
+      COZY_COUCHDB_URL: http://admin:password@localhost:5984/
+      # The app fetchers run git in the working directory of the tests: git
+      # must not find the mounted repository, which is owned by another user
+      # and, in a worktree, points to a git directory absent from the container
+      GIT_CEILING_DIRECTORIES: /src
+    volumes:
+      - .:/src
+      - gomodcache:/go/pkg/mod
+      - gocache:/root/.cache/go-build
+      # Some tests start MinIO, RabbitMQ or ClamAV with testcontainers
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["go", "test", "-p", "1", "-timeout", "10m", "./..."]
+
+volumes:
+  gomodcache:
+  gocache:
+
+configs:
+  corefile:
+    content: |
+      local:53 {
+          errors
+          template ANY ANY {
+              rcode NXDOMAIN
+          }
+      }
+      localhost:53 {
+          errors
+          template IN A {
+              answer "{{ .Name }} 60 IN A 127.0.0.1"
+          }
+          template IN AAAA {
+              rcode NOERROR
+          }
+      }
+      .:53 {
+          errors
+          forward . 8.8.8.8 1.1.1.1
+      }
