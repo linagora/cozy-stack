@@ -194,7 +194,10 @@ func TestExpiredLinkBatchScan(t *testing.T) {
 					require.ErrorContains(t, err, "failure")
 				}
 				if tc.mode == "decode" {
-					require.ErrorContains(t, err, "next_attempt")
+					var reports []*publiclink.Report
+					decodeErr := json.Unmarshal([]byte(`[{"next_attempt":42}]`), &reports)
+					require.Error(t, decodeErr)
+					require.EqualError(t, err, decodeErr.Error())
 				}
 				if tc.mode == "cancel" || tc.mode == "cancel-read" {
 					require.ErrorIs(t, err, context.Canceled)
