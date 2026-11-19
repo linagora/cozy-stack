@@ -52,13 +52,13 @@ func newClientFromViper(t *testing.T, opts map[string]string) *Client {
 		v.Set("search.opensearch."+k, val)
 	}
 	require.NoError(t, config.UseViper(v))
-	c := New(config.GetConfig().Search)
+	c := NewClient(config.GetConfig().Search)
 	require.NotNil(t, c)
 	return c
 }
 
-func TestNewWithoutURL(t *testing.T) {
-	assert.Nil(t, New(config.Search{}))
+func TestNewClientWithoutURL(t *testing.T) {
+	assert.Nil(t, NewClient(config.Search{}))
 }
 
 func TestCreateIndex(t *testing.T) {

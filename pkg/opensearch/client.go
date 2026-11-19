@@ -35,9 +35,9 @@ type Client struct {
 	http        *http.Client
 }
 
-// New returns a client for the given configuration, or nil when search is
+// NewClient returns a client for the given configuration, or nil when search is
 // not configured.
-func New(cfg config.Search) *Client {
+func NewClient(cfg config.Search) *Client {
 	if cfg.URL == nil {
 		return nil
 	}

@@ -115,7 +115,7 @@ security features. Please do not use this binary as your production server.
 	}
 
 	// Search is auxiliary: warn without delaying or aborting the startup.
-	if client := opensearch.New(config.GetConfig().Search); client != nil {
+	if client := opensearch.NewClient(config.GetConfig().Search); client != nil {
 		go func() {
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
