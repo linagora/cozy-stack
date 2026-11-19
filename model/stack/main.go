@@ -17,7 +17,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/emailer"
 	"github.com/cozy/cozy-stack/pkg/logger"
-	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/google/gops/agent"
@@ -115,7 +114,7 @@ security features. Please do not use this binary as your production server.
 	}
 
 	// Search is auxiliary: warn without delaying or aborting the startup.
-	if client := opensearch.NewClient(config.GetConfig().Search); client != nil {
+	if client := config.GetConfig().Search; client != nil {
 		go func() {
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()

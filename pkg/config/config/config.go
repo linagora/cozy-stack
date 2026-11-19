@@ -29,6 +29,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/limits"
 	"github.com/cozy/cozy-stack/pkg/lock"
 	"github.com/cozy/cozy-stack/pkg/logger"
+	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"github.com/cozy/cozy-stack/pkg/pdf"
 	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/cozy-stack/pkg/tlsclient"
@@ -147,7 +148,7 @@ type Config struct {
 	Contexts       map[string]interface{}
 	Authentication map[string]interface{}
 	RAGServers     map[string]RAGServer
-	Search         Search
+	Search         *opensearch.Client // nil when file search is disabled
 	CommonSettings map[string]CommonSettings
 	ContactsSearch map[string]ContactsSearch
 	Office         map[string]Office

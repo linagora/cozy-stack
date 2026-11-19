@@ -1,6 +1,9 @@
 package config
 
 import (
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -697,23 +700,36 @@ func TestSafeHTTPConfig(t *testing.T) {
 func TestSearchConfig(t *testing.T) {
 	t.Run("search is off without url", func(t *testing.T) {
 		require.NoError(t, UseViper(viper.New()))
-		assert.Nil(t, GetConfig().Search.URL)
+		assert.Nil(t, GetConfig().Search)
 	})
 
-	t.Run("valid config", func(t *testing.T) {
+	t.Run("client uses configured credentials, prefix and root CA", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, password, ok := r.BasicAuth()
+			assert.True(t, ok)
+			assert.Equal(t, "admin", user)
+			assert.Equal(t, "secret", password)
+			assert.Equal(t, "/prod-eu_1-files", r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+		}))
+		t.Cleanup(srv.Close)
 		cfg := viper.New()
-		cfg.Set("search.opensearch.url", "https://opensearch.example.net:9200")
+		cfg.Set("search.opensearch.url", srv.URL)
 		cfg.Set("search.opensearch.username", "admin")
 		cfg.Set("search.opensearch.password", "secret")
 		cfg.Set("search.opensearch.index_prefix", "prod-eu_1")
 		require.NoError(t, UseViper(cfg))
+		require.NotNil(t, GetConfig().Search)
+		require.ErrorContains(t, GetConfig().Search.Ping(t.Context()), "certificate")
+
+		caFile := filepath.Join(t.TempDir(), "ca.pem")
+		pemCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+		require.NoError(t, os.WriteFile(caFile, pemCert, 0o600))
+		cfg.Set("search.opensearch.root_ca", caFile)
+		require.NoError(t, UseViper(cfg))
 		search := GetConfig().Search
-		require.NotNil(t, search.URL)
-		assert.Equal(t, "opensearch.example.net:9200", search.URL.Host)
-		assert.Equal(t, "admin", search.Username)
-		assert.Equal(t, "secret", search.Password)
-		assert.Equal(t, "prod-eu_1", search.IndexPrefix)
-		assert.NotNil(t, search.Client)
+		require.NotNil(t, search)
+		require.NoError(t, search.CreateIndex(t.Context(), "files", nil))
 	})
 
 	t.Run("invalid url makes UseViper fail", func(t *testing.T) {
