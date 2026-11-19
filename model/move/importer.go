@@ -108,8 +108,9 @@ func (im *importer) importZip(zr *zip.Reader) error {
 		case consts.Exports:
 			// Importing exports would just be a mess, so skip them
 			continue
-		case consts.Sessions:
-			// We don't want to import the sessions from another instance
+		case consts.Sessions, consts.OAuthAccessCodes:
+			// We don't want to import the sessions from another instance, nor
+			// its access codes that are short-lived and bound to its clients
 			continue
 		case consts.FilesRecents:
 			// Recents are personal activity, not user data: they are not

@@ -33,6 +33,13 @@ func TestImportSkipsRecents(t *testing.T) {
 			"last_activity_at": "2026-10-26T10:00:00Z",
 			"schema_version": 1
 		}`,
+		ExportDataDir + "/" + consts.OAuthAccessCodes + "/planted-code.json": `{
+			"_id": "planted-code",
+			"_rev": "1-abc",
+			"client_id": "client-id",
+			"issued_at": 1,
+			"scope": "io.cozy.files"
+		}`,
 		ExportDataDir + "/io.cozy.foos/foo-id.json": `{"_id": "foo-id", "_rev": "1-abc"}`,
 	}
 	for name, content := range entries {
@@ -55,6 +62,8 @@ func TestImportSkipsRecents(t *testing.T) {
 	var doc couchdb.JSONDoc
 	err = couchdb.GetDoc(inst, consts.FilesRecents, "file-id", &doc)
 	assert.True(t, couchdb.IsNotFoundError(err), "the recents must not be imported, got %v", err)
+	err = couchdb.GetDoc(inst, consts.OAuthAccessCodes, "planted-code", &doc)
+	assert.True(t, couchdb.IsNotFoundError(err), "the access codes must not be imported, got %v", err)
 	assert.NoError(t, couchdb.GetDoc(inst, "io.cozy.foos", "foo-id", &doc),
 		"the other documents of the archive are imported")
 }
