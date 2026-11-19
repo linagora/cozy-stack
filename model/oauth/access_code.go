@@ -1,11 +1,16 @@
 package oauth
 
 import (
+	"time"
+
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 )
+
+// AccessCodeTTL is how long an access code can be exchanged for a token.
+const AccessCodeTTL = 10 * time.Minute
 
 // AccessCode is struct used during the OAuth2 flow. It has to be persisted in
 // CouchDB, not just sent as a JSON Web Token, because it can be used only

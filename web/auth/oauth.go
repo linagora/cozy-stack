@@ -983,6 +983,16 @@ func accessToken(c echo.Context) error {
 				"error": "invalid code",
 			})
 		}
+		issuedAt := time.Unix(accessCode.IssuedAt, 0)
+		if accessCode.ClientID != client.CouchID || time.Since(issuedAt) > oauth.AccessCodeTTL {
+			// A code leaked to another client, or too old, is revoked.
+			if err := couchdb.DeleteDoc(instance, accessCode); err != nil {
+				instance.Logger().Errorf("[oauth] Failed to delete the access code: %s", err)
+			}
+			return c.JSON(http.StatusBadRequest, echo.Map{
+				"error": "invalid code",
+			})
+		}
 		if accessCode.Challenge != "" {
 			sum := sha256.Sum256([]byte(verifier))
 			challenge := base64.RawURLEncoding.EncodeToString(sum[:])

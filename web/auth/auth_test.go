@@ -1342,6 +1342,40 @@ func TestAuth(t *testing.T) {
 			ValueEqual("error", "invalid code")
 	})
 
+	t.Run("AccessTokenRejectsUnboundOrExpiredCode", func(t *testing.T) {
+		other := oauth.Client{
+			RedirectURIs: []string{"https://example.org/oauth/callback"},
+			ClientName:   "cozy-test-other",
+			SoftwareID:   "github.com/cozy/cozy-test",
+		}
+		require.Nil(t, other.Create(testInstance))
+
+		cases := map[string]*oauth.AccessCode{
+			"code of another client": {ClientID: clientID, IssuedAt: time.Now().Unix(), Scope: "files:read"},
+			"expired code":           {ClientID: other.ClientID, IssuedAt: time.Now().Add(-oauth.AccessCodeTTL - time.Minute).Unix(), Scope: "files:read"},
+		}
+		for name, accessCode := range cases {
+			t.Run(name, func(t *testing.T) {
+				e := testutils.CreateTestClient(t, ts.URL)
+				require.NoError(t, couchdb.CreateDoc(testInstance, accessCode))
+
+				e.POST("/auth/access_token").
+					WithFormField("grant_type", "authorization_code").
+					WithFormField("client_id", other.ClientID).
+					WithFormField("client_secret", other.ClientSecret).
+					WithFormField("code", accessCode.Code).
+					WithHost(domain).
+					Expect().Status(400).
+					JSON().Object().
+					ValueEqual("error", "invalid code")
+
+				var doc oauth.AccessCode
+				err := couchdb.GetDoc(testInstance, consts.OAuthAccessCodes, accessCode.Code, &doc)
+				assert.True(t, couchdb.IsNotFoundError(err), "the code is revoked, got %v", err)
+			})
+		}
+	})
+
 	t.Run("AccessTokenSuccess", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
