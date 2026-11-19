@@ -203,7 +203,8 @@ func parseError(res *http.Response) error {
 	}
 	var detail errorBody
 	if json.Unmarshal(body.Error, &detail) == nil {
-		e.Type, e.Reason = detail.Type, detail.Reason
+		e.Type = detail.Type
+		e.Reason = detail.Reason
 	} else {
 		// Some errors (e.g. 404 on an unknown route) are a plain string
 		_ = json.Unmarshal(body.Error, &e.Reason)
