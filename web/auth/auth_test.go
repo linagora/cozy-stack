@@ -1037,6 +1037,45 @@ func TestAuth(t *testing.T) {
 		assert.True(t, stored.Pending)
 	})
 
+	t.Run("UpdateClientKeepsServerFlags", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		attested := oauth.Client{
+			RedirectURIs: []string{"https://example.org/oauth/callback"},
+			ClientName:   "cozy-test-attested",
+			SoftwareID:   "github.com/cozy/cozy-test",
+		}
+		require.Nil(t, attested.Create(testInstance))
+		stored, err := oauth.FindClient(testInstance, attested.ClientID)
+		require.NoError(t, err)
+		stored.CertifiedFromStore = true
+		stored.CreatedAtOnboarding = true
+		stored.OIDCSessionID = "attested-sid"
+		stored.Pending = false
+		require.NoError(t, stored.SetFlagship(testInstance))
+
+		e.PUT("/auth/register/"+attested.ClientID).
+			WithHost(domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Authorization", "Bearer "+attested.RegistrationToken).
+			WithJSON(map[string]interface{}{
+				"client_id":     attested.ClientID,
+				"client_name":   "cozy-test-attested-renamed",
+				"redirect_uris": []string{"https://example.org/oauth/callback"},
+				"software_id":   "github.com/cozy/cozy-test",
+			}).
+			Expect().Status(200)
+
+		updated, err := oauth.FindClient(testInstance, attested.ClientID)
+		require.NoError(t, err)
+		assert.Equal(t, "cozy-test-attested-renamed", updated.ClientName)
+		assert.True(t, updated.Flagship)
+		assert.True(t, updated.CertifiedFromStore)
+		assert.True(t, updated.CreatedAtOnboarding)
+		assert.Equal(t, "attested-sid", updated.OIDCSessionID)
+		assert.False(t, updated.Pending)
+	})
+
 	t.Run("AuthorizeWhenNotLoggedIn", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
