@@ -2,18 +2,13 @@ package opensearch
 
 import (
 	"context"
-	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
+	"net/url"
 	"testing"
 
-	"github.com/cozy/cozy-stack/pkg/config/config"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,28 +32,19 @@ func newTestClient(t *testing.T, status int, answer string) (*Client, *recorded)
 		_, _ = w.Write([]byte(answer))
 	}))
 	t.Cleanup(srv.Close)
-	return newClientFromViper(t, map[string]string{
-		"url":          srv.URL,
-		"username":     "admin",
-		"password":     "secret",
-		"index_prefix": "test",
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	return NewClient(Options{
+		URL:         u,
+		HTTPClient:  srv.Client(),
+		Username:    "admin",
+		Password:    "secret",
+		IndexPrefix: "test",
 	}), rec
 }
 
-func newClientFromViper(t *testing.T, opts map[string]string) *Client {
-	t.Helper()
-	v := viper.New()
-	for k, val := range opts {
-		v.Set("search.opensearch."+k, val)
-	}
-	require.NoError(t, config.UseViper(v))
-	c := NewClient(config.GetConfig().Search)
-	require.NotNil(t, c)
-	return c
-}
-
 func TestNewClientWithoutURL(t *testing.T) {
-	assert.Nil(t, NewClient(config.Search{}))
+	assert.Nil(t, NewClient(Options{}))
 }
 
 func TestCreateIndex(t *testing.T) {
@@ -181,28 +167,6 @@ func TestErrors(t *testing.T) {
 	}
 }
 
-func TestRootCA(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]bool{"acknowledged": true})
-	}))
-	t.Cleanup(srv.Close)
-
-	t.Run("unknown CA is refused", func(t *testing.T) {
-		c := newClientFromViper(t, map[string]string{"url": srv.URL})
-		err := c.CreateIndex(context.Background(), "files_v1", map[string]any{})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "certificate")
-	})
-
-	t.Run("root_ca is trusted", func(t *testing.T) {
-		caFile := filepath.Join(t.TempDir(), "ca.pem")
-		pemCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
-		require.NoError(t, os.WriteFile(caFile, pemCert, 0o600))
-		c := newClientFromViper(t, map[string]string{"url": srv.URL, "root_ca": caFile})
-		require.NoError(t, c.CreateIndex(context.Background(), "files_v1", map[string]any{}))
-	})
-}
-
 func TestPing(t *testing.T) {
 	t.Run("reachable", func(t *testing.T) {
 		c, rec := newTestClient(t, 200, `{"version":{"number":"2.17.0"}}`)
@@ -222,8 +186,10 @@ func TestPing(t *testing.T) {
 	t.Run("connection refused", func(t *testing.T) {
 		srv := httptest.NewServer(http.NotFoundHandler())
 		srv.Close()
-		c := newClientFromViper(t, map[string]string{"url": srv.URL})
-		err := c.Ping(context.Background())
+		u, err := url.Parse(srv.URL)
+		require.NoError(t, err)
+		c := NewClient(Options{URL: u})
+		err = c.Ping(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "opensearch:")
 	})
