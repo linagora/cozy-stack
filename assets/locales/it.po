@@ -1321,17 +1321,11 @@ msgstr "Report delle attività del link"
 msgid "Mail Link Report Intro"
 msgstr "Ecco il report delle attività del tuo link pubblico scaduto."
 
-msgid "Mail Link Report Scope"
-msgstr "Il CSV contiene tutti gli eventi conservati del link fino alla scadenza, comprese le attività precedenti all'attivazione dei report."
-
 msgid "Mail Link Report Last Events"
 msgstr "Ultimi tre eventi registrati (data e ora | IP | identità | azione):"
 
 msgid "Mail Link Report No Activity"
 msgstr "Nessuna attività registrata."
-
-msgid "Mail Link Report Authentication"
-msgstr "Accedi all'istanza Twake che ospita il link per aprire il report."
 
 msgid "Mail Link Report Open"
 msgstr "Apri il file CSV"

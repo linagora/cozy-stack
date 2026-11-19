@@ -6,9 +6,7 @@
 {{range .Events}}{{index . 0}} | {{index . 1}} | {{if index . 2}}{{index . 2}}{{else}}{{t "Mail Link Report Anonymous"}}{{end}} | {{template "action" (index . 3)}}
 {{end}}{{else}}{{t "Mail Link Report No Activity"}}
 {{end}}
-{{t "Mail Link Report Scope"}}
 {{t "Mail Link Report Download"}}
-{{t "Mail Link Report Authentication"}}
 {{.ReportURL}}
 
 {{t "Mail Link Report Automatic"}}

@@ -1329,17 +1329,11 @@ msgstr "Aktivitätsbericht zum Link"
 msgid "Mail Link Report Intro"
 msgstr "Hier ist der Aktivitätsbericht zu Ihrem abgelaufenen öffentlichen Link."
 
-msgid "Mail Link Report Scope"
-msgstr "Die CSV-Datei enthält alle gespeicherten Link-Ereignisse bis zum Ablauf, einschließlich der Aktivitäten vor der Aktivierung der Berichte."
-
 msgid "Mail Link Report Last Events"
 msgstr "Die letzten drei aufgezeichneten Ereignisse (Zeit | IP | Identität | Aktion):"
 
 msgid "Mail Link Report No Activity"
 msgstr "Keine Aktivität aufgezeichnet."
-
-msgid "Mail Link Report Authentication"
-msgstr "Melden Sie sich bei der Twake-Instanz an, auf der der Link gehostet wird, um den Bericht zu öffnen."
 
 msgid "Mail Link Report Open"
 msgstr "CSV-Datei öffnen"
