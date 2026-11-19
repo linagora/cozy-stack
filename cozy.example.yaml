@@ -225,6 +225,7 @@ search:
     username: admin
     password: $3cr3t
     # Prefix of the index names, so several stacks can share a cluster.
+    # Use lowercase ASCII letters and digits. Hyphens and underscores are allowed after the first character.
     index_prefix: cozy
     # CA certificate(s) of the cluster, when not installed on the system.
     # root_ca: /ca-certificates.pem
