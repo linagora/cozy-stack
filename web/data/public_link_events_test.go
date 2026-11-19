@@ -38,4 +38,11 @@ func TestPublicLinkEventsPrivate(t *testing.T) {
 	var got publiclink.Event
 	require.NoError(t, couchdb.GetDoc(inst, consts.PublicLinkEvents, event.ID(), &got))
 	require.Equal(t, event.IP, got.IP)
+	report := &couchdb.JSONDoc{Type: consts.PublicLinkReports, M: map[string]interface{}{"_id": "checkpoint", "status": "pending"}}
+	require.NoError(t, couchdb.CreateNamedDocWithDB(inst, report))
+	e.GET("/data/"+consts.PublicLinkReports+"/checkpoint").WithHeader("Authorization", "Bearer "+token).Expect().Status(403)
+	e.PUT("/data/"+consts.PublicLinkReports+"/checkpoint").WithHeader("Authorization", "Bearer "+token).WithHeader("Content-Type", "application/json").WithJSON(map[string]string{"status": "sent"}).Expect().Status(403)
+	var saved couchdb.JSONDoc
+	require.NoError(t, couchdb.GetDoc(inst, consts.PublicLinkReports, "checkpoint", &saved))
+	require.Equal(t, "pending", saved.M["status"])
 }

@@ -75,6 +75,8 @@ const (
 	Permissions = "io.cozy.permissions"
 	// PublicLinkEvents stores private activity on public links.
 	PublicLinkEvents = "io.cozy.public_links.events"
+	// PublicLinkReports stores private expiration report checkpoints.
+	PublicLinkReports = "io.cozy.public_links.reports"
 	// Contacts doc type for sharing
 	Contacts = "io.cozy.contacts"
 	// Groups of contacts doc type for sharing

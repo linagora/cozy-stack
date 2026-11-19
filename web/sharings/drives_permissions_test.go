@@ -10,6 +10,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/contact"
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -470,13 +471,25 @@ func TestSharedDriveShareByLinkCreate(t *testing.T) {
 
 	t.Run("RecipientCanCreateShareByLink", func(t *testing.T) {
 		eBetty, bettyToken := f.newBettyClient(t)
-		payload := makeSharedDrivePermissionPayload(t, consts.Files, []string{f.fileID}, "", nil)
+		payload := makeSharedDrivePermissionPayload(t, consts.Files, []string{f.fileID}, "", map[string]interface{}{"activity_report_enabled": true, "expires_at": time.Now().Add(time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)})
 		permID, attrs := createSharedDrivePermission(
 			t, eBetty, f.sharingID, bettyToken, "link", "", payload,
 		)
 
 		attrs.Value("shortcodes").Object().Value("link").String().NotEmpty()
 		attrs.Value("cozyMetadata").Object().Value("createdByApp").String().IsEqual("drive")
+		stored, err := permission.GetPermissionByIDIncludingExpired(f.env.acme, permID)
+		require.NoError(t, err)
+		require.NotNil(t, stored.ActivityReportEnabled)
+		require.True(t, *stored.ActivityReportEnabled)
+		expiry := stored.ExpiresAt
+		patch := mustJSON(t, map[string]interface{}{"data": map[string]interface{}{"type": consts.Permissions, "attributes": map[string]interface{}{"activity_report_enabled": false}}})
+		patchSharedDrivePermissionExpectStatus(t, eBetty, f.sharingID, permID, bettyToken, patch, http.StatusOK)
+		stored, err = permission.GetPermissionByIDIncludingExpired(f.env.acme, permID)
+		require.NoError(t, err)
+		require.NotNil(t, stored.ActivityReportEnabled)
+		require.False(t, *stored.ActivityReportEnabled)
+		require.Equal(t, expiry, stored.ExpiresAt)
 		shareCode := attrs.Value("codes").Object().Value("link").String().NotEmpty().Raw()
 
 		// Download the file using the share-by-link (on owner's instance where the file resides)
@@ -791,6 +804,12 @@ func TestSharedDriveShareByLinkPatch(t *testing.T) {
 		patchedObj.Value("data").Object().
 			Value("attributes").Object().
 			Value("password").Boolean().IsTrue()
+		patchSharedDrivePermissionExpectStatus(t, f.eOwner, f.sharingID, permID, f.ownerAppToken,
+			makeSharedDrivePatchPayload(t, map[string]interface{}{"activity_report_enabled": true}), http.StatusOK)
+		stored, err := permission.GetPermissionByIDIncludingExpired(f.env.acme, permID)
+		require.NoError(t, err)
+		require.NotNil(t, stored.ActivityReportEnabled)
+		require.True(t, *stored.ActivityReportEnabled)
 
 		deleteSharedDrivePermissionExpectStatus(t, f.eOwner, f.sharingID, permID, f.ownerAppToken, http.StatusNoContent)
 	})
@@ -841,9 +860,12 @@ func TestSharedDriveShareByLinkPatch(t *testing.T) {
 			f.sharingID,
 			permID,
 			bettyToken,
-			makeSharedDrivePatchPayload(t, map[string]interface{}{"password": "secret"}),
+			makeSharedDrivePatchPayload(t, map[string]interface{}{"activity_report_enabled": true}),
 			http.StatusForbidden,
 		)
+		stored, err := permission.GetPermissionByIDIncludingExpired(f.env.acme, permID)
+		require.NoError(t, err)
+		require.Nil(t, stored.ActivityReportEnabled)
 
 		deleteSharedDrivePermissionExpectStatus(t, f.eOwner, f.sharingID, permID, f.ownerAppToken, http.StatusNoContent)
 	})
@@ -899,9 +921,12 @@ func TestSharedDriveShareByLinkPatch(t *testing.T) {
 			f.sharingID,
 			permID,
 			shareCode,
-			makeSharedDrivePatchPayload(t, map[string]interface{}{"password": "forbidden"}),
+			makeSharedDrivePatchPayload(t, map[string]interface{}{"activity_report_enabled": true}),
 			http.StatusForbidden,
 		)
+		stored, err := permission.GetPermissionByIDIncludingExpired(f.env.acme, permID)
+		require.NoError(t, err)
+		require.Nil(t, stored.ActivityReportEnabled)
 
 		deleteSharedDrivePermissionExpectStatus(t, f.eOwner, f.sharingID, permID, f.ownerAppToken, http.StatusNoContent)
 	})
