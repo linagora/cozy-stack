@@ -99,12 +99,39 @@ func TestMget(t *testing.T) {
 }
 
 func TestDeleteByQuery(t *testing.T) {
-	c, rec := newTestClient(t, 200, `{"deleted":3}`)
+	c, rec := newTestClient(t, 200, `{"deleted":3,"version_conflicts":1,"failures":[]}`)
 	query := map[string]any{"term": map[string]string{"owner_instance_id": "alice.example.net"}}
 	require.NoError(t, c.DeleteByQuery(context.Background(), "files_v1", query))
 	assert.Equal(t, "/test-files_v1/_delete_by_query", rec.path)
 	assert.Equal(t, "conflicts=proceed", rec.query)
 	assert.JSONEq(t, `{"query":{"term":{"owner_instance_id":"alice.example.net"}}}`, rec.body)
+}
+
+func TestDeleteByQueryFailures(t *testing.T) {
+	const failedDeletes = `{"deleted":3,"failures":[
+		{"id":"a","status":403,"cause":{"type":"security_exception","reason":"delete denied"}},
+		{"id":"b","status":429,"cause":{"type":"rejected_execution_exception","reason":"queue full"}}
+	]}`
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   Error
+	}{
+		{"partial success", 200, failedDeletes, Error{403, "security_exception", "delete denied"}},
+		{"failed deletes", 429, failedDeletes, Error{403, "security_exception", "delete denied"}},
+		{"failed shard", 503, `{"failures":[{"shard":0,"status":503,
+			"reason":{"type":"search_context_missing_exception","reason":"scroll expired"}}]}`,
+			Error{503, "search_context_missing_exception", "scroll expired"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newTestClient(t, tc.status, tc.body)
+			err := c.DeleteByQuery(context.Background(), "files_v1", map[string]any{"match_all": map[string]any{}})
+			var osErr *Error
+			require.ErrorAs(t, err, &osErr)
+			assert.Equal(t, tc.want, *osErr)
+		})
+	}
 }
 
 func TestBulk(t *testing.T) {
