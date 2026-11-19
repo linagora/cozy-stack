@@ -26,7 +26,8 @@ func TestS3Configuration(t *testing.T) {
 			v.SetConfigType("yaml")
 			setting := ""
 			if value != "" {
-				setting = "    auto_create_buckets: " + value + "\n"
+				setting = "    auto_create_buckets: " + value + "\n" +
+					"    delete_instances_by_listing: " + value + "\n"
 			}
 			err := v.ReadConfig(strings.NewReader("fs:\n  s3:\n" + setting + `    buckets:
       default:
@@ -39,6 +40,7 @@ func TestS3Configuration(t *testing.T) {
 			require.NoError(t, UseViper(v))
 			s3 := config.Fs.S3
 			assert.Equal(t, value != "false", s3.AutoCreateBuckets == nil || *s3.AutoCreateBuckets)
+			assert.Equal(t, value != "false", s3.DeleteInstancesByListing == nil || *s3.DeleteInstancesByListing)
 			assert.Equal(t, "s3://apps.example.net?access_key=APPS&secret_key=SECRET", s3.Buckets["apps_web"].URL)
 			assert.Equal(t, "company-web", s3.Buckets["apps_web"].Name)
 			assert.Equal(t, "company-storage", s3.Buckets["default"].Name)
@@ -63,14 +65,18 @@ func TestS3EnvironmentOverride(t *testing.T) {
 		for _, env := range []string{"true", "false"} {
 			t.Run("yaml="+setting+"/env="+env, func(t *testing.T) {
 				t.Setenv("COZY_FS_S3_AUTO_CREATE_BUCKETS", env)
+				t.Setenv("COZY_FS_S3_DELETE_INSTANCES_BY_LISTING", env)
 				v := createTestViper()
 				if setting != "" {
 					v.SetConfigType("yaml")
-					require.NoError(t, v.ReadConfig(strings.NewReader("fs:\n  s3:\n    auto_create_buckets: "+setting)))
+					require.NoError(t, v.ReadConfig(strings.NewReader("fs:\n  s3:\n    auto_create_buckets: "+setting+
+						"\n    delete_instances_by_listing: "+setting)))
 				}
 				require.NoError(t, UseViper(v))
 				require.NotNil(t, config.Fs.S3.AutoCreateBuckets)
 				assert.Equal(t, env == "true", *config.Fs.S3.AutoCreateBuckets)
+				require.NotNil(t, config.Fs.S3.DeleteInstancesByListing)
+				assert.Equal(t, env == "true", *config.Fs.S3.DeleteInstancesByListing)
 			})
 		}
 	}

@@ -746,6 +746,8 @@ func TestLifecycle(t *testing.T) {
 			assert.Equal(t, instance.ErrNotFound, err)
 		}
 	})
+
+	t.Run("InstanceDestroyS3WithoutListing", testDestroyS3InstanceWithoutListing)
 }
 
 // createInstance destroys any leftover instance for opts.Domain, registers

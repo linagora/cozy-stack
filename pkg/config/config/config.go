@@ -242,9 +242,10 @@ type Fs struct {
 
 // FsS3 configures bucket provisioning and destinations by storage type.
 type FsS3 struct {
-	AutoCreateBuckets *bool                 `mapstructure:"auto_create_buckets"`
-	PreferIPv4        bool                  `mapstructure:"prefer_ipv4"`
-	Buckets           map[string]FsS3Bucket `mapstructure:"buckets"`
+	AutoCreateBuckets        *bool                 `mapstructure:"auto_create_buckets"`
+	DeleteInstancesByListing *bool                 `mapstructure:"delete_instances_by_listing"`
+	PreferIPv4               bool                  `mapstructure:"prefer_ipv4"`
+	Buckets                  map[string]FsS3Bucket `mapstructure:"buckets"`
 }
 
 // FsS3Bucket contains the bucket name and optional connection URL.
@@ -903,6 +904,9 @@ func UseViper(v *viper.Viper) error {
 	}
 	if err := v.UnmarshalKey("fs.s3.auto_create_buckets", &s3.AutoCreateBuckets); err != nil {
 		return errors.New("s3: invalid fs.s3.auto_create_buckets configuration")
+	}
+	if err := v.UnmarshalKey("fs.s3.delete_instances_by_listing", &s3.DeleteInstancesByListing); err != nil {
+		return errors.New("s3: invalid fs.s3.delete_instances_by_listing configuration")
 	}
 	if s3.Buckets == nil {
 		s3.Buckets = make(map[string]FsS3Bucket)

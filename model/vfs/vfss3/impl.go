@@ -146,6 +146,9 @@ func (sfs *s3VFS) InitFs() error {
 }
 
 func (sfs *s3VFS) Delete() error {
+	if byListing := config.GetConfig().Fs.S3.DeleteInstancesByListing; byListing != nil && !*byListing {
+		return sfs.deleteIndexedObjects()
+	}
 	sfs.log.Infof("Deleting all objects with prefix %q in bucket %q", sfs.keyPrefix, sfs.bucket)
 	return s3util.DeletePrefixObjects(sfs.ctx, sfs.client, sfs.bucket, sfs.keyPrefix)
 }
