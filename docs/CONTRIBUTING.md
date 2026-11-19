@@ -98,6 +98,21 @@ $ export COZY_COUCHDB_URL=http://admin:password@localhost:5984
 $ make unit-tests
 ```
 
+To run all the tests like the CI, without `-short`, use Docker: `make
+docker-tests` starts CouchDB, Redis and a DNS server, then runs `go test` in a
+container (`make docker-tests-down` stops them). Running the full suite on the
+host fails on most desktops: mDNS takes over the `.local` names of the test
+instances and hangs, so the sharing tests time out. `TEST_ARGS` narrows the run:
+
+```
+$ make docker-tests TEST_ARGS='-run TestDriveAutoAcceptTrusted ./web/sharings/'
+```
+
+The full suite takes about 25 minutes. CouchDB sometimes stalls for a few
+seconds under the load of `web/sharings`, and a test then fails with
+`CouchDB(no_couch) ... context deadline exceeded` while creating its instance:
+run the package again.
+
 If you want to play with the modified cozy-stack (for example, testing it with a
 webapp), you can build it locally and start it with this command:
 
