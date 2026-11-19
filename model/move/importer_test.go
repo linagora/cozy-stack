@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -56,4 +57,49 @@ func TestImportSkipsRecents(t *testing.T) {
 	assert.True(t, couchdb.IsNotFoundError(err), "the recents must not be imported, got %v", err)
 	assert.NoError(t, couchdb.GetDoc(inst, "io.cozy.foos", "foo-id", &doc),
 		"the other documents of the archive are imported")
+}
+
+func TestImportResetsOAuthClientTrust(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	config.UseTestFile(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(ExportDataDir + "/" + consts.OAuthClients + "/client-id.json")
+	require.NoError(t, err)
+	_, err = w.Write([]byte(`{
+		"_id": "client-id",
+		"_rev": "1-abc",
+		"client_name": "imported",
+		"redirect_uris": ["https://example.org/oauth/callback"],
+		"software_id": "github.com/cozy/cozy-test",
+		"flagship": true,
+		"certified_from_store": true,
+		"created_at_onboarding": true,
+		"oidc_session_id": "some-sid"
+	}`))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+
+	im := &importer{
+		inst:            inst,
+		fs:              inst.VFS(),
+		servicesInError: make(map[string]bool),
+	}
+	require.NoError(t, im.importZip(zr))
+
+	client, err := oauth.FindClient(inst, "client-id")
+	require.NoError(t, err)
+	assert.Equal(t, "imported", client.ClientName)
+	assert.False(t, client.Flagship)
+	assert.False(t, client.CertifiedFromStore)
+	assert.False(t, client.CreatedAtOnboarding)
+	assert.Empty(t, client.OIDCSessionID)
 }

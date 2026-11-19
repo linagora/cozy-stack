@@ -194,6 +194,13 @@ func (im *importer) importZip(zr *zip.Reader) error {
 			continue
 		}
 		delete(doc, "_rev")
+		if doctype == consts.OAuthClients {
+			// The archive is not trusted to grant a client the trust that the
+			// stack gives after an attestation, an onboarding or an OIDC login.
+			for _, field := range []string{"flagship", "certified_from_store", "created_at_onboarding", "oidc_session_id"} {
+				delete(doc, field)
+			}
+		}
 		im.doctype = doctype
 		im.docs = append(im.docs, doc)
 	}
