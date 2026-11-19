@@ -11,8 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/cozy/cozy-stack/pkg/config/config"
 )
 
 // Error is an error returned by OpenSearch.
@@ -26,36 +24,38 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("opensearch: %d %s: %s", e.Status, e.Type, e.Reason)
 }
 
+// Options configures the connection to an OpenSearch cluster.
+type Options struct {
+	URL         *url.URL
+	Username    string
+	Password    string
+	IndexPrefix string
+	HTTPClient  *http.Client // Defaults to http.DefaultClient.
+}
+
 // Client sends requests to an OpenSearch cluster.
 type Client struct {
-	url         *url.URL
-	username    string
-	password    string
-	indexPrefix string
-	http        *http.Client
+	opts Options
 }
 
 // NewClient returns a client for the given configuration, or nil when search is
 // not configured.
-func NewClient(cfg config.Search) *Client {
-	if cfg.URL == nil {
+func NewClient(opts Options) *Client {
+	if opts.URL == nil {
 		return nil
 	}
-	return &Client{
-		url:         cfg.URL,
-		username:    cfg.Username,
-		password:    cfg.Password,
-		indexPrefix: cfg.IndexPrefix,
-		http:        cfg.Client,
+	if opts.HTTPClient == nil {
+		opts.HTTPClient = http.DefaultClient
 	}
+	return &Client{opts: opts}
 }
 
 // IndexName returns the name of the index in the cluster, with the prefix.
 func (c *Client) IndexName(name string) string {
-	if c.indexPrefix == "" {
+	if c.opts.IndexPrefix == "" {
 		return name
 	}
-	return c.indexPrefix + "-" + name
+	return c.opts.IndexPrefix + "-" + name
 }
 
 // Ping checks that the cluster is reachable and accepts the credentials.
@@ -151,7 +151,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 }
 
 func (c *Client) do(ctx context.Context, method, path, contentType string, body []byte, out any) error {
-	u := *c.url
+	u := *c.opts.URL
 	u.Path = strings.TrimSuffix(u.Path, "/")
 	p, q, _ := strings.Cut(path, "?")
 	u.Path += p
@@ -162,10 +162,10 @@ func (c *Client) do(ctx context.Context, method, path, contentType string, body 
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
-	if c.username != "" {
-		req.SetBasicAuth(c.username, c.password)
+	if c.opts.Username != "" {
+		req.SetBasicAuth(c.opts.Username, c.opts.Password)
 	}
-	res, err := c.http.Do(req)
+	res, err := c.opts.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("opensearch: %w", err)
 	}
