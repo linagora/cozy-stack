@@ -81,6 +81,10 @@ fs:
   #       url: s3://{{ .Env.S3_VFS_ENDPOINT }}?access_key={{ .Env.S3_VFS_ACCESS_KEY }}&secret_key={{ .Env.S3_VFS_SECRET_KEY }}&region={{ .Env.S3_REGION }}
   #     exports:
   #       name: company-backups
+  #   # Set to false to delete an instance from the keys indexed in CouchDB,
+  #   # without listing the bucket (for Ceph RGW). Unindexed objects are then
+  #   # left behind, and check fs only finds them before the deletion.
+  #   delete_instances_by_listing: true
 
   # Swift FS can be used with advanced parameters to activate TLS properties.
   # For using swift with https, you must use the "swift+https" scheme.
