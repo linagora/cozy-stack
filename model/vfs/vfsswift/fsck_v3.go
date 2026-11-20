@@ -91,7 +91,7 @@ func (sfs *swiftVFSV3) checkFiles(
 			return nil, err
 		}
 		for _, obj := range objs {
-			if obj.Name == "avatar" {
+			if obj.Name == "avatar" || strings.HasPrefix(obj.Name, vfs.UploadsObjectPrefix) {
 				continue
 			}
 			if strings.HasPrefix(obj.Name, "thumbs/") {
@@ -128,7 +128,7 @@ func (sfs *swiftVFSV3) checkFiles(
 				if err != nil {
 					return nil, err
 				}
-				if !bytes.Equal(md5sum, v.MD5Sum) || v.ByteSize != obj.Bytes {
+				if !sameContent(obj, md5sum, v.MD5Sum, v.ByteSize) {
 					accumulate(&vfs.FsckLog{
 						Type:       vfs.ContentMismatch,
 						IsVersion:  true,
@@ -163,7 +163,7 @@ func (sfs *swiftVFSV3) checkFiles(
 				if err != nil {
 					return nil, err
 				}
-				if !bytes.Equal(md5sum, f.MD5Sum) || f.ByteSize != obj.Bytes {
+				if !sameContent(obj, md5sum, f.MD5Sum, f.ByteSize) {
 					accumulate(&vfs.FsckLog{
 						Type:    vfs.ContentMismatch,
 						IsFile:  true,
@@ -216,6 +216,16 @@ func (sfs *swiftVFSV3) checkFiles(
 	}
 
 	return nil
+}
+
+// sameContent compares an object of the listing with the index. The hash of a
+// SLO manifest in the listing is not the md5 of the content: only the size is
+// compared for the objects of the resumable uploads.
+func sameContent(obj swift.Object, md5sum, indexMD5 []byte, indexSize int64) bool {
+	if obj.Bytes != indexSize {
+		return false
+	}
+	return isLargeObjectName(obj.Name) || bytes.Equal(md5sum, indexMD5)
 }
 
 func objectToFileDocV3(container string, object swift.Object) *vfs.TreeFile {

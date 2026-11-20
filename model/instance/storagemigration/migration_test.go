@@ -85,6 +85,7 @@ func TestS3Migration(t *testing.T) {
 		{name: "TestMigrateHoldsVFSLock", run: testMigrateHoldsVFSLock},
 		{name: "TestMigrateReportsBlockRestorationFailure", run: testMigrateReportsBlockRestorationFailure},
 		{name: "TestMigrateFlipsSchemeAfterVerify", run: testMigrateFlipsSchemeAfterVerify},
+		{name: "TestMigrateCancelsUploadsInProgress", run: testMigrateCancelsUploadsInProgress},
 		{name: "TestMigrateDryRunIsReadOnly", run: testMigrateDryRunIsReadOnly},
 		{name: "TestMigrateFlagOnlyRequiresForce", run: testMigrateFlagOnlyRequiresForce},
 		{name: "TestMigrateFlagOnlyFlipsWhenTargetPopulated", run: testMigrateFlagOnlyFlipsWhenTargetPopulated},
@@ -659,6 +660,33 @@ func testMigrateFlipsSchemeAfterVerify(t *testing.T, mf *testutils.MinioFixture)
 	doc2, err := s3fs.FileByPath("/migrate-file2.txt")
 	require.NoError(t, err)
 	assertFileContentOn(t, s3fs, doc2, []byte("hello from migrate file 2, a bit longer"))
+}
+
+// testMigrateCancelsUploadsInProgress checks that an upload started on the
+// source storage does not survive the switch: its state points to the parts
+// of the source, which the target does not know.
+func testMigrateCancelsUploadsInProgress(t *testing.T, mf *testutils.MinioFixture) {
+	inst := setupMigrateInstance(t, mf)
+
+	doc, err := vfs.NewFileDoc("in-progress.bin", consts.RootDirID, -1, nil, "application/octet-stream", "files", time.Now(), false, false, false, nil)
+	require.NoError(t, err)
+	u, err := vfs.NewUpload(inst.VFS(), doc, nil, "", -1)
+	require.NoError(t, err)
+	_, err = vfs.AppendUpload(inst.VFS(), u, bytes.NewReader([]byte("the first bytes")), false)
+	require.NoError(t, err)
+	source := inst.VFS().(vfs.UploadStorage)
+	require.NotNil(t, u.Tail)
+	content, err := source.OpenUploadTail(u)
+	require.NoError(t, err)
+	require.NoError(t, content.Close())
+
+	_, err = migrate(inst, Options{To: config.SchemeS3}, time.Millisecond)
+	require.NoError(t, err)
+
+	_, err = vfs.GetUpload(inst.VFS(), u.UploadID)
+	assert.ErrorIs(t, err, vfs.ErrUploadNotFound)
+	_, err = source.OpenUploadTail(u)
+	assert.Error(t, err, "the content of the upload must be removed from the source")
 }
 
 func testMigrateDryRunIsReadOnly(t *testing.T, mf *testutils.MinioFixture) {

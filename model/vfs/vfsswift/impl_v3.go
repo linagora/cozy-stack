@@ -448,16 +448,22 @@ func (sfs *swiftVFSV3) destroyFileLocked(doc *vfs.FileDoc) error {
 			sfs.log.Warnf("DestroyFile failed on BatchDeleteVersions: %s", err)
 		}
 	}
-	_, errb := sfs.c.BulkDelete(sfs.ctx, sfs.container, objNames)
-	if errb == swift.Forbidden {
-		for _, objName := range objNames {
-			if err := sfs.c.ObjectDelete(sfs.ctx, sfs.container, objName); err != nil {
-				sfs.log.Infof("DestroyFile failed on ObjectDelete: %s", err)
+	objNames, errl := sfs.deleteLargeObjects(objNames)
+	if errl != nil {
+		sfs.log.Warnf("DestroyFile failed on deleteLargeObjects: %s", errl)
+	}
+	if len(objNames) > 0 {
+		_, errb := sfs.c.BulkDelete(sfs.ctx, sfs.container, objNames)
+		if errb == swift.Forbidden {
+			for _, objName := range objNames {
+				if err := sfs.c.ObjectDelete(sfs.ctx, sfs.container, objName); err != nil {
+					sfs.log.Infof("DestroyFile failed on ObjectDelete: %s", err)
+				}
 			}
 		}
-	}
-	if errb != nil {
-		sfs.log.Warnf("DestroyFile failed on BulkDelete: %s", errb)
+		if errb != nil {
+			sfs.log.Warnf("DestroyFile failed on BulkDelete: %s", errb)
+		}
 	}
 	vfs.DiskQuotaAfterDestroy(sfs, diskUsage, destroyed)
 	return nil
@@ -493,9 +499,16 @@ func (sfs *swiftVFSV3) EnsureErased(journal vfs.TrashJournal) error {
 		sfs.log.Warnf("EnsureErased failed on BatchDeleteVersions: %s", err)
 		errm = multierror.Append(errm, err)
 	}
-	if err := deleteContainerFiles(sfs.ctx, sfs.c, sfs.container, objNames); err != nil {
-		sfs.log.Warnf("EnsureErased failed on deleteContainerFiles: %s", err)
+	objNames, err := sfs.deleteLargeObjects(objNames)
+	if err != nil {
+		sfs.log.Warnf("EnsureErased failed on deleteLargeObjects: %s", err)
 		errm = multierror.Append(errm, err)
+	}
+	if len(objNames) > 0 {
+		if err := deleteContainerFiles(sfs.ctx, sfs.c, sfs.container, objNames); err != nil {
+			sfs.log.Warnf("EnsureErased failed on deleteContainerFiles: %s", err)
+			errm = multierror.Append(errm, err)
+		}
 	}
 	vfs.DiskQuotaAfterDestroy(sfs, diskUsage, destroyed)
 	return errm
@@ -722,7 +735,7 @@ func (sfs *swiftVFSV3) CopyFileFromOtherFS(
 				internalID = parts[1]
 			}
 			objName := MakeObjectNameV3(newdoc.DocID, internalID)
-			_ = sfs.c.ObjectDelete(sfs.ctx, sfs.container, objName)
+			_ = sfs.deleteObject(objName)
 		}
 		for _, old := range toClean {
 			_ = cleanOldVersion(sfs, newdoc.DocID, old)
@@ -986,16 +999,26 @@ func (f *swiftFileCreationV3) Close() (err error) {
 		return vfs.ErrContentLengthMismatch
 	}
 
-	lockerr := f.fs.mu.Lock()
-	if lockerr != nil {
+	return f.fs.commitFile(newdoc, olddoc, f.size, f.capsize, f.allowTrash, nil)
+}
+
+// commitFile adds a file, whose content is already in its object, to the
+// index. check, when given, runs with the lock of the VFS held.
+func (sfs *swiftVFSV3) commitFile(newdoc, olddoc *vfs.FileDoc, size, capsize int64, allowTrash bool, check func() error) error {
+	if lockerr := sfs.mu.Lock(); lockerr != nil {
 		return lockerr
 	}
-	defer f.fs.mu.Unlock()
+	defer sfs.mu.Unlock()
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 
 	// Check again that a file with the same path does not exist. It can happen
 	// when the same file is uploaded twice in parallel.
 	if olddoc == nil {
-		exists, err := f.fs.Indexer.DirChildExists(newdoc.DirID, newdoc.DocName)
+		exists, err := sfs.Indexer.DirChildExists(newdoc.DirID, newdoc.DocName)
 		if err != nil {
 			return err
 		}
@@ -1004,36 +1027,35 @@ func (f *swiftFileCreationV3) Close() (err error) {
 		}
 	}
 
-	var newpath string
-	newpath, err = f.fs.Indexer.FilePath(newdoc)
+	newpath, err := sfs.Indexer.FilePath(newdoc)
 	if err != nil {
 		return err
 	}
 	newdoc.Trashed = strings.HasPrefix(newpath, vfs.TrashDirName+"/")
-	if olddoc == nil && newdoc.Trashed && !f.allowTrash {
+	if olddoc == nil && newdoc.Trashed && !allowTrash {
 		return vfs.ErrParentInTrash
 	}
 
 	var v *vfs.Version
 	if olddoc != nil {
 		v = vfs.NewVersion(olddoc)
-		err = f.fs.Indexer.UpdateFileDoc(olddoc, newdoc)
+		err = sfs.Indexer.UpdateFileDoc(olddoc, newdoc)
 	} else if newdoc.ID() == "" {
-		err = f.fs.Indexer.CreateFileDoc(newdoc)
+		err = sfs.Indexer.CreateFileDoc(newdoc)
 	} else {
-		err = f.fs.Indexer.CreateNamedFileDoc(newdoc)
+		err = sfs.Indexer.CreateNamedFileDoc(newdoc)
 	}
 	if err != nil {
 		return err
 	}
 
 	if v != nil {
-		actionV, toClean, _ := vfs.FindVersionsToClean(f.fs, newdoc.DocID, v)
+		actionV, toClean, _ := vfs.FindVersionsToClean(sfs, newdoc.DocID, v)
 		if bytes.Equal(newdoc.MD5Sum, olddoc.MD5Sum) {
 			actionV = vfs.CleanCandidateVersion
 		}
 		if actionV == vfs.KeepCandidateVersion {
-			if errv := f.fs.Indexer.CreateVersion(v); errv != nil {
+			if errv := sfs.Indexer.CreateVersion(v); errv != nil {
 				actionV = vfs.CleanCandidateVersion
 			}
 		}
@@ -1043,19 +1065,19 @@ func (f *swiftFileCreationV3) Close() (err error) {
 				internalID = parts[1]
 			}
 			objName := MakeObjectNameV3(newdoc.DocID, internalID)
-			if err := f.fs.c.ObjectDelete(f.fs.ctx, f.fs.container, objName); err != nil {
-				f.fs.log.Warnf("Could not delete previous version %q: %s", objName, err.Error())
+			if err := sfs.deleteObject(objName); err != nil {
+				sfs.log.Warnf("Could not delete previous version %q: %s", objName, err.Error())
 			}
 		}
 		for _, old := range toClean {
-			if err := cleanOldVersion(f.fs, newdoc.DocID, old); err != nil {
-				f.fs.log.Warnf("Could not delete old versions for %s: %s", newdoc.DocID, err.Error())
+			if err := cleanOldVersion(sfs, newdoc.DocID, old); err != nil {
+				sfs.log.Warnf("Could not delete old versions for %s: %s", newdoc.DocID, err.Error())
 			}
 		}
 	}
 
-	if f.capsize > 0 && f.size >= f.capsize {
-		vfs.PushDiskQuotaAlert(f.fs, true)
+	if capsize > 0 && size >= capsize {
+		vfs.PushDiskQuotaAlert(sfs, true)
 	}
 
 	return nil
@@ -1078,7 +1100,7 @@ func cleanOldVersion(sfs *swiftVFSV3, fileID string, v *vfs.Version) error {
 		internalID = parts[1]
 	}
 	objName := MakeObjectNameV3(fileID, internalID)
-	return sfs.c.ObjectDelete(sfs.ctx, sfs.container, objName)
+	return sfs.deleteObject(objName)
 }
 
 func (sfs *swiftVFSV3) ClearOldVersions() error {
@@ -1103,7 +1125,11 @@ func (sfs *swiftVFSV3) ClearOldVersions() error {
 		return err
 	}
 	vfs.DiskQuotaAfterDestroy(sfs, diskUsage, destroyed)
-	return deleteContainerFiles(sfs.ctx, sfs.c, sfs.container, objNames)
+	objNames, err = sfs.deleteLargeObjects(objNames)
+	if len(objNames) > 0 {
+		err = errors.Join(err, deleteContainerFiles(sfs.ctx, sfs.c, sfs.container, objNames))
+	}
+	return err
 }
 
 type swiftFileOpenV3 struct {
