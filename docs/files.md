@@ -72,7 +72,9 @@ Reading it does not create a missing directory.
 Requests must be authenticated. Creating a missing magic folder does not
 require directory-creation permission; the requested operation still requires
 its usual permissions on the resolved directory. Response resource IDs and
-stored parent IDs use concrete directory IDs. Other IDs follow the usual lookup
+stored parent IDs use concrete directory IDs. The stack assigns the listed
+magic folder references. Both relationship APIs return HTTP 400 if a client
+tries to add one. Other IDs follow the usual lookup
 behavior.
 
 ### POST /files/:dir-id

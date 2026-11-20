@@ -207,6 +207,9 @@ func AddReferencesHandler(c echo.Context) error {
 			return err
 		}
 	}
+	if err := validateClientReferences(docRef); err != nil {
+		return err
+	}
 	docs := make([]interface{}, len(references))
 	oldDocs := make([]interface{}, len(references))
 
