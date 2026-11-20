@@ -2,6 +2,7 @@ package permissions
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -574,9 +575,6 @@ func TestPermissions(t *testing.T) {
 				"an app removes one of its own rules", "/permissions/apps/notes", notesToken, `{"permissions": {"contacts": {}}}`, 200,
 			},
 			{
-				"an OAuth client replaces a rule it could give", "/permissions/apps/notes", token, `{"permissions": {"given": ` + giveFiles + `}}`, 200,
-			},
-			{
 				"a konnector removes one of its own rules", "/permissions/konnectors/mini", konnToken, `{"permissions": {"rule0": {}}}`, 200,
 			},
 			{
@@ -597,6 +595,30 @@ func TestPermissions(t *testing.T) {
 					Expect().Status(tc.status)
 			})
 		}
+
+		t.Run("an OAuth client replaces a rule it could give", func(t *testing.T) {
+			patch := func(values string) *httpexpect.Object {
+				return testutils.CreateTestClient(t, ts.URL).PATCH("/permissions/apps/notes").
+					WithHeader("Authorization", "Bearer "+token).
+					WithHeader("Content-Type", "application/json").
+					WithBytes([]byte(`{"data": {"attributes": {"permissions": {"replaced": {"type": "io.cozy.files", "verbs": ["GET"], "values": ` + values + `}}}}}`)).
+					Expect().Status(200).
+					JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+					Object().Path("$.data.attributes").Object()
+			}
+			attrs := patch(`["io.cozy.music"]`)
+			attrs.NotContainsKey("codes")
+			attrs.NotContainsKey("shortcodes")
+			attrs.NotContainsKey("password")
+			patch(`["io.cozy.photos"]`)
+
+			stored, err := permission.GetForWebapp(testInstance, "notes")
+			require.NoError(t, err)
+			replaced := stored.Permissions.Some(func(r permission.Rule) bool {
+				return r.Title == "replaced" && slices.Equal(r.Values, []string{"io.cozy.photos"})
+			})
+			assert.True(t, replaced, stored.Permissions)
+		})
 	})
 
 	t.Run("PatchShareLinkReservedDoctypes", func(t *testing.T) {
