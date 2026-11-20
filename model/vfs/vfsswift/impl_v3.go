@@ -184,7 +184,7 @@ func (sfs *swiftVFSV3) CreateDir(doc *vfs.DirDoc) error {
 	return sfs.Indexer.CreateNamedDirDoc(doc)
 }
 
-func (sfs *swiftVFSV3) CreateFile(newdoc, olddoc *vfs.FileDoc, opts ...vfs.CreateOptions) (vfs.File, error) {
+func (sfs *swiftVFSV3) CreateFile(newdoc, olddoc *vfs.FileDoc, opts ...vfs.CreateOptions) (vfs.FileUpload, error) {
 	if lockerr := sfs.mu.Lock(); lockerr != nil {
 		return nil, lockerr
 	}
@@ -243,16 +243,17 @@ func (sfs *swiftVFSV3) CreateFile(newdoc, olddoc *vfs.FileDoc, opts ...vfs.Creat
 	extractor := vfs.NewMetaExtractor(newdoc)
 
 	return &swiftFileCreationV3{
-		fs:      sfs,
-		f:       f,
-		newdoc:  newdoc,
-		olddoc:  olddoc,
-		name:    objName,
-		w:       0,
-		size:    newsize,
-		maxsize: maxsize,
-		capsize: capsize,
-		meta:    extractor,
+		fs:         sfs,
+		f:          f,
+		newdoc:     newdoc,
+		olddoc:     olddoc,
+		name:       objName,
+		allowTrash: vfs.OptionsAllowCreationInTrash(opts),
+		w:          0,
+		size:       newsize,
+		maxsize:    maxsize,
+		capsize:    capsize,
+		meta:       extractor,
 	}, nil
 }
 
@@ -846,17 +847,18 @@ func (sfs *swiftVFSV3) DirOrFileByPath(name string) (*vfs.DirDoc, *vfs.FileDoc, 
 //
 // swiftFileCreationV3 implements io.WriteCloser.
 type swiftFileCreationV3 struct {
-	fs      *swiftVFSV3
-	f       *swift.ObjectCreateFile
-	newdoc  *vfs.FileDoc
-	olddoc  *vfs.FileDoc
-	name    string
-	w       int64
-	size    int64
-	maxsize int64
-	capsize int64
-	meta    *vfs.MetaExtractor
-	err     error
+	fs         *swiftVFSV3
+	f          *swift.ObjectCreateFile
+	newdoc     *vfs.FileDoc
+	olddoc     *vfs.FileDoc
+	name       string
+	allowTrash bool
+	w          int64
+	size       int64
+	maxsize    int64
+	capsize    int64
+	meta       *vfs.MetaExtractor
+	err        error
 }
 
 func (f *swiftFileCreationV3) Read(p []byte) (int, error) {
@@ -897,6 +899,19 @@ func (f *swiftFileCreationV3) Write(p []byte) (int, error) {
 	}
 
 	return n, nil
+}
+
+func (f *swiftFileCreationV3) Abort() error {
+	if f.meta != nil {
+		(*f.meta).Abort(vfs.ErrContentLengthMismatch)
+	}
+	// Swift must finish the request before the temporary object can be deleted.
+	_ = f.f.Close()
+	err := f.fs.c.ObjectDelete(f.fs.ctx, f.fs.container, f.name)
+	if errors.Is(err, swift.ObjectNotFound) {
+		return nil
+	}
+	return err
 }
 
 func (f *swiftFileCreationV3) Close() (err error) {
@@ -995,6 +1010,9 @@ func (f *swiftFileCreationV3) Close() (err error) {
 		return err
 	}
 	newdoc.Trashed = strings.HasPrefix(newpath, vfs.TrashDirName+"/")
+	if olddoc == nil && newdoc.Trashed && !f.allowTrash {
+		return vfs.ErrParentInTrash
+	}
 
 	var v *vfs.Version
 	if olddoc != nil {

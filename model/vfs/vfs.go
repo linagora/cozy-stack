@@ -90,8 +90,8 @@ type Fs interface {
 	// the file. The second argument is the optional old document of the old
 	// version of the file.
 	//
-	// Warning: you MUST call the Close() method and check for its error.
-	CreateFile(newdoc, olddoc *FileDoc, opts ...CreateOptions) (File, error)
+	// Finish the upload with Close or Abort and check its error.
+	CreateFile(newdoc, olddoc *FileDoc, opts ...CreateOptions) (FileUpload, error)
 	// CopyFile creates a fresh copy of the source file with the given newdoc
 	// attributes (e.g. a new name)
 	CopyFile(olddoc, newdoc *FileDoc) error
@@ -144,6 +144,13 @@ type File interface {
 	io.Seeker
 	io.Writer
 	io.Closer
+}
+
+// FileUpload is an uncommitted upload. Finish it with either Close to publish
+// or Abort to discard it, never both.
+type FileUpload interface {
+	File
+	Abort() error
 }
 
 // FilePather is an interface for computing the fullpath of a filedoc

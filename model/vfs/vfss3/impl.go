@@ -191,7 +191,7 @@ type putResult struct {
 	err  error
 }
 
-func (sfs *s3VFS) CreateFile(newdoc, olddoc *vfs.FileDoc, opts ...vfs.CreateOptions) (vfs.File, error) {
+func (sfs *s3VFS) CreateFile(newdoc, olddoc *vfs.FileDoc, opts ...vfs.CreateOptions) (vfs.FileUpload, error) {
 	if lockerr := sfs.mu.Lock(); lockerr != nil {
 		return nil, lockerr
 	}
@@ -268,18 +268,19 @@ func (sfs *s3VFS) CreateFile(newdoc, olddoc *vfs.FileDoc, opts ...vfs.CreateOpti
 	extractor := vfs.NewMetaExtractor(newdoc)
 
 	return &s3FileCreation{
-		fs:       sfs,
-		pw:       pw,
-		resultCh: resultCh,
-		newdoc:   newdoc,
-		olddoc:   olddoc,
-		objKey:   objKey,
-		w:        0,
-		size:     newsize,
-		maxsize:  maxsize,
-		capsize:  capsize,
-		meta:     extractor,
-		md5H:     md5.New(),
+		fs:         sfs,
+		pw:         pw,
+		resultCh:   resultCh,
+		newdoc:     newdoc,
+		olddoc:     olddoc,
+		objKey:     objKey,
+		allowTrash: vfs.OptionsAllowCreationInTrash(opts),
+		w:          0,
+		size:       newsize,
+		maxsize:    maxsize,
+		capsize:    capsize,
+		meta:       extractor,
+		md5H:       md5.New(),
 	}, nil
 }
 
@@ -923,19 +924,20 @@ func (sfs *s3VFS) DirOrFileByPath(name string) (*vfs.DirDoc, *vfs.FileDoc, error
 // s3FileCreation represents a file open for writing. It is used to create
 // a file or to modify the content of a file.
 type s3FileCreation struct {
-	fs       *s3VFS
-	pw       *io.PipeWriter
-	resultCh chan putResult
-	newdoc   *vfs.FileDoc
-	olddoc   *vfs.FileDoc
-	objKey   string
-	w        int64
-	size     int64
-	maxsize  int64
-	capsize  int64
-	meta     *vfs.MetaExtractor
-	md5H     hash.Hash
-	err      error
+	fs         *s3VFS
+	pw         *io.PipeWriter
+	resultCh   chan putResult
+	newdoc     *vfs.FileDoc
+	olddoc     *vfs.FileDoc
+	objKey     string
+	allowTrash bool
+	w          int64
+	size       int64
+	maxsize    int64
+	capsize    int64
+	meta       *vfs.MetaExtractor
+	md5H       hash.Hash
+	err        error
 }
 
 func (f *s3FileCreation) Read(p []byte) (int, error) {
@@ -992,6 +994,15 @@ func (f *s3FileCreation) Write(p []byte) (int, error) {
 
 	f.w += int64(n)
 	return n, nil
+}
+
+func (f *s3FileCreation) Abort() error {
+	if f.meta != nil {
+		(*f.meta).Abort(vfs.ErrContentLengthMismatch)
+	}
+	_ = f.pw.CloseWithError(vfs.ErrContentLengthMismatch)
+	<-f.resultCh
+	return f.fs.removeObject(f.objKey)
 }
 
 func (f *s3FileCreation) Close() (err error) {
@@ -1088,6 +1099,9 @@ func (f *s3FileCreation) Close() (err error) {
 		return err
 	}
 	newdoc.Trashed = strings.HasPrefix(newpath, vfs.TrashDirName+"/")
+	if olddoc == nil && newdoc.Trashed && !f.allowTrash {
+		return vfs.ErrParentInTrash
+	}
 
 	var v *vfs.Version
 	if olddoc != nil {

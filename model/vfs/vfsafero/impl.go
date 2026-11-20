@@ -186,7 +186,7 @@ func (afs *aferoVFS) CreateDir(doc *vfs.DirDoc) error {
 	return err
 }
 
-func (afs *aferoVFS) CreateFile(newdoc, olddoc *vfs.FileDoc, opts ...vfs.CreateOptions) (vfs.File, error) {
+func (afs *aferoVFS) CreateFile(newdoc, olddoc *vfs.FileDoc, opts ...vfs.CreateOptions) (vfs.FileUpload, error) {
 	if lockerr := afs.mu.Lock(); lockerr != nil {
 		return nil, lockerr
 	}
@@ -802,6 +802,13 @@ func (f *aferoFileCreation) Write(p []byte) (int, error) {
 
 	_, err = f.hash.Write(p)
 	return n, err
+}
+
+func (f *aferoFileCreation) Abort() error {
+	if f.meta != nil {
+		(*f.meta).Abort(vfs.ErrContentLengthMismatch)
+	}
+	return errors.Join(f.f.Close(), f.afs.fs.Remove(f.tmppath))
 }
 
 func (f *aferoFileCreation) Close() (err error) {

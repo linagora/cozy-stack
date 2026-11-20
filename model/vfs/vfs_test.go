@@ -45,6 +45,65 @@ type contexter struct {
 	context string
 }
 
+func TestAbortFileUpload(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires CouchDB and the storage backends")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	for _, tt := range []struct {
+		name string
+		make func(*testing.T) vfs.VFS
+	}{{"afero", makeAferoFS}, {"swift", makeSwiftFS}, {"s3", makeS3FS}} {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := tt.make(t)
+			require.NoError(t, couchdb.EnsureDBExist(fs, consts.FilesVersions))
+			doc, err := vfs.NewFileDoc("aborted.txt", "", 8, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+			require.NoError(t, err)
+			doc.DocID = "aborted-upload"
+			upload, err := fs.CreateFile(doc, nil)
+			require.NoError(t, err)
+			_, err = io.WriteString(upload, "complete")
+			require.NoError(t, err)
+			require.NoError(t, upload.Abort())
+			_, err = fs.FileByID(doc.ID())
+			require.ErrorIs(t, err, os.ErrNotExist)
+
+			original, err := vfs.NewFileDoc("original.txt", "", 8, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+			require.NoError(t, err)
+			upload, err = fs.CreateFile(original, nil)
+			require.NoError(t, err)
+			_, err = io.WriteString(upload, "original")
+			require.NoError(t, err)
+			require.NoError(t, upload.Close())
+
+			replacement, err := vfs.NewFileDoc("original.txt", "", 8, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+			require.NoError(t, err)
+			upload, err = fs.CreateFile(replacement, original)
+			require.NoError(t, err)
+			_, err = io.WriteString(upload, "replaced")
+			require.NoError(t, err)
+			require.NoError(t, upload.Abort())
+			current, err := fs.FileByID(original.ID())
+			require.NoError(t, err)
+			require.Equal(t, original.Rev(), current.Rev())
+			in, err := fs.OpenFile(current)
+			require.NoError(t, err)
+			content, err := io.ReadAll(in)
+			require.NoError(t, in.Close())
+			require.NoError(t, err)
+			require.Equal(t, "original", string(content))
+
+			// Fsck lists physical files/objects as well as the CouchDB index.
+			var inconsistent []*vfs.FsckLog
+			require.NoError(t, fs.CheckFilesConsistency(func(log *vfs.FsckLog) {
+				inconsistent = append(inconsistent, log)
+			}, false))
+			require.Empty(t, inconsistent)
+		})
+	}
+}
+
 func TestVfs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
