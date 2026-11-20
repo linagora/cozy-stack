@@ -15,19 +15,6 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-func enabled(inst *instance.Instance) bool {
-	if value, ok := inst.FeatureFlags[publiclink.FlagEnabled]; ok {
-		enabled, _ := value.(bool)
-		return enabled
-	}
-	flags, err := feature.GetFlags(inst)
-	if err != nil {
-		return false
-	}
-	enabled, _ := flags.M[publiclink.FlagEnabled].(bool)
-	return enabled
-}
-
 // Record must not change the result of the action if storage is unavailable.
 func Record(c echo.Context, inst *instance.Instance, perm *permission.Permission, action publiclink.Action) {
 	if perm == nil || perm.Type != permission.TypeShareByLink {
@@ -40,7 +27,7 @@ func Record(c echo.Context, inst *instance.Instance, perm *permission.Permission
 			break
 		}
 	}
-	if !isFileLink || !enabled(inst) {
+	if !isFileLink || !feature.Enabled(inst, publiclink.FlagEnabled) {
 		return
 	}
 	event := &publiclink.Event{LinkID: perm.ID(), Action: action, OccurredAt: time.Now(), IP: utils.ClientIP(c.Request())}

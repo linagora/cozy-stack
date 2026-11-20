@@ -103,6 +103,20 @@ func (f *Flags) HasListItem(name, item string) (bool, error) {
 	return false, nil
 }
 
+// Enabled reports whether the effective flag is a boolean true.
+func Enabled(inst *instance.Instance, name string) bool {
+	if value, ok := inst.FeatureFlags[name]; ok {
+		enabled, _ := value.(bool)
+		return enabled
+	}
+	flags, err := GetFlags(inst)
+	if err != nil {
+		return false
+	}
+	enabled, _ := flags.M[name].(bool)
+	return enabled
+}
+
 // GetFlags returns the list of feature flags for the given instance.
 func GetFlags(inst *instance.Instance) (*Flags, error) {
 	sources := make([]*Flags, 0)
