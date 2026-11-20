@@ -2,6 +2,7 @@ package sharing
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -318,19 +319,14 @@ func (s *Sharing) CreatePreviewPermissions(inst *instance.Instance) (*permission
 	shortcodes := make(map[string]string, len(s.Members)-1)
 
 	for i, m := range s.Members {
-		if i == 0 {
+		// A recipient can host a file opened read-only by the owner.
+		if i == 0 && (s.Owner || s.Drive) {
 			continue
 		}
 		var err error
 		var previousCode, previousShort string
 		var okCode, okShort bool
-		key := m.Email
-		if key == "" {
-			key = m.Instance
-		}
-		if key == "" {
-			key = keyFromMemberIndex(i)
-		}
+		key := previewCodeKey(&m, i)
 
 		// Checks that we don't already have a sharing code
 		if doc != nil {
@@ -390,6 +386,10 @@ func (s *Sharing) CreatePreviewPermissions(inst *instance.Instance) (*permission
 		return nil, err
 	}
 	return doc, nil
+}
+
+func previewCodeKey(m *Member, index int) string {
+	return cmp.Or(m.Email, m.Instance, keyFromMemberIndex(index))
 }
 
 func keyFromMemberIndex(index int) string {

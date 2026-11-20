@@ -28,6 +28,7 @@ type FileOpener struct {
 	Code      string
 	ClientID  string
 	MemberKey string
+	readOnly  bool // restriction of the authenticated caller
 
 	// InteractToken marks a share-interact token on a drive: MemberKey
 	// identifies the member, but readOnly is decided by the caller
@@ -147,11 +148,24 @@ func (o *FileOpener) CheckPermission(pdoc *permission.Permission, sharingID stri
 	// through the VFS check: naming a sharing doesn't give access to its files.
 	if sharingID != "" && o.isClientOfSharing(pdoc, sharingID) {
 		o.ClientID = pdoc.SourceID
+		o.readOnly = !pdoc.Permissions.AllowID(permission.PUT, consts.Sharings, sharingID)
 		return nil
 	}
 
 	fs := o.Inst.VFS()
-	return vfs.Allows(fs, pdoc.Permissions, permission.GET, o.File)
+	if err := vfs.Allows(fs, pdoc.Permissions, permission.GET, o.File); err != nil {
+		return err
+	}
+	if o.Sharing != nil && !o.Sharing.Drive && !o.ShouldOpenLocally() {
+		// A peer can return a member's full interact code, including peers
+		// that do not honor ReadOnly. Check its entire scope before forwarding.
+		grant := o.Sharing.CreateInteractSet()
+		if !grant.IsSubSetOf(pdoc.Permissions) {
+			return permission.ErrNotSubset
+		}
+	}
+	o.readOnly = vfs.Allows(fs, pdoc.Permissions, permission.PUT, o.File) != nil
+	return nil
 }
 
 // isClientOfSharing returns true if the file is in the given sharing, and the
@@ -160,7 +174,8 @@ func (o *FileOpener) CheckPermission(pdoc *permission.Permission, sharingID stri
 // file, as CheckPermission fills it from the token only for a sharecode.
 func (o *FileOpener) isClientOfSharing(pdoc *permission.Permission, sharingID string) bool {
 	s := o.Sharing
-	if s == nil || s.ID() != sharingID || pdoc.Type != permission.TypeOauth {
+	if s == nil || s.ID() != sharingID || pdoc.Type != permission.TypeOauth ||
+		!pdoc.Permissions.AllowID(permission.GET, consts.Sharings, sharingID) {
 		return false
 	}
 	if !s.Owner && len(s.Credentials) == 0 {
@@ -216,22 +231,14 @@ func (o *FileOpener) GetSharecode(memberIndex int, readOnly bool) (string, error
 			return "", ErrMemberNotFound
 		}
 		if !o.InteractToken {
-			if member.ReadOnly {
-				readOnly = true
-			} else {
-				readOnly = s.ReadOnlyRules()
-			}
+			readOnly = readOnly || member.ReadOnly || s.ReadOnlyRules()
 		}
 	} else if s.Owner {
 		member, err = s.FindMemberByInboundClientID(o.ClientID)
 		if err != nil {
 			return "", err
 		}
-		if member.ReadOnly {
-			readOnly = true
-		} else {
-			readOnly = s.ReadOnlyRules()
-		}
+		readOnly = readOnly || member.ReadOnly || s.ReadOnlyRules()
 	} else {
 		// Trust the owner
 		if memberIndex < 0 || memberIndex >= len(s.Members) {
@@ -265,13 +272,14 @@ func (o *FileOpener) GetSharecode(memberIndex int, readOnly bool) (string, error
 // uses a share-preview token.
 func (o *FileOpener) getPreviewCode(member *Member, memberIndex int) (string, error) {
 	preview, err := permission.GetForSharePreview(o.Inst, o.Sharing.ID())
+	// Older recipient-side previews have no code for the owner.
+	missingOwner := err == nil && !o.Sharing.Drive && !o.Sharing.Owner && memberIndex == 0 &&
+		preview.Codes[previewCodeKey(member, 0)] == ""
+	if couchdb.IsNotFoundError(err) || missingOwner {
+		preview, err = o.Sharing.CreatePreviewPermissions(o.Inst)
+	}
 	if err != nil {
-		if couchdb.IsNotFoundError(err) {
-			preview, err = o.Sharing.CreatePreviewPermissions(o.Inst)
-		}
-		if err != nil {
-			return "", err
-		}
+		return "", err
 	}
 
 	indexKey := keyFromMemberIndex(memberIndex)
@@ -339,13 +347,28 @@ func (o *FileOpener) OpenLocalFileForMember(memberIndex int, readOnly bool) (Ope
 // instance where collaborative editing should happen. If Opts is nil, the file
 // should be opened locally with MemberIndex and ReadOnly.
 func (o *FileOpener) PrepareOpenFileRequest(memberIndex int, readOnly bool) (*PreparedRequest, error) {
+	readOnly = readOnly || o.readOnly
+	s := o.Sharing
+	if s != nil && s.Owner && o.ClientID != "" {
+		// On the owner, only the authenticated peer identifies the member.
+		for i, c := range s.Credentials {
+			if c.InboundClientID == o.ClientID {
+				memberIndex = i + 1
+				readOnly = readOnly || s.Members[memberIndex].ReadOnly || s.ReadOnlyRules()
+				break
+			}
+		}
+	}
 	if o.ShouldOpenLocally() {
 		return &PreparedRequest{
 			MemberIndex: memberIndex,
 			ReadOnly:    readOnly,
 		}, nil
 	}
-	return o.PrepareRequestForSharedFile()
+	if !s.Owner || o.ClientID == "" {
+		memberIndex = 0 // The owner identifies the sender from its credential.
+	}
+	return o.prepareRequestForSharedFile(memberIndex, readOnly)
 }
 
 // PreparedRequest contains the parameters to make a request to another
@@ -362,11 +385,11 @@ type PreparedRequest struct {
 	ReadOnly    bool
 }
 
-// PrepareRequestForSharedFile returns the parameters for making a request to
+// prepareRequestForSharedFile returns the parameters for making a request to
 // open the shared file on another instance.
-func (o *FileOpener) PrepareRequestForSharedFile() (*PreparedRequest, error) {
+func (o *FileOpener) prepareRequestForSharedFile(memberIndex int, readOnly bool) (*PreparedRequest, error) {
 	s := o.Sharing
-	prepared := PreparedRequest{}
+	prepared := PreparedRequest{MemberIndex: memberIndex, ReadOnly: readOnly}
 
 	if s.Owner {
 		domain := o.File.CozyMetadata.CreatedOn
@@ -383,14 +406,6 @@ func (o *FileOpener) PrepareRequestForSharedFile() (*PreparedRequest, error) {
 			if m.Instance == domain || m.Instance+"/" == domain {
 				prepared.Creds = &s.Credentials[i-1]
 				prepared.Creator = &s.Members[i]
-			}
-		}
-		if o.ClientID != "" && !prepared.ReadOnly {
-			for i, c := range s.Credentials {
-				if c.InboundClientID == o.ClientID {
-					prepared.MemberIndex = i + 1
-					prepared.ReadOnly = s.Members[i+1].ReadOnly
-				}
 			}
 		}
 	} else {

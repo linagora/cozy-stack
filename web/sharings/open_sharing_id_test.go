@@ -500,12 +500,92 @@ func TestOpenSharedFileWithSharingIDParamNeedsClientOfSharing(t *testing.T) {
 				})
 			}
 
+			for name, verbs := range map[string]permission.VerbSet{
+				"ReadOnlyFileLink": permission.Verbs(permission.GET),
+				"WritableFileLink": permission.ALL,
+			} {
+				t.Run(name, func(t *testing.T) {
+					code, err := tc.inst.CreateShareCode(name, "")
+					require.NoError(t, err)
+					rule := permission.Rule{Type: consts.Files, Verbs: verbs}
+					for _, f := range peerFiles {
+						rule.Values = append(rule.Values, f.id)
+					}
+					_, err = permission.CreateShareSet(tc.inst, nil, consts.Apps+"/drive", map[string]string{"link": code}, nil,
+						permission.Permission{Permissions: permission.Set{rule}}, nil, true)
+					require.NoError(t, err)
+					for _, f := range peerFiles {
+						open(f, code).Status(http.StatusForbidden)
+					}
+					assert.Empty(t, peer.takeCalls())
+				})
+			}
+
+			t.Run("ReadOnlyOAuth", func(t *testing.T) {
+				client := oauth.Client{
+					ClientName: "reader", SoftwareID: "github.com/cozy/cozy-stack/testing/reader",
+					RedirectURIs: []string{"http://localhost/oauth/callback"},
+				}
+				require.Nil(t, client.Create(tc.inst, oauth.NotPending))
+				token, err := tc.inst.MakeJWT(consts.AccessTokenAudience, client.ClientID, consts.Files+":GET", "", time.Now())
+				require.NoError(t, err)
+				for _, f := range peerFiles {
+					open(f, token).Status(http.StatusForbidden)
+				}
+				assert.Empty(t, peer.takeCalls())
+				for _, f := range localFiles {
+					obj := open(f, token).Status(http.StatusOK).
+						JSON(httpexpect.ContentOpts{MediaType: jsonAPIContentType}).Object()
+					if f.route == "office" {
+						obj.Path("$.data.attributes.onlyoffice.document.permissions.edit").Boolean().IsFalse()
+					}
+				}
+			})
+
+			t.Run("ReadOnlyMemberOpen", func(t *testing.T) {
+				if !tc.owner {
+					// Recipient preview documents previously omitted the owner.
+					preview, err := s.CreatePreviewPermissions(tc.inst)
+					require.NoError(t, err)
+					delete(preview.Codes, s.Members[0].Email)
+					delete(preview.ShortCodes, s.Members[0].Email)
+					require.NoError(t, couchdb.UpdateDoc(tc.inst, preview))
+				}
+				for _, f := range localFiles {
+					code := eOpen.GET(f.path()).WithQuery("SharingID", s.ID()).WithQuery("ReadOnly", "true").
+						WithHeader("Authorization", "Bearer "+clientToken).Expect().Status(http.StatusOK).
+						JSON(httpexpect.ContentOpts{MediaType: jsonAPIContentType}).
+						Object().Path("$.data.attributes.sharecode").String().NotEmpty().Raw()
+					_, perm, err := permission.GetTokenAndPermissionsFromShortcode(tc.inst, code)
+					require.NoError(t, err)
+					require.Equal(t, permission.TypeSharePreview, perm.Type)
+					require.NotEmpty(t, perm.Permissions)
+					for _, rule := range perm.Permissions {
+						assert.Equal(t, permission.Verbs(permission.GET), rule.Verbs)
+					}
+				}
+				for _, f := range peerFiles {
+					eOpen.GET(f.path()).WithQuery("SharingID", s.ID()).WithQuery("ReadOnly", "true").
+						WithHeader("Authorization", "Bearer "+clientToken).Expect().Status(http.StatusOK)
+					calls := peer.takeCalls()
+					require.Len(t, calls, 1)
+					assert.Equal(t, "true", calls[0].URL.Query().Get("ReadOnly"))
+					assert.Equal(t, tc.peerMemberIndex, calls[0].URL.Query().Get("MemberIndex"))
+				}
+			})
+
 			// A token with rights on the file opens it like without the parameter.
 			appToken := generateAppToken(tc.inst, "files-app", consts.Files)
 			for _, f := range localFiles {
 				t.Run("AppWithRights/Local/"+f.route, func(t *testing.T) {
 					open(f, appToken).Status(http.StatusOK)
 					assert.Empty(t, peer.takeCalls())
+				})
+			}
+			for _, f := range peerFiles {
+				t.Run("AppWithRights/Peer/"+f.route, func(t *testing.T) {
+					open(f, appToken).Status(http.StatusOK)
+					require.Len(t, peer.takeCalls(), 1)
 				})
 			}
 		})

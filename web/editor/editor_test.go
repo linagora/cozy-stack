@@ -18,37 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReadOnlyForSharedOpen(t *testing.T) {
-	filesReadOnly := &permission.Permission{
-		Permissions: permission.Set{
-			{
-				Type:  consts.Files,
-				Verbs: permission.VerbSet{permission.GET: struct{}{}},
-			},
-		},
-	}
-	filesWritable := &permission.Permission{
-		Permissions: permission.Set{
-			{
-				Type:  consts.Files,
-				Verbs: permission.VerbSet{permission.GET: struct{}{}, permission.PATCH: struct{}{}},
-			},
-		},
-	}
-	filesAllVerbs := &permission.Permission{
-		Permissions: permission.Set{
-			{
-				Type: consts.Files,
-			},
-		},
-	}
-
-	require.True(t, readOnlyForSharedOpen(filesReadOnly, false))
-	require.False(t, readOnlyForSharedOpen(filesWritable, false))
-	require.False(t, readOnlyForSharedOpen(filesAllVerbs, false))
-	require.True(t, readOnlyForSharedOpen(filesWritable, true))
-}
-
 func TestEditor(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
