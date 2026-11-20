@@ -3968,6 +3968,14 @@ func TestFiles(t *testing.T) {
 		_, err := testInstance.VFS().DirByPath("/Downloads")
 		require.ErrorIs(t, err, os.ErrNotExist)
 
+		// An upgraded instance can already have a referenced Mail folder at the root.
+		mailRef := couchdb.DocReference{Type: consts.Apps, ID: "io.cozy.apps/mail"}
+		otherRef := couchdb.DocReference{Type: consts.PhotosAlbums, ID: "album"}
+		legacy, err := vfs.NewDirDocWithPath("Mail", consts.RootDirID, "/", nil)
+		require.NoError(t, err)
+		legacy.AddReferencedBy(mailRef, otherRef)
+		require.NoError(t, testInstance.VFS().CreateDir(legacy))
+
 		upload := func(name string) *httpexpect.Object {
 			return e.POST("").WithURL(ts.URL+magicPath).
 				WithQuery("Type", "file").
@@ -3983,6 +3991,10 @@ func TestFiles(t *testing.T) {
 		// The first upload creates the folder and the Downloads folder it lives in
 		dirID := upload("first.txt").Path("$.data.attributes.dir_id").String().NotEmpty().Raw()
 		require.NotEqual(t, "io.cozy.apps/mail", dirID)
+		oldMail, err := testInstance.VFS().DirByPath("/Mail")
+		require.NoError(t, err)
+		assert.Equal(t, legacy.ID(), oldMail.ID())
+		assert.Equal(t, []couchdb.DocReference{otherRef}, oldMail.ReferencedBy)
 
 		obj := e.GET("").WithURL(ts.URL+magicPath).
 			WithHeader("Authorization", "Bearer "+token).
@@ -4073,13 +4085,6 @@ func TestFiles(t *testing.T) {
 		requireOrdinaryDir(dirID)
 		movedID := dirID
 		dirID = upload("moved.txt").Path("$.data.attributes.dir_id").String().NotEqual(movedID).Raw()
-
-		// A referenced folder out of Downloads is ignored
-		legacy, err := vfs.NewDirDocWithPath("Legacy Mail", consts.RootDirID, "/", nil)
-		require.NoError(t, err)
-		legacy.AddReferencedBy(couchdb.DocReference{Type: consts.Apps, ID: "io.cozy.apps/mail"})
-		require.NoError(t, testInstance.VFS().CreateDir(legacy))
-		upload("legacy.txt").Path("$.data.attributes.dir_id").String().Equal(dirID)
 
 		// The same goes for the Downloads folder itself
 		patch(downloads.ID(), `{"name":"Old downloads"}`)
