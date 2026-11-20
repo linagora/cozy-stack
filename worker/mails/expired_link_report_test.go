@@ -98,6 +98,8 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		j := job.NewJob(inst, &job.JobRequest{WorkerType: expiredReportWorker, Message: msg})
 		ctx, cancel := job.NewTaskContext("report-test", j, inst)
 		defer cancel()
+		ctx, cancelTimeout := ctx.WithTimeout(5 * time.Second)
+		defer cancelTimeout()
 		return expiredLinkReport(ctx)
 	}
 	setOwner := func(t *testing.T, email string) {
@@ -283,19 +285,22 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		greetings := make(chan int, 4)
 		mailCommands := make(chan int, 4)
 		revoked := make(chan error, 1)
-		options, messages := reportSMTPWithFaults(t, func(number int) {
-			greetings <- number
-			if number == 2 {
-				// Only the old sender reaches this second handshake. Revoke
-				// before sending its EHLO reply to expose the stale check.
-				changed := link.Clone().(*permission.Permission)
-				changed.ActivityReportEnabled = nil
-				revoked <- couchdb.UpdateDoc(inst, changed)
-			}
-		}, func(number int) bool {
-			mailCommands <- number
-			return number == 1
-		}, false)
+		options, messages := reportSMTPWithFaults(t, reportSMTPFaults{
+			onHello: func(number int) {
+				greetings <- number
+				if number == 2 {
+					// Only the old sender reaches this second handshake. Revoke
+					// before sending its EHLO reply to expose the stale check.
+					changed := link.Clone().(*permission.Permission)
+					changed.ActivityReportEnabled = nil
+					revoked <- couchdb.UpdateDoc(inst, changed)
+				}
+			},
+			dropMail: func(number int) bool {
+				mailCommands <- number
+				return number == 1
+			},
+		})
 		conf.Mail = options
 		err := run(t, link)
 		select {
@@ -310,6 +315,50 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		require.Len(t, greetings, 1)
 		require.Len(t, mailCommands, 1)
 		require.Equal(t, 1, <-mailCommands)
+	})
+
+	t.Run("closes the SMTP transport after DATA", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			rejected   bool
+			ignoreQuit bool
+		}{
+			{name: "accepted"},
+			{name: "accepted even if QUIT is ignored", ignoreQuit: true},
+			{name: "rejected", rejected: true, ignoreQuit: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				link := newLink(t)
+				eof := make(chan struct{}, 1)
+				quits := make(chan struct{}, 2)
+				faults := reportSMTPFaults{
+					onEOF:      func() { eof <- struct{}{} },
+					onQuit:     func() { quits <- struct{}{} },
+					ignoreQuit: tc.ignoreQuit,
+				}
+				if tc.rejected {
+					faults.dataReply = "451 temporary failure"
+				}
+				options, messages := reportSMTPWithFaults(t, faults)
+				conf.Mail = options
+				err := run(t, link)
+				require.Equal(t, "RCPT TO:<"+owner+">", receiveReportMail(t, messages).recipient)
+				select {
+				case <-eof:
+				case <-time.After(time.Second):
+					t.Fatal("relay did not observe client closing the SMTP connection")
+				}
+				if tc.rejected {
+					require.EqualError(t, err, "link report attempt failed")
+					require.Empty(t, quits, "do not wait for QUIT after a failed submission")
+				} else {
+					require.NoError(t, err)
+					require.Len(t, quits, 1)
+				}
+				require.NoError(t, run(t, link))
+				requireNoReportMail(t, messages)
+			})
+		}
 	})
 
 	t.Run("does not replay a submission with an unknown outcome", func(t *testing.T) {
