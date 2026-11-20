@@ -202,7 +202,7 @@ func readPump(ctx context.Context, c echo.Context, i *instance.Instance, ws *web
 			continue
 		}
 		// These doctypes contain private data, even for applications with maximal permissions.
-		if cmd.Payload.Type == consts.PublicLinkEvents {
+		if cmd.Payload.Type == consts.PublicLinkEvents || cmd.Payload.Type == consts.PublicLinkReports {
 			sendErr(ctx, errc, forbidden(cmd))
 			continue
 		}

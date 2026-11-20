@@ -170,6 +170,9 @@ func HandleCreateShareByLink(c echo.Context, inst *instance.Instance, opts Creat
 	if parent == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "no parent")
 	}
+	if parent.Type == permission.TypeShareByLink || parent.Type == permission.TypeSharePreview {
+		return permission.ErrNotParent
+	}
 
 	var creatorDomain string
 	if opts.CreatorDomain != nil {
@@ -470,7 +473,7 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 			toPatch.Type == permission.TypeSharePreview ||
 			toPatch.Type == permission.TypeShareInteract
 		changesAccess := patch.Password != nil || patch.ExpiresAt != nil
-		if (!patchSet || sharingCodes || changesAccess) && !current.CanUpdateShareByLink(toPatch) {
+		if (!patchSet || sharingCodes || changesAccess || patch.ActivityReportEnabled != nil) && !current.CanUpdateShareByLink(toPatch) {
 			return permission.ErrNotParent
 		}
 		// Only the owner can remove rules or change metadata.
@@ -480,13 +483,16 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 			if patchSet {
 				return ErrPatchCodeOrSet
 			}
-			if patch.Password == nil && patch.ExpiresAt == nil {
+			if patch.Password == nil && patch.ExpiresAt == nil && patch.ActivityReportEnabled == nil {
 				return ErrPatchCodeOrSet
 			}
 		}
 
 		if patch.Metadata != nil && !owner {
 			return permission.ErrNotParent
+		}
+		if patch.ActivityReportEnabled != nil {
+			toPatch.ActivityReportEnabled = patch.ActivityReportEnabled
 		}
 
 		if pass, ok := patch.Password.(string); ok {

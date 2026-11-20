@@ -456,6 +456,12 @@ This route also accepts a [document metadata](https://github.com/cozy/cozy-docty
 Giving an empty string for `password` or `expires_at` will remove it (while
 omitting the field will keep the old value).
 
+A share-by-link permission can also store `activity_report_enabled` as an
+explicit boolean on creation or update. Omitting it from a PATCH preserves the
+existing value; `null` and non-boolean values are rejected. This choice alone
+does not generate or send a report. Imported links do not retain the choice;
+existing event history and CSV files remain ordinary imported data.
+
 #### Request to add / remove codes with a document metadata
 
 ```http

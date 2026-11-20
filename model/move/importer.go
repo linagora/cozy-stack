@@ -88,6 +88,17 @@ func (im *importer) downloadFile(cursor string) error {
 	return err
 }
 
+func reportImportDoctype(doctype string) string {
+	switch couchdb.EscapeCouchdbName(doctype) {
+	case couchdb.EscapeCouchdbName(consts.PublicLinkReports):
+		return consts.PublicLinkReports
+	case couchdb.EscapeCouchdbName(consts.Permissions):
+		return consts.Permissions
+	default:
+		return doctype
+	}
+}
+
 func (im *importer) importZip(zr *zip.Reader) error {
 	var errm error
 
@@ -104,7 +115,10 @@ func (im *importer) importZip(zr *zip.Reader) error {
 		id := strings.TrimSuffix(parts[1], ".json")
 
 		// Special cases
-		switch doctype {
+		switch reportImportDoctype(doctype) {
+		case consts.PublicLinkReports:
+			// Checkpoints and bindings are local authority; CSVs remain ordinary files.
+			continue
 		case consts.Exports:
 			// Importing exports would just be a mess, so skip them
 			continue
@@ -527,6 +541,9 @@ func (im *importer) importPermission(zf *zip.File) error {
 	// We only import permission documents for sharings
 	if doc.Type != permission.TypeShareByLink && doc.Type != permission.TypeSharePreview {
 		return nil
+	}
+	if doc.Type == permission.TypeShareByLink {
+		doc.ActivityReportEnabled = nil
 	}
 	// We need to remake the long codes with the new instance domain
 	for name := range doc.Codes {
