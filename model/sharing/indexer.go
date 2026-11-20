@@ -11,7 +11,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb/revision"
 	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/logger"
-	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/realtime"
 )
 
@@ -21,7 +20,7 @@ type bulkRevs struct {
 }
 
 type sharingIndexer struct {
-	db       prefixer.Prefixer
+	db       vfs.Prefixer
 	indexer  vfs.Indexer
 	bulkRevs *bulkRevs
 	shared   *SharedRef
@@ -282,6 +281,17 @@ func (s *sharingIndexer) bulkForceUpdateDoc(olddoc, doc *vfs.FileDoc) error {
 	}
 	if doc.InternalID != "" {
 		docs[0]["internal_vfs_id"] = doc.InternalID
+	}
+	// The verdict of the origin instance does not apply here: the local
+	// antivirus scans what it receives, and keeps its verdict when only the
+	// metadata change, since it does not rescan an unchanged content.
+	if olddoc != nil && doc.SameContent(olddoc) {
+		doc.AntivirusScan = olddoc.AntivirusScan
+	} else {
+		doc.AntivirusScan = vfs.NewContentAntivirusScan(s.db.GetContextName(), doc.ByteSize)
+	}
+	if doc.AntivirusScan != nil {
+		docs[0]["antivirus_scan"] = doc.AntivirusScan
 	}
 	doc.SetRev(s.bulkRevs.Rev)
 	s.setDirOrFileRevisions(nil, olddoc, docs[0])

@@ -816,6 +816,71 @@ func TestVfs(t *testing.T) {
 			require.NoError(t, err)
 			assert.Nil(t, otherContent.AntivirusScan)
 		})
+
+		t.Run("NewContentIsWrittenWithItsAntivirusStatus", func(t *testing.T) {
+			conf := config.GetConfig()
+			previous, hadPrevious := conf.Contexts["cozy_beta"]
+			conf.Contexts["cozy_beta"] = map[string]interface{}{
+				"antivirus": map[string]interface{}{
+					"enabled":       true,
+					"max_file_size": int64(20),
+				},
+			}
+			t.Cleanup(func() {
+				if hadPrevious {
+					conf.Contexts["cozy_beta"] = previous
+				} else {
+					delete(conf.Contexts, "cozy_beta")
+				}
+			})
+
+			write := func(name string, olddoc *vfs.FileDoc, content string) *vfs.FileDoc {
+				newdoc, err := vfs.NewFileDoc(name, consts.RootDirID, -1, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+				require.NoError(t, err)
+				f, err := fs.CreateFile(newdoc, olddoc)
+				require.NoError(t, err)
+				_, err = io.Copy(f, strings.NewReader(content))
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				doc, err := fs.FileByID(newdoc.ID())
+				require.NoError(t, err)
+				return doc
+			}
+
+			created := write("av-status-file", nil, "small content")
+			require.NotNil(t, created.AntivirusScan)
+			assert.Equal(t, vfs.AVStatusPending, created.AntivirusScan.Status)
+
+			scanned := created.Clone().(*vfs.FileDoc)
+			scanned.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusClean}
+			require.NoError(t, couchdb.UpdateDoc(fs, scanned))
+
+			sameContent := write("av-status-file", scanned, "small content")
+			require.NotNil(t, sameContent.AntivirusScan)
+			assert.Equal(t, vfs.AVStatusClean, sameContent.AntivirusScan.Status)
+
+			otherContent := write("av-status-file", sameContent, "other content")
+			require.NotNil(t, otherContent.AntivirusScan)
+			assert.Equal(t, vfs.AVStatusPending, otherContent.AntivirusScan.Status)
+
+			tooBig := write("av-status-big-file", nil, "content above the max file size")
+			require.NotNil(t, tooBig.AntivirusScan)
+			assert.Equal(t, vfs.AVStatusSkipped, tooBig.AntivirusScan.Status)
+		})
+
+		t.Run("NewContentHasNoAntivirusStatusWhenAntivirusIsDisabled", func(t *testing.T) {
+			doc, err := vfs.NewFileDoc("av-disabled-file", consts.RootDirID, -1, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+			require.NoError(t, err)
+			f, err := fs.CreateFile(doc, nil)
+			require.NoError(t, err)
+			_, err = io.Copy(f, strings.NewReader("content"))
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+
+			created, err := fs.FileByID(doc.ID())
+			require.NoError(t, err)
+			assert.Nil(t, created.AntivirusScan)
+		})
 	}
 }
 

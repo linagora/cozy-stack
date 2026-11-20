@@ -5,7 +5,6 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
-	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/realtime"
 )
@@ -115,8 +114,6 @@ func (t *AntivirusTrigger) pushJob(e *realtime.Event) {
 
 	log := t.log.WithField("domain", e.Domain)
 
-	t.setPendingStatus(inst, doc, log)
-
 	// Push antivirus job
 	event, err := NewEvent(e)
 	if err != nil {
@@ -134,25 +131,6 @@ func (t *AntivirusTrigger) pushJob(e *realtime.Event) {
 	log.Infof("trigger antivirus: Pushing scan job for file %s", doc.DocID)
 	if _, err := t.broker.PushJob(inst, req); err != nil {
 		log.Errorf("trigger antivirus: Could not schedule job: %s", err.Error())
-	}
-}
-
-func (t *AntivirusTrigger) setPendingStatus(inst *instance.Instance, doc *vfs.FileDoc, log logger.Logger) {
-	fs := inst.VFS()
-	file, err := fs.FileByID(doc.DocID)
-	if err != nil {
-		// File may have been deleted between event and now - not an error
-		log.Warnf("trigger antivirus: Could not get file %s for pending status: %s", doc.DocID, err)
-		return
-	}
-
-	newdoc := file.Clone().(*vfs.FileDoc)
-	newdoc.AntivirusScan = &vfs.AntivirusScan{
-		Status: vfs.AVStatusPending,
-	}
-	if err := couchdb.UpdateDoc(fs, newdoc); err != nil {
-		// Conflict or other error - log and continue, job will still run
-		log.Warnf("trigger antivirus: Could not set pending status for file %s: %s", doc.DocID, err)
 	}
 }
 

@@ -197,6 +197,8 @@ func testWorkerSkipsLargeFiles(t *testing.T, inst *instance.Instance) {
 	largeContent := []byte("This is a file larger than 10 bytes")
 	doc := createTestFile(t, fs, "large-test.txt", largeContent)
 	defer deleteTestFile(t, fs, doc)
+	require.NotNil(t, doc.AntivirusScan)
+	require.Equal(t, vfs.AVStatusSkipped, doc.AntivirusScan.Status)
 
 	// Create and run the job
 	msg, err := job.NewMessage(&antivirus.Message{FileID: doc.DocID})
@@ -218,6 +220,7 @@ func testWorkerSkipsLargeFiles(t *testing.T, inst *instance.Instance) {
 	require.NoError(t, err)
 	require.NotNil(t, updatedDoc.AntivirusScan)
 	require.Equal(t, vfs.AVStatusSkipped, updatedDoc.AntivirusScan.Status)
+	require.Equal(t, doc.Rev(), updatedDoc.Rev())
 
 	// Verify notification was sent
 	verifyNotificationCreated(t, inst, "large-test.txt")
