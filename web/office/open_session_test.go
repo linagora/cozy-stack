@@ -1,7 +1,6 @@
 package office
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/base64"
@@ -37,7 +36,7 @@ const forceSavedContent = "saved by the forcesave"
 // command with the configured error code and, on success, calls the stack
 // back with the saved document after its answer, as OnlyOffice does.
 type fakeCommandServer struct {
-	callbackURL  string
+	forceSave    func(key, downloadURL string)
 	result       atomic.Int32
 	commands     atomic.Int32
 	noCallback   atomic.Bool
@@ -67,11 +66,7 @@ func (f *fakeCommandServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	savedURL := "http://" + r.Host + "/saved"
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		body := fmt.Sprintf(`{"key":%q,"status":6,"url":%q}`, cmd.Key, savedURL)
-		res, err := http.Post(f.callbackURL, "application/json", bytes.NewBufferString(body))
-		if err == nil {
-			res.Body.Close()
-		}
+		f.forceSave(cmd.Key, savedURL)
 	}()
 }
 
@@ -85,7 +80,7 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 	ooServer := httptest.NewServer(oo)
 	t.Cleanup(ooServer.Close)
 	config.GetConfig().Office = map[string]config.Office{
-		"default": {OnlyOfficeURL: ooServer.URL + "/"},
+		config.DefaultInstanceContext: {OnlyOfficeURL: ooServer.URL + "/", OutboxSecret: outboxSecret},
 	}
 	timeout := office.ForceSaveTimeout
 	office.ForceSaveTimeout = 2 * time.Second
@@ -105,9 +100,14 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 		"/files":  files.Routes,
 	})
 	ts.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
-	oo.callbackURL = ts.URL + "/office/callback"
-
 	e := testutils.CreateTestClient(t, ts.URL)
+	oo.forceSave = func(key, downloadURL string) {
+		const status = office.StatusForceSaveRequested
+		e.POST("/office/callback").
+			WithHeader("Authorization", "Bearer "+callbackToken(t, key, status, downloadURL)).
+			WithJSON(office.CallbackParameters{Key: key, Status: status, URL: downloadURL}).
+			Expect().Status(http.StatusOK).JSON().Object().ValueEqual("error", 0)
+	}
 	download := func() string {
 		return e.GET("/files/download/"+fileID).
 			WithHeader("Authorization", "Bearer "+token).
@@ -291,10 +291,7 @@ func TestDownloadDuringAnEditingSession(t *testing.T) {
 		}))
 		defer saves.Close()
 		for _, content := range []string{"first-save", "second-save"} {
-			e.POST("/office/callback").
-				WithHeader("Content-Type", "application/json").
-				WithBytes([]byte(fmt.Sprintf(`{"key":%q,"status":6,"url":%q}`, key, saves.URL+"/"+content))).
-				Expect().Status(200)
+			oo.forceSave(key, saves.URL+"/"+content)
 		}
 
 		copied, err := inst.VFS().FileByPath("/conflict (2).docx")

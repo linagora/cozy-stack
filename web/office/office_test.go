@@ -475,7 +475,7 @@ func callbackToken(t *testing.T, key string, status int, url string) string {
 	t.Helper()
 	claims := jwt.MapClaims{"payload": map[string]interface{}{"key": key, "status": status, "url": url}}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(outboxSecret))
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	return token
 }
 

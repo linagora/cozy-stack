@@ -32,7 +32,7 @@ import (
 func newOpenClient(t *testing.T, inst *instance.Instance) *httpexpect.Expect {
 	t.Helper()
 	config.GetConfig().Office = map[string]config.Office{
-		config.DefaultInstanceContext: {OnlyOfficeURL: "https://documentserver.example"},
+		config.DefaultInstanceContext: {OnlyOfficeURL: "https://documentserver.example", OutboxSecret: "outbox"},
 	}
 	handler := echo.New()
 	handler.HTTPErrorHandler = errors.ErrorHandler
