@@ -375,11 +375,13 @@ func (s *Sharing) CreatePreviewPermissions(inst *instance.Instance) (*permission
 	}
 
 	if doc.Metadata != nil {
-		err := doc.Metadata.UpdatedByApp(s.AppSlug, "")
-		if err != nil {
+		if s.AppSlug == "" {
+			doc.Metadata.ChangeUpdatedAt()
+		} else if err := doc.Metadata.UpdatedByApp(s.AppSlug, ""); err != nil {
 			return nil, err
 		}
 	}
+	doc.Permissions = set
 	doc.Codes = codes
 	doc.ShortCodes = shortcodes
 	if err := couchdb.UpdateDoc(inst, doc); err != nil {

@@ -549,6 +549,7 @@ func TestOpenSharedFileWithSharingIDParamNeedsClientOfSharing(t *testing.T) {
 					require.NoError(t, err)
 					delete(preview.Codes, s.Members[0].Email)
 					delete(preview.ShortCodes, s.Members[0].Email)
+					preview.Permissions[0].Values = []string{otherDirID}
 					require.NoError(t, couchdb.UpdateDoc(tc.inst, preview))
 				}
 				for _, f := range localFiles {
@@ -559,10 +560,9 @@ func TestOpenSharedFileWithSharingIDParamNeedsClientOfSharing(t *testing.T) {
 					_, perm, err := permission.GetTokenAndPermissionsFromShortcode(tc.inst, code)
 					require.NoError(t, err)
 					require.Equal(t, permission.TypeSharePreview, perm.Type)
-					require.NotEmpty(t, perm.Permissions)
-					for _, rule := range perm.Permissions {
-						assert.Equal(t, permission.Verbs(permission.GET), rule.Verbs)
-					}
+					require.Len(t, perm.Permissions, 1)
+					assert.Equal(t, permission.Verbs(permission.GET), perm.Permissions[0].Verbs)
+					assert.Equal(t, []string{dirID}, perm.Permissions[0].Values)
 				}
 				for _, f := range peerFiles {
 					eOpen.GET(f.path()).WithQuery("SharingID", s.ID()).WithQuery("ReadOnly", "true").
