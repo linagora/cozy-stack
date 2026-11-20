@@ -1,0 +1,79 @@
+package vfs
+
+import (
+	"errors"
+	"os"
+	"testing"
+
+	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestLinkPaths(t *testing.T) {
+	roots := []LinkRoot{{ID: "docs", Path: "/Private/Clients/Docs"}}
+
+	for p, expected := range map[string]string{
+		"/Private/Clients/Docs":      "/Docs",
+		"/Private/Clients/Docs/Sub":  "/Docs/Sub",
+		"/Private/Clients/DocsOther": "",
+		"/Private/Clients":           "",
+		"/Private":                   "",
+		"/.cozy_trash/Sub":           "/.cozy_trash/Sub",
+		"":                           "",
+	} {
+		assert.Equal(t, expected, RelativeToLink(roots, p), p)
+	}
+
+	for p, expected := range map[string]string{
+		"/Docs":                       "/Private/Clients/Docs",
+		"/Docs/Sub/":                  "/Private/Clients/Docs/Sub",
+		"/Docs/../Other":              "",
+		"/Docs/../../Docs":            "/Private/Clients/Docs",
+		"/Private/Clients/Docs":       "",
+		"/DocsOther":                  "",
+		"Docs":                        "",
+		"/":                           "",
+		"/Docs/Sub/../../../Clients/": "",
+	} {
+		assert.Equal(t, expected, AbsoluteFromLink(roots, p), p)
+	}
+
+	whole := []LinkRoot{{ID: "root", Path: "/"}}
+	assert.Equal(t, "/Private", RelativeToLink(whole, "/Private"))
+	assert.Equal(t, "/Private", AbsoluteFromLink(whole, "/Private"))
+
+	homonyms := []LinkRoot{{ID: "a", Path: "/A/Docs"}, {ID: "b", Path: "/B/Docs"}, {ID: "c", Path: "/C/Other"}}
+	assert.Empty(t, AbsoluteFromLink(homonyms, "/Docs"))
+	assert.Empty(t, AbsoluteFromLink(homonyms, "/Docs/Sub"))
+	assert.Equal(t, "/C/Other/Sub", AbsoluteFromLink(homonyms, "/Other/Sub"))
+}
+
+type lookupVFS struct {
+	VFS
+	err error
+}
+
+func (fs lookupVFS) DirOrFileByID(string) (*DirDoc, *FileDoc, error) {
+	return nil, nil, fs.err
+}
+
+func TestLinkRoots(t *testing.T) {
+	byID := permission.Set{permission.Rule{Type: consts.Files, Values: []string{"gone"}}}
+
+	_, err := LinkRoots(lookupVFS{err: errors.New("couchdb is down")}, byID)
+	assert.Error(t, err)
+
+	roots, err := LinkRoots(lookupVFS{err: os.ErrNotExist}, byID)
+	require.NoError(t, err)
+	assert.NotNil(t, roots, "a link whose targets are gone is still restricted")
+	assert.Empty(t, roots)
+	assert.Empty(t, RelativeToLink(roots, "/Private"))
+	assert.Empty(t, AbsoluteFromLink(roots, "/Private"))
+
+	whole := permission.Set{permission.Rule{Type: consts.Files}}
+	roots, err = LinkRoots(lookupVFS{}, whole)
+	require.NoError(t, err)
+	assert.Nil(t, roots)
+}

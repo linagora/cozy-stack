@@ -44,7 +44,11 @@ func (r Rule) FilesByID() bool {
 	if r.DocType != consts.Files {
 		return false
 	}
-	return r.Selector == "" || r.Selector == "id" || r.Selector == "_id"
+	return isIDSelector(r.Selector)
+}
+
+func isIDSelector(selector string) bool {
+	return selector == "" || selector == "id" || selector == "_id"
 }
 
 // ValidateRules returns an error if the rules are invalid (the doctype is
@@ -78,7 +82,7 @@ func (s *Sharing) ValidateRules() error {
 				}
 			}
 			// XXX Currently, we only support one file/folder per rule for the id selector
-			if rule.Selector == "" || rule.Selector == "id" || rule.Selector == "_id" {
+			if isIDSelector(rule.Selector) {
 				if len(rule.Values) > 1 {
 					return ErrInvalidRule
 				}
