@@ -1,10 +1,13 @@
 package sharings_test
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/assets/dynamic"
 	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -15,12 +18,23 @@ import (
 	"github.com/cozy/cozy-stack/web"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/cozy/cozy-stack/web/permissions"
+	"github.com/cozy/cozy-stack/web/realtime"
 	"github.com/cozy/cozy-stack/web/statik"
 	"github.com/gavv/httpexpect/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func watchFilePaths(t *testing.T, e *httpexpect.Expect, token, id string) *httpexpect.Websocket {
+	t.Helper()
+	ws := e.GET("/realtime/").WithWebsocketUpgrade().Expect().Status(http.StatusSwitchingProtocols).Websocket()
+	t.Cleanup(func() { ws.Disconnect() })
+	ws.WriteText(fmt.Sprintf(`{"method":"AUTH","payload":%q}`, token))
+	ws.WriteText(fmt.Sprintf(`{"method":"SUBSCRIBE","payload":{"type":"io.cozy.files","id":%q}}`, id))
+	time.Sleep(100 * time.Millisecond)
+	return ws
+}
 
 func TestPublicLinkOnASharedDriveFolder(t *testing.T) {
 	if testing.Short() {
@@ -39,6 +53,7 @@ func TestPublicLinkOnASharedDriveFolder(t *testing.T) {
 	acme, acmeToken, tsA := newDriveOwnerTestServerWithOptions(t, strings.ReplaceAll(t.Name(), "/", "_")+"_acme", nil, render,
 		map[string]func(*echo.Group){
 			"/permissions": permissions.Routes,
+			"/realtime":    realtime.Routes,
 		})
 	eA := newSharingExpect(t, tsA.URL)
 
@@ -124,6 +139,31 @@ func TestPublicLinkOnASharedDriveFolder(t *testing.T) {
 		e.GET("/files/download/"+fileID).WithHeader("Authorization", "Bearer "+member).
 			Expect().Status(http.StatusOK).Body().IsEqual("new agenda")
 	})
+
+	t.Run("Realtime", func(t *testing.T) {
+		e := newSharingExpect(t, tsA.URL)
+		visitorWS := watchFilePaths(t, e, link, meetingsID)
+		memberWS := watchFilePaths(t, e, member, meetingsID)
+		patchDirName(t, e, acmeToken, clientsID, "Renamed")
+
+		msg := visitorWS.Expect().TextMessage()
+		assert.NotContains(t, msg.Body().Raw(), "Private")
+		assert.NotContains(t, msg.Body().Raw(), "Renamed")
+		assert.NotContains(t, msg.Body().Raw(), driveName)
+		msg.JSON().Object().Path("$.payload.doc.path").String().IsEqual("/Meetings")
+		msg = memberWS.Expect().TextMessage()
+		assert.NotContains(t, msg.Body().Raw(), "Private")
+		assert.NotContains(t, msg.Body().Raw(), "Renamed")
+		msg.JSON().Object().Path("$.payload.doc.path").String().IsEqual("/" + driveName + "/Meetings")
+
+		meetings, err := acme.VFS().DirByID(meetingsID)
+		require.NoError(t, err)
+		_, err = vfs.ModifyDirMetadata(acme.VFS(), meetings, &vfs.DocPatch{DirID: &privateID})
+		require.NoError(t, err)
+		msg = memberWS.Expect().TextMessage()
+		assert.NotContains(t, msg.Body().Raw(), "Private")
+		msg.JSON().Object().Path("$.payload.doc").Object().NotContainsKey("path")
+	})
 }
 
 func TestSharingCodesPaths(t *testing.T) {
@@ -141,7 +181,7 @@ func TestSharingCodesPaths(t *testing.T) {
 	require.NoError(t, dynamic.InitDynamicAssetFS(config.FsURL().String()))
 
 	acme, acmeToken, tsA := newDriveOwnerTestServerWithOptions(t, strings.ReplaceAll(t.Name(), "/", "_")+"_acme", nil, render,
-		nil)
+		map[string]func(*echo.Group){"/realtime": realtime.Routes})
 	eA := newSharingExpect(t, tsA.URL)
 
 	privateID := createRootDirectory(t, eA, "Private", acmeToken)
@@ -181,6 +221,23 @@ func TestSharingCodesPaths(t *testing.T) {
 					WithHeader("Authorization", "Bearer "+code).
 					Expect().Status(http.StatusNotFound)
 			})
+
+			t.Run("Realtime", func(t *testing.T) {
+				e := newSharingExpect(t, tsA.URL)
+				ws := watchFilePaths(t, e, code, docsID)
+
+				newName := "Renamed" + name
+				e.PATCH("/files/"+clientsID).
+					WithHeader("Authorization", "Bearer "+acmeToken).
+					WithHeader("Content-Type", "application/vnd.api+json").
+					WithBytes([]byte(`{"data": {"type": "io.cozy.files", "id": "` + clientsID + `", "attributes": {"name": "` + newName + `"}}}`)).
+					Expect().Status(http.StatusOK)
+
+				msg := ws.Expect().TextMessage()
+				assert.NotContains(t, msg.Body().Raw(), "Private")
+				assert.NotContains(t, msg.Body().Raw(), newName)
+				msg.JSON().Object().Path("$.payload.doc.path").String().IsEqual("/Docs")
+			})
 		})
 	}
 	t.Run("MultipleInteractRoots", func(t *testing.T) {
@@ -199,5 +256,10 @@ func TestSharingCodesPaths(t *testing.T) {
 		}
 		e.GET("/files/metadata").WithQuery("Path", "/Docs/Sub").WithHeader("Authorization", "Bearer "+code).
 			Expect().Status(http.StatusNotFound)
+		ws := watchFilePaths(t, e, code, docsID)
+		patchDirName(t, e, acmeToken, docsID, "Documents")
+		msg := ws.Expect().TextMessage().JSON().Object()
+		msg.Path("$.payload.id").String().IsEqual(docsID)
+		msg.Path("$.payload.doc").Object().NotContainsKey("path")
 	})
 }
