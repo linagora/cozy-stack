@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"strings"
 
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -46,10 +45,6 @@ func withoutPlacedMagicRefs(refs []couchdb.DocReference) []couchdb.DocReference 
 	return kept
 }
 
-func isInTrash(dir *DirDoc) bool {
-	return dir.Fullpath == TrashDirName || strings.HasPrefix(dir.Fullpath, TrashDirName+"/")
-}
-
 // EnsureReferencedDir returns the active directory with the reference, or
 // creates it, reusing an existing directory with the given name. With a
 // parent, only a directory directly inside it counts and a missing one is
@@ -74,7 +69,7 @@ func EnsureReferencedDir(db prefixer.Prefixer, fs VFS, ref couchdb.DocReference,
 		if err := json.Unmarshal(row.Doc, &dir); err != nil {
 			return nil, err
 		}
-		if dir.Type != consts.DirType || isInTrash(&dir) {
+		if dir.Type != consts.DirType || IsInTrash(dir.Fullpath) {
 			continue
 		}
 		if parent == nil || dir.DirID == parent.ID() {

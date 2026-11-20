@@ -126,11 +126,7 @@ func alive(inst *instance.Instance, s *sharing.Sharing) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return !inTrash(dir), nil
-}
-
-func inTrash(dir *vfs.DirDoc) bool {
-	return dir.Fullpath == vfs.TrashDirName || strings.HasPrefix(dir.Fullpath, vfs.TrashDirName+"/")
+	return !vfs.IsInTrash(dir.Fullpath), nil
 }
 
 func create(inst *instance.Instance, cmd *Command) (*sharing.Sharing, error) {

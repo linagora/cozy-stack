@@ -9,6 +9,7 @@ import (
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
+	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 	"github.com/cozy/cozy-stack/tests/testutils"
@@ -38,7 +39,7 @@ func TestRemoval(t *testing.T) {
 		assert.False(t, s.Active)
 		assert.Equal(t, int64(2), s.Reference.Revision)
 		require.Eventually(t, func() bool {
-			return inTrash(rootDir(t, org, s))
+			return vfs.IsInTrash(rootDir(t, org, s).Fullpath)
 		}, 10*time.Second, 100*time.Millisecond)
 	})
 
@@ -56,7 +57,7 @@ func TestRemoval(t *testing.T) {
 		pending := driveOf(t, org, "sp")
 		assert.False(t, pending.Active)
 		assert.NotEqual(t, sharing.MemberStatusRevoked, pending.Members[1].Status)
-		assert.False(t, inTrash(rootDir(t, org, pending)))
+		assert.False(t, vfs.IsInTrash(rootDir(t, org, pending).Fullpath))
 		_, err := permission.CreateShareInteractSet(org, pending.ID(), nil, permission.Permission{Permissions: pending.CreateInteractSet()})
 		require.NoError(t, err)
 		require.NoError(t, remove(ctx, pub, org, msg))
@@ -70,7 +71,7 @@ func TestRemoval(t *testing.T) {
 		}
 		assert.Empty(t, s.Triggers.TrackIDs)
 		dir := rootDir(t, org, s)
-		assert.True(t, inTrash(dir))
+		assert.True(t, vfs.IsInTrash(dir.Fullpath))
 		assertNoRemovalTriggers(t, org)
 
 		require.Len(t, pub.requests, 1)
@@ -103,7 +104,7 @@ func TestRemoval(t *testing.T) {
 
 		require.ErrorIs(t, remove(ctx, pub, org, msg), permission.ErrExpiredToken)
 		assert.Empty(t, pub.requests)
-		assert.False(t, inTrash(rootDir(t, org, s)))
+		assert.False(t, vfs.IsInTrash(rootDir(t, org, s).Fullpath))
 	})
 
 	t.Run("OlderRevisionIsIgnored", func(t *testing.T) {
@@ -140,7 +141,7 @@ func TestRemoval(t *testing.T) {
 				for _, id := range []string{"first", "second"} {
 					require.NoError(t, NewHandler(&fakePublisher{}).Handle(ctx, ensure(t, org, id, 1, id)))
 					require.NoError(t, remove(ctx, &fakePublisher{}, org, markRemoved(t, org, id, 2)))
-					assert.True(t, inTrash(rootDir(t, org, driveOf(t, org, id))))
+					assert.True(t, vfs.IsInTrash(rootDir(t, org, driveOf(t, org, id)).Fullpath))
 				}
 				triggers, err := job.System().GetAllTriggers(org)
 				require.NoError(t, err)

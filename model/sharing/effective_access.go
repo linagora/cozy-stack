@@ -595,7 +595,7 @@ func (r *AccessResolver) DrivesForMember(targets []AccessTarget, member *Member)
 	}
 	drives := make([]*SharingScope, len(docs))
 	for i, doc := range docs {
-		if doc.err != nil || isInTrash(doc.path) {
+		if doc.err != nil || vfs.IsInTrash(doc.path) {
 			continue
 		}
 		drives[i] = preferredDrive(doc.scopes)
@@ -622,11 +622,6 @@ func preferredDrive(scopes []SharingScope) *SharingScope {
 	}
 	drive := slices.MinFunc(scopes, compareDriveScopes)
 	return &drive
-}
-
-// isInTrash reports whether a full path is the trash or under it.
-func isInTrash(fullpath string) bool {
-	return fullpath == vfs.TrashDirName || strings.HasPrefix(fullpath, vfs.TrashDirName+"/")
 }
 
 // compareDriveScopes orders the scopes applying to a same target by preference
