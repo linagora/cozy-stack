@@ -22,6 +22,9 @@ func makeSearch(v *viper.Viper) (*opensearch.Client, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("invalid search.opensearch.url config: %q", raw)
 	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return nil, fmt.Errorf("invalid search.opensearch.url config: query strings are unsupported")
+	}
 	prefix := v.GetString("search.opensearch.index_prefix")
 	if prefix != "" && !indexPrefixPattern.MatchString(prefix) {
 		return nil, fmt.Errorf("invalid search.opensearch.index_prefix config: %q", prefix)
