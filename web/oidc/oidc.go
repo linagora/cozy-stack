@@ -1379,7 +1379,7 @@ func getUserInfo(conf *Config, token string) (map[string]interface{}, error) {
 }
 
 func checkIDToken(conf *Config, inst *instance.Instance, idToken string) error {
-	claims, err := oidcprovider.VerifyIDToken(idToken, conf)
+	claims, err := oidcprovider.VerifyIDTokenForClient(idToken, inst.ContextName, conf)
 	if err != nil {
 		logger.WithNamespace("oidc").Errorf("Error on VerifyIDToken: %s", err)
 		return ErrInvalidToken
