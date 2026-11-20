@@ -196,6 +196,13 @@ func (b *redisBroker) pollLoop(key string, ch chan<- *Job) {
 // PushJob will produce a new Job with the given options and enqueue the job in
 // the proper queue.
 func (b *redisBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, error) {
+	return b.pushJob(b.ctx, db, req)
+}
+
+func (b *redisBroker) pushJob(ctx context.Context, db prefixer.Prefixer, req *JobRequest) (*Job, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if atomic.LoadUint32(&b.running) == 0 {
 		return nil, ErrClosed
 	}
@@ -238,7 +245,7 @@ func (b *redisBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, erro
 		}
 	}
 
-	if err := job.Create(); err != nil {
+	if err := job.create(ctx); err != nil {
 		return nil, err
 	}
 
@@ -260,7 +267,10 @@ func (b *redisBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, erro
 		key += redisHighPrioritySuffix
 	}
 
-	if err := b.client.LPush(b.ctx, key, val).Err(); err != nil {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := b.client.LPush(ctx, key, val).Err(); err != nil {
 		return nil, err
 	}
 

@@ -5,6 +5,7 @@ package job
 
 import (
 	"context"
+	"errors"
 
 	"github.com/cozy/cozy-stack/pkg/utils"
 )
@@ -19,15 +20,18 @@ type JobSystem interface {
 type jobSystem struct {
 	Broker
 	Scheduler
+	reports *expiredLinkScheduler
 }
 
 // Shutdown shuts down the job system. Implement the utils.Shutdowner
 // interface.
-func (j jobSystem) Shutdown(ctx context.Context) error {
+func (j *jobSystem) Shutdown(ctx context.Context) error {
+	// Don't admit new report jobs while the consumers are shutting down.
+	reportErr := j.reports.stop(ctx)
 	if err := j.Broker.ShutdownWorkers(ctx); err != nil {
-		return err
+		return errors.Join(reportErr, err)
 	}
-	return j.Scheduler.ShutdownScheduler(ctx)
+	return errors.Join(reportErr, j.Scheduler.ShutdownScheduler(ctx))
 }
 
 var globalJobSystem JobSystem
@@ -38,11 +42,16 @@ func SystemStart(b Broker, s Scheduler, workersList WorkersList) error {
 	if globalJobSystem != nil {
 		panic("Job system already started")
 	}
-	globalJobSystem = jobSystem{b, s}
+	system := &jobSystem{Broker: b, Scheduler: s}
+	globalJobSystem = system
 	if err := b.StartWorkers(workersList); err != nil {
 		return err
 	}
-	return s.StartScheduler(b)
+	if err := s.StartScheduler(b); err != nil {
+		return err
+	}
+	system.reports = startExpiredLinkScheduler(b)
+	return nil
 }
 
 // System returns the global job system.
