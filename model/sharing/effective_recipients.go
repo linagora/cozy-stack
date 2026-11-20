@@ -3,6 +3,8 @@ package sharing
 import (
 	"fmt"
 	"strings"
+
+	"github.com/cozy/cozy-stack/pkg/utils"
 )
 
 // RecipientSource describes one sharing scope through which a recipient has
@@ -39,7 +41,10 @@ type EffectiveRecipient struct {
 // shares). Revoked members are excluded. Recipients are deduplicated by
 // instance, with an email fallback. It is a read-only view: no sharing
 // document is mutated and no inherited member is copied anywhere.
-func (r *AccessResolver) EffectiveRecipients(targetID string) ([]EffectiveRecipient, error) {
+//
+// When member is not nil, the scopes whose root the member cannot read are
+// left out: a member of a nested drive learns nothing about the drive above.
+func (r *AccessResolver) EffectiveRecipients(targetID string, member *Member) ([]EffectiveRecipient, error) {
 	sharings, rootBySharing, err := r.applicableSharings(targetID)
 	if err != nil {
 		return nil, err
@@ -51,6 +56,9 @@ func (r *AccessResolver) EffectiveRecipients(targetID string) ([]EffectiveRecipi
 	for _, s := range sharings {
 		info, ok := rootBySharing[s.SID]
 		if !ok {
+			continue
+		}
+		if member != nil && !memberReadsRoot(sharings, rootBySharing, info.RootPath, member) {
 			continue
 		}
 		kind := "ancestor"
@@ -181,4 +189,21 @@ func recipientKeys(sharingID string, memberIndex int, m *Member) (string, []stri
 		return fmt.Sprintf("member:%s:%d", sharingID, memberIndex), nil
 	}
 	return keys[0], keys[1:]
+}
+
+// memberReadsRoot tells if the member belongs to one of the sharings whose
+// root is rootPath or above it. The sharings all apply to the same target, so
+// their roots are on its path and no other lookup is needed.
+func memberReadsRoot(sharings []*Sharing, rootBySharing map[string]rootInfo, rootPath string, member *Member) bool {
+	for _, s := range sharings {
+		info, ok := rootBySharing[s.SID]
+		if !ok {
+			continue
+		}
+		above := info.RootPath == rootPath || strings.HasPrefix(rootPath, utils.EnsureHasSuffix(info.RootPath, "/"))
+		if above && s.MemberMatching(member) != nil {
+			return true
+		}
+	}
+	return false
 }
