@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
+    name: test (${{ matrix.versions.go-version }}, ${{ matrix.versions.couchdb-version }}, shard ${{ matrix.shard }})
     runs-on: ubuntu-22.04
     services:
       redis:
@@ -22,13 +23,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
+        versions:
           # Maximum supported version
           - go-version: '1.27.x'
             couchdb-version: '3.3.3'
           # Minimum supported version
           - go-version: '1.26.x'
             couchdb-version: '3.2.3'
+        shard: [1, 2, 3, 4]
     steps:
       - name: Install CouchDB
         run: |
@@ -48,7 +50,7 @@ jobs:
                 couchdb couchdb/cookie string elmo
                 couchdb couchdb/cookie seen true
           EOF
-          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --force-yes couchdb=${{ matrix.couchdb-version }}*
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --force-yes couchdb=${{ matrix.versions.couchdb-version }}*
           echo "COZY_COUCHDB_URL=http://admin:password@localhost:5984/" >> $GITHUB_ENV
 
       - name: Install ghostscript
@@ -60,11 +62,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check shard selection
+        run: scripts/go-test-shard-test.sh
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: ${{ matrix.versions.go-version }}
           cache: true
 
       - name: Run tests
-        run: go test -p 1 -timeout 10m ./...
+        shell: bash
+        run: |
+          set -o pipefail
+          scripts/go-test-shard.sh ${{ matrix.shard }} -json -count=1 | tee go-tests-${{ matrix.shard }}.json
+
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-tests-${{ matrix.versions.go-version }}-shard-${{ matrix.shard }}
+          path: go-tests-${{ matrix.shard }}.json
