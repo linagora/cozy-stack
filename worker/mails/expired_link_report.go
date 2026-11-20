@@ -130,13 +130,8 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 		To:   []*mail.Address{{Name: owner.Name, Email: owner.Address}},
 	}
 	opts.From, opts.ReplyTo = configureInstanceMail(inst, opts)
-	smtpOptions := *mailDialerOptions(opts)
-	if smtpOptions.LocalName == "" {
-		// Otherwise plaintext SMTP without auth defers EHLO until MAIL FROM.
-		smtpOptions.LocalName = "localhost"
-	}
-	dialer := makeMailDialer(ctx, &smtpOptions)
-	if dialer == nil {
+	smtpOptions := mailDialerOptions(opts)
+	if smtpOptions.Host == "-" {
 		return errors.New("mail transport disabled")
 	}
 	opts.Subject, opts.Parts, err = expiredReportTemplater.execute(ctx, expiredReportTemplate, "layout-expired-link-report", inst.Locale, map[string]interface{}{
@@ -155,16 +150,11 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 	}
 	// Connect/authenticate without disclosing the envelope or body. Rendering,
 	// SMTP setup and the claim all precede the last authorization checks.
-	smtp, err := dialer.Dial()
+	client, transport, err := dialReportSMTP(ctx, smtpOptions)
 	if err != nil {
 		return err
 	}
-	client, ok := smtp.(reportSMTPClient)
-	if !ok {
-		_ = smtp.Close()
-		return errors.New("mail transport does not support single-session submission")
-	}
-	defer client.Close()
+	defer transport.Close()
 	if err := setReportStatus(inst, state, reportSubmitting); err != nil {
 		return err
 	}
@@ -193,38 +183,8 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 	}), email); err != nil {
 		return err
 	}
-	defer smtp.Close() // QUIT only after DATA completed successfully.
+	defer quitReportSMTP(ctx, client, transport)
 	return setReportStatus(inst, state, reportSent)
-}
-
-// The pinned gomail sender exposes the underlying SMTP commands. Use them on
-// the already checked session: gomail's Send can reconnect after MAIL FROM EOF.
-type reportSMTPClient interface {
-	Mail(string) error
-	Rcpt(string) error
-	Data() (io.WriteCloser, error)
-	Close() error
-}
-
-func submitReportMail(client reportSMTPClient, from string, to []string, message io.WriterTo) error {
-	if err := client.Mail(from); err != nil {
-		return err
-	}
-	for _, addr := range to {
-		if err := client.Rcpt(addr); err != nil {
-			return err
-		}
-	}
-	data, err := client.Data()
-	if err != nil {
-		return err
-	}
-	if _, err := message.WriteTo(data); err != nil {
-		// Closing data would send the terminator for a partial message.
-		// The caller closes the transport instead.
-		return err
-	}
-	return data.Close()
 }
 
 func setReportStatus(inst *instance.Instance, state *couchdb.JSONDoc, status string) error {
