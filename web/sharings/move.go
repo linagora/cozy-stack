@@ -407,6 +407,9 @@ func moveDirSameStack(c echo.Context, srcInst *instance.Instance, destInst *inst
 		if err != nil {
 			return files.WrapVfsError(err)
 		}
+		if destSharing != nil {
+			_ = destSharing.LoadDriveRootPath(destInst)
+		}
 		obj := files.NewDir(newDir, destSharing)
 		return jsonapi.Data(c, http.StatusCreated, obj, nil)
 	}
@@ -479,6 +482,9 @@ func moveDirSameStack(c echo.Context, srcInst *instance.Instance, destInst *inst
 		pushRecentsMove(srcInst, destInst, sourceSharing, moved)
 	}
 
+	if destSharing != nil {
+		_ = destSharing.LoadDriveRootPath(destInst)
+	}
 	obj := files.NewDir(newRoot, destSharing)
 	return jsonapi.Data(c, http.StatusCreated, obj, nil)
 }
@@ -530,6 +536,9 @@ func moveFileSameStack(c echo.Context, srcInst *instance.Instance, destInst *ins
 		if err != nil {
 			return files.WrapVfsError(err)
 		}
+		if destSharing != nil {
+			_ = destSharing.LoadDriveRootPath(destInst)
+		}
 		obj := files.NewFile(newFile, destInst, destSharing)
 		return jsonapi.Data(c, http.StatusCreated, obj, nil)
 	}
@@ -540,6 +549,9 @@ func moveFileSameStack(c echo.Context, srcInst *instance.Instance, destInst *ins
 	}
 	if deleteSource {
 		pushRecentsMove(srcInst, destInst, sourceSharing, []job.RecentsMovePair{{OldID: fileID, NewID: newFileDoc.DocID}})
+	}
+	if destSharing != nil {
+		_ = destSharing.LoadDriveRootPath(destInst)
 	}
 	obj := files.NewFile(newFileDoc, destInst, destSharing)
 	return jsonapi.Data(c, http.StatusCreated, obj, nil)

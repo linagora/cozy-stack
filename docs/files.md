@@ -1430,7 +1430,9 @@ Put a file in the trash.
 
 ### GET /files/metadata
 
-Same as `/files/:file-id` but to retrieve informations from a path.
+Retrieve file or directory metadata by path. With a folder link, the path
+starts with the shared folder's name. Use that same path for metadata updates,
+direct downloads, download links, and the `files` list when creating an archive.
 
 #### Request
 
