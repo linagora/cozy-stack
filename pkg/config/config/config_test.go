@@ -1,6 +1,9 @@
 package config
 
 import (
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -698,4 +701,72 @@ func TestOfficeCheck(t *testing.T) {
 	assert.NoError(t, Office{}.Check())
 	assert.NoError(t, Office{OnlyOfficeURL: "https://onlyoffice-url", InboxSecret: "inbox", OutboxSecret: "outbox"}.Check())
 	assert.Error(t, Office{OnlyOfficeURL: "https://onlyoffice-url", InboxSecret: "inbox"}.Check())
+}
+
+func TestSearchConfig(t *testing.T) {
+	t.Run("search is off without url", func(t *testing.T) {
+		require.NoError(t, UseViper(viper.New()))
+		assert.Nil(t, GetConfig().Search)
+	})
+
+	t.Run("client uses configured credentials, prefix and root CA", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, password, ok := r.BasicAuth()
+			assert.True(t, ok)
+			assert.Equal(t, "admin", user)
+			assert.Equal(t, "secret", password)
+			assert.Equal(t, "/os%2Fcluster/prod-eu_1-files%2520old", r.URL.EscapedPath())
+			w.WriteHeader(http.StatusOK)
+		}))
+		t.Cleanup(srv.Close)
+		cfg := viper.New()
+		cfg.Set("search.opensearch.url", srv.URL+"/os%2Fcluster/")
+		cfg.Set("search.opensearch.username", "admin")
+		cfg.Set("search.opensearch.password", "secret")
+		cfg.Set("search.opensearch.index_prefix", "prod-eu_1")
+		require.NoError(t, UseViper(cfg))
+		require.NotNil(t, GetConfig().Search)
+		require.ErrorContains(t, GetConfig().Search.Ping(t.Context()), "certificate")
+
+		caFile := filepath.Join(t.TempDir(), "ca.pem")
+		pemCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+		require.NoError(t, os.WriteFile(caFile, pemCert, 0o600))
+		cfg.Set("search.opensearch.root_ca", caFile)
+		require.NoError(t, UseViper(cfg))
+		search := GetConfig().Search
+		require.NotNil(t, search)
+		require.NoError(t, search.CreateIndex(t.Context(), "files%20old", nil))
+	})
+
+	t.Run("invalid url makes UseViper fail", func(t *testing.T) {
+		cfg := viper.New()
+		cfg.Set("search.opensearch.url", "opensearch:9200")
+		err := UseViper(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid search.opensearch.url config")
+	})
+
+	for _, query := range []string{"?route=search", "?"} {
+		t.Run("reject URL with query "+query, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.Set("search.opensearch.url", "https://gateway.example.net/os/"+query)
+			require.ErrorContains(t, UseViper(cfg), "search.opensearch.url")
+		})
+	}
+
+	for _, prefix := range []string{"Cozy", "my stack", "_prod", "-prod", "+prod", "prod*"} {
+		t.Run("invalid prefix "+prefix, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.Set("search.opensearch.url", "https://opensearch.example.net:9200")
+			cfg.Set("search.opensearch.index_prefix", prefix)
+			require.ErrorContains(t, UseViper(cfg), "search.opensearch.index_prefix")
+		})
+	}
+
+	t.Run("missing root_ca file makes UseViper fail", func(t *testing.T) {
+		cfg := viper.New()
+		cfg.Set("search.opensearch.url", "https://opensearch.example.net:9200")
+		cfg.Set("search.opensearch.root_ca", "/does/not/exist.pem")
+		require.Error(t, UseViper(cfg))
+	})
 }

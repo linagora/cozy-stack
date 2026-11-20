@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/cloudery"
 	"github.com/cozy/cozy-stack/model/instance"
@@ -110,6 +111,18 @@ security features. Please do not use this binary as your production server.
 				"Could not init the S3 migration target connection; storage "+
 					"migrations to S3 are disabled until this is fixed: %s", err)
 		}
+	}
+
+	// Search is auxiliary: warn without delaying or aborting the startup.
+	if client := config.GetConfig().Search; client != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := client.Ping(ctx); err != nil {
+				logger.WithNamespace("stack").Warnf(
+					"Could not reach OpenSearch, file search will not work: %s", err)
+			}
+		}()
 	}
 
 	rabbitmqSvc, err := rabbitmq.Init(config.GetConfig().RabbitMQ)
