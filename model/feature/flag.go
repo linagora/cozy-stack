@@ -103,6 +103,50 @@ func (f *Flags) HasListItem(name, item string) (bool, error) {
 	return false, nil
 }
 
+// Enabled reports whether the effective flag is a boolean true.
+func Enabled(inst *instance.Instance, name string) bool {
+	if value, ok := inst.FeatureFlags[name]; ok {
+		enabled, _ := value.(bool)
+		return enabled
+	}
+	flags, err := GetFlags(inst)
+	if err != nil {
+		return false
+	}
+	enabled, _ := flags.M[name].(bool)
+	return enabled
+}
+
+// EnabledFresh resolves a flag in source priority order without the Manager
+// cache. Do not authorize work from a lower-priority source on lookup failure.
+func EnabledFresh(inst *instance.Instance, name string) (bool, error) {
+	if value, ok := inst.FeatureFlags[name]; ok {
+		enabled, _ := value.(bool)
+		return enabled, nil
+	}
+	if len(inst.FeatureSets) != 0 {
+		flags, err := fetchManagerFlags(inst)
+		if err != nil {
+			return false, err
+		}
+		if value, ok := flags[name]; ok {
+			enabled, _ := value.(bool)
+			return enabled, nil
+		}
+	}
+	flags := &Flags{M: make(map[string]interface{})}
+	for _, add := range []func(*instance.Instance) error{flags.addConfig, flags.addContext, flags.addDefaults} {
+		if err := add(inst); err != nil {
+			return false, err
+		}
+		if value, ok := flags.M[name]; ok {
+			enabled, _ := value.(bool)
+			return enabled, nil
+		}
+	}
+	return false, nil
+}
+
 // GetFlags returns the list of feature flags for the given instance.
 func GetFlags(inst *instance.Instance) (*Flags, error) {
 	sources := make([]*Flags, 0)
@@ -188,9 +232,20 @@ func getFlagsFromManager(inst *instance.Instance) (map[string]interface{}, error
 		}
 	}
 
+	flags, err := fetchManagerFlags(inst)
+	if err != nil || flags == nil {
+		return flags, err
+	}
+	if buf, err := json.Marshal(flags); err == nil {
+		cache.Set(cacheKey, buf, cacheDuration)
+	}
+	return flags, nil
+}
+
+func fetchManagerFlags(inst *instance.Instance) (map[string]interface{}, error) {
 	client := instance.APIManagerClient(inst)
 	if client == nil {
-		return flags, nil
+		return nil, nil
 	}
 	query := url.Values{
 		"sets":    {strings.Join(inst.FeatureSets, ",")},
@@ -200,13 +255,9 @@ func getFlagsFromManager(inst *instance.Instance) (map[string]interface{}, error
 	if err != nil {
 		return nil, err
 	}
-	var ok bool
-	if flags, ok = data["flags"].(map[string]interface{}); !ok {
+	flags, ok := data["flags"].(map[string]interface{})
+	if !ok {
 		return nil, errInvalidResponse
-	}
-
-	if buf, err := json.Marshal(flags); err == nil {
-		cache.Set(cacheKey, buf, cacheDuration)
 	}
 	return flags, nil
 }

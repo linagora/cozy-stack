@@ -45,10 +45,12 @@ func newMemQueue(workerType string) *memQueue {
 	}
 }
 
-// Enqueue into the queue
-func (q *memQueue) Enqueue(job *Job) error {
+func (q *memQueue) enqueue(ctx context.Context, job *Job) error {
 	q.jmu.Lock()
 	defer q.jmu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	q.list.PushBack(job.Clone())
 	if !q.run {
 		q.run = true
@@ -172,6 +174,13 @@ func (b *memBroker) ShutdownWorkers(ctx context.Context) error {
 // PushJob will produce a new Job with the given options and enqueue the job in
 // the proper queue.
 func (b *memBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, error) {
+	return b.pushJob(context.Background(), db, req)
+}
+
+func (b *memBroker) pushJob(ctx context.Context, db prefixer.Prefixer, req *JobRequest) (*Job, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if atomic.LoadUint32(&b.running) == 0 {
 		return nil, ErrClosed
 	}
@@ -215,7 +224,7 @@ func (b *memBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, error)
 		}
 	}
 
-	if err := job.Create(); err != nil {
+	if err := job.create(ctx); err != nil {
 		return nil, err
 	}
 
@@ -225,7 +234,7 @@ func (b *memBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, error)
 	}
 
 	q := b.queues[workerType]
-	if err := q.Enqueue(job); err != nil {
+	if err := q.enqueue(ctx, job); err != nil {
 		return nil, err
 	}
 	return job, nil

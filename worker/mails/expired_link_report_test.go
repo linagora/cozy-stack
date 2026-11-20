@@ -6,12 +6,16 @@ import (
 	"html"
 	"image/png"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/feature"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/permission"
@@ -24,6 +28,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/i18n"
 	"github.com/cozy/cozy-stack/pkg/metadata"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/spf13/afero"
@@ -49,7 +54,15 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 
 	const owner = "owner@example.test"
 	expiry := time.Date(2025, time.February, 21, 14, 0, 0, 0, time.UTC)
-	inst := &instance.Instance{Domain: "report-" + strings.ToLower(utils.RandomString(10)) + ".example.test", Locale: "fr"}
+	night, end := publiclink.ReportWindow(expiry)
+	inst := &instance.Instance{
+		Domain: "report-" + strings.ToLower(utils.RandomString(10)) + ".example.test", Locale: "fr",
+		FeatureFlags: map[string]interface{}{publiclink.FlagEnabled: true},
+	}
+	require.NoError(t, couchdb.CreateDoc(prefixer.GlobalPrefixer, inst))
+	t.Cleanup(func() {
+		require.NoError(t, couchdb.DeleteDoc(prefixer.GlobalPrefixer, inst))
+	})
 	t.Cleanup(func() {
 		for _, dt := range []string{consts.Files, consts.Settings, consts.Permissions, consts.PublicLinkEvents, consts.PublicLinkReports} {
 			if err := couchdb.DeleteDB(inst, dt); err != nil && !couchdb.IsNotFoundError(err) {
@@ -91,16 +104,24 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		require.NoError(t, err)
 		return file
 	}
-	run := func(t *testing.T, link *permission.Permission) error {
+	runWithClock := func(t *testing.T, link *permission.Permission, now func() time.Time) error {
 		t.Helper()
 		msg, err := job.NewMessage(publiclink.ReportMessage{LinkID: link.ID(), Expiry: expiry})
 		require.NoError(t, err)
-		j := job.NewJob(inst, &job.JobRequest{WorkerType: expiredReportWorker, Message: msg})
+		j := job.NewJob(inst, &job.JobRequest{WorkerType: publiclink.ReportWorker, Message: msg})
 		ctx, cancel := job.NewTaskContext("report-test", j, inst)
 		defer cancel()
 		ctx, cancelTimeout := ctx.WithTimeout(5 * time.Second)
 		defer cancelTimeout()
-		return expiredLinkReport(ctx)
+		return expiredLinkReportWithClock(ctx, now)
+	}
+	runAt := func(t *testing.T, link *permission.Permission, at time.Time) error {
+		t.Helper()
+		return runWithClock(t, link, func() time.Time { return at })
+	}
+	run := func(t *testing.T, link *permission.Permission) error {
+		t.Helper()
+		return runAt(t, link, night)
 	}
 	setOwner := func(t *testing.T, email string) {
 		t.Helper()
@@ -124,6 +145,8 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		}, 10*time.Second, 50*time.Millisecond)
 		conf.Mail.Host = "127.0.0.1"
 		require.NoError(t, run(t, link))
+		requireNoReportMail(t, messages)
+		require.NoError(t, runAt(t, link, night.AddDate(0, 0, 1)))
 		got := receiveReportMail(t, messages)
 		require.Equal(t, "RCPT TO:<"+owner+">", got.recipient)
 		header, parts := reportMailParts(t, got.raw)
@@ -178,7 +201,7 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		require.Len(t, rows, 5)
 		require.Equal(t, "older-visitor", rows[1][2])
 		require.Equal(t, "<visitor-four>", rows[4][2])
-		require.NoError(t, run(t, link))
+		require.NoError(t, runAt(t, link, night.AddDate(0, 0, 2)))
 		requireNoReportMail(t, messages)
 	})
 
@@ -196,18 +219,48 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 	})
 
 	t.Run("rechecks changes while opening SMTP", func(t *testing.T) {
-		for _, change := range []string{"clean", "revoked", "recipient", "infected", "bytes-only", "clean-and-changed-metadata", "clean-and-changed-bytes", "clean-after-reverted-metadata", "clean-and-revoked"} {
+		for _, change := range []string{
+			"clean", "revoked", "expiry", "flag", "manager-disabled", "manager-unavailable", "recipient", "infected", "bytes-only",
+			"clean-and-changed-metadata", "clean-and-changed-bytes", "clean-after-reverted-metadata", "clean-and-revoked",
+		} {
 			t.Run(change, func(t *testing.T) {
 				link := newLink(t)
 				if change == "recipient" {
 					t.Cleanup(func() { setOwner(t, owner) })
 				}
+				var managerChanged atomic.Bool
+				var managerInstance *instance.Instance
+				if change == "manager-disabled" || change == "manager-unavailable" {
+					managerInstance = useReportFlagManager(t, inst, change, &managerChanged)
+				}
+				if change == "flag" {
+					t.Cleanup(func() {
+						var current instance.Instance
+						require.NoError(t, couchdb.GetDoc(prefixer.GlobalPrefixer, consts.Instances, inst.ID(), &current))
+						current.FeatureFlags[publiclink.FlagEnabled] = true
+						require.NoError(t, couchdb.UpdateDoc(prefixer.GlobalPrefixer, &current))
+						inst.SetRev(current.Rev())
+					})
+				}
 				mutate := func() error {
-					if change == "revoked" {
+					switch change {
+					case "revoked":
 						link.ActivityReportEnabled = nil
 						return couchdb.UpdateDoc(inst, link)
-					}
-					if change == "recipient" {
+					case "expiry":
+						link.ExpiresAt = expiry.Add(time.Nanosecond).Format(time.RFC3339Nano)
+						return couchdb.UpdateDoc(inst, link)
+					case "flag":
+						var current instance.Instance
+						if err := couchdb.GetDoc(prefixer.GlobalPrefixer, consts.Instances, inst.ID(), &current); err != nil {
+							return err
+						}
+						current.FeatureFlags[publiclink.FlagEnabled] = false
+						return couchdb.UpdateDoc(prefixer.GlobalPrefixer, &current)
+					case "manager-disabled", "manager-unavailable":
+						managerChanged.Store(true)
+						return nil
+					case "recipient":
 						settings.M["email"] = "changed@example.test"
 						return couchdb.UpdateDoc(inst, settings)
 					}
@@ -295,8 +348,59 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 					require.Empty(t, mailCommands, "must not submit the envelope")
 				}
 				requireNoReportMail(t, messages)
+				if managerInstance != nil {
+					require.True(t, feature.Enabled(managerInstance, publiclink.FlagEnabled), "the ordinary flag cache was not changed")
+					var state publiclink.Delivery
+					require.NoError(t, couchdb.GetDoc(inst, consts.PublicLinkReports, publiclink.DeliveryID(publiclink.ReportID(link.ID(), expiry)), &state))
+					require.Equal(t, publiclink.DeliveryPending, state.Status)
+				}
 			})
 		}
+	})
+
+	t.Run("day jobs create neither a checkpoint nor a report", func(t *testing.T) {
+		link := newLink(t)
+		options, messages := reportSMTP(t, nil, false)
+		conf.Mail = options
+		for _, daytime := range []time.Time{night.Add(-time.Nanosecond), end} {
+			require.NoError(t, runAt(t, link, daytime))
+		}
+		key := publiclink.ReportID(link.ID(), expiry)
+		err := couchdb.GetDoc(inst, consts.PublicLinkReports, publiclink.DeliveryID(key), &publiclink.Delivery{})
+		require.True(t, couchdb.IsNotFoundError(err), "%v", err)
+		_, err = inst.VFS().FileByID("link-report-" + key)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		requireNoReportMail(t, messages)
+	})
+
+	t.Run("does not interpret an unknown delivery checkpoint as pending", func(t *testing.T) {
+		link := newLink(t)
+		key := publiclink.ReportID(link.ID(), expiry)
+		state := &couchdb.JSONDoc{Type: consts.PublicLinkReports, M: map[string]interface{}{"_id": publiclink.DeliveryID(key)}}
+		require.NoError(t, couchdb.CreateNamedDocWithDB(inst, state))
+		options, messages := reportSMTP(t, nil, false)
+		conf.Mail = options
+		require.NoError(t, run(t, link))
+		_, err := inst.VFS().FileByID("link-report-" + key)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		requireNoReportMail(t, messages)
+	})
+
+	t.Run("a report admitted at night can finish after the window closes", func(t *testing.T) {
+		link := newLink(t)
+		var closed atomic.Bool
+		options, messages := reportSMTP(t, func() { closed.Store(true) }, false)
+		conf.Mail = options
+		require.NoError(t, runWithClock(t, link, func() time.Time {
+			if closed.Load() {
+				return end
+			}
+			return end.Add(-time.Nanosecond)
+		}))
+		require.True(t, closed.Load())
+		require.Equal(t, "RCPT TO:<"+owner+">", receiveReportMail(t, messages).recipient)
+		require.NoError(t, runAt(t, link, night.AddDate(0, 0, 1)))
+		requireNoReportMail(t, messages)
 	})
 
 	t.Run("requires opt-in before publishing the CSV", func(t *testing.T) {
@@ -418,7 +522,7 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		conf.Mail = options
 		require.EqualError(t, run(t, link), "link report attempt failed")
 		require.Equal(t, "RCPT TO:<"+owner+">", receiveReportMail(t, messages).recipient)
-		require.NoError(t, run(t, link))
+		require.NoError(t, runAt(t, link, night.AddDate(0, 0, 1)))
 		requireNoReportMail(t, messages)
 	})
 }
@@ -432,6 +536,53 @@ func receiveReportMail(t *testing.T, messages <-chan capturedReportMail) capture
 		t.Fatal("missing SMTP message")
 		return capturedReportMail{}
 	}
+}
+
+func useReportFlagManager(t *testing.T, inst *instance.Instance, change string, changed *atomic.Bool) *instance.Instance {
+	t.Helper()
+	manager := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/features" || r.URL.Query().Get("sets") != change {
+			t.Errorf("unexpected Manager request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if changed.Load() {
+			if change == "manager-unavailable" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = io.WriteString(w, `{"flags":{"drive.public_link_events.enabled":false}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"flags":{"drive.public_link_events.enabled":true}}`)
+	}))
+	t.Cleanup(manager.Close)
+	conf := config.GetConfig()
+	oldClouderies, oldContexts := conf.Clouderies, conf.Contexts
+	conf.Clouderies = map[string]config.ClouderyConfig{
+		change: {API: config.ClouderyAPI{URL: manager.URL, Token: "fixture"}},
+	}
+	// Even with a true fallback, an unreachable higher-priority Manager must
+	// not authorize a new SMTP envelope.
+	conf.Contexts = map[string]interface{}{
+		change: map[string]interface{}{"features": map[string]interface{}{publiclink.FlagEnabled: true}},
+	}
+	t.Cleanup(func() { conf.Clouderies, conf.Contexts = oldClouderies, oldContexts })
+
+	var current instance.Instance
+	require.NoError(t, couchdb.GetDoc(prefixer.GlobalPrefixer, consts.Instances, inst.ID(), &current))
+	original := current
+	current.FeatureFlags = nil
+	current.ContextName = change
+	current.FeatureSets = []string{change}
+	require.NoError(t, couchdb.UpdateDoc(prefixer.GlobalPrefixer, &current))
+	t.Cleanup(func() {
+		original.SetRev(current.Rev())
+		require.NoError(t, couchdb.UpdateDoc(prefixer.GlobalPrefixer, &original))
+		inst.SetRev(original.Rev())
+	})
+	require.True(t, feature.Enabled(&current, publiclink.FlagEnabled), "prime the Manager cache")
+	return &current
 }
 
 func requireNoReportMail(t *testing.T, messages <-chan capturedReportMail) {
