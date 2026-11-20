@@ -785,6 +785,47 @@ func TestFileRootSharedDriveShareByLink(t *testing.T) {
 func TestSharedDriveShareByLinkPatch(t *testing.T) {
 	f := setupSharedDrivePermissionFixture(t)
 
+	t.Run("RecipientRejectsPublicLinkToken", func(t *testing.T) {
+		eBetty, bettyToken := f.newBettyClient(t)
+		payload := makeSharedDrivePermissionPayload(t, consts.Files, []string{f.fileID}, "", nil)
+		permID, _ := createSharedDrivePermission(t, eBetty, f.sharingID, bettyToken, "recipient-guard", "", payload)
+
+		code, err := f.env.betty.CreateShareCode("link", "")
+		require.NoError(t, err)
+		public, err := permission.CreateShareSet(f.env.betty, nil, consts.Apps+"/drive", map[string]string{"link": code}, nil,
+			permission.Permission{Permissions: permission.Set{{Type: consts.Files, Verbs: permission.ALL}}}, nil, true)
+		require.NoError(t, err)
+		for _, verb := range []permission.Verb{permission.POST, permission.PATCH, permission.DELETE} {
+			require.True(t, public.Permissions.AllowWholeType(verb, consts.Files))
+		}
+
+		newFile := createFile(t, f.eOwner, f.productID, "recipient-guard-post.txt", f.ownerAppToken)
+		newPayload := makeSharedDrivePermissionPayload(t, consts.Files, []string{newFile}, "", nil)
+		createSharedDrivePermissionExpectStatus(t, eBetty, f.sharingID, code, "link", "", newPayload, http.StatusForbidden)
+		links, err := permission.GetShareByLinkPermissionsForTarget(f.env.acme, consts.Files, newFile)
+		require.NoError(t, err)
+		require.Empty(t, links)
+		newID, _ := createSharedDrivePermission(t, eBetty, f.sharingID, bettyToken, "link", "", newPayload)
+		deleteSharedDrivePermissionExpectStatus(t, eBetty, f.sharingID, newID, bettyToken, http.StatusNoContent)
+
+		deleteSharedDrivePermissionExpectStatus(t, eBetty, f.sharingID, permID, code, http.StatusForbidden)
+		_, err = permission.GetPermissionByIDIncludingExpired(f.env.acme, permID)
+		require.NoError(t, err)
+
+		patch := makeSharedDrivePatchPayload(t, map[string]interface{}{"activity_report_enabled": true})
+		patchSharedDrivePermissionExpectStatus(t, eBetty, f.sharingID, permID, code, patch, http.StatusForbidden)
+		stored, err := permission.GetPermissionByIDIncludingExpired(f.env.acme, permID)
+		require.NoError(t, err)
+		require.Nil(t, stored.ActivityReportEnabled)
+
+		patchSharedDrivePermissionExpectStatus(t, eBetty, f.sharingID, permID, bettyToken, patch, http.StatusOK)
+		stored, err = permission.GetPermissionByIDIncludingExpired(f.env.acme, permID)
+		require.NoError(t, err)
+		require.NotNil(t, stored.ActivityReportEnabled)
+		require.True(t, *stored.ActivityReportEnabled)
+		deleteSharedDrivePermissionExpectStatus(t, eBetty, f.sharingID, permID, bettyToken, http.StatusNoContent)
+	})
+
 	t.Run("OwnerCanPatchPermission", func(t *testing.T) {
 		eBetty, bettyToken := f.newBettyClient(t)
 		payload := makeSharedDrivePermissionPayload(t, consts.Files, []string{f.fileID}, "", nil)

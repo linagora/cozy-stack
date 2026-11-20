@@ -1674,12 +1674,20 @@ func drivesRoutes(router *echo.Group) {
 
 	// Share-by-link (public link) endpoints for files in shared drives
 	drive.GET("/permissions", proxy(ListSharedDriveShareByLinkPermissions, true))
-	drive.POST("/permissions", proxy(CreateSharedDriveShareByLinkHandler, true))
-	drive.PATCH("/permissions/:perm-id", proxy(PatchSharedDrivePermissionHandler, true))
-	drive.DELETE("/permissions/:perm-id", proxy(RevokeSharedDrivePermission, true))
+	drive.POST("/permissions", proxyLinkMutation(CreateSharedDriveShareByLinkHandler))
+	drive.PATCH("/permissions/:perm-id", proxyLinkMutation(PatchSharedDrivePermissionHandler))
+	drive.DELETE("/permissions/:perm-id", proxyLinkMutation(RevokeSharedDrivePermission))
 }
 
 func proxy(fn func(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error, needsAuth bool) echo.HandlerFunc {
+	return proxyWithLinkMutationGuard(fn, needsAuth, false)
+}
+
+func proxyLinkMutation(fn func(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error) echo.HandlerFunc {
+	return proxyWithLinkMutationGuard(fn, true, true)
+}
+
+func proxyWithLinkMutationGuard(fn func(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error, needsAuth, linkMutation bool) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		inst := middlewares.GetInstance(c)
 		s, err := sharing.FindSharing(inst, c.Param("id"))
@@ -1716,6 +1724,16 @@ func proxy(fn func(c echo.Context, inst *instance.Instance, s *sharing.Sharing) 
 			verb := permission.Verb(method)
 			if err := middlewares.AllowWholeType(c, verb, consts.Files); err != nil {
 				return err
+			}
+		}
+
+		if linkMutation {
+			pdoc, err := middlewares.GetPermission(c)
+			if err != nil {
+				return err
+			}
+			if pdoc.Type == permission.TypeShareByLink || pdoc.Type == permission.TypeSharePreview {
+				return jsonapi.Forbidden(middlewares.ErrForbidden)
 			}
 		}
 
