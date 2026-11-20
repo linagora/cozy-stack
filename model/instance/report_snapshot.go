@@ -13,8 +13,14 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 )
 
-func (i *Instance) verifyReportSnapshot(ctx context.Context, fileID, dirID, originRev, fingerprint string, consume func(io.Reader) error) (*vfs.FileDoc, error) {
-	if originRev == "" || fingerprint == "" {
+type reportSnapshot struct {
+	file        *vfs.FileDoc
+	revision    string
+	fingerprint string
+}
+
+func (i *Instance) verifyReportSnapshot(ctx context.Context, fileID, dirID, originRev, fingerprint string, consume func(io.Reader) error, previous *reportSnapshot) (*reportSnapshot, error) {
+	if originRev == "" || fingerprint == "" || (previous != nil && fingerprint != previous.fingerprint) {
 		return nil, errReportSnapshot
 	}
 	if err := i.checkReportDirectory(dirID); err != nil {
@@ -34,6 +40,12 @@ func (i *Instance) verifyReportSnapshot(ctx context.Context, fileID, dirID, orig
 	}
 	if head.Rev() != file.Rev() {
 		return nil, errReportSnapshot
+	}
+	if previous != nil && head.Rev() != previous.revision {
+		// Only a direct clean successor can replace the revision used for the preview.
+		if file.AntivirusScan == nil || file.AntivirusScan.Status != vfs.AVStatusClean || !reportHasParent(head, previous.revision) {
+			return nil, errReportSnapshot
+		}
 	}
 	if err := i.checkReportLineage(ctx, head, originRev); err != nil {
 		return nil, err
@@ -79,7 +91,20 @@ func (i *Instance) verifyReportSnapshot(ctx context.Context, fileID, dirID, orig
 	if err := i.checkReportDirectory(dirID); err != nil {
 		return nil, err
 	}
-	return current, nil
+	return &reportSnapshot{file: current, revision: current.Rev(), fingerprint: actual}, nil
+}
+
+func reportHasParent(head *couchdb.JSONDoc, parent string) bool {
+	revs, _ := head.M["_revisions"].(map[string]interface{})
+	start, _ := revs["start"].(float64)
+	ids, _ := revs["ids"].([]interface{})
+	if start < 2 || len(ids) < 2 {
+		return false
+	}
+	headHash, headOK := ids[0].(string)
+	parentHash, parentOK := ids[1].(string)
+	return headOK && parentOK && head.Rev() == fmt.Sprintf("%d-%s", int(start), headHash) &&
+		parent == fmt.Sprintf("%d-%s", int(start)-1, parentHash)
 }
 
 // Allow antivirus-only changes. Compaction may remove old revision bodies, so

@@ -195,53 +195,104 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		requireNoReportMail(t, messages)
 	})
 
-	t.Run("refuses changes while opening SMTP", func(t *testing.T) {
-		for _, change := range []string{"revoked", "recipient", "infected", "bytes-only"} {
+	t.Run("rechecks changes while opening SMTP", func(t *testing.T) {
+		for _, change := range []string{"clean", "revoked", "recipient", "infected", "bytes-only", "clean-and-changed-metadata", "clean-and-changed-bytes", "clean-after-reverted-metadata", "clean-and-revoked"} {
 			t.Run(change, func(t *testing.T) {
 				link := newLink(t)
 				if change == "recipient" {
 					t.Cleanup(func() { setOwner(t, owner) })
 				}
-				changed := make(chan error, 1)
-				options, messages := reportSMTP(t, func() {
-					var err error
+				mutate := func() error {
 					if change == "revoked" {
 						link.ActivityReportEnabled = nil
-						err = couchdb.UpdateDoc(inst, link)
-					} else if change == "recipient" {
+						return couchdb.UpdateDoc(inst, link)
+					}
+					if change == "recipient" {
 						settings.M["email"] = "changed@example.test"
-						err = couchdb.UpdateDoc(inst, settings)
-					} else {
-						fs := inst.VFS()
-						var file *vfs.FileDoc
-						file, err = fs.FileByID("link-report-" + publiclink.ReportID(link.ID(), expiry))
-						if err == nil && change == "infected" {
-							file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusInfected}
-							err = couchdb.UpdateDoc(inst, file)
-						} else if err == nil {
-							var path string
-							path, err = fs.FilePath(file)
-							if err == nil {
-								// Corrupt actual stored bytes without an index revision change.
-								backend := vfsafero.GetMemFS(inst.DomainName())
-								var original []byte
-								original, err = afero.ReadFile(backend, path)
-								if err == nil {
-									original[0] ^= 1
-									err = afero.WriteFile(backend, path, original, 0600)
-								}
-							}
+						return couchdb.UpdateDoc(inst, settings)
+					}
+					fs := inst.VFS()
+					file, err := fs.FileByID("link-report-" + publiclink.ReportID(link.ID(), expiry))
+					if err != nil {
+						return err
+					}
+					if change == "infected" {
+						file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusInfected}
+						return couchdb.UpdateDoc(inst, file)
+					}
+					if change == "clean-after-reverted-metadata" {
+						tags := file.Tags
+						file.Tags = []string{"changed"}
+						if err := couchdb.UpdateDoc(inst, file); err != nil {
+							return err
+						}
+						file.Tags = tags
+					}
+					if change != "bytes-only" {
+						now := time.Now()
+						file.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusClean, ScannedAt: &now}
+						if change == "clean-and-changed-metadata" {
+							file.Tags = []string{"changed"}
+						}
+						if err := couchdb.UpdateDoc(inst, file); err != nil {
+							return err
 						}
 					}
-					changed <- err
-				}, false)
+					switch change {
+					case "clean-and-revoked":
+						link.ActivityReportEnabled = nil
+						return couchdb.UpdateDoc(inst, link)
+					case "bytes-only", "clean-and-changed-bytes":
+						path, err := fs.FilePath(file)
+						if err != nil {
+							return err
+						}
+						// Corrupt the stored bytes without another index revision.
+						backend := vfsafero.GetMemFS(inst.DomainName())
+						original, err := afero.ReadFile(backend, path)
+						if err != nil {
+							return err
+						}
+						original[0] ^= 1
+						return afero.WriteFile(backend, path, original, 0600)
+					}
+					return nil
+				}
+				changed := make(chan error, 1)
+				mailCommands := make(chan int, 2)
+				options, messages := reportSMTPWithFaults(t, reportSMTPFaults{
+					onHello: func(int) { changed <- mutate() },
+					dropMail: func(number int) bool {
+						mailCommands <- number
+						return false
+					},
+				})
 				conf.Mail = options
-				require.EqualError(t, run(t, link), "link report attempt failed")
+				err := run(t, link)
 				select {
 				case err := <-changed:
 					require.NoError(t, err)
 				default:
 					t.Fatal("SMTP handshake did not reach the mutation")
+				}
+				if change == "clean" {
+					require.NoError(t, err)
+					got := receiveReportMail(t, messages)
+					require.Equal(t, "RCPT TO:<"+owner+">", got.recipient)
+					_, parts := reportMailParts(t, got.raw)
+					previewCount := 0
+					for _, part := range parts {
+						if strings.HasPrefix(part.header.Get("Content-Type"), "text/") {
+							require.Contains(t, string(part.body), "visitor-four")
+							previewCount++
+						}
+					}
+					require.Equal(t, 2, previewCount)
+					require.NoError(t, run(t, link))
+					require.Len(t, mailCommands, 1)
+				} else {
+					require.EqualError(t, err, "link report attempt failed")
+					require.Empty(t, mailCommands, "must not submit the envelope")
 				}
 				requireNoReportMail(t, messages)
 			})
