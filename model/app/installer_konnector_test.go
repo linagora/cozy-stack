@@ -55,6 +55,8 @@ func TestInstallerKonnector(t *testing.T) {
 		stackStarted = true
 	}
 
+	previousClient := app.ManifestClient
+	t.Cleanup(func() { app.ManifestClient = previousClient })
 	app.ManifestClient = &http.Client{Transport: &transport{}}
 
 	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
