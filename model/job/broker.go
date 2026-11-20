@@ -258,7 +258,11 @@ func (j *Job) Update() error {
 
 // Create creates the job in couchdb
 func (j *Job) Create() error {
-	return couchdb.CreateDoc(j, j)
+	return j.create(context.Background())
+}
+
+func (j *Job) create(ctx context.Context) error {
+	return couchdb.CreateDocWithContext(ctx, j, j)
 }
 
 // WaitUntilDone will wait until the job is done. It will return an error if

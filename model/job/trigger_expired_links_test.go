@@ -144,7 +144,7 @@ func TestExpiredLinkReportScanMemory(t *testing.T) {
 	cutoff := time.Date(2025, time.November, 20, 2, 0, 0, 0, time.UTC)
 	addReportScanLink(t, inst, "memory-catch-up", cutoff, true)
 	consumed := make(chan publiclink.ReportMessage, 1)
-	b := NewMemBroker()
+	b := NewMemBroker().(*memBroker)
 	require.NoError(t, b.StartWorkers(WorkersList{{
 		WorkerType: publiclink.ReportWorker, Reserved: true, Concurrency: 1,
 		WorkerFunc: func(ctx *TaskContext) error {

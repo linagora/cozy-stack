@@ -27,7 +27,6 @@ type memScheduler struct {
 	share   *ShareGroupTrigger
 	av      *AntivirusTrigger
 	recents *RecentsSyncTrigger
-	reports *expiredLinkScheduler
 	mu      sync.RWMutex
 	log     *logger.Entry
 }
@@ -115,7 +114,6 @@ func (s *memScheduler) StartScheduler(b Broker) error {
 		go s.schedule(t)
 	}
 
-	s.reports = startExpiredLinkScheduler(b)
 	return nil
 }
 
@@ -131,9 +129,6 @@ func (s *memScheduler) ShutdownScheduler(ctx context.Context) error {
 	s.share.Unschedule()
 	s.av.Unschedule()
 	s.recents.Unschedule()
-	if err := s.reports.stop(ctx); err != nil {
-		return err
-	}
 	fmt.Println("ok.")
 	return nil
 }

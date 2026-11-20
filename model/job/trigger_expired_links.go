@@ -24,13 +24,17 @@ type expiredLinkScheduler struct {
 	done   chan struct{}
 }
 
+type reportBroker interface {
+	Broker
+	pushJob(context.Context, prefixer.Prefixer, *JobRequest) (*Job, error)
+}
+
 func startExpiredLinkScheduler(b Broker) *expiredLinkScheduler {
 	if _, skip := os.LookupEnv("COZY_SKIP_LOADING_TRIGGERS"); skip {
 		return nil
 	}
-	switch b.(type) {
-	case *memBroker, *redisBroker:
-	default:
+	broker, ok := b.(reportBroker)
+	if !ok {
 		return nil
 	}
 	if reserved, err := b.WorkerIsReserved(publiclink.ReportWorker); err != nil || !reserved {
@@ -40,7 +44,7 @@ func startExpiredLinkScheduler(b Broker) *expiredLinkScheduler {
 	s := &expiredLinkScheduler{cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(s.done)
-		scheduleExpiredLinks(ctx, b)
+		scheduleExpiredLinks(ctx, broker)
 	}()
 	return s
 }
@@ -58,7 +62,7 @@ func (s *expiredLinkScheduler) stop(ctx context.Context) error {
 	}
 }
 
-func scheduleExpiredLinks(ctx context.Context, b Broker) {
+func scheduleExpiredLinks(ctx context.Context, b reportBroker) {
 	for ctx.Err() == nil {
 		now := time.Now()
 		start, end := publiclink.ReportWindow(now)
@@ -90,7 +94,7 @@ func scheduleExpiredLinks(ctx context.Context, b Broker) {
 	}
 }
 
-func scanExpiredLinks(ctx context.Context, b Broker, cutoff time.Time) (bool, error) {
+func scanExpiredLinks(ctx context.Context, b reportBroker, cutoff time.Time) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -135,7 +139,7 @@ func scanExpiredLinks(ctx context.Context, b Broker, cutoff time.Time) (bool, er
 	return err == nil, err
 }
 
-func queueExpiredLinks(ctx context.Context, b Broker, inst *instance.Instance, cutoff time.Time) error {
+func queueExpiredLinks(ctx context.Context, b reportBroker, inst *instance.Instance, cutoff time.Time) error {
 	const batchSize = 100
 	batch := make([]publiclink.ReportMessage, 0, batchSize)
 	flush := func() error {
@@ -171,7 +175,7 @@ func queueExpiredLinks(ctx context.Context, b Broker, inst *instance.Instance, c
 			if err != nil {
 				return err
 			}
-			if _, err := b.PushJob(inst, &JobRequest{WorkerType: publiclink.ReportWorker, Message: message}); err != nil {
+			if _, err := b.pushJob(ctx, inst, &JobRequest{WorkerType: publiclink.ReportWorker, Message: message}); err != nil {
 				return err
 			}
 		}
