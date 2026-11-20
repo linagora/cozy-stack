@@ -25,6 +25,6 @@
 </mj-table>
 <mj-text mj-class="title-h2 content-medium">{{t "Mail Link Report CTA Title"}}</mj-text>
 <mj-button href="{{.ReportURL}}" align="center" mj-class="primary-button content-large">{{t "Mail Link Report Open"}}</mj-button>
-<mj-text align="center" mj-class="content-medium" font-size="12px">{{t "Mail Link Report Download"}}<br />{{t "Mail Link Report Authentication"}}<br /><a href="{{.ReportURL}}" style="color:#297ef2;overflow-wrap:anywhere;word-break:break-all;">{{.ReportURL}}</a></mj-text>
-<mj-text mj-class="content-medium" font-size="11px">{{t "Mail Link Report Scope"}}<br /><br />{{t "Mail Link Report Automatic"}}</mj-text>
+<mj-text align="center" mj-class="content-medium" font-size="12px">{{t "Mail Link Report Download"}}<br /><a href="{{.ReportURL}}" style="color:#297ef2;overflow-wrap:anywhere;word-break:break-all;">{{.ReportURL}}</a></mj-text>
+<mj-text mj-class="content-medium" font-size="11px">{{t "Mail Link Report Automatic"}}</mj-text>
 {{end}}
