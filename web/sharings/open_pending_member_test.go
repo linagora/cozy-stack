@@ -2,44 +2,12 @@ package sharings_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
-	"github.com/cozy/cozy-stack/model/instance"
-	"github.com/cozy/cozy-stack/pkg/config/config"
-	"github.com/cozy/cozy-stack/web/editor"
-	"github.com/cozy/cozy-stack/web/errors"
-	"github.com/cozy/cozy-stack/web/notes"
-	"github.com/cozy/cozy-stack/web/office"
 	"github.com/gavv/httpexpect/v2"
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// newPendingMemberOpenClient serves the direct /office, /notes and /editor
-// routes of the given instance, that the shared test environment does not mount
-// for all its instances.
-func newPendingMemberOpenClient(t *testing.T, inst *instance.Instance) *httpexpect.Expect {
-	t.Helper()
-	config.GetConfig().Office = map[string]config.Office{
-		config.DefaultInstanceContext: {OnlyOfficeURL: "https://documentserver.example"},
-	}
-	handler := echo.New()
-	handler.HTTPErrorHandler = errors.ErrorHandler
-	withInstance := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			c.Set("instance", inst)
-			return next(c)
-		}
-	}
-	office.Routes(handler.Group("/office", withInstance))
-	notes.Routes(handler.Group("/notes", withInstance))
-	editor.Routes(handler.Group("/editor", withInstance))
-	ts := httptest.NewServer(handler)
-	t.Cleanup(ts.Close)
-	return newSharingExpect(t, ts.URL)
-}
 
 func createNoteForPendingMember(t *testing.T, e *httpexpect.Expect, path, dirID, title, token string) string {
 	t.Helper()
@@ -87,7 +55,7 @@ func TestOpenDriveFileWithShortPreviewCodeAndPendingMember(t *testing.T) {
 
 	env := setupSharedDrivesEnv(t)
 	eA, _, eD := env.createClients(t)
-	eOpen := newPendingMemberOpenClient(t, env.acme)
+	eOpen := newOpenClient(t, env.acme)
 
 	// Dave is a read-only member, and Charlie has not accepted yet.
 	driveID, driveRootID, _ := createSharedDrive(t, DriveCreationMethodFromFolder,
