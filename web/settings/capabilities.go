@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -19,6 +20,9 @@ type apiCapabilities struct {
 	PasswordAuth   bool   `json:"can_auth_with_password"`
 	MagicLinkAuth  bool   `json:"can_auth_with_magic_links"`
 	OIDCAuth       bool   `json:"can_auth_with_oidc"`
+	// ResumableUploads tells if the VFS of the instance accepts the resumable
+	// uploads (draft-ietf-httpbis-resumable-upload).
+	ResumableUploads bool `json:"resumable_uploads"`
 }
 
 func (c *apiCapabilities) ID() string                             { return c.DocID }
@@ -56,12 +60,13 @@ func NewCapabilities(inst *instance.Instance) jsonapi.Object {
 	}
 
 	return &apiCapabilities{
-		DocID:          consts.CapabilitiesSettingsID,
-		FileVersioning: versioning,
-		FlatSubdomains: flat,
-		PasswordAuth:   password,
-		MagicLinkAuth:  magicLink,
-		OIDCAuth:       oidc,
+		DocID:            consts.CapabilitiesSettingsID,
+		FileVersioning:   versioning,
+		FlatSubdomains:   flat,
+		PasswordAuth:     password,
+		MagicLinkAuth:    magicLink,
+		OIDCAuth:         oidc,
+		ResumableUploads: vfs.SupportsUploads(inst.VFS()),
 	}
 }
 

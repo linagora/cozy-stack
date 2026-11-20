@@ -810,7 +810,8 @@ A file is a binary content with some metadata.
 
 ### POST /files/:dir-id
 
-Upload a file in the directory identified by `:dir-id`.
+Upload a file in the directory identified by `:dir-id`. The upload can be
+resumed after an interruption, see [resumable uploads](#resumable-uploads).
 
 The `:dir-id` can be a [magic folder ID](#magic-folders).
 
@@ -1046,6 +1047,149 @@ Location: https://cozy.example.com/files/9152d568-7e7c-11e6-a377-37cbfb190b4b
 **Note**: see [references of documents in VFS](references-docs-in-vfs.md) for
 more informations about the references field.
 
+### Resumable uploads
+
+`POST /files/:dir-id` and `PUT /files/:file-id` accept the [Resumable Uploads
+for HTTP](https://www.ietf.org/archive/id/draft-ietf-httpbis-resumable-upload-15.txt)
+protocol. An upload interrupted by a lost connection, a suspended app or a
+pause asked by the user goes on from the last byte received by the server,
+instead of starting again. The design is explained in
+[Resumable uploads](files-resumable-upload.md).
+
+The protocol is used only when the request has the
+`Upload-Draft-Interop-Version` header set to `6` (draft -05, spoken by
+`URLSession` on iOS 18.1+ and macOS, and by `tus-js-client`) or `10` (draft
+-15), and the `Upload-Complete` header. Other requests are handled as before,
+except a request with `Upload-Complete: ?0` (no content) when the upload cannot
+be resumable (another interop version, or a storage without resumable
+uploads): it gets a `501 Not Implemented` with an `application/problem+json`
+body instead of creating an empty file, and the client sends the whole content
+in one request.
+The query-string and the headers are the same as for a normal upload. The
+`Content-MD5` header, when given, is checked against the whole file.
+
+A request that sends the whole content (`Upload-Complete: ?1`) with a
+`Content-Length` up to the part size (16 MiB by default) is a normal upload.
+Otherwise, the server creates an upload resource, announces it with a `104
+Upload Resumption Supported` interim response, with a `Location` header like
+`/files/uploads/:upload-id`, and writes the content as it arrives:
+
+- `HEAD /files/uploads/:upload-id` returns the number of bytes kept by the
+  server in `Upload-Offset`, and `Upload-Complete: ?1` when the upload is
+  finished.
+- `PATCH /files/uploads/:upload-id`, with `Content-Type:
+  application/partial-upload`, appends the content at the offset given in
+  `Upload-Offset`. It must be the offset of the server, or the response is a
+  `409 Conflict` with the expected offset. `Upload-Complete: ?1` marks the last
+  bytes: the response is then the same as for a normal upload (`201 Created`
+  for a new file, `200 OK` for a new version). Any size works for a `PATCH`,
+  but a request smaller than the part size makes the server copy the bytes
+  received since the last part again: a client that sends the content in
+  slices should make them at least as large as the part size.
+- `DELETE /files/uploads/:upload-id` cancels the upload and frees the storage.
+
+The upload resource requires the same permissions as the request that has
+created it. Browsers do not see the `104` response: a web client creates the
+upload first with an empty request (`Upload-Complete: ?0`), takes the `Location`
+of the `201 Created` response, then sends the content with `PATCH` requests.
+
+To pause, the client stops the request in progress. To resume, it asks the
+offset with `HEAD`, and sends the rest with `PATCH`. When a request is
+interrupted, the server keeps the bytes received so far: just after a cut, the
+`HEAD` can take a few seconds, while the server waits for the interrupted
+request to save them. When the offset
+returned by `HEAD` is the size of the file but `Upload-Complete` is `?0`, the
+server has received everything but has not finished creating the file: the
+client sends a `PATCH` with no content and `Upload-Complete: ?1`.
+
+A response with `Upload-Complete: ?1` is the final answer for the upload: the
+file, or the reason why it cannot be created (wrong `Content-MD5`, name
+already taken, quota, etc.). After any other error, the client can resume the
+upload.
+
+An upload without any new byte for 7 days is removed, with its content. When
+the upload is finished, the server keeps its state for 7 days: `HEAD` returns
+`Upload-Complete: ?1`, and the request that has completed the upload, when it
+is sent again, gets the final response again, so a client that has lost this
+response does not upload the file a second time. An upload in progress is
+also removed when the storage of the instance is migrated.
+An upload that does not exist (expired, cancelled, or never created) returns
+`404 Not Found` with an `application/problem+json` body. An account can have
+20 uploads in progress, and an instance 200: above, a request with
+`Upload-Complete: ?0` returns `429 Too Many Requests`, and a request with the
+whole content is a normal upload. These values are in the
+`fs.resumable_uploads` section of the configuration.
+
+Uploads from a `SourceURL` and of notes are normal uploads. A request without
+the content (`Upload-Complete: ?0`) gets `501 Not Implemented` for them, and
+nothing is created or imported. Uploads to a shared drive are resumable with
+the [drive routes](shared-drives.md#resumable-uploads).
+
+#### Request
+
+```http
+POST /files/fce1a6c0-dfc5-11e5-8d1a-1f854d4aaf81?Type=file&Name=video.mp4 HTTP/1.1
+Content-Length: 104857600
+Content-Type: video/mp4
+Upload-Complete: ?1
+Upload-Draft-Interop-Version: 6
+Host: cozy.example.com
+
+...
+```
+
+#### Response
+
+```http
+HTTP/1.1 104 Upload Resumption Supported
+Location: /files/uploads/b5wqkmrsnxcftjglo3ywb72qza
+Upload-Draft-Interop-Version: 6
+Upload-Limit: max-size=5368709120, expires=604800
+```
+
+The connection is lost after 40 MB.
+
+#### Request
+
+```http
+HEAD /files/uploads/b5wqkmrsnxcftjglo3ywb72qza HTTP/1.1
+Upload-Draft-Interop-Version: 6
+Host: cozy.example.com
+```
+
+#### Response
+
+```http
+HTTP/1.1 204 No Content
+Cache-Control: no-store
+Upload-Complete: ?0
+Upload-Offset: 40000000
+```
+
+#### Request
+
+```http
+PATCH /files/uploads/b5wqkmrsnxcftjglo3ywb72qza HTTP/1.1
+Content-Length: 64857600
+Content-Type: application/partial-upload
+Upload-Complete: ?1
+Upload-Draft-Interop-Version: 6
+Upload-Offset: 40000000
+Host: cozy.example.com
+
+...
+```
+
+#### Response
+
+```http
+HTTP/1.1 201 Created
+Content-Type: application/vnd.api+json
+Upload-Complete: ?1
+```
+
+The body is the same as for a normal upload.
+
 ### POST /files/upload/metadata
 
 Send a metadata object that can be associated to a file (or directory) uploaded
@@ -1215,7 +1359,8 @@ a new secret.
 
 ### PUT /files/:file-id
 
-Overwrite a file
+Overwrite a file. The upload can be resumed after an interruption, see
+[resumable uploads](#resumable-uploads).
 
 The `updated_at` field will be the first value in this list:
 

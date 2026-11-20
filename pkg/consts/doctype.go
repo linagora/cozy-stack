@@ -43,6 +43,8 @@ const (
 	// FilesRecents doc type for the files and directories recently opened or
 	// edited by the user
 	FilesRecents = "io.cozy.files.recents"
+	// FilesUploads doc type for the state of the resumable uploads in progress
+	FilesUploads = "io.cozy.files.uploads"
 	// Thumbnails is a synthetic doctype for thumbnails, used for realtime
 	// events
 	Thumbnails = "io.cozy.files.thumbnails"

@@ -53,6 +53,7 @@ Feel free to [open an issue](https://github.com/cozy/cozy-stack/issues/new) for 
 -   [Flagship app](flagship.md)
 -   [Move design](move-design.md)
 -   [Realtime internals](realtime-internals.md)
+-   [Resumable uploads](files-resumable-upload.md)
 -   [Sharing design](sharing-design.md)
 -   [Workflow of the konnectors](konnectors-workflow.md)
 
