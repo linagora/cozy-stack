@@ -76,41 +76,86 @@ type stateStorage interface {
 	DeleteCodeData(code string) bool
 }
 
-type memStateStorage struct {
-	states map[string]*stateHolder
-	codes  map[string]*DelegatedCodeData // delegated code -> code data
+type delegatedCodeEntry struct {
+	data      *DelegatedCodeData
+	expiresAt time.Time
 }
 
-func (store memStateStorage) Add(state *stateHolder) error {
-	state.expiresAt = time.Now().UTC().Add(stateTTL).Unix()
+type memStateStorage struct {
+	mu     sync.Mutex
+	now    func() time.Time
+	states map[string]*stateHolder
+	codes  map[string]delegatedCodeEntry
+}
+
+func newMemStateStorage() *memStateStorage {
+	return &memStateStorage{
+		now:    time.Now,
+		states: make(map[string]*stateHolder),
+		codes:  make(map[string]delegatedCodeEntry),
+	}
+}
+
+func (store *memStateStorage) Add(state *stateHolder) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	state.expiresAt = store.now().UTC().Add(stateTTL).Unix()
 	store.states[state.id] = state
 	return nil
 }
 
-func (store memStateStorage) Find(id string) *stateHolder {
+func (store *memStateStorage) Find(id string) *stateHolder {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	state, ok := store.states[id]
 	if !ok {
 		return nil
 	}
-	if state.expiresAt < time.Now().UTC().Unix() {
+	if state.expiresAt < store.now().UTC().Unix() {
 		delete(store.states, id)
 		return nil
 	}
 	return state
 }
 
-func (store memStateStorage) CreateCodeData(sub, sessionID, contextName string, provider oidcprovider.Kind) string {
+func (store *memStateStorage) CreateCodeData(sub, sessionID, contextName string, provider oidcprovider.Kind) string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	code := makeCode()
-	store.codes[code] = &DelegatedCodeData{Sub: sub, SessionID: sessionID, ContextName: contextName, Provider: provider}
+	store.codes[code] = delegatedCodeEntry{
+		data:      &DelegatedCodeData{Sub: sub, SessionID: sessionID, ContextName: contextName, Provider: provider},
+		expiresAt: store.now().Add(codeTTL),
+	}
 	return code
 }
 
-func (store memStateStorage) GetCodeData(code string) *DelegatedCodeData {
-	return store.codes[code]
+// liveCode must be called with the lock held.
+func (store *memStateStorage) liveCode(code string) (delegatedCodeEntry, bool) {
+	entry, ok := store.codes[code]
+	if !ok {
+		return entry, false
+	}
+	if !store.now().Before(entry.expiresAt) {
+		delete(store.codes, code)
+		return entry, false
+	}
+	return entry, true
 }
 
-func (store memStateStorage) DeleteCodeData(code string) bool {
-	_, ok := store.codes[code]
+func (store *memStateStorage) GetCodeData(code string) *DelegatedCodeData {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	entry, ok := store.liveCode(code)
+	if !ok {
+		return nil
+	}
+	return entry.data
+}
+
+func (store *memStateStorage) DeleteCodeData(code string) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	_, ok := store.liveCode(code)
 	delete(store.codes, code)
 	return ok
 }
@@ -188,10 +233,7 @@ func getStorage() stateStorage {
 	}
 	cli := config.GetConfig().OauthStateStorage
 	if cli == nil {
-		globalStorage = &memStateStorage{
-			states: make(map[string]*stateHolder),
-			codes:  make(map[string]*DelegatedCodeData),
-		}
+		globalStorage = newMemStateStorage()
 	} else {
 		ctx := context.Background()
 		globalStorage = &redisStateStorage{cl: cli, ctx: ctx}

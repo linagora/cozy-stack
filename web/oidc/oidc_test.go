@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,55 +39,99 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// delegatedCodeRedis expires keys like Redis does, on the clock of the test
+// when now is set.
 type delegatedCodeRedis struct {
-	values map[string]string
-	ttls   map[string]time.Duration
+	values    map[string]string
+	deadlines map[string]time.Time
+	now       func() time.Time
+}
+
+func (r *delegatedCodeRedis) expired(key string) bool {
+	deadline, ok := r.deadlines[key]
+	return ok && r.now != nil && !r.now().Before(deadline)
 }
 
 func (r *delegatedCodeRedis) Get(_ context.Context, key string) *redis.StringCmd {
+	if r.expired(key) {
+		return redis.NewStringResult("", redis.Nil)
+	}
 	return redis.NewStringResult(r.values[key], nil)
 }
 
 func (r *delegatedCodeRedis) Set(_ context.Context, key string, value interface{}, ttl time.Duration) *redis.StatusCmd {
 	r.values[key] = string(value.([]byte))
-	if r.ttls == nil {
-		r.ttls = make(map[string]time.Duration)
+	if r.now != nil && ttl > 0 {
+		if r.deadlines == nil {
+			r.deadlines = make(map[string]time.Time)
+		}
+		r.deadlines[key] = r.now().Add(ttl)
 	}
-	r.ttls[key] = ttl
 	return redis.NewStatusResult("OK", nil)
 }
 
 func (r *delegatedCodeRedis) Del(_ context.Context, keys ...string) *redis.IntCmd {
 	var n int64
 	for _, key := range keys {
-		if _, ok := r.values[key]; ok {
-			delete(r.values, key)
+		if _, ok := r.values[key]; ok && !r.expired(key) {
 			n++
 		}
+		delete(r.values, key)
 	}
 	return redis.NewIntResult(n, nil)
 }
 
 func TestDelegatedCodeIsSingleUseAndShortLived(t *testing.T) {
 	config.UseTestFile(t)
-	previousStorage := globalStorage
-	t.Cleanup(func() { globalStorage = previousStorage })
 
-	mock := &delegatedCodeRedis{values: make(map[string]string)}
-	stores := map[string]stateStorage{
-		"memory": &memStateStorage{codes: make(map[string]*DelegatedCodeData)},
-		"redis":  &redisStateStorage{cl: mock, ctx: context.Background()},
-	}
-	for name, store := range stores {
+	for _, name := range []string{"memory", "redis"} {
 		t.Run(name, func(t *testing.T) {
+			now := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+			clock := func() time.Time { return now }
+			var store stateStorage
+			if name == "memory" {
+				mem := newMemStateStorage()
+				mem.now = clock
+				store = mem
+			} else {
+				mock := &delegatedCodeRedis{values: make(map[string]string), now: clock}
+				store = &redisStateStorage{cl: mock, ctx: context.Background()}
+			}
+
 			code := store.CreateCodeData("sub", "sid", "ctx", oidcprovider.GenericProvider)
 			require.True(t, store.DeleteCodeData(code))
 			require.False(t, store.DeleteCodeData(code))
 			require.Nil(t, store.GetCodeData(code))
+
+			code = store.CreateCodeData("sub", "sid", "ctx", oidcprovider.GenericProvider)
+			now = now.Add(10*time.Minute - time.Second)
+			require.NotNil(t, store.GetCodeData(code))
+			now = now.Add(time.Second)
+			require.Nil(t, store.GetCodeData(code))
+			require.False(t, store.DeleteCodeData(code))
 		})
 	}
-	code := stores["redis"].CreateCodeData("sub", "sid", "ctx", oidcprovider.GenericProvider)
-	require.LessOrEqual(t, mock.ttls[code], 10*time.Minute)
+}
+
+func TestDelegatedCodeIsConsumedOnce(t *testing.T) {
+	store := newMemStateStorage()
+	code := store.CreateCodeData("sub", "sid", "ctx", oidcprovider.GenericProvider)
+
+	const n = 32
+	var wg sync.WaitGroup
+	var consumed atomic.Int32
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			store.CreateCodeData("other", "sid", "ctx", oidcprovider.GenericProvider)
+			if store.GetCodeData(code) != nil && store.DeleteCodeData(code) {
+				consumed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int32(1), consumed.Load())
 }
 
 func TestDelegatedCodeIsolation(t *testing.T) {
@@ -99,7 +145,7 @@ func TestDelegatedCodeIsolation(t *testing.T) {
 		FranceConnectID: "fc-sub",
 	}
 	stores := map[string]stateStorage{
-		"memory": &memStateStorage{codes: make(map[string]*DelegatedCodeData)},
+		"memory": newMemStateStorage(),
 		"redis": &redisStateStorage{
 			cl:  &delegatedCodeRedis{values: make(map[string]string)},
 			ctx: context.Background(),
@@ -161,7 +207,7 @@ func TestDelegatedCodeContextMismatch(t *testing.T) {
 	config.UseTestFile(t)
 	previousStorage := globalStorage
 	t.Cleanup(func() { globalStorage = previousStorage })
-	globalStorage = &memStateStorage{codes: make(map[string]*DelegatedCodeData)}
+	globalStorage = newMemStateStorage()
 	userinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer external-token", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
@@ -1827,7 +1873,7 @@ func TestDelegatedCodeCannotBeReplayed(t *testing.T) {
 	config.UseTestFile(t)
 	previousStorage := globalStorage
 	t.Cleanup(func() { globalStorage = previousStorage })
-	globalStorage = &memStateStorage{codes: make(map[string]*DelegatedCodeData)}
+	globalStorage = newMemStateStorage()
 
 	env := newBackchannelLogoutTestEnv(t)
 	previousAuthentication := config.GetConfig().Authentication
