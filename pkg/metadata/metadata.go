@@ -122,6 +122,7 @@ func (cm *CozyMetadata) UpdatedByApp(slug, version string) error {
 	updated := &UpdatedByAppEntry{Slug: slug, Date: now, Version: version}
 	for i, entry := range cm.UpdatedByApps {
 		if entry.Slug == slug {
+			updated.Instance = entry.Instance
 			cm.UpdatedByApps[i] = updated
 			return nil
 		}
