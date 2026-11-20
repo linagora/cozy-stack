@@ -25,6 +25,15 @@ type capturedReportMail struct{ recipient, raw string }
 // Use real TCP and collect the SMTP envelope and MIME before sending the final ACK.
 func reportSMTP(t *testing.T, onHello func(), loseAck bool) (*gomail.DialerOptions, <-chan capturedReportMail) {
 	t.Helper()
+	return reportSMTPWithFaults(t, func(int) {
+		if onHello != nil {
+			onHello()
+		}
+	}, nil, loseAck)
+}
+
+func reportSMTPWithFaults(t *testing.T, onHello func(int), dropMail func(int) bool, loseAck bool) (*gomail.DialerOptions, <-chan capturedReportMail) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	messages := make(chan capturedReportMail, 30)
@@ -33,7 +42,7 @@ func reportSMTP(t *testing.T, onHello func(), loseAck bool) (*gomail.DialerOptio
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for {
+		for number := 1; ; number++ {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
@@ -56,10 +65,13 @@ func reportSMTP(t *testing.T, onHello func(), loseAck bool) (*gomail.DialerOptio
 					switch {
 					case strings.HasPrefix(line, "EHLO"), strings.HasPrefix(line, "HELO"):
 						if onHello != nil {
-							onHello()
+							onHello(number)
 						}
 						reply("250 report test")
 					case strings.HasPrefix(line, "MAIL FROM:"):
+						if dropMail != nil && dropMail(number) {
+							return
+						}
 						reply("250 OK")
 					case strings.HasPrefix(line, "RCPT TO:"):
 						to = line
