@@ -278,6 +278,40 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		requireNoReportMail(t, messages)
 	})
 
+	t.Run("does not reconnect after the first MAIL FROM loses its reply", func(t *testing.T) {
+		link := newLink(t)
+		greetings := make(chan int, 4)
+		mailCommands := make(chan int, 4)
+		revoked := make(chan error, 1)
+		options, messages := reportSMTPWithFaults(t, func(number int) {
+			greetings <- number
+			if number == 2 {
+				// Only the old sender reaches this second handshake. Revoke
+				// before sending its EHLO reply to expose the stale check.
+				changed := link.Clone().(*permission.Permission)
+				changed.ActivityReportEnabled = nil
+				revoked <- couchdb.UpdateDoc(inst, changed)
+			}
+		}, func(number int) bool {
+			mailCommands <- number
+			return number == 1
+		}, false)
+		conf.Mail = options
+		err := run(t, link)
+		select {
+		case result := <-revoked:
+			require.NoError(t, result)
+		default:
+		}
+		requireNoReportMail(t, messages)
+		require.EqualError(t, err, "link report attempt failed")
+		require.NoError(t, run(t, link))
+		requireNoReportMail(t, messages)
+		require.Len(t, greetings, 1)
+		require.Len(t, mailCommands, 1)
+		require.Equal(t, 1, <-mailCommands)
+	})
+
 	t.Run("does not replay a submission with an unknown outcome", func(t *testing.T) {
 		link := newLink(t)
 		options, messages := reportSMTP(t, nil, true)

@@ -159,7 +159,12 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 	if err != nil {
 		return err
 	}
-	defer smtp.Close()
+	client, ok := smtp.(reportSMTPClient)
+	if !ok {
+		_ = smtp.Close()
+		return errors.New("mail transport does not support single-session submission")
+	}
+	defer client.Close()
 	if err := setReportStatus(inst, state, reportSubmitting); err != nil {
 		return err
 	}
@@ -183,10 +188,43 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 
 	// A transport error need not mean the relay rejected the message. Leave
 	// the claim in place on any unknown outcome, including completion failure.
-	if err := gomail.Send(smtp, email); err != nil {
+	if err := gomail.Send(gomail.SendFunc(func(from string, to []string, message io.WriterTo) error {
+		return submitReportMail(client, from, to, message)
+	}), email); err != nil {
 		return err
 	}
+	defer smtp.Close() // QUIT only after DATA completed successfully.
 	return setReportStatus(inst, state, reportSent)
+}
+
+// The pinned gomail sender exposes the underlying SMTP commands. Use them on
+// the already checked session: gomail's Send can reconnect after MAIL FROM EOF.
+type reportSMTPClient interface {
+	Mail(string) error
+	Rcpt(string) error
+	Data() (io.WriteCloser, error)
+	Close() error
+}
+
+func submitReportMail(client reportSMTPClient, from string, to []string, message io.WriterTo) error {
+	if err := client.Mail(from); err != nil {
+		return err
+	}
+	for _, addr := range to {
+		if err := client.Rcpt(addr); err != nil {
+			return err
+		}
+	}
+	data, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := message.WriteTo(data); err != nil {
+		// Closing data would send the terminator for a partial message.
+		// The caller closes the transport instead.
+		return err
+	}
+	return data.Close()
 }
 
 func setReportStatus(inst *instance.Instance, state *couchdb.JSONDoc, status string) error {
