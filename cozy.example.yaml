@@ -226,6 +226,7 @@ konnectors:
 # search. Search is off when the url is empty.
 search:
   opensearch:
+    # The cluster URL can include a path prefix. Omit the query string.
     url: http://localhost:9200
     username: admin
     password: $3cr3t

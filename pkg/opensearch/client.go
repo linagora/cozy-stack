@@ -151,10 +151,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 }
 
 func (c *Client) do(ctx context.Context, method, path, contentType string, body []byte, out any) error {
-	u := *c.opts.URL
-	u.Path = strings.TrimSuffix(u.Path, "/")
 	p, q, _ := strings.Cut(path, "?")
-	u.Path += p
+	endpoint := url.URL{Path: p}
+	u := c.opts.URL.JoinPath(endpoint.EscapedPath())
 	u.RawQuery = q
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
 	if err != nil {

@@ -715,12 +715,12 @@ func TestSearchConfig(t *testing.T) {
 			assert.True(t, ok)
 			assert.Equal(t, "admin", user)
 			assert.Equal(t, "secret", password)
-			assert.Equal(t, "/prod-eu_1-files", r.URL.Path)
+			assert.Equal(t, "/os%2Fcluster/prod-eu_1-files%2520old", r.URL.EscapedPath())
 			w.WriteHeader(http.StatusOK)
 		}))
 		t.Cleanup(srv.Close)
 		cfg := viper.New()
-		cfg.Set("search.opensearch.url", srv.URL)
+		cfg.Set("search.opensearch.url", srv.URL+"/os%2Fcluster/")
 		cfg.Set("search.opensearch.username", "admin")
 		cfg.Set("search.opensearch.password", "secret")
 		cfg.Set("search.opensearch.index_prefix", "prod-eu_1")
@@ -735,7 +735,7 @@ func TestSearchConfig(t *testing.T) {
 		require.NoError(t, UseViper(cfg))
 		search := GetConfig().Search
 		require.NotNil(t, search)
-		require.NoError(t, search.CreateIndex(t.Context(), "files", nil))
+		require.NoError(t, search.CreateIndex(t.Context(), "files%20old", nil))
 	})
 
 	t.Run("invalid url makes UseViper fail", func(t *testing.T) {
@@ -745,6 +745,14 @@ func TestSearchConfig(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid search.opensearch.url config")
 	})
+
+	for _, query := range []string{"?route=search", "?"} {
+		t.Run("reject URL with query "+query, func(t *testing.T) {
+			cfg := viper.New()
+			cfg.Set("search.opensearch.url", "https://gateway.example.net/os/"+query)
+			require.ErrorContains(t, UseViper(cfg), "search.opensearch.url")
+		})
+	}
 
 	for _, prefix := range []string{"Cozy", "my stack", "_prod", "-prod", "+prod", "prod*"} {
 		t.Run("invalid prefix "+prefix, func(t *testing.T) {
