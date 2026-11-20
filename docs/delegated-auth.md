@@ -111,8 +111,7 @@ ignored). If `id_token_jwk_url` is set, the client can send the ID token from
 the provider instead of the access token. This token will be checked with the
 key fetched from this URL, its `iss` must be the issuer of the provider (from
 `issuer` or the discovery of `token_url`), its `aud` must contain the
-`client_id` (and its `azp`, when present, must be the `client_id`), and its
-`sub` must match the `oidc_id` set in the instance.
+`client_id`, and its `sub` must match the `oidc_id` set in the instance.
 
 ### Routes
 

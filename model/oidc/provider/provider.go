@@ -311,12 +311,11 @@ func VerifyIDTokenForClient(raw, contextName string, conf *Config) (jwt.MapClaim
 	if issuer, _ := claims.GetIssuer(); issuer == "" || issuer != expectedIssuer {
 		return nil, errors.New("id_token issuer mismatch")
 	}
+	// azp is not checked: a token asked by another client (the admin app for
+	// example) is accepted when the provider also lists our client_id in aud.
 	aud, err := claims.GetAudience()
 	if conf.ClientID == "" || err != nil || !audienceContains(aud, conf.ClientID) {
 		return nil, errors.New("id_token audience mismatch")
-	}
-	if azp, ok := claims["azp"]; ok && azp != conf.ClientID {
-		return nil, errors.New("id_token azp mismatch")
 	}
 	return claims, nil
 }
