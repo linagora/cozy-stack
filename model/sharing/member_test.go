@@ -764,6 +764,21 @@ func TestMemberMatching(t *testing.T) {
 	assert.Nil(t, s.MemberMatching(&Member{}))
 }
 
+func TestAddMemberMatchesEmailsCaseInsensitively(t *testing.T) {
+	config.UseTestFile(t)
+	s := &Sharing{
+		Members: []Member{
+			{Status: MemberStatusOwner, Email: "alice@example.net"},
+			{Status: MemberStatusReady, Email: "Bob@Example.net"},
+		},
+		Credentials: []Credentials{{}},
+	}
+	_, idx, err := s.addMember(&instance.Instance{}, Member{Status: MemberStatusMailNotSent, Email: "bob@example.net"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, idx)
+	assert.Len(t, s.Members, 2, "the same person is not added twice")
+}
+
 func TestFindOrgInstance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
