@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -4370,6 +4371,45 @@ func readFile(fs vfs.VFS, name string) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(f)
+}
+
+// BenchmarkMagicFolderUpload measures saves after the target directories exist.
+func BenchmarkMagicFolderUpload(b *testing.B) {
+	require.NoError(b, config.LoadTestFile())
+	require.NoError(b, loadLocale())
+	config.GetConfig().Fs.URL = &url.URL{Scheme: "file", Path: b.TempDir()}
+	for _, target := range []struct {
+		name, slug string
+		concrete   bool
+	}{
+		{"ConcreteMailID", "mail", true},
+		{"NotesMagicID", consts.NotesSlug, false},
+		{"MailMagicID", "mail", false},
+	} {
+		b.Run(target.name, func(b *testing.B) {
+			setup := testutils.NewSetup(b, b.Name())
+			inst := setup.GetTestInstance()
+			_, token := setup.GetTestClient(consts.Files)
+			server := setup.GetTestServer("/files", Routes)
+			id := consts.Apps + "/" + target.slug
+			dirID, err := inst.ResolveDirID(id)
+			require.NoError(b, err)
+			if target.concrete {
+				id = dirID
+			}
+			prefix := "/files/" + url.PathEscape(id) + "?Type=file&Name="
+			for i := 0; b.Loop(); i++ {
+				req := httptest.NewRequest(http.MethodPost, prefix+strconv.Itoa(i)+".txt", strings.NewReader("mail"))
+				req.Header.Set("Authorization", "Bearer "+token)
+				req.Header.Set("Content-Type", "text/plain")
+				res := httptest.NewRecorder()
+				server.Config.Handler.ServeHTTP(res, req)
+				if res.Code != http.StatusCreated {
+					b.Fatalf("upload returned %d: %s", res.Code, res.Body.String())
+				}
+			}
+		})
+	}
 }
 
 func loadLocale() error {
