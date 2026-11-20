@@ -219,7 +219,7 @@ func reportFeatureEnabled(inst *instance.Instance) (bool, error) {
 	if err := couchdb.GetDoc(prefixer.GlobalPrefixer, consts.Instances, inst.ID(), &current); err != nil {
 		return false, err
 	}
-	return feature.Enabled(&current, publiclink.FlagEnabled), nil
+	return feature.EnabledFresh(&current, publiclink.FlagEnabled)
 }
 
 func readReportPreview(src io.Reader, location *time.Location) ([][]string, error) {
