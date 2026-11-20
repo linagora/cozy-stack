@@ -462,6 +462,18 @@ existing value; `null` and non-boolean values are rejected. This choice alone
 does not generate or send a report. Imported links do not retain the choice;
 existing event history and CSV files remain ordinary imported data.
 
+The Stack's internal expiry report generator reuses the interactive CSV format
+and includes only retained events through the specified expiry, inclusive.
+Reports use a server-bound directory, never an existing folder selected by
+name or references. Published CSVs are ordinary Drive files and may be shared
+by their owner. The private binding and snapshot record are not Drive files.
+
+The generator is not called by a route, worker, or scheduler. Publication of
+the Drive file and recording its snapshot are separate operations: an
+interruption between them can leave a complete file that the generator will
+not reuse or overwrite. There is no migration recovery or automatic retry in
+this step.
+
 #### Request to add / remove codes with a document metadata
 
 ```http

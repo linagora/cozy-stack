@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 )
 
@@ -33,4 +35,23 @@ func (p *Permission) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return json.Unmarshal(data, (*plain)(p))
+}
+
+// ActivityReportExpiry returns the expiry of an opted-in file link. It works
+// on expired permissions, which the report generator reads directly from CouchDB.
+func (p *Permission) ActivityReportExpiry() (time.Time, bool) {
+	if p.Type != TypeShareByLink || p.ActivityReportEnabled == nil || !*p.ActivityReportEnabled || len(p.Codes) == 0 {
+		return time.Time{}, false
+	}
+	expiry, _ := p.ExpiresAt.(string)
+	at, err := time.Parse(time.RFC3339Nano, expiry)
+	if err != nil || at.IsZero() {
+		return time.Time{}, false
+	}
+	for _, rule := range p.Permissions {
+		if rule.Type == consts.Files {
+			return at.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }

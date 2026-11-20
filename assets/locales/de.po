@@ -42,6 +42,9 @@ msgstr "Chat"
 msgid "Tree Meeting Recordings"
 msgstr "Besprechungsaufzeichnungen"
 
+msgid "Tree Reports"
+msgstr "Berichte"
+
 msgid "Tree Shared Drives"
 msgstr "Drives"
 
