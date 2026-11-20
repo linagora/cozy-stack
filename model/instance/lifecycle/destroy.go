@@ -87,19 +87,30 @@ func Destroy(domain string) error {
 	if err != nil {
 		return err
 	}
-	inst.Deleting = false
+	inst.Deleting = true
 	_ = instance.Update(inst)
 
 	removeTriggers(inst)
 
-	if err = couchdb.DeleteAllDBs(inst); err != nil {
-		inst.Logger().Errorf("Could not delete all CouchDB databases: %s", err.Error())
+	// Deleting stays true while the files are deleted, so that no request
+	// writes a new object behind the deletion. It is reset on failure to
+	// allow a retry.
+	retryable := func(err error) error {
+		inst.Deleting = false
+		_ = instance.Update(inst)
 		return err
 	}
 
+	// The VFS goes first: on S3 without listing, the object keys are read
+	// from CouchDB, and a failure here leaves the instance retryable.
 	if err = inst.VFS().Delete(); err != nil {
 		inst.Logger().Errorf("Could not delete VFS: %s", err.Error())
-		return err
+		return retryable(err)
+	}
+
+	if err = couchdb.DeleteAllDBs(inst); err != nil {
+		inst.Logger().Errorf("Could not delete all CouchDB databases: %s", err.Error())
+		return retryable(err)
 	}
 
 	err = instance.Delete(inst)
