@@ -571,6 +571,10 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 		if toPatch.Password != nil {
 			toPatch.Password = true
 		}
+		if !owner {
+			toPatch.Codes = nil
+			toPatch.ShortCodes = nil
+		}
 
 		return jsonapi.Data(c, http.StatusOK, &APIPermission{Permission: toPatch}, nil)
 	}
