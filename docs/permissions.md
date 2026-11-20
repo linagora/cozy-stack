@@ -481,8 +481,10 @@ the feature flag, current opt-in and exact expiry. It sends a link to the CSV
 and a preview to the instance owner's current address, or saves the CSV alone
 when no address is available. It rechecks the flag, consent, expiry, recipient
 and report snapshot before SMTP submission, even when the attempt continues
-past the end of the window. Jobs skipped outside the window are rediscovered
-by a subsequent scan if still eligible.
+past the end of the window. When the flag depends on the Manager, these worker
+checks bypass the cache and do not authorize sending if that lookup fails.
+Jobs skipped outside the window are rediscovered by a subsequent scan if still
+eligible.
 
 Attempts that fail before SMTP submission can be retried on subsequent nights.
 The Stack does not automatically resend a message whose submission might have
@@ -494,7 +496,11 @@ worker will not reuse or overwrite. There is no migration recovery.
 With Redis jobs, scanners coordinate with a `locks:` lease on the jobs Redis
 backend, even if instance locks are stored elsewhere. The jobs Redis ACL must
 allow the standard lock operations (`SET`, `GET`, `PEXPIRE`, `DEL` and `EVAL`)
-on that lease key, and queue length reads on both report queues.
+on that lease key, and queue length reads on both report queues. A jobs backend
+configured with multiple `redis.addrs` and no `redis.master` can use Redis
+Cluster. On a native cluster, the broker's multi-key `BRPOP` can fail with
+`CROSSSLOT` because the report queue keys are in separate slots. Report jobs
+may then remain queued and prevent subsequent scans.
 
 #### Request to add / remove codes with a document metadata
 
