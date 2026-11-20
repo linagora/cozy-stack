@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/feature"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/publiclink"
@@ -17,19 +18,9 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/mail"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/gomail"
-)
-
-// Do not wake the prototype's queue when registering this consumer.
-const expiredReportWorker = "expired-link-report-mail"
-
-const (
-	reportPending    = "pending"
-	reportFileOnly   = "file-only"
-	reportNoEmail    = "no-email"
-	reportSubmitting = "submitting"
-	reportSent       = "sent"
 )
 
 const expiredReportTemplate = "expired_link_report"
@@ -39,24 +30,32 @@ var expiredReportTemplater = MailTemplater{expiredReportTemplate: subjectEntry{"
 
 func init() {
 	job.AddWorker(&job.WorkerConfig{
-		WorkerType: expiredReportWorker, WorkerFunc: expiredLinkReport,
+		WorkerType: publiclink.ReportWorker, WorkerFunc: expiredLinkReport,
 		Reserved: true, Concurrency: 2, MaxExecCount: 1, Timeout: 10 * time.Minute,
 	})
 }
 
 func expiredLinkReport(ctx *job.TaskContext) error {
+	return expiredLinkReportWithClock(ctx, time.Now)
+}
+
+func expiredLinkReportWithClock(ctx *job.TaskContext, now func() time.Time) error {
 	var msg publiclink.ReportMessage
-	if err := ctx.UnmarshalMessage(&msg); err != nil || msg.LinkID == "" || msg.Expiry.IsZero() || msg.Expiry.After(time.Now()) {
+	at := now()
+	if err := ctx.UnmarshalMessage(&msg); err != nil || ctx.Instance == nil || msg.LinkID == "" || msg.Expiry.IsZero() || msg.Expiry.After(at) {
 		return errors.New("invalid link report job")
 	}
-	if err := deliverExpiredLinkReport(ctx, msg); err != nil {
+	if !publiclink.ReportWindowOpen(at) {
+		return nil
+	}
+	if err := deliverExpiredLinkReport(ctx, msg, now); err != nil {
 		// Internal errors can contain recipients, event data or storage details.
 		return errors.New("link report attempt failed")
 	}
 	return nil
 }
 
-func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage) error {
+func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage, now func() time.Time) error {
 	inst := ctx.Instance
 	key := publiclink.ReportID(msg.LinkID, msg.Expiry)
 	mu := config.Lock().LongOperation(inst, "public-link-report/"+key)
@@ -68,10 +67,12 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 		return err
 	}
 
-	state := &couchdb.JSONDoc{Type: consts.PublicLinkReports}
-	stateID := "delivery-" + key
-	err := couchdb.GetDoc(inst, consts.PublicLinkReports, stateID, state)
-	if err == nil && state.M["status"] != reportPending && state.M["status"] != reportFileOnly {
+	if !publiclink.ReportWindowOpen(now()) {
+		return nil
+	}
+	state := &publiclink.Delivery{DocID: publiclink.DeliveryID(key)}
+	err := couchdb.GetDoc(inst, consts.PublicLinkReports, state.ID(), state)
+	if err == nil && !state.Due(now()) {
 		return nil
 	}
 	if err != nil && (!couchdb.IsNotFoundError(err) || couchdb.IsDeletedError(err)) {
@@ -84,25 +85,37 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 	}
 	address, _ := settings.M["email"].(string)
 	address = strings.TrimSpace(address)
-	if create {
-		status := reportPending
-		if address == "" {
-			status = reportFileOnly
-		}
-		state.M = map[string]interface{}{"_id": stateID, "status": status}
-		if err := couchdb.CreateNamedDocWithDB(inst, state); err != nil {
-			return err
-		}
-	} else if address == "" && state.M["status"] != reportFileOnly {
-		if err := setReportStatus(inst, state, reportFileOnly); err != nil {
-			return err
-		}
+	enabled, err := reportFeatureEnabled(inst)
+	if err != nil || !enabled {
+		return err
 	}
-	if state.M["status"] == reportFileOnly {
+	at := now()
+	if !publiclink.ReportWindowOpen(at) {
+		return nil
+	}
+	if address == "" {
+		state.Status = publiclink.DeliveryFileOnly
+	} else if create {
+		state.Status = publiclink.DeliveryPending
+	}
+	// Persist the next eligible night before doing any work. The revision check
+	// also prevents two consumers from starting the same attempt on stale reads.
+	_, end := publiclink.ReportWindow(at)
+	state.NextAttempt, _ = publiclink.ReportWindow(end)
+	if create {
+		err = couchdb.CreateNamedDocWithDB(inst, state)
+	} else {
+		err = couchdb.UpdateDoc(inst, state)
+	}
+	if err != nil || !publiclink.ReportWindowOpen(now()) {
+		return err
+	}
+	// Only admission is limited to the window; the report may finish after it.
+	if state.Status == publiclink.DeliveryFileOnly {
 		if _, err := inst.GenerateExpiredLinkReport(ctx, msg.LinkID, msg.Expiry); err != nil {
 			return err
 		}
-		return setReportStatus(inst, state, reportNoEmail)
+		return setReportStatus(inst, state, publiclink.DeliveryNoEmail)
 	}
 
 	owner, err := netmail.ParseAddress(address)
@@ -155,10 +168,17 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 		return err
 	}
 	defer transport.Close()
-	if err := setReportStatus(inst, state, reportSubmitting); err != nil {
+	if err := setReportStatus(inst, state, publiclink.DeliverySubmitting); err != nil {
 		return err
 	}
 	err = check(func() error {
+		enabled, err := reportFeatureEnabled(inst)
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			return errors.New("link reports disabled")
+		}
 		current, err := inst.SettingsDocument()
 		if err != nil {
 			return err
@@ -172,8 +192,8 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 		err = ctx.Err()
 	}
 	if err != nil {
-		// No message was submitted. Release the claim only in this case.
-		return errors.Join(err, setReportStatus(inst, state, reportPending))
+		// No message was submitted. Release the claim for the next night only.
+		return errors.Join(err, setReportStatus(inst, state, publiclink.DeliveryPending))
 	}
 
 	// A transport error need not mean the relay rejected the message. Leave
@@ -184,12 +204,22 @@ func deliverExpiredLinkReport(ctx *job.TaskContext, msg publiclink.ReportMessage
 		return err
 	}
 	defer quitReportSMTP(ctx, client, transport)
-	return setReportStatus(inst, state, reportSent)
+	return setReportStatus(inst, state, publiclink.DeliverySent)
 }
 
-func setReportStatus(inst *instance.Instance, state *couchdb.JSONDoc, status string) error {
-	state.M["status"] = status
+func setReportStatus(inst *instance.Instance, state *publiclink.Delivery, status string) error {
+	state.Status = status
 	return couchdb.UpdateDoc(inst, state)
+}
+
+func reportFeatureEnabled(inst *instance.Instance) (bool, error) {
+	// Re-read the flag sources after blocking work, rather than using the
+	// instance snapshot loaded before the job began.
+	var current instance.Instance
+	if err := couchdb.GetDoc(prefixer.GlobalPrefixer, consts.Instances, inst.ID(), &current); err != nil {
+		return false, err
+	}
+	return feature.Enabled(&current, publiclink.FlagEnabled), nil
 }
 
 func readReportPreview(src io.Reader, location *time.Location) ([][]string, error) {

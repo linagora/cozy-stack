@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/i18n"
 	"github.com/cozy/cozy-stack/pkg/metadata"
+	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/spf13/afero"
@@ -49,7 +51,15 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 
 	const owner = "owner@example.test"
 	expiry := time.Date(2025, time.February, 21, 14, 0, 0, 0, time.UTC)
-	inst := &instance.Instance{Domain: "report-" + strings.ToLower(utils.RandomString(10)) + ".example.test", Locale: "fr"}
+	night, end := publiclink.ReportWindow(expiry)
+	inst := &instance.Instance{
+		Domain: "report-" + strings.ToLower(utils.RandomString(10)) + ".example.test", Locale: "fr",
+		FeatureFlags: map[string]interface{}{publiclink.FlagEnabled: true},
+	}
+	require.NoError(t, couchdb.CreateDoc(prefixer.GlobalPrefixer, inst))
+	t.Cleanup(func() {
+		require.NoError(t, couchdb.DeleteDoc(prefixer.GlobalPrefixer, inst))
+	})
 	t.Cleanup(func() {
 		for _, dt := range []string{consts.Files, consts.Settings, consts.Permissions, consts.PublicLinkEvents, consts.PublicLinkReports} {
 			if err := couchdb.DeleteDB(inst, dt); err != nil && !couchdb.IsNotFoundError(err) {
@@ -91,16 +101,24 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		require.NoError(t, err)
 		return file
 	}
-	run := func(t *testing.T, link *permission.Permission) error {
+	runWithClock := func(t *testing.T, link *permission.Permission, now func() time.Time) error {
 		t.Helper()
 		msg, err := job.NewMessage(publiclink.ReportMessage{LinkID: link.ID(), Expiry: expiry})
 		require.NoError(t, err)
-		j := job.NewJob(inst, &job.JobRequest{WorkerType: expiredReportWorker, Message: msg})
+		j := job.NewJob(inst, &job.JobRequest{WorkerType: publiclink.ReportWorker, Message: msg})
 		ctx, cancel := job.NewTaskContext("report-test", j, inst)
 		defer cancel()
 		ctx, cancelTimeout := ctx.WithTimeout(5 * time.Second)
 		defer cancelTimeout()
-		return expiredLinkReport(ctx)
+		return expiredLinkReportWithClock(ctx, now)
+	}
+	runAt := func(t *testing.T, link *permission.Permission, at time.Time) error {
+		t.Helper()
+		return runWithClock(t, link, func() time.Time { return at })
+	}
+	run := func(t *testing.T, link *permission.Permission) error {
+		t.Helper()
+		return runAt(t, link, night)
 	}
 	setOwner := func(t *testing.T, email string) {
 		t.Helper()
@@ -124,6 +142,8 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		}, 10*time.Second, 50*time.Millisecond)
 		conf.Mail.Host = "127.0.0.1"
 		require.NoError(t, run(t, link))
+		requireNoReportMail(t, messages)
+		require.NoError(t, runAt(t, link, night.AddDate(0, 0, 1)))
 		got := receiveReportMail(t, messages)
 		require.Equal(t, "RCPT TO:<"+owner+">", got.recipient)
 		header, parts := reportMailParts(t, got.raw)
@@ -178,7 +198,7 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		require.Len(t, rows, 5)
 		require.Equal(t, "older-visitor", rows[1][2])
 		require.Equal(t, "<visitor-four>", rows[4][2])
-		require.NoError(t, run(t, link))
+		require.NoError(t, runAt(t, link, night.AddDate(0, 0, 2)))
 		requireNoReportMail(t, messages)
 	})
 
@@ -196,18 +216,40 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 	})
 
 	t.Run("rechecks changes while opening SMTP", func(t *testing.T) {
-		for _, change := range []string{"clean", "revoked", "recipient", "infected", "bytes-only", "clean-and-changed-metadata", "clean-and-changed-bytes", "clean-after-reverted-metadata", "clean-and-revoked"} {
+		for _, change := range []string{
+			"clean", "revoked", "expiry", "flag", "recipient", "infected", "bytes-only",
+			"clean-and-changed-metadata", "clean-and-changed-bytes", "clean-after-reverted-metadata", "clean-and-revoked",
+		} {
 			t.Run(change, func(t *testing.T) {
 				link := newLink(t)
 				if change == "recipient" {
 					t.Cleanup(func() { setOwner(t, owner) })
 				}
+				if change == "flag" {
+					t.Cleanup(func() {
+						var current instance.Instance
+						require.NoError(t, couchdb.GetDoc(prefixer.GlobalPrefixer, consts.Instances, inst.ID(), &current))
+						current.FeatureFlags[publiclink.FlagEnabled] = true
+						require.NoError(t, couchdb.UpdateDoc(prefixer.GlobalPrefixer, &current))
+						inst.SetRev(current.Rev())
+					})
+				}
 				mutate := func() error {
-					if change == "revoked" {
+					switch change {
+					case "revoked":
 						link.ActivityReportEnabled = nil
 						return couchdb.UpdateDoc(inst, link)
-					}
-					if change == "recipient" {
+					case "expiry":
+						link.ExpiresAt = expiry.Add(time.Nanosecond).Format(time.RFC3339Nano)
+						return couchdb.UpdateDoc(inst, link)
+					case "flag":
+						var current instance.Instance
+						if err := couchdb.GetDoc(prefixer.GlobalPrefixer, consts.Instances, inst.ID(), &current); err != nil {
+							return err
+						}
+						current.FeatureFlags[publiclink.FlagEnabled] = false
+						return couchdb.UpdateDoc(prefixer.GlobalPrefixer, &current)
+					case "recipient":
 						settings.M["email"] = "changed@example.test"
 						return couchdb.UpdateDoc(inst, settings)
 					}
@@ -297,6 +339,51 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 				requireNoReportMail(t, messages)
 			})
 		}
+	})
+
+	t.Run("day jobs create neither a checkpoint nor a report", func(t *testing.T) {
+		link := newLink(t)
+		options, messages := reportSMTP(t, nil, false)
+		conf.Mail = options
+		for _, daytime := range []time.Time{night.Add(-time.Nanosecond), end} {
+			require.NoError(t, runAt(t, link, daytime))
+		}
+		key := publiclink.ReportID(link.ID(), expiry)
+		err := couchdb.GetDoc(inst, consts.PublicLinkReports, publiclink.DeliveryID(key), &publiclink.Delivery{})
+		require.True(t, couchdb.IsNotFoundError(err), "%v", err)
+		_, err = inst.VFS().FileByID("link-report-" + key)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		requireNoReportMail(t, messages)
+	})
+
+	t.Run("does not interpret an unknown delivery checkpoint as pending", func(t *testing.T) {
+		link := newLink(t)
+		key := publiclink.ReportID(link.ID(), expiry)
+		state := &couchdb.JSONDoc{Type: consts.PublicLinkReports, M: map[string]interface{}{"_id": publiclink.DeliveryID(key)}}
+		require.NoError(t, couchdb.CreateNamedDocWithDB(inst, state))
+		options, messages := reportSMTP(t, nil, false)
+		conf.Mail = options
+		require.NoError(t, run(t, link))
+		_, err := inst.VFS().FileByID("link-report-" + key)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		requireNoReportMail(t, messages)
+	})
+
+	t.Run("a report admitted at night can finish after the window closes", func(t *testing.T) {
+		link := newLink(t)
+		var closed atomic.Bool
+		options, messages := reportSMTP(t, func() { closed.Store(true) }, false)
+		conf.Mail = options
+		require.NoError(t, runWithClock(t, link, func() time.Time {
+			if closed.Load() {
+				return end
+			}
+			return end.Add(-time.Nanosecond)
+		}))
+		require.True(t, closed.Load())
+		require.Equal(t, "RCPT TO:<"+owner+">", receiveReportMail(t, messages).recipient)
+		require.NoError(t, runAt(t, link, night.AddDate(0, 0, 1)))
+		requireNoReportMail(t, messages)
 	})
 
 	t.Run("requires opt-in before publishing the CSV", func(t *testing.T) {
@@ -418,7 +505,7 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 		conf.Mail = options
 		require.EqualError(t, run(t, link), "link report attempt failed")
 		require.Equal(t, "RCPT TO:<"+owner+">", receiveReportMail(t, messages).recipient)
-		require.NoError(t, run(t, link))
+		require.NoError(t, runAt(t, link, night.AddDate(0, 0, 1)))
 		requireNoReportMail(t, messages)
 	})
 }
