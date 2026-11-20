@@ -1658,20 +1658,7 @@ func (s *Sharing) notifyRecipients(inst *instance.Instance, except *Member) erro
 		return nil
 	}
 
-	var params PutRecipientsParams
-	params.Members = make([]Member, len(s.Members))
-	for i, m := range s.Members {
-		params.Members[i] = Member{
-			Status:     m.Status,
-			PublicName: m.PublicName,
-			Email:      m.Email,
-			ReadOnly:   m.ReadOnly,
-			// Instance and name are private
-		}
-	}
-	params.Groups = make([]Group, len(s.Groups))
-	copy(params.Groups, s.Groups)
-	body, err := json.Marshal(params)
+	body, err := json.Marshal(s.recipientsParams())
 	if err != nil {
 		return err
 	}
@@ -1727,6 +1714,24 @@ func (s *Sharing) notifyRecipients(inst *instance.Instance, except *Member) erro
 		res.Body.Close()
 	}
 	return errors.Join(errs...)
+}
+
+// recipientsParams is what recipients receive about the members and groups.
+func (s *Sharing) recipientsParams() PutRecipientsParams {
+	var params PutRecipientsParams
+	params.Members = make([]Member, len(s.Members))
+	for i, m := range s.Members {
+		params.Members[i] = Member{
+			Status:     m.Status,
+			PublicName: m.PublicName,
+			Email:      m.Email,
+			ReadOnly:   m.ReadOnly,
+			// Instance and name are private
+		}
+	}
+	params.Groups = make([]Group, len(s.Groups))
+	copy(params.Groups, s.Groups)
+	return params
 }
 
 func shouldNotifyMember(s *Sharing, i int, except *Member) bool {

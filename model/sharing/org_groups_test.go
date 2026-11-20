@@ -325,7 +325,7 @@ func TestReconcileOrgGroupsRetriesRecipientNotification(t *testing.T) {
 	require.NoError(t, couchdb.CreateDoc(owner, s))
 	sharingID = s.ID()
 	msg := job.OrgGroupsMessage{OrganizationID: org.OrgID, GroupID: groupID, SharingID: s.ID()}
-	require.Error(t, ReconcileOrgGroups(t.Context(), owner, msg, false))
+	require.NoError(t, ReconcileOrgGroups(t.Context(), owner, msg, false), "an unreachable recipient does not fail the run")
 	s, err := FindSharing(owner, s.ID())
 	require.NoError(t, err)
 	require.Equal(t, "New name", s.Groups[0].Name)
@@ -567,6 +567,9 @@ func TestReconcileOrgGroupsSkipsContactsWithoutIdentity(t *testing.T) {
 	s := createDriveSharingForGroupTest(t, owner, "No identity")
 	s.OrgDrive = true
 	s.Groups = []Group{{ID: groupID, Name: "Team"}}
+	// AddGroup turns such a contact into a member with only a name.
+	s.Members = append(s.Members, Member{Name: "Nobody", Status: MemberStatusMailNotSent, OnlyInGroups: true, Groups: []int{0}})
+	s.Credentials = []Credentials{{}}
 	require.NoError(t, couchdb.UpdateDoc(owner, s))
 	msg := job.OrgGroupsMessage{OrganizationID: org.OrgID, GroupID: groupID, SharingID: s.ID()}
 	for range 2 {
@@ -574,5 +577,58 @@ func TestReconcileOrgGroupsSkipsContactsWithoutIdentity(t *testing.T) {
 	}
 	s, err := FindSharing(owner, s.ID())
 	require.NoError(t, err)
-	require.Len(t, s.Members, 1, "a contact that cannot be matched is not invited on every run")
+	require.Len(t, s.Members, 2, "a contact that cannot be matched is not invited on every run")
+	require.Equal(t, MemberStatusMailNotSent, s.Members[1].Status, "nor is its member revoked")
+}
+
+func TestReconcileOrgGroupsNotifiesOncePerRun(t *testing.T) {
+	org, owner, _ := newOrgGroupInstances(t, true, false)
+	previousMode := build.BuildMode
+	build.BuildMode = build.ModeDev
+	t.Cleanup(func() { build.BuildMode = previousMode })
+	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
+		OrganizationID: org.OrgID, ID: "team", Name: "Team", Members: []orgdirectory.GroupMember{
+			{Email: "carol@cozy.tools", FirstName: "Carol"},
+			{Email: "dave@cozy.tools", FirstName: "Dave"},
+			{Email: "erin@cozy.tools", FirstName: "Erin"},
+		},
+	}))
+	groupID := orgdirectory.GroupDocID(org.OrgID, "team")
+	var puts atomic.Int32
+	recipient := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			puts.Add(1)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(recipient.Close)
+	s := createDriveSharingForGroupTest(t, owner, "Notified once")
+	s.OrgDrive = true
+	s.Groups = []Group{{ID: groupID, Name: "Team"}}
+	s.Members = append(s.Members,
+		Member{Status: MemberStatusReady, Instance: recipient.URL},
+		Member{Email: "carol@cozy.tools", Status: MemberStatusPendingInvitation, OnlyInGroups: true, Groups: []int{0}},
+	)
+	s.Credentials = []Credentials{{AccessToken: &auth.AccessToken{AccessToken: "test-token"}}, {}}
+	require.NoError(t, couchdb.UpdateDoc(owner, s))
+	msg := job.OrgGroupsMessage{OrganizationID: org.OrgID, GroupID: groupID, SharingID: s.ID()}
+	require.NoError(t, ReconcileOrgGroups(t.Context(), owner, msg, false))
+	s, err := FindSharing(owner, s.ID())
+	require.NoError(t, err)
+	require.Len(t, s.Members, 5)
+	require.Equal(t, MemberStatusPendingInvitation, s.Members[4].Status)
+	require.EqualValues(t, 1, puts.Load(), "one notification for all the new members")
+
+	// Carol's invitation could not be sent: only a job retry sends it again.
+	s.Members[2].Status = MemberStatusMailNotSent
+	require.NoError(t, couchdb.UpdateDoc(owner, s))
+	require.NoError(t, ReconcileOrgGroups(t.Context(), owner, msg, false))
+	s, err = FindSharing(owner, s.ID())
+	require.NoError(t, err)
+	require.Equal(t, MemberStatusMailNotSent, s.Members[2].Status)
+	require.EqualValues(t, 1, puts.Load(), "a pending invitation does not notify on every run")
+	require.NoError(t, ReconcileOrgGroups(t.Context(), owner, msg, true))
+	s, err = FindSharing(owner, s.ID())
+	require.NoError(t, err)
+	require.Equal(t, MemberStatusPendingInvitation, s.Members[2].Status)
 }
