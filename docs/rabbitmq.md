@@ -432,7 +432,8 @@ Direct grants and grants through another group are preserved. A member who left
 a sharing, or whom its owner removed, is not invited again while they stay in
 the group. Only owners
 reconcile, as a recipient cannot trust the groups its owner sends: a group that a
-member added to a sharing owned outside the organization is not kept up to date.
+member added to a sharing owned outside the organization is not kept up to date
+yet ([#5335](https://github.com/linagora/cozy-stack/issues/5335)).
 Owners notify
 recipients only when a sharing changed, or when a job is retried.
 Replication-retained mode continues to use local `share-group` triggers.

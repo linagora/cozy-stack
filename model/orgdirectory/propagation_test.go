@@ -2,8 +2,10 @@ package orgdirectory
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
@@ -58,17 +60,23 @@ func TestPushGroupJobs(t *testing.T) {
 
 type triggerRecorder struct {
 	job.JobSystem
-	added []*job.TriggerInfos
+	added []job.Trigger
+	count int
 }
 
-func (r *triggerRecorder) HasTrigger(_ prefixer.Prefixer, infos job.TriggerInfos) bool {
-	return slices.ContainsFunc(r.added, func(t *job.TriggerInfos) bool {
-		return t.Type == infos.Type && t.WorkerType == infos.WorkerType && t.Arguments == infos.Arguments
-	})
+func (r *triggerRecorder) GetAllTriggers(prefixer.Prefixer) ([]job.Trigger, error) {
+	return slices.Clone(r.added), nil
+}
+
+func (r *triggerRecorder) DeleteTrigger(_ prefixer.Prefixer, id string) error {
+	r.added = slices.DeleteFunc(r.added, func(t job.Trigger) bool { return t.ID() == id })
+	return nil
 }
 
 func (r *triggerRecorder) AddTrigger(t job.Trigger) error {
-	r.added = append(r.added, t.Infos())
+	r.count++
+	t.Infos().TID = fmt.Sprintf("trigger-%d", r.count)
+	r.added = append(r.added, t)
 	return nil
 }
 
@@ -93,7 +101,7 @@ func TestDebounceGroupPropagation(t *testing.T) {
 		require.NoError(t, debounceGroupPropagation(sys, scope("central")))
 	}
 	require.Len(t, sys.added, 1, "events within the window share one run")
-	trigger := sys.added[0]
+	trigger := sys.added[0].Infos()
 	require.Equal(t, "org.example", trigger.Domain, "the organization instance fans out")
 	require.Equal(t, "@in", trigger.Type)
 	require.Equal(t, "45s", trigger.Arguments)
@@ -101,6 +109,12 @@ func TestDebounceGroupPropagation(t *testing.T) {
 	var msg job.OrgGroupsMessage
 	require.NoError(t, trigger.Message.Unmarshal(&msg))
 	require.Equal(t, job.OrgGroupsMessage{OrganizationID: "org", FanOut: true}, msg)
+
+	// A trigger that should have fired long ago lost its Redis entry.
+	trigger.Metadata.CreatedAt = time.Now().Add(-staleTriggerDelays * 45 * time.Second)
+	require.NoError(t, debounceGroupPropagation(sys, scope("central")))
+	require.Len(t, sys.added, 1)
+	require.NotEqual(t, trigger.TID, sys.added[0].ID(), "a stale trigger is replaced")
 
 	sys = &triggerRecorder{}
 	require.NoError(t, debounceGroupPropagation(sys, scope("replicated")))

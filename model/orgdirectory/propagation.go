@@ -16,6 +16,10 @@ import (
 // one propagation run, unless the context sets org_groups_propagation_delay.
 const defaultGroupPropagationDelay = 30 * time.Second
 
+// staleTriggerDelays is how many propagation delays a pending trigger may stay
+// before it is considered lost, e.g. after Redis lost its entry.
+const staleTriggerDelays = 10
+
 var errNoJobSystem = errors.New("organization group propagation: job system is not initialized")
 
 // QueueGroupPropagation schedules a reconciliation of all organization groups
@@ -39,11 +43,25 @@ func debounceGroupPropagation(sys job.JobSystem, scope OrganizationInstances) er
 	if sys == nil {
 		return errNoJobSystem
 	}
-	infos := job.TriggerInfos{Type: "@in", WorkerType: job.OrgGroupsWorker, Arguments: groupPropagationDelay(org).String()}
+	delay := groupPropagationDelay(org)
+	infos := job.TriggerInfos{Type: "@in", WorkerType: job.OrgGroupsWorker, Arguments: delay.String()}
 	// shortcut: a change made while the trigger fires, before it is deleted, waits
 	// for the next change; switch to an atomic Redis window if that shows up.
-	if sys.HasTrigger(org, infos) {
-		return nil
+	triggers, err := sys.GetAllTriggers(org)
+	if err != nil {
+		return err
+	}
+	for _, t := range triggers {
+		if t.Type() != infos.Type || t.Infos().WorkerType != infos.WorkerType {
+			continue
+		}
+		if md := t.Infos().Metadata; md != nil && time.Since(md.CreatedAt) < staleTriggerDelays*delay {
+			return nil
+		}
+		// A trigger saved without its Redis entry never fires, and would block every later run.
+		if err := sys.DeleteTrigger(org, t.ID()); err != nil {
+			return err
+		}
 	}
 	msg, err := job.NewMessage(job.OrgGroupsMessage{OrganizationID: scope.OrganizationID, FanOut: true})
 	if err != nil {
