@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 
 	"github.com/cozy/cozy-stack/model/contact"
@@ -89,8 +90,12 @@ func ReconcileOrgGroups(ctx context.Context, inst *instance.Instance, msg job.Or
 	}
 	s, notify, err := reconcileOrgGroupsLocked(ctx, inst, org, msg, retry)
 	if notify {
-		// Notify outside the lock, which replication also takes.
-		err = errors.Join(err, s.notifyRecipients(inst, nil))
+		// Notify outside the lock, which replication also takes. An unreachable
+		// recipient must not fail the run, as a retry would notify everyone again.
+		if errn := s.notifyRecipients(inst, nil); errn != nil {
+			inst.Logger().WithNamespace("sharing").
+				Warnf("Cannot notify the recipients of sharing %s: %s", s.SID, errn)
+		}
 	}
 	return err
 }
@@ -103,7 +108,7 @@ func reconcileOrgGroupsLocked(ctx context.Context, inst, org *instance.Instance,
 		return nil, false, err
 	}
 	defer mu.Unlock()
-	firstRev := ""
+	var before PutRecipientsParams
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
@@ -115,22 +120,24 @@ func reconcileOrgGroupsLocked(ctx context.Context, inst, org *instance.Instance,
 		if err != nil {
 			return nil, false, err
 		}
-		if firstRev == "" {
-			firstRev = s.Rev()
+		if attempt == 0 {
+			before = s.recipientsParams()
 		}
-		matched, err := s.reconcileOrgGroups(ctx, inst, org, msg.GroupID)
+		matched, err := s.reconcileOrgGroups(ctx, inst, org, msg.GroupID, retry)
 		if couchdb.IsConflictError(err) {
 			if attempt < 3 {
 				continue
 			}
 			return nil, false, err
 		}
-		return s, matched && s.Active && (retry || s.Rev() != firstRev), err
+		// Saving pending invitations again changes the revision, not what recipients see.
+		changed := !reflect.DeepEqual(before, s.recipientsParams())
+		return s, matched && s.Active && (retry || changed), err
 	}
 }
 
 // reconcileOrgGroups reports whether the sharing has a group to reconcile.
-func (s *Sharing) reconcileOrgGroups(ctx context.Context, inst, org *instance.Instance, groupID string) (bool, error) {
+func (s *Sharing) reconcileOrgGroups(ctx context.Context, inst, org *instance.Instance, groupID string, retry bool) (bool, error) {
 	if !s.Owner || !s.Active {
 		return false, nil
 	}
@@ -177,7 +184,7 @@ func (s *Sharing) reconcileOrgGroups(ctx context.Context, inst, org *instance.In
 		if err != nil {
 			return matched, err
 		}
-		if err := s.reconcileGroupMembers(ctx, inst, index, contacts); err != nil {
+		if err := s.reconcileGroupMembers(ctx, inst, index, contacts, retry); err != nil {
 			if couchdb.IsConflictError(err) {
 				return matched, err
 			}
@@ -206,16 +213,17 @@ func (s *Sharing) memberInOrg(inst *instance.Instance, index int) bool {
 	return member != nil && member.OrgID == inst.OrgID
 }
 
-// reconcileGroupMembers indexes members and contacts once, so a run stays
-// linear in the group and sharing sizes. It stops on a conflict, as the
-// sharing in memory is stale.
-func (s *Sharing) reconcileGroupMembers(ctx context.Context, inst *instance.Instance, index int, contacts []*contact.Contact) error {
+// reconcileGroupMembers indexes members and contacts once, and saves and sends
+// invitations once, so a run stays linear in the group and sharing sizes. It
+// stops on a conflict, as the sharing in memory is stale.
+func (s *Sharing) reconcileGroupMembers(ctx context.Context, inst *instance.Instance, index int, contacts []*contact.Contact, retry bool) error {
 	self := newPeople()
 	self.add(s.Members[0].Email, s.Members[0].Instance, 0)
 	selfEmail, _ := inst.SettingsEMail()
 	self.add(selfEmail, inst.PageURL("", nil), 0)
 	inGroup := s.groupPeople(index)
 	inDirectory := newPeople()
+	added, pending := false, false
 	var errs []error
 	for _, c := range contacts {
 		if err := ctx.Err(); err != nil {
@@ -230,24 +238,39 @@ func (s *Sharing) reconcileGroupMembers(ctx context.Context, inst *instance.Inst
 		if self.find(m.Email, m.Instance) >= 0 {
 			continue
 		}
-		// An existing member only needs another try at a pending invitation.
-		if i := inGroup.find(m.Email, m.Instance); i >= 0 && s.Members[i].Status != MemberStatusMailNotSent {
+		if i := inGroup.find(m.Email, m.Instance); i >= 0 {
+			pending = pending || s.Members[i].Status == MemberStatusMailNotSent
 			continue
 		}
-		switch err := s.AddMemberToGroup(inst, index, c); {
-		case couchdb.IsConflictError(err):
-			return err
+		switch err := s.addGroupMember(inst, index, c); {
 		case errors.Is(err, ErrMemberAlreadyInGroup):
 			// Retrying cannot fix a person whose groups give different roles.
 			inst.Logger().WithNamespace("sharing").
 				Warnf("Cannot add contact %s to group %d of sharing %s: %s", c.ID(), index, s.SID, err)
 		case err != nil:
 			errs = append(errs, err)
+		default:
+			added = true
+		}
+	}
+	if added {
+		if err := couchdb.UpdateDoc(inst, s); err != nil {
+			return err
+		}
+	}
+	// A pending invitation is sent again by a job retry, or along a new member's.
+	if added || retry && pending {
+		if err := s.inviteMembers(inst); couchdb.IsConflictError(err) {
+			return err
+		} else if err != nil {
+			errs = append(errs, err)
 		}
 	}
 
 	for memberIndex, member := range s.Members {
-		if memberIndex == 0 || !slices.Contains(member.Groups, index) || inDirectory.find(member.Email, member.Instance) >= 0 {
+		// Like a contact without an email or a Cozy URL, such a member cannot be matched.
+		if memberIndex == 0 || !slices.Contains(member.Groups, index) || (member.Email == "" && member.Instance == "") ||
+			inDirectory.find(member.Email, member.Instance) >= 0 {
 			continue
 		}
 		if err := ctx.Err(); err != nil {

@@ -320,33 +320,45 @@ func updateGroupMetadata(inst *instance.Instance, doc *couchdb.JSONDoc) error {
 // AddMemberToGroup adds a contact to a sharing via a group (on the owner).
 func (s *Sharing) AddMemberToGroup(inst *instance.Instance, groupIndex int, contact *contact.Contact) error {
 	if i := s.groupMemberIndex(groupIndex, contact); i < 0 {
-		readOnly := s.Groups[groupIndex].ReadOnly
-		m := buildMemberFromContact(contact, readOnly)
-		m.OnlyInGroups = true
-		_, idx, err := s.addMember(inst, m)
-		if err != nil {
+		if err := s.addGroupMember(inst, groupIndex, contact); err != nil {
 			return err
 		}
-		addGroupToMember(&s.Members[idx], groupIndex)
 		if err := couchdb.UpdateDoc(inst, s); err != nil {
 			return err
 		}
 	} else if s.Members[i].Status != MemberStatusMailNotSent {
 		return nil
 	}
-	var err error
-	var perms *permission.Permission
-	if s.PreviewPath != "" {
-		if perms, err = s.CreatePreviewPermissions(inst); err != nil {
-			return err
-		}
-	}
-	if err = s.SendInvitations(inst, perms); err != nil {
+	if err := s.inviteMembers(inst); err != nil {
 		return err
 	}
 	cloned := s.Clone().(*Sharing)
 	go cloned.NotifyRecipients(inst, nil)
 	return nil
+}
+
+// addGroupMember adds a contact to a group in memory, without saving or inviting it.
+func (s *Sharing) addGroupMember(inst *instance.Instance, groupIndex int, contact *contact.Contact) error {
+	m := buildMemberFromContact(contact, s.Groups[groupIndex].ReadOnly)
+	m.OnlyInGroups = true
+	_, idx, err := s.addMember(inst, m)
+	if err != nil {
+		return err
+	}
+	addGroupToMember(&s.Members[idx], groupIndex)
+	return nil
+}
+
+// inviteMembers sends the invitations that were not sent yet.
+func (s *Sharing) inviteMembers(inst *instance.Instance) error {
+	var perms *permission.Permission
+	if s.PreviewPath != "" {
+		var err error
+		if perms, err = s.CreatePreviewPermissions(inst); err != nil {
+			return err
+		}
+	}
+	return s.SendInvitations(inst, perms)
 }
 
 // DelegateAddMemberToGroup adds a contact to a sharing via a group (on a recipient).
