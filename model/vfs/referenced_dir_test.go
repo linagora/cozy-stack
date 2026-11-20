@@ -23,8 +23,13 @@ type referencedDirFS struct {
 	createErr, updateErr error
 }
 
-func (fs *referencedDirFS) DirByPath(string) (*vfs.DirDoc, error) { return fs.dir, nil }
-func (fs *referencedDirFS) UpdateDirDoc(_, _ *vfs.DirDoc) error   { return fs.updateErr }
+func (fs *referencedDirFS) DirByPath(path string) (*vfs.DirDoc, error) {
+	if path != fs.dir.Fullpath {
+		return nil, os.ErrNotExist
+	}
+	return fs.dir, nil
+}
+func (fs *referencedDirFS) UpdateDirDoc(_, _ *vfs.DirDoc) error { return fs.updateErr }
 func (fs *referencedDirFS) CreateDir(dir *vfs.DirDoc) error {
 	if fs.createErr == nil {
 		dir.DocID = "created"
@@ -45,6 +50,7 @@ func TestEnsureReferencedDir(t *testing.T) {
 	}{
 		{name: "create", wantID: "created"},
 		{name: "reuse existing path", createErr: os.ErrExist, wantID: "existing"},
+		{name: "reuse existing path in parent", createErr: os.ErrExist, wantID: "existing", parent: downloads},
 		{name: "creation failure", createErr: failure, wantErr: failure},
 		{name: "reference update failure", createErr: os.ErrExist, updateErr: failure, wantErr: failure},
 		{name: "existing reference", wantID: "existing", docs: []vfs.DirDoc{
@@ -82,6 +88,9 @@ func TestEnsureReferencedDir(t *testing.T) {
 				dir:       &vfs.DirDoc{DocID: "existing", Type: consts.DirType, Fullpath: "/Mail"},
 				createErr: tt.createErr, updateErr: tt.updateErr,
 			}
+			if tt.parent != nil {
+				fs.dir.DirID, fs.dir.Fullpath = downloads.DocID, "/Downloads/Mail"
+			}
 			dir, err := vfs.EnsureReferencedDir(db, fs, ref, tt.parent, "Mail", "")
 			require.ErrorIs(t, err, tt.wantErr)
 			if tt.wantErr == nil {
@@ -96,4 +105,19 @@ func TestEnsureReferencedDir(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRenameKeepsUnrelatedReferences(t *testing.T) {
+	notes := couchdb.DocReference{Type: consts.Apps, ID: consts.Apps + "/notes"}
+	unknown := couchdb.DocReference{Type: consts.Apps, ID: consts.Apps + "/other"}
+	mail := couchdb.DocReference{Type: consts.Apps, ID: consts.Apps + "/mail"}
+	album := couchdb.DocReference{Type: consts.PhotosAlbums, ID: mail.ID}
+	dir, err := vfs.NewDirDocWithPath("Mail", "downloads", "/Downloads", nil)
+	require.NoError(t, err)
+	dir.AddReferencedBy(notes, mail, unknown, album)
+
+	name := "Renamed"
+	renamed, err := vfs.ModifyDirMetadata(&referencedDirFS{}, dir, &vfs.DocPatch{Name: &name})
+	require.NoError(t, err)
+	assert.Equal(t, []couchdb.DocReference{notes, unknown, album}, renamed.ReferencedBy)
 }
