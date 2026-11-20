@@ -32,6 +32,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/crypto"
 	"github.com/cozy/cozy-stack/pkg/realtime"
 	"github.com/cozy/cozy-stack/pkg/shortcut"
 	"github.com/cozy/cozy-stack/tests/testutils"
@@ -5764,6 +5765,80 @@ func TestSharedDriveRealtime(t *testing.T) {
 		require.Equal(t, consts.Files, msg.Payload.Type)
 		require.Equal(t, rootFileID, msg.Payload.ID)
 		require.Equal(t, "RealtimeRootRenamed.txt", msg.Payload.Doc.Name)
+	})
+}
+
+// TestSharedDriveRealtimeHijack checks the same-stack shortcut of
+// GET /sharings/drives/:id/realtime: it must be authorized by the owner's copy
+// of the sharing, never by the recipient's one, which anybody can forge.
+func TestSharedDriveRealtimeHijack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	// The owner is found on the stack by its domain, which triggers the hijack mode
+	ownerURL := "http://" + env.acme.Domain
+	setBettyDoc := func(t *testing.T, token string) {
+		s, err := sharing.FindSharing(env.betty, env.firstSharingID)
+		require.NoError(t, err)
+		s.Members[0].Instance = ownerURL
+		if token != "" {
+			s.Credentials[0].DriveToken = token
+		}
+		require.NoError(t, couchdb.UpdateDoc(env.betty, s))
+	}
+
+	t.Run("ReceiveEventsWithValidToken", func(t *testing.T) {
+		setBettyDoc(t, "")
+		eA, eB, _ := env.createClients(t)
+
+		ws := eB.GET("/sharings/drives/" + env.firstSharingID + "/realtime").
+			WithWebsocketUpgrade().
+			Expect().Status(http.StatusSwitchingProtocols).
+			Websocket()
+		defer ws.Disconnect()
+
+		ws.WriteText(fmt.Sprintf(`{"method": "AUTH", "payload": "%s"}`, env.bettyToken))
+		time.Sleep(50 * time.Millisecond)
+
+		newFileID := createFile(t, eA, env.meetingsDirID, "HijackRealtime.txt", env.acmeToken)
+		obj := ws.Expect().TextMessage().JSON().Object()
+		obj.HasValue("event", "CREATED")
+		obj.Value("payload").Object().HasValue("id", newFileID)
+	})
+
+	t.Run("RejectDriveTokenUnknownToOwner", func(t *testing.T) {
+		setBettyDoc(t, "forged-drive-token")
+		_, eB, _ := env.createClients(t)
+
+		eB.GET("/sharings/drives/" + env.firstSharingID + "/realtime").
+			Expect().Status(http.StatusForbidden)
+	})
+
+	t.Run("RejectSharingDocPlantedByPut", func(t *testing.T) {
+		_, eB, _ := env.createClients(t)
+		forgedID := "forged" + crypto.GenerateRandomString(16)
+
+		eB.PUT("/sharings/"+forgedID).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithJSON(map[string]any{"data": map[string]any{
+				"id": forgedID, "type": consts.Sharings,
+				"attributes": map[string]any{
+					"description": "forged",
+					"drive":       true,
+					"rules":       []sharing.Rule{{Title: "t", DocType: consts.Files, Values: []string{env.checklistID}}},
+					"members": []map[string]any{
+						{"status": "owner", "instance": ownerURL},
+						{"status": "pending", "email": "betty@example.net"},
+					},
+					"credentials": []map[string]any{{"drive_token": "forged-drive-token"}},
+				},
+			}}).
+			Expect().Status(http.StatusCreated)
+
+		eB.GET("/sharings/drives/" + forgedID + "/realtime").
+			Expect().Status(http.StatusForbidden)
 	})
 }
 
