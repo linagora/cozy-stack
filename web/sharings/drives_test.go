@@ -4902,6 +4902,25 @@ func TestSharedDriveDownload(t *testing.T) {
 	})
 }
 
+func TestSharedDriveProxyPreservesEscapedPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("the recipient instance requires CouchDB")
+	}
+	env := setupSharedDrivesEnv(t)
+	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Received-Path", r.URL.EscapedPath())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(owner.Close)
+	FakeOwnerInstanceForSharing(t, env.betty, owner.URL, env.firstSharingID)
+
+	path := "/sharings/drives/" + env.firstSharingID + "/downloads/link/reports%2Fjune.txt"
+	_, recipient, _ := env.createClients(t)
+	recipient.GET("").WithURL(env.tsB.URL + path).
+		Expect().Status(http.StatusNoContent).
+		Header("X-Received-Path").IsEqual(path)
+}
+
 func TestSharedDriveShortcut(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")

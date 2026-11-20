@@ -1754,6 +1754,7 @@ func proxy(fn func(c echo.Context, inst *instance.Instance, s *sharing.Sharing) 
 		director := func(req *http.Request) {
 			req.URL = u
 			req.URL.Path = c.Request().URL.Path
+			req.URL.RawPath = c.Request().URL.RawPath
 			req.URL.RawQuery = c.Request().URL.RawQuery
 			req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
 			req.Header.Del(echo.HeaderCookie)
@@ -1824,7 +1825,7 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 		method = http.MethodGet
 	}
 	verb := permission.Verb(method)
-	reqPath := c.Request().URL.Path
+	route := c.Path()
 	fileID := c.Param("file-id")
 
 	// Only the owner can trash or destroy the root of a shared drive: the VFS
@@ -1839,33 +1840,21 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	// Share-by-link routes keep their own authorization layer. Match the
 	// registered route pattern, not the raw URL, so a future route whose
 	// path contains "/permissions" cannot silently bypass this guard.
-	if strings.HasPrefix(c.Path(), "/sharings/drives/:id/permissions") {
+	if strings.HasPrefix(route, "/sharings/drives/:id/permissions") {
 		return nil
 	}
 	// Open routes (note, office, editor) are checked in the handler by
 	// driveOpenReadOnly: the guard's 403 would leak the existence of a
 	// target outside every scope, where the handler answers 404.
-	if strings.HasSuffix(c.Path(), "/open") {
+	if strings.HasSuffix(route, "/open") {
 		return nil
 	}
 	// Trashed files are outside every sharing scope: the effective access
 	// resolver cannot see them. Restore and destroy are authorized against
 	// the effective write access on the folder the file would be restored
 	// to (which is also where destroy removes it from, logically).
-	// Match the route pattern: a :file-id holding "%2Ftrash%2F" must not
-	// look like a trash route.
-	if strings.HasPrefix(c.Path(), "/sharings/drives/:id/trash/") {
-		if shouldCheck, requireWrite := sharedDrivePermissionCheck(method, reqPath); !shouldCheck || !requireWrite {
-			return nil
-		}
-		if err := checkTrashEffectiveAccess(inst, fileID, member); err != nil {
-			return err
-		}
-		// The guard has authorized the request: the handlers skip their VFS
-		// permission check for share-interact tokens (it cannot succeed on a
-		// trashed file, which has lost its referenced_by and whose path is
-		// outside the sharing rules). See files.driveMemberAuthorized.
-		return nil
+	if route == "/sharings/drives/:id/trash/:file-id" {
+		return checkTrashEffectiveAccess(inst, fileID, member)
 	}
 
 	// Write routes without a file target create content at the drive root:
@@ -1875,7 +1864,7 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	// not the dir_id declared in its body; resolve the body dir_id when
 	// limited_access lands.
 	if fileID == "" {
-		if shouldCheck, requireWrite := sharedDrivePermissionCheck(method, reqPath); !shouldCheck || !requireWrite {
+		if shouldCheck, requireWrite := sharedDrivePermissionCheck(method, route); !shouldCheck || !requireWrite {
 			return nil
 		}
 		rootID, err := s.DriveRootID()
@@ -1888,9 +1877,7 @@ func guardSharedDriveRouteForMember(c echo.Context, inst *instance.Instance, s *
 	// Copy needs effective read on the source and effective write on the
 	// destination folder. File-root drives do not support copy: let the
 	// handler answer 422.
-	// Match the route pattern, not the decoded URL: a :file-id ending in
-	// "%2Fcopy", or equal to "copy", is not a copy.
-	if method == http.MethodPost && c.Path() == "/sharings/drives/:id/:file-id/copy" {
+	if method == http.MethodPost && route == "/sharings/drives/:id/:file-id/copy" {
 		if s.HasFileDriveRoot() {
 			return nil
 		}
