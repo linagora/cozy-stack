@@ -87,10 +87,9 @@ func TestExpiredLinkReportRendering(t *testing.T) {
 				{"2026-10-25 01:30 UTC", "192.0.2.2", "", "opened"},
 				{"2026-10-25 00:30 UTC", "192.0.2.3", "Alice <alice@example.test>", "updated"},
 			}
-			templater := MailTemplater{"expired_link_report": subjectEntry{"Mail Link Report Subject", nil}}
 			for _, count := range []int{0, 1, 3} {
 				data := map[string]interface{}{"Expiry": "2026-10-31 23:59 UTC", "ReportURL": reportURL, "Events": rows[:count]}
-				subject, parts, err := templater.Execute(ctx, "expired_link_report", "layout-expired-link-report", locale, "", data)
+				subject, parts, err := expiredReportTemplater.execute(ctx, expiredReportTemplate, "layout-expired-link-report", locale, data, true)
 				require.NoError(t, err)
 				require.Equal(t, catalogue.Get("Mail Link Report Subject"), subject)
 				require.Len(t, parts, 2, "MJML must not silently fall back to text")

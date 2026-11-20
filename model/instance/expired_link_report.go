@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"time"
@@ -23,30 +22,64 @@ var errReportSnapshot = errors.New("expired link report snapshot is unavailable 
 // link and its expiry. This is a stack-internal operation, not an authorization
 // check for a client or a guarantee about a subsequent read of the file.
 func (i *Instance) GenerateExpiredLinkReport(ctx context.Context, linkID string, expiry time.Time) (*vfs.FileDoc, error) {
-	expiry = expiry.UTC()
 	permissionRev, err := i.reportPermissionRevision(ctx, linkID, expiry)
 	if err != nil {
 		return nil, err
 	}
-	key := fmt.Sprintf("%x", sha256.Sum256([]byte(linkID+"/"+expiry.Format(time.RFC3339Nano))))
+	snapshot, err := i.generateExpiredLinkReport(ctx, linkID, expiry, permissionRev, nil)
+	if err != nil {
+		return nil, err
+	}
+	return snapshot.file, nil
+}
+
+// ReadExpiredLinkReport passes the CSV through consume while hashing the same
+// bytes for attestation. Discard anything read by consume on error. Before
+// disclosing the result, call the returned check after preparing delivery.
+// The check runs checkRecipient after re-attesting the CSV and before rereading
+// consent. These are separate observations, not atomic send authorization.
+func (i *Instance) ReadExpiredLinkReport(ctx context.Context, linkID string, expiry time.Time, consume func(io.Reader) error) (*vfs.FileDoc, func(checkRecipient func() error) error, error) {
+	permissionRev, err := i.reportPermissionRevision(ctx, linkID, expiry)
+	if err != nil {
+		return nil, nil, err
+	}
+	snapshot, err := i.generateExpiredLinkReport(ctx, linkID, expiry, permissionRev, consume)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	key := publiclink.ReportID(linkID, expiry)
+	check := func(checkRecipient func() error) error {
+		checkpoint := &couchdb.JSONDoc{}
+		if err := couchdb.GetDoc(i, consts.PublicLinkReports, key, checkpoint); err != nil {
+			return err
+		}
+		if _, err := i.verifyPublishedReport(ctx, checkpoint, linkID, key, nil, snapshot); err != nil {
+			return err
+		}
+		if err := checkRecipient(); err != nil {
+			return err
+		}
+		return i.checkReportPermission(ctx, linkID, expiry, permissionRev)
+	}
+	return snapshot.file, check, nil
+}
+
+func (i *Instance) generateExpiredLinkReport(ctx context.Context, linkID string, expiry time.Time, permissionRev string, consume func(io.Reader) error) (*reportSnapshot, error) {
+	expiry = expiry.UTC()
+	key := publiclink.ReportID(linkID, expiry)
 	fileID := "link-report-" + key
 	checkpoint := &couchdb.JSONDoc{Type: consts.PublicLinkReports}
-	err = couchdb.GetDoc(i, consts.PublicLinkReports, key, checkpoint)
+	err := couchdb.GetDoc(i, consts.PublicLinkReports, key, checkpoint)
 	if err == nil {
-		fileRev, _ := checkpoint.M["file_rev"].(string)
-		fingerprint, _ := checkpoint.M["file_fingerprint"].(string)
-		dirID, _ := checkpoint.M["directory_id"].(string)
-		if checkpoint.M["file_id"] != fileID || checkpoint.M["link_id"] != linkID {
-			return nil, errReportSnapshot
-		}
-		file, err := i.verifyReportSnapshot(ctx, fileID, dirID, fileRev, fingerprint)
+		snapshot, err := i.verifyPublishedReport(ctx, checkpoint, linkID, key, consume, nil)
 		if err != nil {
 			return nil, err
 		}
 		if err := i.checkReportPermission(ctx, linkID, expiry, permissionRev); err != nil {
 			return nil, err
 		}
-		return file, nil
+		return snapshot, nil
 	}
 	if !couchdb.IsNotFoundError(err) {
 		return nil, err
@@ -73,7 +106,7 @@ func (i *Instance) GenerateExpiredLinkReport(ctx context.Context, linkID string,
 	if err != nil {
 		return nil, err
 	}
-	published, err := i.verifyReportSnapshot(ctx, file.ID(), dirID, file.Rev(), fingerprint)
+	published, err := i.verifyReportSnapshot(ctx, file.ID(), dirID, file.Rev(), fingerprint, consume, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +124,19 @@ func (i *Instance) GenerateExpiredLinkReport(ctx context.Context, linkID string,
 		return nil, err
 	}
 	return published, nil
+}
+
+func (i *Instance) verifyPublishedReport(ctx context.Context, checkpoint *couchdb.JSONDoc, linkID, key string, consume func(io.Reader) error, previous *reportSnapshot) (*reportSnapshot, error) {
+	fileID := "link-report-" + key
+	// The prototype used the same key for delivery state. It is not safe
+	// to replay a report it may already have submitted.
+	if checkpoint.M["file_id"] != fileID || checkpoint.M["link_id"] != linkID || checkpoint.M["status"] != nil {
+		return nil, errReportSnapshot
+	}
+	fileRev, _ := checkpoint.M["file_rev"].(string)
+	fingerprint, _ := checkpoint.M["file_fingerprint"].(string)
+	dirID, _ := checkpoint.M["directory_id"].(string)
+	return i.verifyReportSnapshot(ctx, fileID, dirID, fileRev, fingerprint, consume, previous)
 }
 
 func (i *Instance) reportPermissionRevision(ctx context.Context, linkID string, expiry time.Time) (string, error) {
