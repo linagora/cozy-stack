@@ -63,6 +63,10 @@ func TestEnsureReferencedDir(t *testing.T) {
 			{DocID: "outside", Type: consts.DirType, DirID: consts.RootDirID, Fullpath: "/Mail"},
 			{DocID: "inside", Type: consts.DirType, DirID: downloads.DocID, Fullpath: "/Downloads/Mail"},
 		}},
+		{name: "cleanup failure after finding a match", parent: downloads, updateErr: failure, wantErr: failure, docs: []vfs.DirDoc{
+			{DocID: "inside", Type: consts.DirType, DirID: downloads.DocID},
+			{DocID: "outside", Type: consts.DirType, DirID: consts.RootDirID, ReferencedBy: []couchdb.DocReference{ref}},
+		}},
 		{name: "skip a referenced file", wantID: "inside", parent: downloads, docs: []vfs.DirDoc{
 			{DocID: "file", Type: consts.FileType, DirID: downloads.DocID},
 			{DocID: "inside", Type: consts.DirType, DirID: downloads.DocID, Fullpath: "/Downloads/Mail"},

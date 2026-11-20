@@ -64,6 +64,7 @@ func EnsureReferencedDir(db prefixer.Prefixer, fs VFS, ref couchdb.DocReference,
 		return nil, err
 	}
 
+	var match *DirDoc
 	for _, row := range res.Rows {
 		var dir DirDoc
 		if err := json.Unmarshal(row.Doc, &dir); err != nil {
@@ -72,9 +73,24 @@ func EnsureReferencedDir(db prefixer.Prefixer, fs VFS, ref couchdb.DocReference,
 		if dir.Type != consts.DirType || IsInTrash(dir.Fullpath) {
 			continue
 		}
-		if parent == nil || dir.DirID == parent.ID() {
+		if parent == nil {
 			return &dir, nil
 		}
+		if dir.DirID == parent.ID() {
+			if match == nil {
+				match = &dir
+			}
+			continue
+		}
+		// A legacy folder outside its parent must stop matching reference-based shares.
+		updated := dir.Clone().(*DirDoc)
+		updated.RemoveReferencedBy(ref)
+		if err := fs.UpdateDirDoc(&dir, updated); err != nil {
+			return nil, err
+		}
+	}
+	if match != nil {
+		return match, nil
 	}
 
 	parentID, parentPath := consts.RootDirID, "/"

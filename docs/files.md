@@ -62,6 +62,10 @@ directly inside it. Missing parents are created on the way. Renaming or moving
 one of them removes its reference: it becomes an ordinary directory and a new
 one is created on the next resolution.
 
+On the first Mail lookup after an upgrade, an old Mail folder outside Downloads
+loses its Mail reference. Its files and other references stay in place. A share
+selected by the Mail reference then matches the folder inside Downloads.
+
 The legacy `io.cozy.files.shared-drives-dir` is an ordinary directory ID.
 Reading it does not create a missing directory.
 
