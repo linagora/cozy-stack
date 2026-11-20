@@ -181,7 +181,6 @@ func TestSharingCodesPaths(t *testing.T) {
 					WithHeader("Authorization", "Bearer "+code).
 					Expect().Status(http.StatusNotFound)
 			})
-
 		})
 	}
 	t.Run("MultipleInteractRoots", func(t *testing.T) {
