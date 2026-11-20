@@ -1284,13 +1284,17 @@ func TestConnection(t *testing.T) {
 
 		f := testutils.StartRabbitMQ(t, false, true)
 
-		cm := rabbitmq.NewRabbitMQConnection(f.AMQPURL)
+		cm := rabbitmq.NewRabbitMQConnection(f.AMQPSURL)
 		cm.TLSConfig = getTlsConfig(t)
 
 		conn := initConnection(t, cm)
 
 		declareTestQueue(t, conn, "tls-test-queue")
 		require.NoError(t, cm.Close())
+
+		untrusted := rabbitmq.NewRabbitMQConnection(f.AMQPSURL)
+		_, err := untrusted.Connect(t.Context(), 1)
+		require.Error(t, err)
 	})
 
 	t.Run("ConnectWithTLSIgnoreCA", func(t *testing.T) {
@@ -1298,7 +1302,7 @@ func TestConnection(t *testing.T) {
 
 		f := testutils.StartRabbitMQ(t, false, true)
 
-		cm := rabbitmq.NewRabbitMQConnection(f.AMQPURL)
+		cm := rabbitmq.NewRabbitMQConnection(f.AMQPSURL)
 		cm.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}
 
 		conn := initConnection(t, cm)
@@ -1320,7 +1324,7 @@ func getTlsConfig(t *testing.T) *tls.Config {
 	require.NoError(t, err)
 	pool := x509.NewCertPool()
 	require.True(t, pool.AppendCertsFromPEM(caPEM))
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: "localhost"}
 	return tlsCfg
 }
 

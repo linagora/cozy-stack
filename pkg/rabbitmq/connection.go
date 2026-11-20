@@ -64,7 +64,7 @@ func (cm *RabbitMQConnection) Connect(ctx context.Context, maxRetries int) (*amq
 		var err error
 		if isAMQPS(cm.url) {
 			if cm.TLSConfig == nil {
-				cm.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}
+				cm.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 			}
 			conn, err = amqp.DialTLS(cm.url, cm.TLSConfig)
 		} else {

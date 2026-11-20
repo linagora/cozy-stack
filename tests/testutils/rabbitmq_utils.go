@@ -53,11 +53,6 @@ func StartRabbitMQ(t *testing.T, withVolume bool, enableTLS bool) *RabbitFixture
 		}
 		if enableTLS {
 			hc.PortBindings["5671/tcp"] = []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: amqpsHostPort}}
-
-			hc.Binds = append(hc.Binds,
-				fmt.Sprintf("%s:/etc/rabbitmq/rabbitmq.conf", filepath.Join(certRoot(), "rabbitmq.conf")),
-				fmt.Sprintf("%s:/etc/rabbitmq/certs", certRoot()),
-			)
 		}
 		if withVolume {
 			hc.Binds = append(hc.Binds, fmt.Sprintf("%s:/var/lib/rabbitmq/mnesia", volName))
@@ -83,6 +78,16 @@ func StartRabbitMQ(t *testing.T, withVolume bool, enableTLS bool) *RabbitFixture
 			}
 			return wait.ForAll(base...)
 		}(),
+	}
+
+	if enableTLS {
+		for _, name := range []string{"rabbitmq.conf", "ca.pem", "server.crt", "server.key"} {
+			req.Files = append(req.Files, tc.ContainerFile{
+				HostFilePath:      filepath.Join(certRoot(), name),
+				ContainerFilePath: "/etc/rabbitmq/" + name,
+				FileMode:          0o644,
+			})
+		}
 	}
 
 	var container tc.Container
@@ -287,5 +292,5 @@ func getFreePort(t *testing.T) string {
 func certRoot() string {
 	_, thisFile, _, _ := runtime.Caller(0)
 	testDir := filepath.Dir(thisFile)
-	return filepath.Join(testDir, "testdata")
+	return filepath.Join(testDir, "..", "..", "pkg", "rabbitmq", "testdata")
 }
