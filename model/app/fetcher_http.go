@@ -20,12 +20,14 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/cozy-stack/pkg/utils"
 	"github.com/labstack/echo/v4"
 )
 
 var httpClient = http.Client{
-	Timeout: 60 * time.Second,
+	Timeout:   60 * time.Second,
+	Transport: safehttp.ClientWithKeepAlive.Transport,
 }
 
 type httpFetcher struct {

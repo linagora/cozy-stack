@@ -13,6 +13,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/appfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,10 +24,36 @@ type tarballFile struct {
 	content string
 }
 
+func setTrustedNetworks(t *testing.T, cidrs ...string) {
+	t.Helper()
+	config.UseTestFile(t)
+	require.NoError(t, safehttp.SetTrustedPrivateNetworks(cidrs))
+	t.Cleanup(func() {
+		require.NoError(t, safehttp.SetTrustedPrivateNetworks(config.GetConfig().SafeHTTPTrustedNetworks))
+	})
+}
+
+func TestAppSourceClientsRejectLoopback(t *testing.T) {
+	setTrustedNetworks(t)
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+
+	for name, client := range map[string]*http.Client{"tarball": &httpClient, "git manifest": ManifestClient} {
+		t.Run(name, func(t *testing.T) {
+			resp, err := client.Get(server.URL)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			require.ErrorContains(t, err, "is not a public IP address")
+		})
+	}
+}
+
 // serveTarball starts a server that answers with a gzipped tarball of the
 // given files, and returns its URL
 func serveTarball(t *testing.T, files ...tarballFile) *url.URL {
 	t.Helper()
+	setTrustedNetworks(t, "127.0.0.1/32")
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
@@ -67,7 +94,6 @@ func storedFiles(t *testing.T, fs afero.Fs) []string {
 }
 
 func TestFetchHTTPRejectsTraversingNames(t *testing.T) {
-	config.UseTestFile(t)
 	src := serveTarball(t,
 		tarballFile{name: "manifest.webapp", content: `{"slug":"app"}`},
 		tarballFile{name: "../../other/1.0.0/index.html", content: "<html></html>"})
@@ -82,7 +108,6 @@ func TestFetchHTTPRejectsTraversingNames(t *testing.T) {
 }
 
 func TestFetchHTTPCopiesFiles(t *testing.T) {
-	config.UseTestFile(t)
 	src := serveTarball(t,
 		tarballFile{name: "app-1.0.0/manifest.webapp", content: `{"slug":"app"}`},
 		tarballFile{name: "app-1.0.0/assets/icon.svg", content: "<svg/>"})
@@ -100,7 +125,6 @@ func TestFetchHTTPCopiesFiles(t *testing.T) {
 }
 
 func TestHTTPFetcherIgnoresManifestChecksum(t *testing.T) {
-	config.UseTestFile(t)
 	const registrySum = "3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855a"
 	fs := afero.NewBasePathFs(afero.NewOsFs(), t.TempDir())
 	fetch := func() string {

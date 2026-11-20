@@ -18,6 +18,7 @@ import (
 
 	"github.com/cozy/cozy-stack/pkg/appfs"
 	"github.com/cozy/cozy-stack/pkg/logger"
+	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/spf13/afero"
 )
 
@@ -50,7 +51,8 @@ func newGitFetcher(manFilename string, log logger.Logger) *gitFetcher {
 // ManifestClient is the client used to HTTP resources from the git fetcher. It
 // is exported for tests purposes only.
 var ManifestClient = &http.Client{
-	Timeout: 60 * time.Second,
+	Timeout:   60 * time.Second,
+	Transport: safehttp.ClientWithKeepAlive.Transport,
 }
 
 func isGithub(src *url.URL) bool {
