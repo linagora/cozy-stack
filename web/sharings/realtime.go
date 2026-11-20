@@ -191,6 +191,11 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 		log.Errorf("filterMapEvents: failed to get root dir %s: %s", s.Rules[0].Values[0], err)
 		return
 	}
+	// A file doc has no path: its empty Fullpath would match every event.
+	if dir.Type != consts.DirType || dir.Fullpath == "" {
+		log.Errorf("filterMapEvents: root %s of sharing %s is not a directory", dir.DocID, s.SID)
+		return
+	}
 	log.Debugf("filterMapEvents: watching %s for sharing %s", dir.Fullpath, s.SID)
 
 	testPath := func(doc realtime.Doc) bool {
@@ -342,6 +347,9 @@ func Ws(c echo.Context) error {
 		return wsOwner(c, inst, s)
 	}
 
+	if !s.Active {
+		return jsonapi.Forbidden(errors.New("sharing is not active"))
+	}
 	if len(s.Credentials) == 0 {
 		return jsonapi.InternalServerError(errors.New("no credentials"))
 	}
@@ -367,11 +375,41 @@ func Ws(c echo.Context) error {
 	// instances are on the same domain (same stack), we can watch directly
 	// the real-time events. It helps for performances.
 	if owner, err := lifecycle.GetInstance(u.Host); err == nil {
+		ownerSide, err := ownerSharingForHijack(owner, s, token)
+		if err != nil {
+			log.Warnf("Ws: hijack refused for sharing %s: %s", s.SID, err)
+			return jsonapi.Forbidden(errors.New("sharing not recognized by the owner"))
+		}
 		log.Debugf("Ws: new connection for sharing %s (hijack mode, owner=%s)", s.SID, owner.Domain)
-		return wsHijack(c, inst, owner, s)
+		return wsHijack(c, inst, owner, ownerSide)
 	}
 	log.Debugf("Ws: new connection for sharing %s (proxy mode, owner=%s)", s.SID, u.Host)
 	return wsProxy(c, inst, s, token)
+}
+
+// ownerSharingForHijack returns the owner's copy of the sharing, once the
+// owner has recognized token as the drive token of a ready member, as the
+// proxy mode would. The recipient's copy cannot be trusted: PUT /sharings/:id
+// lets anyone forge it.
+func ownerSharingForHijack(owner *instance.Instance, s *sharing.Sharing, token string) (*sharing.Sharing, error) {
+	if token == "" {
+		return nil, errors.New("no drive token")
+	}
+	ownerSide, err := sharing.FindSharing(owner, s.SID)
+	if err != nil {
+		return nil, err
+	}
+	if !ownerSide.Owner || !ownerSide.Active || !ownerSide.Drive {
+		return nil, errors.New("not an active shared drive on the owner")
+	}
+	member, err := ownerSide.FindMemberByInteractCode(owner, token)
+	if err != nil {
+		return nil, err
+	}
+	if member.Status != sharing.MemberStatusReady {
+		return nil, errors.New("member is not ready on the owner")
+	}
+	return ownerSide, nil
 }
 
 func wsHijack(c echo.Context, inst, owner *instance.Instance, s *sharing.Sharing) error {
