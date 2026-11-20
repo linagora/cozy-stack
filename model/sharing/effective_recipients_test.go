@@ -34,7 +34,7 @@ func TestEffectiveRecipients_Self(t *testing.T) {
 		Instance: "https://bob.cozy.tools",
 	})
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID(), nil)
 	require.NoError(t, err)
 	require.Len(t, recipients, 2)
 
@@ -90,7 +90,7 @@ func TestEffectiveRecipients_Ancestor(t *testing.T) {
 		ReadOnly: true,
 	})
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID(), nil)
 	require.NoError(t, err)
 	require.Len(t, recipients, 2)
 
@@ -143,7 +143,7 @@ func TestEffectiveRecipients_DedupReadWriteWins(t *testing.T) {
 		ReadOnly: false,
 	})
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID(), nil)
 	require.NoError(t, err)
 
 	var bobs []EffectiveRecipient
@@ -187,7 +187,7 @@ func TestEffectiveRecipients_DedupByEmailFallback(t *testing.T) {
 		Email:  "bob@cozy.tools",
 	})
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID(), nil)
 	require.NoError(t, err)
 
 	var bobs []EffectiveRecipient
@@ -231,7 +231,7 @@ func TestEffectiveRecipients_DedupInstanceThenEmail(t *testing.T) {
 		Email:  "bob@cozy.tools",
 	})
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID(), nil)
 	require.NoError(t, err)
 
 	var bobs []EffectiveRecipient
@@ -281,7 +281,7 @@ func TestEffectiveRecipients_DedupTransitiveBridge(t *testing.T) {
 		Instance: "https://bob.cozy.tools",
 	})
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID(), nil)
 	require.NoError(t, err)
 
 	var bobs []EffectiveRecipient
@@ -325,7 +325,7 @@ func TestEffectiveRecipients_MergePrefersAdvancedStatus(t *testing.T) {
 		Instance: "https://bob.cozy.tools",
 	})
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(child.ID(), nil)
 	require.NoError(t, err)
 
 	var bobs []EffectiveRecipient
@@ -368,7 +368,7 @@ func TestEffectiveRecipients_AbsorbKeepsEmailFallbackName(t *testing.T) {
 		Instance: "https://bob.cozy.tools",
 	})
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID(), nil)
 	require.NoError(t, err)
 
 	var bobs []EffectiveRecipient
@@ -404,7 +404,7 @@ func TestEffectiveRecipients_RevokedExcluded(t *testing.T) {
 		Instance: "https://bob.cozy.tools",
 	})
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID(), nil)
 	require.NoError(t, err)
 	for _, r := range recipients {
 		assert.NotEqual(t, "bob@cozy.tools", r.Email)
@@ -424,7 +424,7 @@ func TestEffectiveRecipients_NotShared(t *testing.T) {
 	tree := H{"parent/": H{}}
 	parent := createTree(t, fs, tree, consts.RootDirID)
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, recipients)
 }
@@ -438,7 +438,7 @@ func TestEffectiveRecipients_NotFound(t *testing.T) {
 	setup := testutils.NewSetup(t, t.Name())
 	inst := setup.GetTestInstance()
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients("does-not-exist")
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients("does-not-exist", nil)
 	require.Error(t, err)
 	assert.True(t, os.IsNotExist(err))
 	assert.Nil(t, recipients)
@@ -462,7 +462,7 @@ func TestEffectiveRecipients_ManageableDriveRecipient(t *testing.T) {
 
 	createActiveRecipientSharing(t, inst, parent.ID(), false)
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID(), nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, recipients)
 
@@ -498,7 +498,7 @@ func TestEffectiveRecipients_NotManageableDriveRecipientReadOnly(t *testing.T) {
 
 	createActiveRecipientSharing(t, inst, parent.ID(), true)
 
-	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID())
+	recipients, err := NewAccessResolver(inst).EffectiveRecipients(parent.ID(), nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, recipients)
 
@@ -515,4 +515,23 @@ func addMemberToSharing(t *testing.T, inst *instance.Instance, s *Sharing, m Mem
 	t.Helper()
 	s.Members = append(s.Members, m)
 	require.NoError(t, couchdb.UpdateDoc(inst, s))
+}
+
+func TestMemberReadsRootUsesTheLoadedScopes(t *testing.T) {
+	ready := func(email string) Member { return Member{Email: email, Status: MemberStatusReady} }
+	parent := &Sharing{SID: "parent", Members: []Member{ready("owner@example.net"), ready("dave@example.net")}}
+	nested := &Sharing{SID: "nested", Members: []Member{ready("owner@example.net"), ready("betty@example.net")}}
+	sharings := []*Sharing{parent, nested}
+	roots := map[string]rootInfo{
+		"parent": {RootID: "p", RootPath: "/Team"},
+		"nested": {RootID: "n", RootPath: "/Team/Clients"},
+	}
+	betty := &Member{Email: "betty@example.net"}
+	dave := &Member{Email: "dave@example.net"}
+
+	assert.True(t, memberReadsRoot(sharings, roots, "/Team/Clients", betty))
+	assert.False(t, memberReadsRoot(sharings, roots, "/Team", betty))
+	assert.True(t, memberReadsRoot(sharings, roots, "/Team", dave))
+	assert.True(t, memberReadsRoot(sharings, roots, "/Team/Clients", dave))
+	assert.False(t, memberReadsRoot(sharings, roots, "/Team", &Member{Email: "eve@example.net"}))
 }

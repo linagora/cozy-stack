@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
@@ -38,8 +39,9 @@ const constsSharingsRecipients = "io.cozy.sharings.recipients"
 // including recipients inherited from parent shared folders. The caller
 // needs at least read access to the target, and public share-by-link tokens
 // are rejected: a link holder must not be able to enumerate sharing members.
-// Recipients of ancestor sharings are included by design, even when the
-// caller is not a member of those sharings: their additive access is real.
+// Recipients of ancestor sharings are included by design when the caller can
+// read their root: their additive access is real. A member's share-interact
+// code does not see the sharings above its own scope.
 func GetEffectiveRecipients(c echo.Context) error {
 	inst := middlewares.GetInstance(c)
 	if _, _, err := loadDirOrFileFromParam(c, inst, permission.GET); err != nil {
@@ -77,7 +79,11 @@ func respondEffectiveRecipients(c echo.Context, inst *instance.Instance, fileID 
 	case permission.TypeShareByLink, permission.TypeSharePreview:
 		return jsonapi.Forbidden(errors.New("public share token cannot list sharing members"))
 	}
-	recipients, err := sharing.NewAccessResolver(inst).EffectiveRecipients(fileID)
+	member, err := interactCodeMember(c, inst, pdoc)
+	if err != nil {
+		return err
+	}
+	recipients, err := sharing.NewAccessResolver(inst).EffectiveRecipients(fileID, member)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return jsonapi.NotFound(err)
@@ -90,6 +96,24 @@ func respondEffectiveRecipients(c echo.Context, inst *instance.Instance, fileID 
 		objs[i] = &apiEffectiveRecipient{EffectiveRecipient: &r, id: effectiveRecipientID(&r)}
 	}
 	return jsonapi.DataListWithMeta(c, http.StatusOK, jsonapi.Meta{FileID: fileID}, objs, nil)
+}
+
+// interactCodeMember gives the member a share-interact code belongs to, or nil
+// for any other token.
+func interactCodeMember(c echo.Context, inst *instance.Instance, pdoc *permission.Permission) (*sharing.Member, error) {
+	if pdoc.Type != permission.TypeShareInteract {
+		return nil, nil
+	}
+	_, sharingID, _ := strings.Cut(pdoc.SourceID, "/")
+	s, err := sharing.FindSharing(inst, sharingID)
+	if err != nil {
+		return nil, wrapErrors(err)
+	}
+	member, err := s.FindMemberByInteractCode(inst, middlewares.GetRequestToken(c))
+	if err != nil {
+		return nil, wrapErrors(err)
+	}
+	return member, nil
 }
 
 // effectiveRecipientID builds a stable, URL-safe JSON-API id for a
