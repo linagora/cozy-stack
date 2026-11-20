@@ -374,7 +374,7 @@ func checkIDToken(c echo.Context) bool {
 		return false
 	}
 
-	claims, err := oidcprovider.VerifyIDToken(c.QueryParam("id_token"), conf)
+	claims, err := oidcprovider.VerifyIDTokenForClient(c.QueryParam("id_token"), inst.ContextName, conf)
 	if err != nil {
 		logger.WithNamespace("oidc").Errorf("Error on VerifyIDToken: %s", err)
 		return false

@@ -296,6 +296,31 @@ func VerifyIDToken(raw string, conf *Config) (jwt.MapClaims, error) {
 	return claims, nil
 }
 
+// VerifyIDTokenForClient checks that the identity provider of the context
+// issued the id_token to the client_id of the context, so that an id_token of
+// another relying party cannot open a session.
+func VerifyIDTokenForClient(raw, contextName string, conf *Config) (jwt.MapClaims, error) {
+	claims, err := VerifyIDToken(raw, conf)
+	if err != nil {
+		return nil, err
+	}
+	expectedIssuer, err := GetIssuer(contextName, conf)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve issuer for OIDC context %s: %w", contextName, err)
+	}
+	if issuer, _ := claims.GetIssuer(); issuer == "" || issuer != expectedIssuer {
+		return nil, errors.New("id_token issuer mismatch")
+	}
+	aud, err := claims.GetAudience()
+	if conf.ClientID == "" || err != nil || !audienceContains(aud, conf.ClientID) {
+		return nil, errors.New("id_token audience mismatch")
+	}
+	if azp, ok := claims["azp"]; ok && azp != conf.ClientID {
+		return nil, errors.New("id_token azp mismatch")
+	}
+	return claims, nil
+}
+
 func VerifyLogoutToken(raw, contextName string, conf *Config) (jwt.MapClaims, error) {
 	if conf.IDTokenKeyURL == "" {
 		return nil, errors.New("id_token_jwk_url is not configured")

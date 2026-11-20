@@ -205,14 +205,29 @@ func TestAccessTokenValidatesOIDCToken(t *testing.T) {
 				"allow_custom_instance": true,
 				"userinfo_url":          idp.URL + "/userinfo",
 				"id_token_jwk_url":      jwksURL,
+				"issuer":                "https://idp.example",
+				"client_id":             "cozy-client",
 			},
 		},
 	}
 	inst := &instance.Instance{
 		Domain: "alice.twake.app", ContextName: "oauth_token_context", OIDCID: "alice-sub",
 	}
+	idTokenWith := func(overrides map[string]interface{}) string {
+		claims := map[string]interface{}{
+			"sub": "alice-sub", "sid": "sid", "iss": "https://idp.example", "aud": "cozy-client",
+		}
+		for k, v := range overrides {
+			if v == nil {
+				delete(claims, k)
+			} else {
+				claims[k] = v
+			}
+		}
+		return makeSignedJWT(t, privateKey, kid, claims)
+	}
 	idToken := func(sub string) string {
-		return makeSignedJWT(t, privateKey, kid, map[string]interface{}{"sub": sub, "sid": "sid"})
+		return idTokenWith(map[string]interface{}{"sub": sub})
 	}
 
 	for _, tc := range []struct {
@@ -222,6 +237,11 @@ func TestAccessTokenValidatesOIDCToken(t *testing.T) {
 	}{
 		{"unsigned id_token", `{"id_token":"` + makeUnsignedJWT(map[string]interface{}{"sub": "alice-sub", "sid": "sid"}) + `"}`, "invalid token"},
 		{"id_token of another user", `{"id_token":"` + idToken("other-sub") + `"}`, "OIDC Domain Mismatch alice.twake.app other-sub"},
+		{"id_token issued to another client", `{"id_token":"` + idTokenWith(map[string]interface{}{"aud": "other-client"}) + `"}`, "invalid token"},
+		{"id_token without aud", `{"id_token":"` + idTokenWith(map[string]interface{}{"aud": nil}) + `"}`, "invalid token"},
+		{"id_token authorized for another client", `{"id_token":"` + idTokenWith(map[string]interface{}{"aud": []string{"cozy-client", "other-client"}, "azp": "other-client"}) + `"}`, "invalid token"},
+		{"id_token of another issuer", `{"id_token":"` + idTokenWith(map[string]interface{}{"iss": "https://evil.example"}) + `"}`, "invalid token"},
+		{"id_token without iss", `{"id_token":"` + idTokenWith(map[string]interface{}{"iss": nil}) + `"}`, "invalid token"},
 		{"oidc_token refused by the IdP", `{"oidc_token":"garbage"}`, "OIDC service responded with 401"},
 		{"oidc_token of another user", `{"oidc_token":"other-user-token"}`, "OIDC Domain Mismatch alice.twake.app other-sub"},
 	} {
@@ -238,6 +258,7 @@ func TestAccessTokenValidatesOIDCToken(t *testing.T) {
 	}
 
 	require.NoError(t, validateOIDCToken(inst, idToken("alice-sub"), ""))
+	require.NoError(t, validateOIDCToken(inst, idTokenWith(map[string]interface{}{"aud": []string{"other-client", "cozy-client"}, "azp": "cozy-client"}), ""))
 	require.NoError(t, validateOIDCToken(inst, "", "alice-token"))
 }
 
