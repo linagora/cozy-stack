@@ -63,6 +63,10 @@ type subjectEntry struct {
 // specified name. It returns the mail parts that should be added to the sent
 // mail.
 func (m MailTemplater) Execute(ctx *job.TaskContext, name, layout, locale string, recipientName string, data map[string]interface{}) (string, []*mail.Part, error) {
+	return m.execute(ctx, name, layout, locale, data, false)
+}
+
+func (m MailTemplater) execute(ctx *job.TaskContext, name, layout, locale string, data map[string]interface{}, requireHTML bool) (string, []*mail.Part, error) {
 	entry, ok := m[name]
 	if !ok {
 		err := fmt.Errorf("Could not find email named %q", name)
@@ -98,11 +102,12 @@ func (m MailTemplater) Execute(ctx *job.TaskContext, name, layout, locale string
 		{Body: txt, Type: "text/plain"},
 	}
 
-	// If we can generate the HTML, we should still send the mail with the text
-	// part.
-	if html, err := buildHTML(name, layout, ctx, context, locale, data); err == nil {
+	if html, err := buildHTML(name, layout, ctx, context, locale, data, !requireHTML); err == nil {
 		parts = append(parts, &mail.Part{Body: html, Type: "text/html"})
+	} else if requireHTML {
+		return "", nil, err
 	} else {
+		// Ordinary mail can fall back to text.
 		ctx.Logger().Errorf("Cannot generate HTML mail: %s", err)
 	}
 	return subject, parts, nil
@@ -125,7 +130,7 @@ func buildText(name, context, locale string, data map[string]interface{}) (strin
 	return buf.String(), nil
 }
 
-func buildHTML(name string, layout string, ctx *job.TaskContext, context, locale string, data map[string]interface{}) (string, error) {
+func buildHTML(name string, layout string, ctx *job.TaskContext, context, locale string, data map[string]interface{}, logErrors bool) (string, error) {
 	buf := new(bytes.Buffer)
 	b, err := loadTemplate("/mails/"+name+".mjml", context)
 	if err != nil {
@@ -150,7 +155,7 @@ func buildHTML(name string, layout string, ctx *job.TaskContext, context, locale
 	if err := t.Execute(buf, data); err != nil {
 		return "", err
 	}
-	html, err := execMjml(ctx, buf.Bytes())
+	html, err := execMjml(ctx, buf.Bytes(), logErrors)
 	if err != nil {
 		return "", err
 	}
