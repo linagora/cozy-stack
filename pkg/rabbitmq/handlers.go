@@ -315,12 +315,12 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, d amqp.Delivery) error 
 	log.Infof("user.deleted: processing message - UserID: %s, InternalEmail: %s, WorkplaceFqdn: %s, Domain: %s, OrganizationID: %s, Reason: %s",
 		msg.UserID, msg.InternalEmail, msg.WorkplaceFqdn, msg.Domain, msg.OrganizationID, msg.Reason)
 
-	if err := SyncDeletedOrgContact(ctx, msg); err != nil {
+	err := SyncDeletedOrgContact(ctx, msg)
+	if err != nil {
 		log.Errorf("user.deleted: failed to sync organization contacts for %s: %v", msg.WorkplaceFqdn, err)
-		return err
 	}
-
-	return nil
+	// Also after a partial sync, so the changes already written reach the sharings.
+	return errors.Join(err, orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, msg.Domain))
 }
 
 // B2BGroupLifecycleHandler handles B2B group lifecycle and membership events.
@@ -331,7 +331,8 @@ func NewB2BGroupLifecycleHandler() *B2BGroupLifecycleHandler {
 	return &B2BGroupLifecycleHandler{}
 }
 
-// Handle processes B2B group lifecycle messages.
+// Handle processes B2B group lifecycle messages. It queues the propagation even
+// after a partial sync, so the changes already written reach the sharings.
 func (h *B2BGroupLifecycleHandler) Handle(ctx context.Context, d amqp.Delivery) error {
 	log.Infof("b2b.group: received message: %s", d.RoutingKey)
 	log.Debugf("b2b.group: message details - MessageId: %s, ContentType: %s, Body size: %d bytes",
@@ -344,35 +345,40 @@ func (h *B2BGroupLifecycleHandler) Handle(ctx context.Context, d amqp.Delivery) 
 			return fmt.Errorf("b2b.group.created: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, len(msg.Members))
-		return orgdirectory.SyncGroupCreated(ctx, msg)
+		return errors.Join(orgdirectory.SyncGroupCreated(ctx, msg), orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, ""))
 	case RoutingKeyB2BGroupUpdated:
 		var msg orgdirectory.GroupUpdatedMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.updated: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, 0)
-		return orgdirectory.SyncGroupUpdated(ctx, msg)
+		return errors.Join(orgdirectory.SyncGroupUpdated(ctx, msg), orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, ""))
 	case RoutingKeyB2BGroupDeleted:
 		var msg orgdirectory.GroupDeletedMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.deleted: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, 0)
-		return orgdirectory.SyncGroupDeleted(ctx, msg)
+		// The debounced run revokes the group again, from its tombstone, if these jobs fail.
+		return errors.Join(
+			orgdirectory.SyncGroupDeleted(ctx, msg),
+			orgdirectory.QueueGroupDeletion(ctx, msg.OrganizationID, orgdirectory.GroupDocID(msg.OrganizationID, msg.ID)),
+			orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, ""),
+		)
 	case RoutingKeyB2BGroupMemberAdded:
 		var msg orgdirectory.GroupMembersMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.member.added: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, len(msg.Members))
-		return orgdirectory.SyncGroupMembersAdded(ctx, msg)
+		return errors.Join(orgdirectory.SyncGroupMembersAdded(ctx, msg), orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, ""))
 	case RoutingKeyB2BGroupMemberRemoved:
 		var msg orgdirectory.GroupMembersMessage
 		if err := json.Unmarshal(d.Body, &msg); err != nil {
 			return fmt.Errorf("b2b.group.member.removed: failed to unmarshal message: %w", err)
 		}
 		logB2BGroupMessage(d.RoutingKey, msg.OrganizationID, msg.ID, len(msg.Members))
-		return orgdirectory.SyncGroupMembersRemoved(ctx, msg)
+		return errors.Join(orgdirectory.SyncGroupMembersRemoved(ctx, msg), orgdirectory.QueueGroupPropagation(ctx, msg.OrganizationID, ""))
 	default:
 		return fmt.Errorf("b2b.group: unsupported routing key %s", d.RoutingKey)
 	}

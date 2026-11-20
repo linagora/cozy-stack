@@ -508,6 +508,16 @@ func TestRedisScheduler(t *testing.T) {
 		count, _ = bro.WorkerQueueLen("incr")
 		assert.Equal(t, 3, count)
 	})
+
+	t.Run("RedisFailureLeavesNoTriggerDoc", func(t *testing.T) {
+		down := redis.NewClient(&redis.Options{Addr: "localhost:1", MaxRetries: -1})
+		sch := job.NewRedisScheduler(down)
+		infos := job.TriggerInfos{Type: "@in", WorkerType: "redis-down", Arguments: "1h"}
+		trigger, err := job.NewTrigger(testInstance, infos, nil)
+		require.NoError(t, err)
+		require.Error(t, sch.AddTrigger(trigger))
+		assert.False(t, sch.HasTrigger(testInstance, infos), "an unscheduled trigger must not look pending")
+	})
 }
 
 func (t *testDoc) ID() string      { return t.id }
