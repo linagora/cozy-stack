@@ -144,7 +144,7 @@ func trash(inst *instance.Instance, s *sharing.Sharing) error {
 	if err != nil {
 		return err
 	}
-	if inTrash(dir) {
+	if vfs.IsInTrash(dir.Fullpath) {
 		return nil
 	}
 
