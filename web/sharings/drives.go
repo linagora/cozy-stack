@@ -436,16 +436,15 @@ func authorizeDriveTarget(inst *instance.Instance, member *sharing.Member, targe
 	return ea, nil
 }
 
-// checkDriveMemberRead asserts the calling drive member (if any) has
-// effective read access on the target. No-op for non-member tokens (owner,
-// share-by-link).
-func checkDriveMemberRead(c echo.Context, inst *instance.Instance, targetID string) error {
+func driveReadCheck(c echo.Context, inst *instance.Instance) func(string) error {
 	member := GetSharedDriveMember(c)
 	if member == nil {
 		return nil
 	}
-	_, err := authorizeDriveTarget(inst, member, targetID)
-	return err
+	return func(id string) error {
+		_, err := authorizeDriveTarget(inst, member, id)
+		return err
+	}
 }
 
 // driveOpenReadOnly says whether an open route (note, office, editor) must be
@@ -468,26 +467,7 @@ func driveOpenReadOnly(c echo.Context, inst *instance.Instance, fileID string) (
 
 // ReadMetadataFromPath allows to get file/dir information for a path.
 func ReadMetadataFromPath(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
-	// Drive tokens are checked against the member's effective read access on
-	// the resolved target; other tokens keep the VFS permission check done
-	// by files.ReadMetadataFromPath. A target outside every sharing scope is
-	// answered 404 to avoid revealing which paths exist on the instance.
-	if GetSharedDriveMember(c) != nil && c.QueryParam("Path") != "" {
-		dir, file, err := inst.VFS().DirOrFileByPath(c.QueryParam("Path"))
-		if err != nil {
-			return jsonapi.NotFound(errors.New("shared drive target not found"))
-		}
-		var targetID string
-		if dir != nil {
-			targetID = dir.DocID
-		} else {
-			targetID = file.DocID
-		}
-		if err := checkDriveMemberRead(c, inst, targetID); err != nil {
-			return err
-		}
-	}
-	return files.ReadMetadataFromPath(c, s)
+	return files.ReadMetadataFromPath(c, s, driveReadCheck(c, inst))
 }
 
 // GetDirOrFileData handles all GET requests on aiming at getting a file or
@@ -591,7 +571,7 @@ func ModifyMetadataByIDHandler(c echo.Context, inst *instance.Instance, s *shari
 			}
 		}
 	}
-	if err = applyPatch(c, inst.VFS(), patch); err != nil {
+	if err = applyPatch(c, inst, s, patch); err != nil {
 		return files.WrapVfsError(err)
 	}
 	return nil
@@ -615,7 +595,8 @@ func getPatch(c echo.Context, docID string) (*docPatch, error) {
 	return &patch, nil
 }
 
-func applyPatch(c echo.Context, fs vfs.VFS, patch *docPatch) (err error) {
+func applyPatch(c echo.Context, inst *instance.Instance, s *sharing.Sharing, patch *docPatch) (err error) {
+	fs := inst.VFS()
 	dir, file, err := fs.DirOrFileByID(patch.docID)
 	if err != nil {
 		return err
@@ -687,10 +668,12 @@ func applyPatch(c echo.Context, fs vfs.VFS, patch *docPatch) (err error) {
 		}
 	}
 
+	// The root itself may have been renamed or moved
+	_ = s.LoadDriveRootPath(inst)
 	if dir != nil {
-		return files.DirData(c, http.StatusOK, dir, nil)
+		return files.DirData(c, http.StatusOK, dir, s)
 	}
-	return files.FileData(c, http.StatusOK, file, false, nil, nil)
+	return files.FileData(c, http.StatusOK, file, false, nil, s)
 }
 
 // ChangesFeed is the handler for CouchDB's changes feed requests with some
@@ -782,37 +765,7 @@ func ThumbnailHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharin
 // FileDownloadCreateHandler stores the required path into a secret usable for
 // the download handler below.
 func FileDownloadCreateHandler(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
-	// TODO: The route contract can be broader than the drive root, especially
-	// for owner requests. To fix it, we need explicit shared-drive scope check here.
-	//
-	// The guard cannot help here: the target lives in the query string, not
-	// in the route. Check the member's effective read on it before minting
-	// the temporary link.
-	// Resolve the target with the same precedence as files.FileDownload
-	// (Path -> Id -> VersionId), else a request with both Id and Path would
-	// be validated on the wrong file and mint a link for the other one.
-	var id string
-	if p := c.QueryParam("Path"); p != "" {
-		_, file, err := inst.VFS().DirOrFileByPath(p)
-		if err != nil {
-			return files.WrapVfsError(err)
-		}
-		if file == nil {
-			return jsonapi.NotFound(errors.New("shared drive target not found"))
-		}
-		id = file.DocID
-	} else if id = c.QueryParam("Id"); id == "" {
-		if versionID := c.QueryParam("VersionId"); versionID != "" {
-			id = strings.Split(versionID, "/")[0]
-		}
-	}
-	if id == "" {
-		return jsonapi.BadRequest(errors.New("missing file target"))
-	}
-	if err := checkDriveMemberRead(c, inst, id); err != nil {
-		return err
-	}
-	return files.FileDownload(c, s)
+	return files.FileDownload(c, s, driveReadCheck(c, inst))
 }
 
 // FileDownloadHandler sends the content of a file that has previously been
@@ -826,66 +779,7 @@ func ArchiveDownloadCreateHandler(c echo.Context, inst *instance.Instance, s *sh
 	if err := ensureDirectoryBackedSharedDrive(s); err != nil {
 		return err
 	}
-	// The guard cannot help here: the targets live in the request body. Check
-	// the member's effective read on every target before minting the link.
-	// files.ArchiveDownload binds the body again, so restore it.
-	if GetSharedDriveMember(c) != nil {
-		body, err := io.ReadAll(c.Request().Body)
-		if err != nil {
-			return jsonapi.BadJSON()
-		}
-		c.Request().Body = io.NopCloser(bytes.NewReader(body))
-		var payload struct {
-			Data struct {
-				Attributes struct {
-					IDs   []string   `json:"ids"`
-					Files []string   `json:"files"`
-					Pages []vfs.Page `json:"pages"`
-				} `json:"attributes"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(body, &payload); err != nil {
-			return jsonapi.BadJSON()
-		}
-		for _, id := range payload.Data.Attributes.IDs {
-			if err := checkDriveMemberRead(c, inst, id); err != nil {
-				return err
-			}
-		}
-		for _, p := range payload.Data.Attributes.Pages {
-			if err := checkDriveMemberRead(c, inst, p.ID); err != nil {
-				return err
-			}
-		}
-		for _, f := range payload.Data.Attributes.Files {
-			// The / and /files keys cover the whole account, outside any
-			// drive scope; the VFS check in files.ArchiveDownload governs
-			// them. The /trash key has no resolvable identifiers.
-			// ponytail: members with access to a single nested folder can
-			// still archive it via ids, files outside their scope get a 404.
-			if f == "/" || f == "/files" {
-				continue
-			}
-			if f == "/trash" {
-				return jsonapi.Forbidden(errors.New("cannot archive the trash"))
-			}
-			// files entries are paths, not ids: resolve the target first.
-			dir, file, err := inst.VFS().DirOrFileByPath(f)
-			if err != nil {
-				return files.WrapVfsError(err)
-			}
-			var targetID string
-			if dir != nil {
-				targetID = dir.DocID
-			} else {
-				targetID = file.DocID
-			}
-			if err := checkDriveMemberRead(c, inst, targetID); err != nil {
-				return err
-			}
-		}
-	}
-	return files.ArchiveDownload(c, s)
+	return files.ArchiveDownload(c, s, driveReadCheck(c, inst))
 }
 
 // ArchiveDownloadHandler serves the zip archive prepared by ArchiveDownloadCreateHandler.
@@ -1710,6 +1604,10 @@ func proxyWithLinkMutationGuard(fn func(c echo.Context, inst *instance.Instance,
 			if err := guardSharedDriveRouteForMember(c, inst, s); err != nil {
 				return err
 			}
+			s.LoadDriveRootPathOnUse(inst)
+			if pdoc, err := middlewares.GetPermission(c); err == nil {
+				s.LimitDrivePaths(pdoc)
+			}
 			return fn(c, inst, s)
 		}
 
@@ -1778,6 +1676,10 @@ func proxyWithLinkMutationGuard(fn func(c echo.Context, inst *instance.Instance,
 			SetSharedDriveMember(c, ownerMember)
 			if err := guardSharedDriveRouteForMember(c, owner, ownerSharing); err != nil {
 				return err
+			}
+			ownerSharing.LoadDriveRootPathOnUse(owner)
+			if pdoc, err := middlewares.GetPermission(c); err == nil {
+				ownerSharing.LimitDrivePaths(pdoc)
 			}
 			return fn(c, owner, ownerSharing)
 		}
