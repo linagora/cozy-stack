@@ -105,7 +105,7 @@ func TestDeleteByQueryFailures(t *testing.T) {
 		want   Error
 	}{
 		{"partial success", 200, failedDeletes, Error{403, "security_exception", "delete denied"}},
-		{"failed deletes", 429, failedDeletes, Error{403, "security_exception", "delete denied"}},
+		{"failed deletes", 429, failedDeletes, Error{429, "security_exception", "delete denied"}},
 		{"failed shard", 503, `{"failures":[{"shard":0,"status":503,
 			"reason":{"type":"search_context_missing_exception","reason":"scroll expired"}}]}`,
 			Error{503, "search_context_missing_exception", "scroll expired"}},

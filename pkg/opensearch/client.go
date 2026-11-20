@@ -196,8 +196,9 @@ func parseError(res *http.Response) error {
 		return e
 	}
 	if len(body.Error) == 0 {
-		if err := body.firstFailure(); err != nil {
-			return err
+		if failure, ok := body.firstFailure().(*Error); ok {
+			failure.Status = res.StatusCode
+			return failure
 		}
 		return e
 	}
