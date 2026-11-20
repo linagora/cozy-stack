@@ -7,6 +7,7 @@ import (
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/web/middlewares"
@@ -17,6 +18,15 @@ func lockVFS(inst *instance.Instance) func() {
 	mu := config.Lock().ReadWrite(inst, "vfs")
 	_ = mu.Lock()
 	return mu.Unlock
+}
+
+func validateClientReferences(refs ...couchdb.DocReference) error {
+	for _, ref := range refs {
+		if _, reserved := vfs.MagicDirs[ref.ID]; reserved && ref.Type == consts.Apps {
+			return jsonapi.Errorf(http.StatusBadRequest, "Magic folder reference %s is managed by the stack", ref.ID)
+		}
+	}
+	return nil
 }
 
 // AddReferencedHandler is the echo.handler for adding referenced_by to
@@ -40,6 +50,9 @@ func AddReferencedHandler(c echo.Context) error {
 	references, err := jsonapi.BindRelations(c.Request())
 	if err != nil {
 		return WrapVfsError(err)
+	}
+	if err := validateClientReferences(references...); err != nil {
+		return err
 	}
 
 	var oldFile *vfs.FileDoc

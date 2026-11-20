@@ -3996,6 +3996,16 @@ func TestFiles(t *testing.T) {
 		assert.Equal(t, legacy.ID(), oldMail.ID())
 		assert.Equal(t, []couchdb.DocReference{otherRef}, oldMail.ReferencedBy)
 
+		// A batch containing a reserved reference must leave the folder untouched.
+		e.POST("/files/"+legacy.ID()+"/relationships/referenced_by").
+			WithHeader("Authorization", "Bearer "+token).
+			WithJSON(echo.Map{"data": []couchdb.DocReference{
+				{Type: consts.PhotosAlbums, ID: "another-album"}, mailRef,
+			}}).Expect().Status(http.StatusBadRequest)
+		oldMail, err = testInstance.VFS().DirByID(legacy.ID())
+		require.NoError(t, err)
+		assert.Equal(t, []couchdb.DocReference{otherRef}, oldMail.ReferencedBy)
+
 		obj := e.GET("").WithURL(ts.URL+magicPath).
 			WithHeader("Authorization", "Bearer "+token).
 			Expect().Status(200).

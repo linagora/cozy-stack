@@ -232,9 +232,14 @@ func TestReferences(t *testing.T) {
       }`)).
 			Expect().Status(204)
 
+		e.POST("").WithURL(ts.URL+"/data/"+consts.Apps+"/"+url.PathEscape(vfs.DownloadsDirID)+"/relationships/references").
+			WithHeader("Authorization", "Bearer "+token).
+			WithJSON(M{"data": M{"type": consts.Files, "id": filedoc.ID()}}).
+			Expect().Status(http.StatusBadRequest)
+
 		fdoc, err := testInstance.VFS().FileByID(filedoc.ID())
 		assert.NoError(t, err)
-		assert.Len(t, fdoc.ReferencedBy, 1)
+		assert.Equal(t, []couchdb.DocReference{{Type: doc.DocType(), ID: doc.ID()}}, fdoc.ReferencedBy)
 	})
 
 	t.Run("RemoveReferencesHandler", func(t *testing.T) {
