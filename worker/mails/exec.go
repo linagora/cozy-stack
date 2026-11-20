@@ -13,13 +13,15 @@ import (
 	"github.com/spf13/afero"
 )
 
-func execMjml(ctx *job.TaskContext, template []byte) ([]byte, error) {
+func execMjml(ctx *job.TaskContext, template []byte, logErrors bool) ([]byte, error) {
 	log := ctx.Logger()
 
 	workDir, cleanDir, err := prepareWorkDir()
 	defer cleanDir()
 	if err != nil {
-		log.Errorf("PrepareWorkDir: %s", err)
+		if logErrors {
+			log.Errorf("PrepareWorkDir: %s", err)
+		}
 		return nil, err
 	}
 
@@ -35,11 +37,13 @@ func execMjml(ctx *job.TaskContext, template []byte) ([]byte, error) {
 	cmd.Stderr = utils.LimitWriterDiscard(&stderrBuf, 256*1024)
 
 	out, err := cmd.Output()
-	if stderrBuf.Len() > 0 {
+	if logErrors && stderrBuf.Len() > 0 {
 		log.Errorf("Stderr: %s", stderrBuf.String())
 	}
 	if err != nil {
-		log.Errorf("Run: %s", err)
+		if logErrors {
+			log.Errorf("Run: %s", err)
+		}
 		return nil, err
 	}
 

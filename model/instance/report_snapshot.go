@@ -13,7 +13,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 )
 
-func (i *Instance) verifyReportSnapshot(ctx context.Context, fileID, dirID, originRev, fingerprint string) (*vfs.FileDoc, error) {
+func (i *Instance) verifyReportSnapshot(ctx context.Context, fileID, dirID, originRev, fingerprint string, consume func(io.Reader) error) (*vfs.FileDoc, error) {
 	if originRev == "" || fingerprint == "" {
 		return nil, errReportSnapshot
 	}
@@ -44,15 +44,22 @@ func (i *Instance) verifyReportSnapshot(ctx context.Context, fileID, dirID, orig
 		return nil, err
 	}
 	digest := sha256.New()
-	size, copyErr := io.Copy(digest, io.LimitReader(reportReader{ctx, in}, file.ByteSize+1))
+	src := &io.LimitedReader{R: reportReader{ctx, in}, N: file.ByteSize + 1}
+	if consume != nil {
+		err = consume(io.TeeReader(src, digest))
+	}
+	var remaining int64
+	if err == nil {
+		remaining, err = io.Copy(digest, src)
+	}
 	closeErr := in.Close()
-	if copyErr != nil {
-		return nil, copyErr
+	if err != nil {
+		return nil, err
 	}
 	if closeErr != nil {
 		return nil, closeErr
 	}
-	if size != file.ByteSize {
+	if (consume != nil && remaining != 0) || src.N != 1 {
 		return nil, errReportSnapshot
 	}
 	actual, err := reportFingerprint(head.M, digest.Sum(nil))
