@@ -3997,6 +3997,22 @@ func TestFiles(t *testing.T) {
 		attrs.ValueEqual("dir_id", downloads.ID())
 		assert.Equal(t, consts.RootDirID, downloads.DirID)
 		assert.Contains(t, downloads.ReferencedBy, couchdb.DocReference{Type: consts.Apps, ID: "io.cozy.apps/downloads"})
+		for _, app := range []struct{ slug, name string }{
+			{"calendar", "Calendar"},
+			{"chat", "Chat"},
+			{"meetings", "Meeting Recordings"},
+		} {
+			t.Run(app.slug, func(t *testing.T) {
+				appPath := "/files/" + url.PathEscape(consts.Apps+"/"+app.slug)
+				attrs := testutils.CreateTestClient(t, ts.URL).GET("").WithURL(ts.URL+appPath).
+					WithHeader("Authorization", "Bearer "+token).
+					Expect().Status(http.StatusOK).
+					JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+					Object().Path("$.data.attributes").Object()
+				attrs.ValueEqual("name", app.name)
+				attrs.ValueEqual("dir_id", downloads.ID())
+			})
+		}
 		ref := obj.Path("$.data.relationships.referenced_by.data").Array().First().Object()
 		ref.ValueEqual("id", "io.cozy.apps/mail")
 		ref.ValueEqual("type", consts.Apps)
