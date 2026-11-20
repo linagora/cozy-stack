@@ -2,12 +2,14 @@ package vfs
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/realtime"
 )
 
 // LinkRoot is a folder or a file targeted by a public link, with its path on
@@ -110,4 +112,39 @@ func AbsoluteFromLink(roots []LinkRoot, p string) string {
 		abs = candidate
 	}
 	return abs
+}
+
+// RewriteEventPaths copies a file event before changing its path and restore_path.
+func RewriteEventPaths(doc realtime.Doc, relative func(id, name, p string) string) realtime.Doc {
+	switch d := doc.(type) {
+	case *DirDoc:
+		c := d.Clone().(*DirDoc)
+		c.Fullpath = relative(c.DocID, c.DocName, c.Fullpath)
+		c.RestorePath = relative("", "", c.RestorePath)
+		return c
+	case *FileDoc:
+		c := d.Clone().(*FileDoc)
+		c.RestorePath = relative("", "", c.RestorePath)
+		return c
+	case *realtime.JSONDoc:
+		m := maps.Clone(d.M)
+		for _, key := range []string{"path", "restore_path"} {
+			p, ok := m[key].(string)
+			if !ok {
+				continue
+			}
+			id, name := "", ""
+			if key == "path" {
+				id = d.ID()
+				name, _ = m["name"].(string)
+			}
+			if rel := relative(id, name, p); rel != "" {
+				m[key] = rel
+			} else {
+				delete(m, key)
+			}
+		}
+		return &realtime.JSONDoc{Type: d.Type, M: m}
+	}
+	return doc
 }

@@ -169,6 +169,18 @@ func wsWrite(ws *websocket.Conn, ch chan *wsResponse, errc chan *wsError) error 
 func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsResponse, inst *instance.Instance, s *sharing.Sharing) {
 	log := inst.Logger().WithNamespace("sharing-realtime")
 
+	eventDoc := func(doc realtime.Doc, root, rootID string) realtime.Doc {
+		return vfs.RewriteEventPaths(doc, func(id, name, p string) string {
+			if s.DrivePathsHidden() {
+				return ""
+			}
+			if id != "" && id == rootID {
+				return "/" + name
+			}
+			return vfs.RelativeToLink([]vfs.LinkRoot{{Path: root}}, p)
+		})
+	}
+
 	if s.HasFileDriveRoot() {
 		rootFileID, err := s.DriveRootID()
 		if err != nil {
@@ -180,8 +192,11 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 		isRoot := func(doc realtime.Doc) bool {
 			return doc != nil && doc.ID() == rootFileID
 		}
-		forwardEvents(ctx, ds, ch, func(e *realtime.Event) bool {
-			return isRoot(e.Doc) || isRoot(e.OldDoc)
+		forwardEvents(ctx, ds, ch, func(e *realtime.Event) *realtime.Event {
+			if !isRoot(e.Doc) && !isRoot(e.OldDoc) {
+				return nil
+			}
+			return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, "", rootFileID)}
 		})
 		return
 	}
@@ -198,17 +213,19 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 	}
 	log.Debugf("filterMapEvents: watching %s for sharing %s", dir.Fullpath, s.SID)
 
+	// RestorePath is the fullpath of the directory that contained the file,
+	// so a file trashed at the very root of the shared folder has an equal
+	// RestorePath
+	trashedInDrive := func(restorePath string) bool {
+		return restorePath == dir.Fullpath || strings.HasPrefix(restorePath, dir.Fullpath+"/")
+	}
 	testPath := func(doc realtime.Doc) bool {
 		if d, ok := doc.(*vfs.DirDoc); ok {
 			return strings.HasPrefix(d.Fullpath, dir.Fullpath+"/")
 		}
 		if f, ok := doc.(*vfs.FileDoc); ok {
 			if f.Trashed {
-				// RestorePath is the fullpath of the directory that
-				// contained the file, so a file trashed at the very root
-				// of the shared folder has an equal RestorePath
-				return f.RestorePath == dir.Fullpath ||
-					strings.HasPrefix(f.RestorePath, dir.Fullpath+"/")
+				return trashedInDrive(f.RestorePath)
 			}
 			p, err := f.Path(inst.VFS())
 			if err != nil {
@@ -222,6 +239,10 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 			if docType == consts.DirType {
 				fullpath, _ := j.M["path"].(string)
 				return strings.HasPrefix(fullpath, dir.Fullpath+"/")
+			}
+			if trashed, _ := j.M["trashed"].(bool); trashed {
+				restorePath, _ := j.M["restore_path"].(string)
+				return trashedInDrive(restorePath)
 			}
 			dirID, _ := j.M["dir_id"].(string)
 			if dirID == "" {
@@ -240,35 +261,47 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 		return false
 	}
 
-	match := func(e *realtime.Event) bool {
+	match := func(e *realtime.Event) *realtime.Event {
 		if e.Doc.ID() == dir.DocID {
-			return true
-		}
-		if e.OldDoc != nil && e.OldDoc.ID() == dir.DocID {
-			return true
+			if reloaded, err := inst.VFS().DirByID(dir.DocID); err == nil {
+				dir.Fullpath = reloaded.Fullpath
+			}
+			return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
 		}
 		if testPath(e.Doc) {
-			return true
+			return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
 		}
-		if e.OldDoc != nil && testPath(e.OldDoc) {
-			return true
+		if e.OldDoc != nil && (e.OldDoc.ID() == dir.DocID || testPath(e.OldDoc)) {
+			// An ancestor of the root may have been renamed or moved: the
+			// documents below it are still in the drive.
+			if reloaded, err := inst.VFS().DirByID(dir.DocID); err == nil && reloaded.Fullpath != dir.Fullpath {
+				dir.Fullpath = reloaded.Fullpath
+				if testPath(e.Doc) {
+					return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
+				}
+			}
+			// The document has left the drive: its new location is not for
+			// the members.
+			gone := &realtime.JSONDoc{Type: e.Doc.DocType(), M: map[string]interface{}{"_id": e.Doc.ID()}}
+			return &realtime.Event{Verb: realtime.EventDelete, Doc: gone}
 		}
-		return false
+		return nil
 	}
 
 	forwardEvents(ctx, ds, ch, match)
 }
 
-// forwardEvents sends the matching events of ds to ch until ctx is done. The
-// websocket writer stops reading ch when the client disconnects, so every
-// send must also watch ctx.
-func forwardEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsResponse, match func(*realtime.Event) bool) {
+// forwardEvents sends to ch the events of ds that match keeps, in the form it
+// returns, until ctx is done. The websocket writer stops reading ch when the
+// client disconnects, so every send must also watch ctx.
+func forwardEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsResponse, match func(*realtime.Event) *realtime.Event) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case e := <-ds.Channel:
-			if !match(e) {
+			e = match(e)
+			if e == nil {
 				continue
 			}
 			res := &wsResponse{
@@ -323,6 +356,7 @@ func wsOwner(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error 
 			}
 		}
 		ds.Subscribe(consts.Files)
+		s.LimitDrivePaths(pdoc)
 		filterMapEvents(ctx, ds, ch, inst, s)
 	}()
 
