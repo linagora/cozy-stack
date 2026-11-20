@@ -255,6 +255,18 @@ func TestSharedDrivesMove(t *testing.T) {
 
 	env := setupSharedDrivesEnv(t)
 
+	t.Run("CopyRequiresSourceInsideSelectedDrive", func(t *testing.T) {
+		_, eB, _ := env.createClients(t)
+		otherDriveID := createAcceptedSharedDriveForRecipient(t, env,
+			RecipientInfo{Name: "Betty", Email: "betty@example.net"}, env.betty, env.tsB.URL)
+		eB.POST("/sharings/drives/move").WithHeader("Authorization", "Bearer "+env.bettyToken).
+			WithJSON(map[string]interface{}{
+				"source": map[string]string{"instance": "https://" + env.acme.Domain, "sharing_id": otherDriveID, "file_id": env.checklistID},
+				"dest":   map[string]string{"dir_id": consts.RootDirID},
+				"copy":   true,
+			}).Expect().Status(http.StatusNotFound)
+	})
+
 	t.Run("SuccessfulMove_ToSharedDrive_SameStack", func(t *testing.T) {
 		_, eB, _ := env.createClients(t)
 		// Perform the move operation
@@ -1434,7 +1446,8 @@ func TestSharedDrivesMove(t *testing.T) {
 		require.NoError(t, nestedSharing.AddReferenceForSharing(env.acme, &nestedSharing.Rules[0]))
 
 		// Create a file inside the nested folder
-		fileToMove := createFile(t, eA, nestedDirID, testify(t, "nested-file.txt"), env.acmeToken)
+		fileName := testify(t, "nested-file.txt")
+		fileToMove := createFile(t, eA, nestedDirID, fileName, env.acmeToken)
 
 		// Dave moves the file inside the nested folder (same instance, same
 		// sharing scope) → should succeed because he is RW on the nested scope
@@ -1451,6 +1464,32 @@ func TestSharedDrivesMove(t *testing.T) {
 			    "dir_id": "`+destDirID+`"
 			  }
 			}`)
+
+		// The nested write grant now belongs to another instance with the same contact email.
+		nestedSharing.Members[1].Instance = "https://" + env.betty.Domain
+		require.NoError(t, couchdb.UpdateDoc(env.acme, nestedSharing))
+		transfer := func(copy bool, status int) {
+			t.Helper()
+			eD.POST("/sharings/drives/move").WithHeader("Authorization", "Bearer "+env.daveToken).
+				WithJSON(map[string]interface{}{
+					"source": map[string]string{"instance": "https://" + env.acme.Domain, "sharing_id": rootSharingID, "file_id": fileToMove},
+					"dest":   map[string]string{"dir_id": consts.RootDirID},
+					"copy":   copy,
+				}).Expect().Status(status)
+		}
+		transfer(false, http.StatusForbidden)
+		verifyFileExists(t, env.acme, fileToMove, fileName, destDirID, "foo")
+		exists, err := env.dave.VFS().DirChildExists(consts.RootDirID, fileName)
+		require.NoError(t, err)
+		require.False(t, exists)
+
+		transfer(true, http.StatusCreated)
+
+		ownerDrive, err := sharing.FindSharing(env.acme, rootSharingID)
+		require.NoError(t, err)
+		i := findSharingMemberIndexByEmail(t, env.acme, rootSharingID, "dave@example.net")
+		require.NoError(t, ownerDrive.RemoveInteractPermissionsForAMember(env.acme, &ownerDrive.Members[i], i))
+		transfer(true, http.StatusNotFound)
 	})
 
 	// Alice shares the parent drive with Bob, a nested drive inside it with

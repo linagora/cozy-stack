@@ -20,6 +20,7 @@ import (
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/web/files"
 	"github.com/cozy/cozy-stack/web/middlewares"
@@ -253,27 +254,54 @@ func checkMoveSidePermission(callerInst, hostInst *instance.Instance, s *sharing
 	if hostInst == nil {
 		return nil
 	}
-	// Resolve the caller as a member of this sharing to follow it across
-	// nested sharings via MemberMatching (email or instance host).
-	member := s.MemberFor(callerInst)
-	if member == nil {
-		return jsonapi.NotFound(errors.New("shared drive target not found"))
+	notFound := jsonapi.NotFound(errors.New("shared drive target not found"))
+	if !s.Active {
+		return notFound
 	}
-	if member.Status == sharing.MemberStatusOwner {
+	if s.Owner {
 		if hostInst.Domain != callerInst.Domain {
-			return jsonapi.NotFound(errors.New("shared drive target not found"))
+			return notFound
 		}
 		return checkFileInsideDrive(hostInst, s, targetID)
 	}
-	ea, err := sharing.NewAccessResolver(hostInst).ResolveForMember(targetID, member)
+	if len(s.Credentials) == 0 || s.Credentials[0].DriveToken == "" {
+		return notFound
+	}
+	ownerDrive, err := sharing.FindSharing(hostInst, s.SID)
+	if couchdb.IsNotFoundError(err) {
+		return notFound
+	}
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return jsonapi.NotFound(errors.New("shared drive target not found"))
-		}
+		return wrapErrors(err)
+	}
+	if !ownerDrive.Owner || !ownerDrive.Active || !ownerDrive.Drive {
+		return notFound
+	}
+	member, err := ownerDrive.FindMemberByInteractCode(hostInst, s.Credentials[0].DriveToken)
+	if errors.Is(err, sharing.ErrMemberNotFound) || couchdb.IsNotFoundError(err) {
+		return notFound
+	}
+	if err != nil {
+		return wrapErrors(err)
+	}
+	if member.Status != sharing.MemberStatusReady || !callerInst.HasDomain(member.InstanceHost()) {
+		return notFound
+	}
+	if err := checkFileInsideDrive(hostInst, ownerDrive, targetID); err != nil {
+		return err
+	}
+	if ownerDrive.HasFileDriveRoot() && verb != permission.GET {
+		return jsonapi.NewError(http.StatusUnprocessableEntity, "file-root shared drives only support copy")
+	}
+	ea, err := sharing.NewAccessResolver(hostInst).ResolveForRecipient(targetID, callerInst)
+	if errors.Is(err, os.ErrNotExist) {
+		return notFound
+	}
+	if err != nil {
 		return wrapErrors(err)
 	}
 	if !ea.CanRead {
-		return jsonapi.NotFound(errors.New("shared drive target not found"))
+		return notFound
 	}
 	if !ea.Can(verb) {
 		return jsonapi.Forbidden(errors.New("insufficient access on the target file or folder"))

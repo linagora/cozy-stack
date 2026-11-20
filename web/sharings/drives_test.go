@@ -687,6 +687,8 @@ func newDriveRecipientTestServer(
 		},
 	}, extraRoutes)
 	ts := setup.GetTestServerMultipleRoutes(routes)
+	// Invitations address the recipient by its test server URL.
+	inst.DomainAliases = append(inst.DomainAliases, ts.Listener.Addr().String())
 	ts.Config.Handler.(*echo.Echo).Renderer = render
 	ts.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
 	t.Cleanup(ts.Close)

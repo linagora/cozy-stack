@@ -91,6 +91,17 @@ func (r *AccessResolver) ResolveForMember(targetID string, member *Member) (*Eff
 	})
 }
 
+// ResolveForRecipient returns the access the owner granted to the recipient's
+// instance, including grants to its domain aliases in nested sharings.
+func (r *AccessResolver) ResolveForRecipient(targetID string, recipient *instance.Instance) (*EffectiveAccess, error) {
+	return r.resolve(targetID, func(s *Sharing) *Member {
+		if !s.Owner {
+			return nil
+		}
+		return s.readyMemberOf(recipient)
+	})
+}
+
 // AccessTarget is a file or folder already loaded by the caller, for
 // ResolveDocsForInstance. Exactly one of Dir and File must be non-nil.
 type AccessTarget struct {
