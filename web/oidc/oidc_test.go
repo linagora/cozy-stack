@@ -1906,3 +1906,32 @@ func TestDelegatedCodeCannotBeReplayed(t *testing.T) {
 		Status(http.StatusBadRequest).
 		JSON().Object().HasValue("error", invalidDelegatedCode)
 }
+
+func TestDelegatedCodeOutlivesARefusedScope(t *testing.T) {
+	config.UseTestFile(t)
+	previousStorage := globalStorage
+	t.Cleanup(func() { globalStorage = previousStorage })
+	globalStorage = newMemStateStorage()
+
+	env := newBackchannelLogoutTestEnv(t)
+	inst := env.setup.GetTestInstance(&lifecycle.Options{
+		ContextName: "scope-code-context",
+		OIDCID:      "scope-code-sub",
+	})
+	client := createFlagshipOAuthClient(t, inst)
+
+	code := getStorage().CreateCodeData(inst.OIDCID, "", inst.ContextName, oidcprovider.GenericProvider)
+	env.client.POST("/oidc/access_token").
+		WithHost(inst.Domain).
+		WithJSON(map[string]string{
+			"client_id":     client.ClientID,
+			"client_secret": client.ClientSecret,
+			"scope":         "",
+			"code":          code,
+		}).
+		Expect().
+		Status(http.StatusBadRequest).
+		JSON().Object().HasValue("error", "invalid scope")
+
+	issueOIDCAccessTokenWithDelegatedCode(t, env.client, inst, client, code)
+}
