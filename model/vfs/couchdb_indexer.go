@@ -147,6 +147,10 @@ func (c *couchdbIndexer) prepareFileDoc(doc *FileDoc) error {
 	return nil
 }
 
+// dirSizeBatch is how many subdirectories DirSize reads from CouchDB at a
+// time.
+var dirSizeBatch = 10000
+
 func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, int64, error) {
 	start := doc.Fullpath + "/"
 	stop := doc.Fullpath + "/\ufff0"
@@ -155,31 +159,51 @@ func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, int64, error) {
 		stop = "/\ufff0"
 	}
 
-	// Find the subdirectories
+	// Find the subdirectories, a batch at a time, and add the size and number
+	// of files of each batch (the first one with the directory itself).
 	sel := mango.And(
 		mango.Gt("path", start),
 		mango.Lt("path", stop),
 		mango.Equal("type", consts.DirType),
 	)
-	req := &couchdb.FindRequest{
-		UseIndex: "dir-by-path",
-		Selector: sel,
-		Fields:   []string{"_id"},
-		Limit:    10000,
+	keys := []interface{}{doc.DocID}
+	bookmark := ""
+	var size, count int64
+	for {
+		req := &couchdb.FindRequest{
+			UseIndex: "dir-by-path",
+			Selector: sel,
+			Fields:   []string{"_id"},
+			Limit:    dirSizeBatch,
+			Bookmark: bookmark,
+		}
+		var children []couchdb.JSONDoc
+		resp, err := couchdb.FindDocsRaw(c.db, consts.Files, req, &children)
+		if err != nil {
+			return 0, 0, err
+		}
+		for _, child := range children {
+			keys = append(keys, child.ID())
+		}
+		if len(keys) > 0 {
+			s, n, err := c.dirFilesStats(keys)
+			if err != nil {
+				return 0, 0, err
+			}
+			size += s
+			count += n
+		}
+		if len(children) < dirSizeBatch || resp.Bookmark == "" {
+			return size, count, nil
+		}
+		keys = keys[:0]
+		bookmark = resp.Bookmark
 	}
-	var children []couchdb.JSONDoc
-	err := couchdb.FindDocs(c.db, consts.Files, req, &children)
-	if err != nil {
-		return 0, 0, err
-	}
-	keys := make([]interface{}, len(children)+1)
-	keys[0] = doc.DocID
-	for i, child := range children {
-		keys[i+1] = child.ID()
-	}
+}
 
-	// Get the size and number of files for the directory and each of its
-	// sub-directory, and sum them
+// dirFilesStats returns the total size and number of files directly in the
+// directories identified by keys.
+func (c *couchdbIndexer) dirFilesStats(keys []interface{}) (int64, int64, error) {
 	var resp struct {
 		Rows []struct {
 			Value struct {
@@ -188,7 +212,7 @@ func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, int64, error) {
 			} `json:"value"`
 		} `json:"rows"`
 	}
-	err = couchdb.ExecView(c.db, couchdb.DirFilesStatsView, &couchdb.ViewRequest{
+	err := couchdb.ExecView(c.db, couchdb.DirFilesStatsView, &couchdb.ViewRequest{
 		Keys:   keys,
 		Group:  true,
 		Reduce: true,
