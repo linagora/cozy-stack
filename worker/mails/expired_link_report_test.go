@@ -6,6 +6,8 @@ import (
 	"html"
 	"image/png"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/feature"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/permission"
@@ -217,13 +220,18 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 
 	t.Run("rechecks changes while opening SMTP", func(t *testing.T) {
 		for _, change := range []string{
-			"clean", "revoked", "expiry", "flag", "recipient", "infected", "bytes-only",
+			"clean", "revoked", "expiry", "flag", "manager-disabled", "manager-unavailable", "recipient", "infected", "bytes-only",
 			"clean-and-changed-metadata", "clean-and-changed-bytes", "clean-after-reverted-metadata", "clean-and-revoked",
 		} {
 			t.Run(change, func(t *testing.T) {
 				link := newLink(t)
 				if change == "recipient" {
 					t.Cleanup(func() { setOwner(t, owner) })
+				}
+				var managerChanged atomic.Bool
+				var managerInstance *instance.Instance
+				if change == "manager-disabled" || change == "manager-unavailable" {
+					managerInstance = useReportFlagManager(t, inst, change, &managerChanged)
 				}
 				if change == "flag" {
 					t.Cleanup(func() {
@@ -249,6 +257,9 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 						}
 						current.FeatureFlags[publiclink.FlagEnabled] = false
 						return couchdb.UpdateDoc(prefixer.GlobalPrefixer, &current)
+					case "manager-disabled", "manager-unavailable":
+						managerChanged.Store(true)
+						return nil
 					case "recipient":
 						settings.M["email"] = "changed@example.test"
 						return couchdb.UpdateDoc(inst, settings)
@@ -337,6 +348,12 @@ func TestExpiredLinkReportDelivery(t *testing.T) {
 					require.Empty(t, mailCommands, "must not submit the envelope")
 				}
 				requireNoReportMail(t, messages)
+				if managerInstance != nil {
+					require.True(t, feature.Enabled(managerInstance, publiclink.FlagEnabled), "the ordinary flag cache was not changed")
+					var state publiclink.Delivery
+					require.NoError(t, couchdb.GetDoc(inst, consts.PublicLinkReports, publiclink.DeliveryID(publiclink.ReportID(link.ID(), expiry)), &state))
+					require.Equal(t, publiclink.DeliveryPending, state.Status)
+				}
 			})
 		}
 	})
@@ -519,6 +536,53 @@ func receiveReportMail(t *testing.T, messages <-chan capturedReportMail) capture
 		t.Fatal("missing SMTP message")
 		return capturedReportMail{}
 	}
+}
+
+func useReportFlagManager(t *testing.T, inst *instance.Instance, change string, changed *atomic.Bool) *instance.Instance {
+	t.Helper()
+	manager := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/features" || r.URL.Query().Get("sets") != change {
+			t.Errorf("unexpected Manager request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if changed.Load() {
+			if change == "manager-unavailable" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = io.WriteString(w, `{"flags":{"drive.public_link_events.enabled":false}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"flags":{"drive.public_link_events.enabled":true}}`)
+	}))
+	t.Cleanup(manager.Close)
+	conf := config.GetConfig()
+	oldClouderies, oldContexts := conf.Clouderies, conf.Contexts
+	conf.Clouderies = map[string]config.ClouderyConfig{
+		change: {API: config.ClouderyAPI{URL: manager.URL, Token: "fixture"}},
+	}
+	// Even with a true fallback, an unreachable higher-priority Manager must
+	// not authorize a new SMTP envelope.
+	conf.Contexts = map[string]interface{}{
+		change: map[string]interface{}{"features": map[string]interface{}{publiclink.FlagEnabled: true}},
+	}
+	t.Cleanup(func() { conf.Clouderies, conf.Contexts = oldClouderies, oldContexts })
+
+	var current instance.Instance
+	require.NoError(t, couchdb.GetDoc(prefixer.GlobalPrefixer, consts.Instances, inst.ID(), &current))
+	original := current
+	current.FeatureFlags = nil
+	current.ContextName = change
+	current.FeatureSets = []string{change}
+	require.NoError(t, couchdb.UpdateDoc(prefixer.GlobalPrefixer, &current))
+	t.Cleanup(func() {
+		original.SetRev(current.Rev())
+		require.NoError(t, couchdb.UpdateDoc(prefixer.GlobalPrefixer, &original))
+		inst.SetRev(original.Rev())
+	})
+	require.True(t, feature.Enabled(&current, publiclink.FlagEnabled), "prime the Manager cache")
+	return &current
 }
 
 func requireNoReportMail(t *testing.T, messages <-chan capturedReportMail) {
