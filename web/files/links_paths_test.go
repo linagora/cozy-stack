@@ -12,6 +12,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
+	"github.com/cozy/cozy-stack/web/realtime"
 	"github.com/gavv/httpexpect/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
@@ -32,7 +33,8 @@ func TestPublicLinkPaths(t *testing.T) {
 	inst := setup.GetTestInstance()
 	_, token := setup.GetTestClient(consts.Files)
 	ts := setup.GetTestServerMultipleRoutes(map[string]func(*echo.Group){
-		"/files": Routes,
+		"/files":    Routes,
+		"/realtime": realtime.Routes,
 	})
 	ts.Config.Handler.(*echo.Echo).HTTPErrorHandler = errors.ErrorHandler
 	t.Cleanup(ts.Close)
@@ -207,5 +209,26 @@ func TestPublicLinkPaths(t *testing.T) {
 			WithHeader("Authorization", "Bearer "+writeLink).
 			Expect().Status(http.StatusOK)
 		noAncestorName(t, res).Path("$.data.attributes.restore_path").String().IsEqual("/Docs")
+	})
+
+	t.Run("Realtime", func(t *testing.T) {
+		e := client(t)
+		ws := e.GET("/realtime/").WithWebsocketUpgrade().
+			Expect().Status(http.StatusSwitchingProtocols).Websocket()
+		defer ws.Disconnect()
+		ws.WriteText(fmt.Sprintf(`{"method": "AUTH", "payload": "%s"}`, readLink))
+		ws.WriteText(fmt.Sprintf(`{"method": "SUBSCRIBE", "payload": {"type": "io.cozy.files", "id": "%s"}}`, docsID))
+		time.Sleep(100 * time.Millisecond)
+
+		e.PATCH("/files/"+clientsID).
+			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes([]byte(`{"data": {"type": "io.cozy.files", "id": "` + clientsID + `", "attributes": {"name": "Renamed"}}}`)).
+			Expect().Status(http.StatusOK)
+
+		msg := ws.Expect().TextMessage()
+		assert.NotContains(t, msg.Body().Raw(), "Private")
+		assert.NotContains(t, msg.Body().Raw(), "Renamed")
+		msg.JSON().Object().Path("$.payload.doc.path").String().IsEqual("/Docs")
 	})
 }
