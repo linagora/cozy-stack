@@ -120,12 +120,44 @@ func Enabled(inst *instance.Instance, name string) bool {
 // EnabledFresh resolves a flag in source priority order without the Manager
 // cache. Do not authorize work from a lower-priority source on lookup failure.
 func EnabledFresh(inst *instance.Instance, name string) (bool, error) {
+	return resolveEnabled(inst, name, fetchManagerFlags)
+}
+
+// NewFreshFlagResolver returns a resolver for one scan. It shares fresh
+// Manager responses (including failures) for the same context and ordered
+// feature sets, without using or updating the regular Manager cache.
+func NewFreshFlagResolver(name string) func(*instance.Instance) (bool, error) {
+	type key struct {
+		context string
+		sets    string
+	}
+	type lookup struct {
+		flags map[string]interface{}
+		err   error
+	}
+	results := make(map[key]lookup)
+	manager := func(inst *instance.Instance) (map[string]interface{}, error) {
+		// Quoting each element preserves the exact list and its order.
+		k := key{inst.ContextName, fmt.Sprintf("%q", inst.FeatureSets)}
+		result, ok := results[k]
+		if !ok {
+			result.flags, result.err = fetchManagerFlags(inst)
+			results[k] = result
+		}
+		return result.flags, result.err
+	}
+	return func(inst *instance.Instance) (bool, error) {
+		return resolveEnabled(inst, name, manager)
+	}
+}
+
+func resolveEnabled(inst *instance.Instance, name string, manager func(*instance.Instance) (map[string]interface{}, error)) (bool, error) {
 	if value, ok := inst.FeatureFlags[name]; ok {
 		enabled, _ := value.(bool)
 		return enabled, nil
 	}
 	if len(inst.FeatureSets) != 0 {
-		flags, err := fetchManagerFlags(inst)
+		flags, err := manager(inst)
 		if err != nil {
 			return false, err
 		}

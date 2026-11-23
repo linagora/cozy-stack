@@ -3,6 +3,8 @@ package job
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +29,7 @@ func TestExpiredLinkReportScan(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cutoff := time.Date(2025, time.November, 20, 2, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return cutoff }
 	inst := reportScanInstance(t, true)
 	disabled := reportScanInstance(t, false)
 	old := cutoff.AddDate(0, -1, 0)
@@ -55,28 +58,25 @@ func TestExpiredLinkReportScan(t *testing.T) {
 	setReportScanState(t, inst, "z-submitting", old, publiclink.DeliverySubmitting, time.Time{})
 	addReportScanLink(t, disabled, "all-disabled", old, true)
 
-	newBroker := func() *redisBroker {
-		client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 15})
-		t.Cleanup(func() { require.NoError(t, client.Close()) })
-		require.NoError(t, client.Ping(ctx).Err())
-		b := NewRedisBroker(client).(*redisBroker)
-		require.NoError(t, b.StartWorkers(WorkersList{{WorkerType: publiclink.ReportWorker, Reserved: true}}))
-		t.Cleanup(func() { require.NoError(t, b.ShutdownWorkers(context.Background())) })
-		return b
-	}
-	b1, b2 := newBroker(), newBroker()
+	b1, b2 := newRedisReportScanBroker(t, ctx), newRedisReportScanBroker(t, ctx)
 	q := redisPrefix + publiclink.ReportWorker
+	tomorrow := cutoff.AddDate(0, 0, 1)
+	marker := q + "/scanned/" + cutoff.Format(time.DateOnly)
+	nextMarker := q + "/scanned/" + tomorrow.Format(time.DateOnly)
 	depth, err := b1.WorkerQueueLen(publiclink.ReportWorker)
 	require.NoError(t, err)
 	require.Zero(t, depth, "report queues must be unused outside this test")
-	t.Cleanup(func() { require.NoError(t, b1.client.Del(context.Background(), q, q+redisHighPrioritySuffix).Err()) })
+	t.Cleanup(func() {
+		require.NoError(t, b1.client.Del(context.Background(), q, q+redisHighPrioritySuffix, marker, nextMarker).Err())
+	})
 
 	// A priority job also prevents a new normal wave.
 	priority, err := b1.PushJob(inst, &JobRequest{WorkerType: publiclink.ReportWorker, Manual: true})
 	require.NoError(t, err)
-	scanned, err := scanExpiredLinks(ctx, b2, cutoff)
+	scanned, err := scanExpiredLinks(ctx, b2, clock)
 	require.NoError(t, err)
 	require.False(t, scanned)
+	require.Zero(t, b1.client.Exists(ctx, marker).Val())
 	require.Zero(t, b1.client.LLen(ctx, q).Val())
 	item, err := b1.client.RPop(ctx, q+redisHighPrioritySuffix).Result()
 	require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestExpiredLinkReportScan(t *testing.T) {
 	for _, b := range []*redisBroker{b1, b2} {
 		go func() {
 			<-start
-			didScan, err := scanExpiredLinks(ctx, b, cutoff)
+			didScan, err := scanExpiredLinks(ctx, b, clock)
 			results <- result{didScan, err}
 		}()
 	}
@@ -101,7 +101,8 @@ func TestExpiredLinkReportScan(t *testing.T) {
 	a, b := <-results, <-results
 	require.NoError(t, a.err)
 	require.NoError(t, b.err)
-	require.NotEqual(t, a.scanned, b.scanned)
+	require.True(t, a.scanned)
+	require.True(t, b.scanned)
 
 	want := []publiclink.ReportMessage{{LinkID: "catch-up", Expiry: old}, {LinkID: "pending", Expiry: old}, {LinkID: "z-at-cutoff", Expiry: cutoff}}
 	readWave := func() []publiclink.ReportMessage {
@@ -123,14 +124,57 @@ func TestExpiredLinkReportScan(t *testing.T) {
 	}
 	require.ElementsMatch(t, want, readWave())
 
-	// A lost or discarded queue entry isn't a delivery claim. A new process
-	// can rediscover the same links, with the exact expiry, once the queue drains.
+	ttl, err := b1.client.PTTL(ctx, marker).Result()
+	require.NoError(t, err)
+	require.Greater(t, ttl, 3*time.Hour+59*time.Minute)
+	require.LessOrEqual(t, ttl, 4*time.Hour)
+
+	// A new producer on the same Redis cannot repeat a completed scan even
+	// after drainage. No delivery claims have been made for the enqueued jobs.
 	require.NoError(t, b1.client.Del(ctx, q).Err())
-	restarted := newBroker()
-	scanned, err = scanExpiredLinks(ctx, restarted, cutoff)
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRedisReportScanRestartHelper$")
+	cmd.Env = append(os.Environ(), "COZY_REPORT_SCAN_TEST_CUTOFF="+cutoff.Format(time.RFC3339Nano))
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	require.Empty(t, readWave())
+
+	// Each window is independent even if yesterday's marker is still present.
+	scanned, err = scanExpiredLinks(ctx, b2, func() time.Time { return cutoff.Add(4 * time.Hour) })
+	require.NoError(t, err)
+	require.False(t, scanned)
+	require.Empty(t, readWave())
+	scanned, err = scanExpiredLinks(ctx, b2, func() time.Time { return tomorrow })
 	require.NoError(t, err)
 	require.True(t, scanned)
+	want = append(want, publiclink.ReportMessage{LinkID: "retry-tomorrow", Expiry: old}, publiclink.ReportMessage{LinkID: "z-future", Expiry: cutoff.Add(time.Nanosecond)})
 	require.ElementsMatch(t, want, readWave())
+}
+
+func TestRedisReportScanRestartHelper(t *testing.T) {
+	raw, ok := os.LookupEnv("COZY_REPORT_SCAN_TEST_CUTOFF")
+	if !ok {
+		return
+	}
+	cutoff, err := time.Parse(time.RFC3339Nano, raw)
+	require.NoError(t, err)
+	config.UseTestFile(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	done, err := scanExpiredLinks(ctx, newRedisReportScanBroker(t, ctx), func() time.Time { return cutoff })
+	require.NoError(t, err)
+	require.True(t, done)
+}
+
+func newRedisReportScanBroker(t *testing.T, ctx context.Context) *redisBroker {
+	t.Helper()
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 15})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	require.NoError(t, client.Ping(ctx).Err())
+	b := NewRedisBroker(client).(*redisBroker)
+	// Producers may have no consumer configured in this process.
+	require.NoError(t, b.StartWorkers(WorkersList{{WorkerType: publiclink.ReportWorker, Reserved: true}}))
+	t.Cleanup(func() { require.NoError(t, b.ShutdownWorkers(context.Background())) })
+	return b
 }
 
 func TestExpiredLinkReportScanMemory(t *testing.T) {
@@ -163,7 +207,7 @@ func TestExpiredLinkReportScanMemory(t *testing.T) {
 		defer cancel()
 		require.NoError(t, b.ShutdownWorkers(ctx))
 	})
-	scanned, err := scanExpiredLinks(ctx, b, cutoff)
+	scanned, err := scanExpiredLinks(ctx, b, func() time.Time { return cutoff })
 	require.NoError(t, err)
 	require.True(t, scanned)
 	select {

@@ -288,9 +288,9 @@ func (b *redisBroker) queueLen(ctx context.Context, workerType string, primaryOn
 	var depth int64
 	for _, k := range []string{key, key + redisHighPrioritySuffix} {
 		client := b.client
-		if cluster, ok := client.(*redis.ClusterClient); ok && primaryOnly && cluster.Options().ReadOnly {
+		if primaryOnly {
 			// A lagging replica can incorrectly report that the last wave drained.
-			primary, err := cluster.MasterForKey(ctx, k)
+			primary, err := b.primaryForKey(ctx, k)
 			if err != nil {
 				return 0, err
 			}
@@ -303,6 +303,13 @@ func (b *redisBroker) queueLen(ctx context.Context, workerType string, primaryOn
 		depth += n
 	}
 	return int(depth), nil
+}
+
+func (b *redisBroker) primaryForKey(ctx context.Context, key string) (redis.UniversalClient, error) {
+	if cluster, ok := b.client.(*redis.ClusterClient); ok && cluster.Options().ReadOnly {
+		return cluster.MasterForKey(ctx, key)
+	}
+	return b.client, nil
 }
 
 func (b *redisBroker) WorkerIsReserved(workerType string) (bool, error) {
