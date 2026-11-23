@@ -12,6 +12,7 @@ import (
 
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/limits"
+	"github.com/cozy/cozy-stack/pkg/lock"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	multierror "github.com/hashicorp/go-multierror"
@@ -27,6 +28,7 @@ const (
 
 type redisBroker struct {
 	client         redis.UniversalClient
+	reportScanLock lock.Getter
 	ctx            context.Context
 	workers        []*Worker
 	workersRunning []*Worker
@@ -39,9 +41,10 @@ type redisBroker struct {
 // the jobs among several cozy-stack processes.
 func NewRedisBroker(client redis.UniversalClient) Broker {
 	return &redisBroker{
-		client: client,
-		ctx:    context.Background(),
-		closed: make(chan struct{}),
+		client:         client,
+		reportScanLock: lock.NewRedisLockGetter(client),
+		ctx:            context.Background(),
+		closed:         make(chan struct{}),
 	}
 }
 
@@ -193,6 +196,13 @@ func (b *redisBroker) pollLoop(key string, ch chan<- *Job) {
 // PushJob will produce a new Job with the given options and enqueue the job in
 // the proper queue.
 func (b *redisBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, error) {
+	return b.pushJob(b.ctx, db, req)
+}
+
+func (b *redisBroker) pushJob(ctx context.Context, db prefixer.Prefixer, req *JobRequest) (*Job, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if atomic.LoadUint32(&b.running) == 0 {
 		return nil, ErrClosed
 	}
@@ -235,7 +245,7 @@ func (b *redisBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, erro
 		}
 	}
 
-	if err := job.Create(); err != nil {
+	if err := job.create(ctx); err != nil {
 		return nil, err
 	}
 
@@ -257,7 +267,10 @@ func (b *redisBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, erro
 		key += redisHighPrioritySuffix
 	}
 
-	if err := b.client.LPush(b.ctx, key, val).Err(); err != nil {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := b.client.LPush(ctx, key, val).Err(); err != nil {
 		return nil, err
 	}
 
@@ -267,16 +280,36 @@ func (b *redisBroker) PushJob(db prefixer.Prefixer, req *JobRequest) (*Job, erro
 // QueueLen returns the size of the number of elements in queue of the
 // specified worker type.
 func (b *redisBroker) WorkerQueueLen(workerType string) (int, error) {
+	return b.queueLen(b.ctx, workerType, false)
+}
+
+func (b *redisBroker) queueLen(ctx context.Context, workerType string, primaryOnly bool) (int, error) {
 	key := redisPrefix + workerType
-	l1, err := b.client.LLen(b.ctx, key).Result()
-	if err != nil {
-		return 0, err
+	var depth int64
+	for _, k := range []string{key, key + redisHighPrioritySuffix} {
+		client := b.client
+		if primaryOnly {
+			// A lagging replica can incorrectly report that the last wave drained.
+			primary, err := b.primaryForKey(ctx, k)
+			if err != nil {
+				return 0, err
+			}
+			client = primary
+		}
+		n, err := client.LLen(ctx, k).Result()
+		if err != nil {
+			return 0, err
+		}
+		depth += n
 	}
-	l2, err := b.client.LLen(b.ctx, key+redisHighPrioritySuffix).Result()
-	if err != nil {
-		return 0, err
+	return int(depth), nil
+}
+
+func (b *redisBroker) primaryForKey(ctx context.Context, key string) (redis.UniversalClient, error) {
+	if cluster, ok := b.client.(*redis.ClusterClient); ok && cluster.Options().ReadOnly {
+		return cluster.MasterForKey(ctx, key)
 	}
-	return int(l1 + l2), nil
+	return b.client, nil
 }
 
 func (b *redisBroker) WorkerIsReserved(workerType string) (bool, error) {

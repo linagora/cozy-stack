@@ -468,11 +468,49 @@ Reports use a server-bound directory, never an existing folder selected by
 name or references. Published CSVs are ordinary Drive files and may be shared
 by their owner. The private binding and snapshot record are not Drive files.
 
-The generator is not called by a route, worker, or scheduler. Publication of
-the Drive file and recording its snapshot are separate operations: an
-interruption between them can leave a complete file that the generator will
-not reuse or overwrite. There is no migration recovery or automatic retry in
-this step.
+When `drive.public_link_events.enabled` is true, the Stack looks for expired
+opted-in file links during the nightly window (02:00 inclusive to 06:00
+exclusive UTC), without requiring a visit to the link. A process starting
+inside the window can scan immediately; one starting outside waits until the
+next window. A scan considers all still-eligible expiries at its start, not
+just the last 24 hours. A new wave waits for the previous wave's queued jobs
+to drain. Stacks sharing a Redis jobs backend record a completed scan until
+that window ends, so a process restart does not repeat it. An incomplete scan
+can be retried inside the same window, with a longer delay after repeated
+errors. For each scan attempt, the Manager is queried without its usual cache,
+at most once per context and ordered feature-set list. An unavailable flag
+lookup does not count as a completed scan. The marker does not confirm delivery;
+links missed or newly eligible after the scan can be picked up the next night.
+This is not a fixed bound on jobs per night or on delivery time.
+
+The internal worker only starts report generation inside the window and checks
+the feature flag, current opt-in and exact expiry. It sends a link to the CSV
+and a preview to the instance owner's current address, or saves the CSV alone
+when no address is available. It rechecks the flag, consent, expiry, recipient
+and report snapshot before SMTP submission, even when the attempt continues
+past the end of the window. When the flag depends on the Manager, these worker
+checks bypass the cache and do not authorize sending if that lookup fails.
+Jobs skipped outside the window are rediscovered by a subsequent scan if still
+eligible.
+
+Attempts that fail before SMTP submission can be retried on subsequent nights.
+The Stack does not automatically resend a message whose submission might have
+reached the relay. This avoids blind replays, but does not guarantee delivery
+or exactly-once SMTP. Publication of the Drive file and recording its snapshot
+are separate operations: an interruption can leave a complete file that the
+worker will not reuse or overwrite. There is no migration recovery.
+
+With Redis jobs, scanners coordinate with a `locks:` lease on the jobs Redis
+backend, even if instance locks are stored elsewhere. The jobs Redis ACL must
+allow the standard lock operations (`SET`, `GET`, `PEXPIRE`, `DEL` and `EVAL`)
+on that lease key, and queue length reads on both report queues. To suppress
+repeated scans, also allow `EXISTS` and `SET` with expiration on
+`j/expired-link-report-mail/scanned/*`. If access to the marker fails, scanning
+and queuing can still proceed. A jobs backend configured with multiple
+`redis.addrs` and no `redis.master` can use Redis
+Cluster. On a native cluster, the broker's multi-key `BRPOP` can fail with
+`CROSSSLOT` because the report queue keys are in separate slots. Report jobs
+may then remain queued and prevent subsequent scans.
 
 #### Request to add / remove codes with a document metadata
 

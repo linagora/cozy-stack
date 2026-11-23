@@ -2,6 +2,7 @@ package couchdb
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -287,6 +288,13 @@ func handleResponseError(db prefixer.Prefixer, resp *http.Response) error {
 }
 
 func makeRequest(db prefixer.Prefixer, doctype, method, path string, reqbody interface{}, resbody interface{}) error {
+	return makeRequestWithContext(context.Background(), db, doctype, method, path, reqbody, resbody)
+}
+
+func makeRequestWithContext(ctx context.Context, db prefixer.Prefixer, doctype, method, path string, reqbody interface{}, resbody interface{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var err error
 	var reqjson []byte
 
@@ -312,10 +320,13 @@ func makeRequest(db prefixer.Prefixer, doctype, method, path string, reqbody int
 	}
 
 	start := time.Now()
-	resp, err := config.CouchClient().Do(req)
+	resp, err := config.CouchClient().Do(req.WithContext(ctx))
 	elapsed := time.Since(start)
 	// Possible err = mostly connection failure
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		err = newConnectionError(err)
 		log.Error(err.Error())
 		return err
@@ -350,6 +361,9 @@ func makeRequest(db prefixer.Prefixer, doctype, method, path string, reqbody int
 		err = json.NewDecoder(resp.Body).Decode(&resbody)
 	}
 
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return err
 }
 
@@ -363,8 +377,12 @@ func Compact(db prefixer.Prefixer, doctype string) error {
 // DBStatus responds with informations on the database: size, number of
 // documents, sequence numbers, etc.
 func DBStatus(db prefixer.Prefixer, doctype string) (*DBStatusResponse, error) {
+	return dbStatus(context.Background(), db, doctype)
+}
+
+func dbStatus(ctx context.Context, db prefixer.Prefixer, doctype string) (*DBStatusResponse, error) {
 	var out DBStatusResponse
-	return &out, makeRequest(db, doctype, http.MethodGet, "", nil, &out)
+	return &out, makeRequestWithContext(ctx, db, doctype, http.MethodGet, "", nil, &out)
 }
 
 func allDbs(db prefixer.Prefixer) ([]string, error) {
@@ -453,6 +471,10 @@ func EnsureDBExist(db prefixer.Prefixer, doctype string) error {
 
 // CreateDB creates the necessary database for a doctype
 func CreateDB(db prefixer.Prefixer, doctype string) error {
+	return createDB(context.Background(), db, doctype)
+}
+
+func createDB(ctx context.Context, db prefixer.Prefixer, doctype string) error {
 	// XXX On dev release of the stack, we force some parameters at the
 	// creation of a database. It helps CouchDB to have more acceptable
 	// performances inside Docker. Those parameters are not suitable for
@@ -461,14 +483,14 @@ func CreateDB(db prefixer.Prefixer, doctype string) error {
 	if build.IsDevRelease() {
 		query = "?q=1&n=1"
 	}
-	if err := makeRequest(db, doctype, http.MethodPut, query, nil, nil); err != nil {
+	if err := makeRequestWithContext(ctx, db, doctype, http.MethodPut, query, nil, nil); err != nil {
 		// A loser of a concurrent creation usually gets 412, but CouchDB 3.3
 		// can answer 500 {"error":"error","reason":"conflict"}: trust the
 		// database state rather than the shape of the error.
 		if IsFileExists(err) {
 			return err
 		}
-		if _, statusErr := DBStatus(db, doctype); statusErr == nil {
+		if _, statusErr := dbStatus(ctx, db, doctype); statusErr == nil {
 			return &Error{
 				StatusCode: http.StatusPreconditionFailed,
 				Name:       "file_exists",
@@ -726,15 +748,15 @@ func Upsert(db prefixer.Prefixer, doc Doc) error {
 	return UpdateDoc(db, doc)
 }
 
-func createDocOrDB(db prefixer.Prefixer, doc Doc, response interface{}) error {
+func createDocOrDB(ctx context.Context, db prefixer.Prefixer, doc Doc, response interface{}) error {
 	doctype := doc.DocType()
-	err := makeRequest(db, doctype, http.MethodPost, "", doc, response)
+	err := makeRequestWithContext(ctx, db, doctype, http.MethodPost, "", doc, response)
 	if err == nil || !IsNoDatabaseError(err) {
 		return err
 	}
-	err = CreateDB(db, doctype)
+	err = createDB(ctx, db, doctype)
 	if err == nil || IsFileExists(err) {
-		err = makeRequest(db, doctype, http.MethodPost, "", doc, response)
+		err = makeRequestWithContext(ctx, db, doctype, http.MethodPost, "", doc, response)
 	}
 	return err
 }
@@ -744,13 +766,18 @@ func createDocOrDB(db prefixer.Prefixer, doc Doc, response interface{}) error {
 // with the document's new ID and Rev.
 // This function creates a database if this is the first document of its type
 func CreateDoc(db prefixer.Prefixer, doc Doc) error {
+	return CreateDocWithContext(context.Background(), db, doc)
+}
+
+// CreateDocWithContext is like CreateDoc but allows canceling the document write.
+func CreateDocWithContext(ctx context.Context, db prefixer.Prefixer, doc Doc) error {
 	var res *UpdateResponse
 
 	if doc.ID() != "" {
 		return newDefinedIDError()
 	}
 
-	err := createDocOrDB(db, doc, &res)
+	err := createDocOrDB(ctx, db, doc, &res)
 	if err != nil {
 		return err
 	} else if !res.Ok {
