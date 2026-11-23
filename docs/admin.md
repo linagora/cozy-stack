@@ -729,7 +729,7 @@ Only the first part of the archive contains the metadata.
 
 | Parameter | Description                                                         |
 | --------- | ------------------------------------------------------------------- |
-| cursor    | String reprentation of the export cursor to start the download from |
+| cursor    | String representation of the export cursor to start the download from |
 
 The cursor parameter is optional but any given cursor should be one of the
 defined `parts_cursors` in the export document.

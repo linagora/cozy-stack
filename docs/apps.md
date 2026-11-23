@@ -126,7 +126,7 @@ application. These part of the application are called services and can be
 declared as part of the application in its manifest.
 
 In contrast to [konnectors](./konnectors.md), services have the same permissions
-as the web application and are not intended to collect outside informations but
+as the web application and are not intended to collect outside information but
 rather analyse the current set of collected information inside the cozy. However
 they share the same mechanisms as the konnectors to describe how and when they
 should be executed: via our trigger system.
@@ -193,7 +193,7 @@ Entrypoints indicates front end routes to other apps. It contains a `name`, a `t
 
 ### Notifications
 
-For more informations on how te declare notifications in the manifest, see the
+For more information on how to declare notifications in the manifest, see the
 [notifications documentation](./notifications.md).
 
 Here is an example:
@@ -218,7 +218,7 @@ Here is an example:
 ### Mobile
 
 Application may exist on mobile platforms. When it is the case, manifest can
-contain informations about the mobile apps.
+contain information about the mobile apps.
 
 On a mobile device and on a native context, this attribute can be used to open the
 native mobile app from any another Cozy app.
@@ -508,7 +508,7 @@ Content-Type: application/vnd.api+json
 ```
 
 This endpoint is paginated, default limit is currently `100`.
-Two flags are available to retreieve the other apps if there are more than `100`
+Two flags are available to retrieve the other apps if there are more than `100`
 apps installed:
 - `limit`
 - `start_key`: The first following doc ID of the next apps
@@ -558,11 +558,11 @@ Content-Type: application/vnd.api+json
 }
 ```
 
-## Get informations about an application
+## Get information about an application
 
 ### GET /apps/:slug
 
-This route is used to retrieve informations about an application installed on the cozy. By calling this route, the application will be updated synchronously.
+This route is used to retrieve information about an application installed on the cozy. By calling this route, the application will be updated synchronously.
 
 #### Request
 
@@ -784,7 +784,7 @@ will be the registration process, the login form, and it will redirect to
 
 The applications have different roles and permissions. An application is
 identified when talking to the stack via a token. The token has to be injected
-in the application, one way or another, and it have to be unaccessible from
+in the application, one way or another, and it have to be inaccessible from
 other apps.
 
 If the applications run on the same domain (for example
@@ -826,7 +826,7 @@ is an hell to debug when it breaks. Clearly, it's not an acceptable solution.
 Thus, the only choice is to have several origins, and sub-domains is the best
 way for that. Of course, it has the downside to be more complicated to deploy
 (DNS and TLS certificates). But, in the tradeoff between security and ease of
-administration, we definetively take the security first.
+administration, we definitively take the security first.
 
 ### Routes
 
