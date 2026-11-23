@@ -17,6 +17,31 @@ func LoginRateExceeded(i *instance.Instance) error {
 	return lifecycle.Block(i, instance.BlockedLoginFailed.Code)
 }
 
+// CountFailedPassphrase counts a wrong passphrase, and blocks the instance
+// past the limit, as for the login. Every check of the passphrase must call it.
+func CountFailedPassphrase(i *instance.Instance) {
+	err := config.GetRateLimiter().CheckRateLimit(i, limits.AuthType)
+	if limits.IsLimitReachedOrExceeded(err) {
+		if err = LoginRateExceeded(i); err != nil {
+			i.Logger().WithNamespace("auth").Warn(err.Error())
+		}
+	}
+}
+
+// CountFailedTwoFactor counts a wrong 2FA passcode. Past the limit, a new
+// passcode is sent, and too many of them block the instance, which the
+// returned error tells. Every check of a 2FA passcode must call it.
+func CountFailedTwoFactor(i *instance.Instance) error {
+	if config.GetRateLimiter().CheckRateLimit(i, limits.TwoFactorType) != limits.ErrRateLimitExceeded {
+		return nil
+	}
+	err := TwoFactorRateExceeded(i)
+	if err != nil {
+		i.Logger().WithNamespace("auth").Warn(err.Error())
+	}
+	return err
+}
+
 // TwoFactorRateExceeded regenerates a new 2FA passcode after too many failed
 // attempts to login
 func TwoFactorRateExceeded(i *instance.Instance) error {

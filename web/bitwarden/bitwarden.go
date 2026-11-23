@@ -19,6 +19,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/web/auth"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
 )
@@ -178,6 +179,7 @@ func ChangeSecurityStamp(c echo.Context) error {
 	}
 
 	if err := instance.CheckPassphrase(inst, []byte(data.Hashed)); err != nil {
+		auth.CountFailedPassphrase(inst)
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": "invalid masterPasswordHash",
 		})
@@ -274,6 +276,7 @@ func getInitialCredentials(c echo.Context) error {
 
 	// Authentication
 	if err := instance.CheckPassphrase(inst, pass); err != nil {
+		auth.CountFailedPassphrase(inst)
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": "invalid password",
 		})
@@ -387,6 +390,7 @@ func checkTwoFactor(c echo.Context, inst *instance.Instance) bool {
 			if inst.ValidateTwoFactorPasscode(token, passcode) {
 				return true
 			} else {
+				_ = auth.CountFailedTwoFactor(inst)
 				_ = c.JSON(http.StatusBadRequest, echo.Map{
 					"error":             "invalid_grant",
 					"error_description": "invalid_username_or_password",

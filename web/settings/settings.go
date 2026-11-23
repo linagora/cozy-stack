@@ -22,6 +22,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
+	"github.com/cozy/cozy-stack/web/auth"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
 	"github.com/mssola/user_agent"
@@ -138,6 +139,7 @@ func (h *HTTPHandler) postEmail(c echo.Context) error {
 		c.NoContent(http.StatusNoContent)
 		return nil
 	case errors.Is(err, instance.ErrInvalidPassphrase):
+		auth.CountFailedPassphrase(inst)
 		return jsonapi.BadRequest(instance.ErrInvalidPassphrase)
 	default:
 		return jsonapi.InternalServerError(err)

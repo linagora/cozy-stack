@@ -119,12 +119,17 @@ func canCreateSessionCode(c echo.Context, inst *instance.Instance) (canCreateSes
 		return cannotCreateSessionCode, ""
 	}
 	if err := instance.CheckPassphrase(inst, []byte(args.Passphrase)); err != nil {
+		CountFailedPassphrase(inst)
 		return cannotCreateSessionCode, ""
 	}
 
 	if inst.HasAuthMode(instance.TwoFactorMail) {
 		token := []byte(args.TwoFactorToken)
 		if ok := inst.ValidateTwoFactorPasscode(token, args.TwoFactorCode); !ok {
+			// The first request has no code yet: it only asks for one.
+			if args.TwoFactorCode != "" {
+				_ = CountFailedTwoFactor(inst)
+			}
 			return need2FAToCreateSessionCode, ""
 		}
 	}
@@ -267,12 +272,7 @@ func loginFlagship(c echo.Context) error {
 	}
 
 	if instance.CheckPassphrase(inst, []byte(args.Passphrase)) != nil {
-		err := config.GetRateLimiter().CheckRateLimit(inst, limits.AuthType)
-		if limits.IsLimitReachedOrExceeded(err) {
-			if err = LoginRateExceeded(inst); err != nil {
-				inst.Logger().WithNamespace("auth").Warn(err.Error())
-			}
-		}
+		CountFailedPassphrase(inst)
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": inst.Translate(CredentialsErrorKey),
 		})
@@ -290,6 +290,7 @@ func loginFlagship(c echo.Context) error {
 		}
 		twoFactorToken := []byte(args.TwoFactorToken)
 		if !inst.ValidateTwoFactorPasscode(twoFactorToken, args.TwoFactorPasscode) {
+			_ = CountFailedTwoFactor(inst)
 			return c.JSON(http.StatusForbidden, echo.Map{
 				"error": inst.Translate(TwoFactorErrorKey),
 			})

@@ -14,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/metadata"
+	"github.com/cozy/cozy-stack/web/auth"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/gofrs/uuid/v5"
 	"github.com/labstack/echo/v4"
@@ -285,6 +286,7 @@ func DeleteOrganization(c echo.Context) error {
 		})
 	}
 	if err := instance.CheckPassphrase(inst, []byte(verification.Hash)); err != nil {
+		auth.CountFailedPassphrase(inst)
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": "invalid password",
 		})

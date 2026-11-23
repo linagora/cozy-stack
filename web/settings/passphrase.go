@@ -321,6 +321,7 @@ func (h *HTTPHandler) updatePassphrase(c echo.Context) error {
 				"two_factor_token": twoFactorToken,
 			})
 		}
+		auth.CountFailedPassphrase(inst)
 		return instance.ErrInvalidPassphrase
 	}
 
@@ -341,6 +342,12 @@ func (h *HTTPHandler) updatePassphrase(c echo.Context) error {
 			Key:        args.Key,
 		})
 	if err != nil {
+		switch {
+		case errors.Is(err, instance.ErrInvalidPassphrase):
+			auth.CountFailedPassphrase(inst)
+		case errors.Is(err, instance.ErrInvalidTwoFactor):
+			_ = auth.CountFailedTwoFactor(inst)
+		}
 		return jsonapi.BadRequest(err)
 	}
 
@@ -373,6 +380,7 @@ func (h *HTTPHandler) checkPassphrase(c echo.Context) error {
 	}
 
 	if instance.CheckPassphrase(inst, []byte(args.Passphrase)) != nil {
+		auth.CountFailedPassphrase(inst)
 		return jsonapi.Forbidden(instance.ErrInvalidPassphrase)
 	}
 

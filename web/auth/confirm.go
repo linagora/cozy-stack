@@ -11,7 +11,6 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/limits"
 	"github.com/cozy/cozy-stack/pkg/realtime"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
@@ -60,12 +59,7 @@ func confirmAuth(c echo.Context) error {
 	passphrase := []byte(c.FormValue("passphrase"))
 	if instance.CheckPassphrase(inst, passphrase) != nil {
 		errorMessage := inst.Translate(CredentialsErrorKey)
-		err := config.GetRateLimiter().CheckRateLimit(inst, limits.AuthType)
-		if limits.IsLimitReachedOrExceeded(err) {
-			if err = LoginRateExceeded(inst); err != nil {
-				inst.Logger().WithNamespace("auth").Warn(err.Error())
-			}
-		}
+		CountFailedPassphrase(inst)
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": errorMessage,
 		})

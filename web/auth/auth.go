@@ -387,12 +387,7 @@ func login(c echo.Context) error {
 		}
 	} else { // Bad login passphrase
 		errorMessage := inst.Translate(CredentialsErrorKey)
-		err := config.GetRateLimiter().CheckRateLimit(inst, limits.AuthType)
-		if limits.IsLimitReachedOrExceeded(err) {
-			if err = LoginRateExceeded(inst); err != nil {
-				inst.Logger().WithNamespace("auth").Warn(err.Error())
-			}
-		}
+		CountFailedPassphrase(inst)
 		if wantsJSON(c) {
 			return c.JSON(http.StatusUnauthorized, echo.Map{
 				"error": errorMessage,

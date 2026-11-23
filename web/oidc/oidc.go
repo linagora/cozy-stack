@@ -218,6 +218,7 @@ func BitwardenExchange(c echo.Context) error {
 		})
 	}
 	if err := instance.CheckPassphrase(inst, []byte(pass)); err != nil {
+		auth.CountFailedPassphrase(inst)
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": "invalid password",
 		})
@@ -1076,6 +1077,7 @@ func AccessToken(c echo.Context) error {
 			})
 		}
 		if ok := inst.ValidateTwoFactorPasscode(token, reqBody.TwoFactorCode); !ok {
+			_ = auth.CountFailedTwoFactor(inst)
 			return c.JSON(http.StatusForbidden, echo.Map{
 				"error": inst.Translate(auth.TwoFactorErrorKey),
 			})

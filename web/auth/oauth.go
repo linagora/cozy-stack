@@ -779,6 +779,7 @@ func (a *AuthorizeHTTPHandler) authorizeMove(c echo.Context) error {
 		passcode := c.FormValue("two-factor-passcode")
 		correctPasscode := inst.ValidateTwoFactorPasscode(token, passcode)
 		if !correctPasscode {
+			_ = CountFailedTwoFactor(inst)
 			errorMessage := inst.Translate(TwoFactorErrorKey)
 			mail, _ := inst.SettingsEMail()
 			return c.Render(http.StatusOK, "move_delegated_auth.html", echo.Map{
@@ -804,12 +805,7 @@ func (a *AuthorizeHTTPHandler) authorizeMove(c echo.Context) error {
 	passphrase := []byte(c.FormValue("passphrase"))
 	if instance.CheckPassphrase(inst, passphrase) != nil {
 		errorMessage := inst.Translate(CredentialsErrorKey)
-		err := config.GetRateLimiter().CheckRateLimit(inst, limits.AuthType)
-		if limits.IsLimitReachedOrExceeded(err) {
-			if err = LoginRateExceeded(inst); err != nil {
-				inst.Logger().WithNamespace("auth").Warn(err.Error())
-			}
-		}
+		CountFailedPassphrase(inst)
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": errorMessage,
 		})

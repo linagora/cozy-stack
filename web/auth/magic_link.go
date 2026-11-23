@@ -119,12 +119,7 @@ func loginWithMagicLinkAndPassword(c echo.Context) error {
 	passphrase := []byte(c.FormValue("passphrase"))
 	if instance.CheckPassphrase(inst, passphrase) != nil {
 		errorMessage := inst.Translate(CredentialsErrorKey)
-		err := config.GetRateLimiter().CheckRateLimit(inst, limits.AuthType)
-		if limits.IsLimitReachedOrExceeded(err) {
-			if err = LoginRateExceeded(inst); err != nil {
-				inst.Logger().WithNamespace("auth").Warn(err.Error())
-			}
-		}
+		CountFailedPassphrase(inst)
 		return c.JSON(http.StatusUnauthorized, echo.Map{
 			"error": errorMessage,
 		})
@@ -173,12 +168,7 @@ func magicLinkFlagship(c echo.Context) error {
 
 	if inst.HasAuthMode(instance.TwoFactorMail) {
 		if instance.CheckPassphrase(inst, []byte(args.Passphrase)) != nil {
-			err := config.GetRateLimiter().CheckRateLimit(inst, limits.AuthType)
-			if limits.IsLimitReachedOrExceeded(err) {
-				if err = LoginRateExceeded(inst); err != nil {
-					inst.Logger().WithNamespace("auth").Warn(err.Error())
-				}
-			}
+			CountFailedPassphrase(inst)
 			return c.JSON(http.StatusUnauthorized, echo.Map{
 				"error": "passphrase is required as second authentication factor",
 			})
