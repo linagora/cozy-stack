@@ -20,6 +20,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
+	"github.com/cozy/cozy-stack/worker/antivirus"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/labstack/echo/v4"
 )
@@ -373,6 +374,38 @@ func indexesFixer(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// defaultAntivirusPendingDelay is longer than a normal scan job can last,
+// retries included, so that the fixer does not push a second scan for a file
+// that is still being scanned.
+const defaultAntivirusPendingDelay = time.Hour
+
+func antivirusPendingFixer(c echo.Context) error {
+	olderThan := defaultAntivirusPendingDelay
+	if param := c.QueryParam("older_than"); param != "" {
+		d, err := time.ParseDuration(param)
+		if err != nil || d < 0 {
+			return echo.NewHTTPError(http.StatusBadRequest, "older_than must be a non-negative duration, like 1h")
+		}
+		olderThan = d
+	}
+
+	domain := c.Param("domain")
+	inst, err := lifecycle.GetInstance(domain)
+	if err != nil {
+		return wrapError(err)
+	}
+
+	ids, err := antivirus.PushPendingScans(inst, time.Now().Add(-olderThan))
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, echo.Map{
+		"domain":      domain,
+		"pushed_jobs": len(ids),
+		"file_ids":    ids,
+	})
 }
 
 func emailsFixer(c echo.Context) error {

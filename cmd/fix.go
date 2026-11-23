@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cozy/cozy-stack/client"
 	"github.com/cozy/cozy-stack/client/request"
@@ -37,6 +38,7 @@ var (
 	contactPathsFlag     string
 	fixContextFlag       string
 	fixDomainFlag        string
+	olderThanFlag        time.Duration
 )
 
 var fixerCmdGroup = &cobra.Command{
@@ -479,6 +481,44 @@ this instance are correctly set.
 	},
 }
 
+var antivirusPendingFixer = &cobra.Command{
+	Use:   "antivirus-pending <domain>",
+	Short: "Scan again the files stuck in the antivirus pending status",
+	Long: `
+This fixer pushes a new antivirus scan for the files whose antivirus status is
+still pending although they were last updated more than --older-than ago. Such
+a file has no verdict because its scan job failed or was lost, and it stays
+blocked when the configuration forbids actions on pending files.
+
+The delay must be longer than a normal scan job can last, retries included, to
+avoid scanning twice a file whose scan is still running.
+`,
+	Example: `$ cozy-stack fix antivirus-pending alice.cozy.localhost --older-than 2h`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) != 1 {
+			return cmd.Usage()
+		}
+		domain := args[0]
+		c := newAdminClient()
+		path := fmt.Sprintf("/instances/%s/fixers/antivirus-pending", domain)
+		res, err := c.Req(&request.Options{
+			Method:  "POST",
+			Path:    path,
+			Queries: url.Values{"older_than": {olderThanFlag.String()}},
+		})
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		out, err := io.ReadAll(res.Body)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(out))
+		return nil
+	},
+}
+
 var emailsFixer = &cobra.Command{
 	Use:   "emails",
 	Short: "Backfill the email of all the instances",
@@ -747,6 +787,7 @@ func init() {
 	orgContactsFixer.Flags().StringVar(&contactPathsFlag, "paths-file", "", "JSON array of CardDAV paths from the completed republication (required)")
 	orgContactsFixer.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Report what would be removed without deleting")
 	orgContactsFixer.Flags().BoolVar(&forceFlag, "force", false, "Do not ask for confirmation before deleting")
+	antivirusPendingFixer.Flags().DurationVar(&olderThanFlag, "older-than", time.Hour, "Only the files last updated before this delay")
 
 	fixerCmdGroup.AddCommand(jobsFixer)
 	fixerCmdGroup.AddCommand(mimeFixerCmd)
@@ -759,6 +800,7 @@ func init() {
 	fixerCmdGroup.AddCommand(sharingsMovedFixer)
 	fixerCmdGroup.AddCommand(sharingsFixer)
 	fixerCmdGroup.AddCommand(indexesFixer)
+	fixerCmdGroup.AddCommand(antivirusPendingFixer)
 	fixerCmdGroup.AddCommand(emailsFixer)
 	fixerCmdGroup.AddCommand(personalContactsFixer)
 	fixerCmdGroup.AddCommand(memberCopiesFixer)
