@@ -629,6 +629,11 @@ pagination](./http-api.md#pagination)). On the last page, there won't be a
 
 It is possible to pass a `execution_stats` parameter to get some information about the query execution. See [here](https://docs.couchdb.org/en/stable/api/database/find.html#execution-statistics) for more details.
 
+For an OAuth client with `client_kind: "desktop"`, the files that the
+[antivirus configuration](./workers.md#allowed-actions-and-sync-clients)
+forbids to download are left out of the results, except in the trash. A page
+can then hold fewer files than `limit` and still have a `links.next`.
+
 ### Request
 
 ```http

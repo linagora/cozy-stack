@@ -1848,11 +1848,21 @@ func FindFilesMango(c echo.Context) error {
 		return err
 	}
 
+	// Desktop lists the directories it does not know yet with this route, and
+	// would then download the files the changes feed hides. The web apps keep
+	// seeing them, to show their antivirus status.
+	client, isOAuth := middlewares.GetOAuthClient(c)
+	fromDesktop := isOAuth && client.ClientKind == "desktop"
+
 	includePath := true
 	if reqFields, ok := findRequest["fields"].([]interface{}); ok {
 		includePath = false
 		// Those fields are necessary for the JSON-API response
 		fields := []string{"_id", "_rev", "type", "class", "size", "trashed"}
+		if fromDesktop {
+			// The antivirus filter needs the scan status
+			fields = append(fields, "antivirus_scan")
+		}
 		for _, v := range reqFields {
 			v := v.(string)
 			if v == "path" {
@@ -1903,15 +1913,21 @@ func FindFilesMango(c echo.Context) error {
 		return err
 	}
 
+	// A page reduced by the antivirus filter must not look like the last one.
+	pageFull := len(results) >= int(limit)
+	if fromDesktop {
+		results = filterAntivirusBlockedFiles(instance, results)
+	}
+
 	// XXX: in theory, we should avoid pagination link for POST requests, but
 	// it is here and used, so let's keep it for compatibility.
 	var links jsonapi.LinksList
-	if resp.Bookmark != "" && len(results) >= int(limit) {
+	if resp.Bookmark != "" && pageFull {
 		links.Next = "/files/_find?page[cursor]=" + resp.Bookmark
 	}
 
 	var total int
-	if len(results) >= int(limit) {
+	if pageFull {
 		total = math.MaxInt32 - 1 // we dont know the actual number
 	} else {
 		total = skip + len(results) // let the client know its done.

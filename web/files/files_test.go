@@ -15,6 +15,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/instance/lifecycle"
+	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -305,6 +306,125 @@ func TestFiles(t *testing.T) {
 		changes = feed("include_docs=true&skip_deleted=true")
 		assert.NotContains(t, changes, ids[vfs.AVStatusInfected])
 		assert.Contains(t, changes, ids[vfs.AVStatusClean])
+
+		e.DELETE("/files/"+dirID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
+		e.DELETE("/files/trash").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(204)
+	})
+
+	t.Run("FindHidesAntivirusBlockedFilesFromDesktop", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		conf := config.GetConfig()
+		if conf.Contexts == nil {
+			conf.Contexts = make(map[string]interface{})
+		}
+		setAntivirus := func(enabled bool) {
+			conf.Contexts[config.DefaultInstanceContext] = map[string]interface{}{
+				"antivirus": map[string]interface{}{
+					"enabled": enabled,
+					"actions": map[string]interface{}{
+						"pending":  []interface{}{"delete"},
+						"infected": []interface{}{"delete"},
+					},
+				},
+			}
+		}
+		setAntivirus(true)
+		t.Cleanup(func() { delete(conf.Contexts, config.DefaultInstanceContext) })
+
+		desktop := &oauth.Client{
+			RedirectURIs: []string{"http://localhost/oauth/callback"},
+			ClientName:   "desktop-av-find",
+			ClientKind:   "desktop",
+			SoftwareID:   "github.com/cozy/cozy-stack/testing/desktop",
+		}
+		require.Nil(t, desktop.Create(testInstance, oauth.NotPending))
+		desktopToken, err := testInstance.MakeJWT(consts.AccessTokenAudience, desktop.ClientID, consts.Files, "", time.Now())
+		require.NoError(t, err)
+
+		dirID := e.POST("/files/").
+			WithQuery("Name", "av-find").
+			WithQuery("Type", "directory").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().NotEmpty().Raw()
+		// Created in this order, so that every page of 2 files holds a blocked one.
+		files := []struct{ name, status string }{
+			{"infected", vfs.AVStatusInfected},
+			{"clean", vfs.AVStatusClean},
+			{"pending", vfs.AVStatusPending},
+			{"trashed", vfs.AVStatusInfected},
+			{"clean2", vfs.AVStatusClean},
+		}
+		for _, f := range files {
+			id := e.POST("/files/"+dirID).
+				WithQuery("Name", f.name).
+				WithQuery("Type", "file").
+				WithHeader("Content-Type", "text/plain").
+				WithHeader("Authorization", "Bearer "+token).
+				WithBytes([]byte(f.name)).
+				Expect().Status(201).
+				JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+				Object().Path("$.data.id").String().NotEmpty().Raw()
+			var doc *vfs.FileDoc
+			testutils.WaitForOrFail(t, 2*time.Second, func() bool {
+				doc, err = testInstance.VFS().FileByID(id)
+				return err == nil && doc.AntivirusScan != nil
+			})
+			doc.AntivirusScan.Status = f.status
+			doc.Trashed = f.name == "trashed"
+			require.NoError(t, couchdb.UpdateDoc(testInstance, doc))
+		}
+
+		find := func(tok, path, extra string) (*httpexpect.Object, []string) {
+			u, err := url.Parse(path)
+			require.NoError(t, err)
+			obj := e.POST(u.Path).
+				WithQueryString(u.RawQuery).
+				WithHeader("Content-Type", "application/json").
+				WithHeader("Authorization", "Bearer "+tok).
+				WithBytes([]byte(fmt.Sprintf(`{
+					"selector": {"dir_id": %q, "updated_at": {"$gt": null}},
+					"sort": [{"dir_id": "asc"}, {"updated_at": "asc"}]%s
+				}`, dirID, extra))).
+				Expect().Status(200).
+				JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+				Object()
+			names := []string{}
+			for _, item := range obj.Value("data").Array().Iter() {
+				names = append(names, item.Object().Path("$.attributes.name").String().Raw())
+			}
+			return obj, names
+		}
+		all := []string{"infected", "clean", "pending", "trashed", "clean2"}
+		allowed := []string{"clean", "trashed", "clean2"}
+
+		obj, names := find(desktopToken, "/files/_find", "")
+		assert.Equal(t, allowed, names)
+		obj.Path("$.meta.count").Number().Equal(len(allowed))
+		_, names = find(token, "/files/_find", "")
+		assert.Equal(t, all, names)
+		_, names = find(desktopToken, "/files/_find", `, "fields": ["name"]`)
+		assert.Equal(t, allowed, names)
+
+		// A page reduced by the filter is not the last one.
+		var pages [][]string
+		for next := "/files/_find"; next != "" && len(pages) < len(all); {
+			obj, names = find(desktopToken, next, `, "limit": 2`)
+			pages = append(pages, names)
+			links, _ := obj.Raw()["links"].(map[string]interface{})
+			next, _ = links["next"].(string)
+		}
+		assert.Equal(t, [][]string{{"clean"}, {"trashed"}, {"clean2"}}, pages)
+		obj.Path("$.meta.count").Number().Equal(1)
+
+		setAntivirus(false)
+		_, names = find(desktopToken, "/files/_find", "")
+		assert.Equal(t, all, names)
 
 		e.DELETE("/files/"+dirID).
 			WithHeader("Authorization", "Bearer "+token).

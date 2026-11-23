@@ -500,6 +500,11 @@ clients do not try to download a content that the stack would refuse with a
 A left-out change lets the clients keep the previous version of the file they
 already have, if any.
 
+`POST /files/_find` also leaves these files out, except in the trash, but only
+for the OAuth clients with `client_kind: "desktop"`: Desktop lists with it the
+directories it does not know yet, while the web apps show the antivirus status
+of the files. A listing tells no deletion, so there is no deleted entry.
+
 #### No unscanned or infected file on the computer of a Desktop user
 
 Remove `download` from `pending`, `infected` and `error`. Remove it from
