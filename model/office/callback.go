@@ -52,20 +52,16 @@ var docserverClient = &http.Client{
 	Timeout: 60 * time.Second,
 }
 
+// The registered claims make the parser refuse an expired callback (OnlyOffice
+// signs its outbox tokens with an exp), so a captured one cannot be replayed.
 type callbackClaims struct {
+	jwt.RegisteredClaims
 	Payload struct {
 		Key    string `json:"key"`
 		Status int    `json:"status"`
 		URL    string `json:"url"`
 	} `json:"payload"`
 }
-
-func (c *callbackClaims) GetExpirationTime() (*jwt.NumericDate, error) { return nil, nil }
-func (c *callbackClaims) GetIssuedAt() (*jwt.NumericDate, error)       { return nil, nil }
-func (c *callbackClaims) GetNotBefore() (*jwt.NumericDate, error)      { return nil, nil }
-func (c *callbackClaims) GetIssuer() (string, error)                   { return "", nil }
-func (c *callbackClaims) GetSubject() (string, error)                  { return "", nil }
-func (c *callbackClaims) GetAudience() (jwt.ClaimStrings, error)       { return nil, nil }
 
 // Callback will manage the callback from the document server.
 func Callback(inst *instance.Instance, params CallbackParameters) error {

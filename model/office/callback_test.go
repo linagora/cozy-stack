@@ -2,6 +2,7 @@ package office
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -42,6 +43,12 @@ func TestCheckToken(t *testing.T) {
 	for name, token := range refused {
 		assert.ErrorIs(t, checkToken(cfg, withToken(token)), permission.ErrInvalidToken, name)
 	}
+
+	payload := map[string]interface{}{"key": "the-key", "status": 6, "url": params.URL}
+	fresh := mustSign(t, jwt.MapClaims{"payload": payload, "exp": time.Now().Add(5 * time.Minute).Unix()}, "outbox")
+	assert.NoError(t, checkToken(cfg, withToken(fresh)), "not expired")
+	expired := mustSign(t, jwt.MapClaims{"payload": payload, "exp": time.Now().Add(-time.Minute).Unix()}, "outbox")
+	assert.ErrorIs(t, checkToken(cfg, withToken(expired)), permission.ErrInvalidToken, "expired")
 
 	none, err := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"payload": map[string]interface{}{"key": "the-key", "status": 6, "url": params.URL}}).
 		SignedString(jwt.UnsafeAllowNoneSignatureType)
