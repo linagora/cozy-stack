@@ -72,6 +72,11 @@ func bulkGet(c echo.Context) error {
 
 func bulkDocs(c echo.Context) error {
 	doctype := c.Param("doctype")
+	// A batch could hold the instance settings, and no client pushes this
+	// doctype by replication.
+	if doctype == consts.Settings {
+		return errInstanceSettings
+	}
 
 	if err := middlewares.AllowWholeType(c, permission.POST, doctype); err != nil {
 		return err

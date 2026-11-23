@@ -136,6 +136,46 @@ func TestData(t *testing.T) {
 			JSON().Object().ValueEqual("key", "bitwarden-vault-key")
 	})
 
+	t.Run("InstanceSettingsAreNotWritable", func(t *testing.T) {
+		before, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		_, settingsToken := setup.GetTestClient(consts.Settings)
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		e.PUT("/data/"+consts.Settings+"/"+consts.InstanceSettingsID).
+			WithHeader("Authorization", "Bearer "+settingsToken).
+			WithHeader("Content-Type", "application/json").
+			WithJSON(map[string]interface{}{
+				"_id":       consts.InstanceSettingsID,
+				"_rev":      before.Rev(),
+				"email":     "carol@example.net",
+				"matrix_id": "@carol:example.net",
+			}).
+			Expect().Status(403)
+
+		e.DELETE("/data/"+consts.Settings+"/"+consts.InstanceSettingsID).
+			WithQuery("rev", before.Rev()).
+			WithHeader("Authorization", "Bearer "+settingsToken).
+			Expect().Status(403)
+
+		e.POST("/data/"+consts.Settings+"/_bulk_docs").
+			WithHeader("Authorization", "Bearer "+settingsToken).
+			WithJSON(map[string]interface{}{"docs": []map[string]interface{}{{
+				"_id":   consts.InstanceSettingsID,
+				"_rev":  before.Rev(),
+				"email": "carol@example.net",
+			}}}).
+			Expect().Status(403)
+
+		e.DELETE("/data/"+consts.Settings+"/").
+			WithHeader("Authorization", "Bearer "+settingsToken).
+			Expect().Status(403)
+
+		after, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		assert.Equal(t, before.Rev(), after.Rev())
+	})
+
 	t.Run("GetForMissingDoc", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

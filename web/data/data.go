@@ -238,6 +238,15 @@ func createNamedDoc(c echo.Context, doc couchdb.JSONDoc) error {
 	})
 }
 
+// The instance settings hold fields (email, matrix_id...) that only
+// PUT /settings/instance guards, so the data API must not write them.
+var errInstanceSettings = jsonapi.Errorf(http.StatusForbidden,
+	"The instance settings can only be changed via PUT /settings/instance")
+
+func isInstanceSettings(doctype, docid string) bool {
+	return doctype == consts.Settings && docid == consts.InstanceSettingsID
+}
+
 // UpdateDoc updates the document given in the request or creates a new one with
 // the given id.
 func UpdateDoc(c echo.Context) error {
@@ -251,6 +260,9 @@ func UpdateDoc(c echo.Context) error {
 	}
 	if doctype == consts.Banners {
 		return updateBanner(c)
+	}
+	if isInstanceSettings(doctype, docid) {
+		return errInstanceSettings
 	}
 
 	var doc couchdb.JSONDoc
@@ -348,6 +360,9 @@ func DeleteDoc(c echo.Context) error {
 		return jsonapi.Errorf(http.StatusBadRequest, "delete without revision")
 	}
 
+	if isInstanceSettings(doctype, docid) {
+		return errInstanceSettings
+	}
 	if err := permission.CheckWritable(doctype); err != nil {
 		return err
 	}
@@ -387,6 +402,9 @@ func DeleteDoc(c echo.Context) error {
 func DeleteDatabase(c echo.Context) error {
 	instance := middlewares.GetInstance(c)
 	doctype := c.Param("doctype")
+	if doctype == consts.Settings {
+		return errInstanceSettings
+	}
 
 	if err := permission.CheckWritable(doctype); err != nil {
 		return err
