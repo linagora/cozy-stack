@@ -598,10 +598,13 @@ func createSessionAndRedirect(c echo.Context, inst *instance.Instance, redirect,
 	if err = session.StoreNewLoginEntry(inst, sessionID, "", c.Request(), "OIDC"); err != nil {
 		inst.Logger().Errorf("Could not store session history %q: %s", sessionID, err)
 	}
-	if redirect == "" {
-		redirect = inst.DefaultRedirection().String()
+	// The redirect comes from the query string: follow it only to the
+	// instance or one of its apps.
+	u, err := auth.CheckRedirect(inst, redirect)
+	if redirect == "" || err != nil {
+		u = inst.DefaultRedirection()
 	}
-	return c.Redirect(http.StatusSeeOther, redirect)
+	return c.Redirect(http.StatusSeeOther, u.String())
 }
 
 type logoutContext struct {

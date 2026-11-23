@@ -506,6 +506,34 @@ func TestOidc(t *testing.T) {
 			Header("Location").Equal(testInstance.DefaultRedirection().String())
 	})
 
+	t.Run("RedirectOnlyToTheInstance", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		drive := testInstance.SubDomain("drive").String()
+
+		for redirect, expected := range map[string]string{
+			"https://evil.example/": testInstance.DefaultRedirection().String(),
+			"//evil.example/":       testInstance.DefaultRedirection().String(),
+			drive:                   drive,
+		} {
+			start := e.GET("/oidc/start").
+				WithHost(testInstance.Domain).
+				WithRedirectPolicy(httpexpect.DontFollowRedirects).
+				Expect().Status(303).
+				Header("Location").Raw()
+			startURL, err := url.Parse(start)
+			require.NoError(t, err)
+			query := startURL.Query()
+			query.Set("redirect", redirect)
+
+			e.GET("/oidc/login").
+				WithHost(testInstance.Domain).
+				WithRedirectPolicy(httpexpect.DontFollowRedirects).
+				WithQueryString(query.Encode()).
+				Expect().Status(303).
+				Header("Location").Equal(expected)
+		}
+	})
+
 	t.Run("WithoutState", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

@@ -761,9 +761,15 @@ func checkRedirectParam(c echo.Context, defaultRedirect *url.URL) (*url.URL, err
 		redirect = defaultRedirect.String()
 	}
 
+	return CheckRedirect(instance, redirect)
+}
+
+// CheckRedirect parses a redirect (a URL or an app slug), and checks that it
+// goes to the instance or to one of its apps.
+func CheckRedirect(inst *instance.Instance, redirect string) (*url.URL, error) {
 	u, err := url.Parse(redirect)
 	if err != nil || u.Scheme == "" {
-		u, err = AppRedirection(instance, redirect)
+		u, err = AppRedirection(inst, redirect)
 	}
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusBadRequest,
@@ -775,9 +781,9 @@ func checkRedirectParam(c echo.Context, defaultRedirect *url.URL) (*url.URL, err
 			"bad url: bad scheme")
 	}
 
-	if !instance.HasDomain(u.Host) {
+	if !inst.HasDomain(u.Host) {
 		instanceHost, appSlug, _ := config.SplitCozyHost(u.Host)
-		if !instance.HasDomain(instanceHost) || appSlug == "" {
+		if !inst.HasDomain(instanceHost) || appSlug == "" {
 			return nil, echo.NewHTTPError(http.StatusBadRequest,
 				"bad url: should be subdomain")
 		}

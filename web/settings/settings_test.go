@@ -1584,15 +1584,22 @@ func TestSettings(t *testing.T) {
 			Expect().Status(302).
 			Header("location").IsEqual(testInstance.DefaultRedirection().String())
 
-		redirect := "cozy://my-app"
-		e.GET("/settings/clients/limit-exceeded").
-			WithCookie(sessCookie, "connected").
-			WithQuery("redirect", redirect).
-			WithHeader("Authorization", "Bearer "+token).
-			WithHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8").
-			WithRedirectPolicy(httpexpect.DontFollowRedirects).
-			Expect().Status(302).
-			Header("location").IsEqual(redirect)
+		drive := testInstance.SubDomain("drive").String()
+		for redirect, expected := range map[string]string{
+			"cozy://my-app":         "cozy://my-app",
+			drive:                   drive,
+			"https://evil.example/": testInstance.DefaultRedirection().String(),
+			"//evil.example/":       testInstance.DefaultRedirection().String(),
+		} {
+			e.GET("/settings/clients/limit-exceeded").
+				WithCookie(sessCookie, "connected").
+				WithQuery("redirect", redirect).
+				WithHeader("Authorization", "Bearer "+token).
+				WithHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8").
+				WithRedirectPolicy(httpexpect.DontFollowRedirects).
+				Expect().Status(302).
+				Header("location").IsEqual(expected)
+		}
 	})
 
 	t.Run("ClientsLimitExceededWithLimitExceeded", func(t *testing.T) {
