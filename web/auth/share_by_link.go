@@ -8,8 +8,10 @@ import (
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/session"
 	build "github.com/cozy/cozy-stack/pkg/config"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/crypto"
+	"github.com/cozy/cozy-stack/pkg/limits"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
 )
@@ -42,12 +44,21 @@ func checkPasswordForShareByLink(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, echo.Map{"error": err.Error()})
 	}
 
+	// Count per link, not per instance, and reset on success: the visitors of a
+	// link share its counter, so only consecutive failures must add up.
+	limiter := config.GetRateLimiter()
+	limitKey := inst.DomainName() + ":" + permID
+	if limits.IsLimitReachedOrExceeded(limiter.CheckRateLimitKey(limitKey, limits.SharePasswordType)) {
+		return c.JSON(http.StatusTooManyRequests, echo.Map{"error": "Too many requests"})
+	}
+
 	password := []byte(c.FormValue("password"))
 	_, err = crypto.CompareHashAndPassphrase(hash, password)
 	if err != nil {
 		msg := inst.Translate("Share by link Password Invalid")
 		return c.JSON(http.StatusForbidden, echo.Map{"error": msg})
 	}
+	limiter.ResetCounterKey(limitKey, limits.SharePasswordType)
 
 	// Put a cookie so that later requests can use the sharecode
 	cookieName := "pass" + permID

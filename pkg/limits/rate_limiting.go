@@ -77,6 +77,9 @@ const (
 	MagicLinkType
 	// ResendOnboardingMailType is used for resending the onboarding link by email
 	ResendOnboardingMailType
+	// SharePasswordType is used for counting the password attempts on a
+	// share by link protected by a password
+	SharePasswordType
 )
 
 type counterConfig struct {
@@ -230,6 +233,12 @@ var configs = []counterConfig{
 		Limit:  2,
 		Period: 1 * time.Hour,
 	},
+	// SharePasswordType
+	{
+		Prefix: "share-password",
+		Limit:  10,
+		Period: 15 * time.Minute,
+	},
 }
 
 // Counter is an interface for counting number of attempts that can be used to
@@ -289,10 +298,13 @@ func (r *RateLimiter) CheckRateLimitKey(customKey string, ct CounterType) error 
 
 // ResetCounter sets again to zero the counter for the given type and instance.
 func (r *RateLimiter) ResetCounter(p prefixer.Prefixer, ct CounterType) {
-	cfg := configs[ct]
-	key := cfg.Prefix + ":" + p.DomainName()
+	r.ResetCounterKey(p.DomainName(), ct)
+}
 
-	_ = r.counter.Reset(key)
+// ResetCounterKey sets again to zero the counter for the given type and
+// custom key.
+func (r *RateLimiter) ResetCounterKey(customKey string, ct CounterType) {
+	_ = r.counter.Reset(configs[ct].Prefix + ":" + customKey)
 }
 
 // IsLimitReachedOrExceeded return true if the limit has been reached or

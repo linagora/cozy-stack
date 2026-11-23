@@ -2226,6 +2226,30 @@ func TestAuth(t *testing.T) {
 
 		res.Cookies().Length().Equal(1)
 		res.Cookie("pass" + perm.ID()).Value().NotEmpty()
+
+		tryPassword := func(permID, password string, status int) *httpexpect.Response {
+			return e.POST("/auth/share-by-link/password").
+				WithHeader("Accept", "application/json").
+				WithFormField("perm_id", permID).
+				WithFormField("password", password).
+				WithHost(domain).
+				Expect().Status(status)
+		}
+
+		// A success resets the counter of the link
+		for i := 0; i < 9; i++ {
+			tryPassword(perm.ID(), "bad_password", 403)
+		}
+		tryPassword(perm.ID(), "the_password!", 200)
+		tryPassword(perm.ID(), "bad_password", 403)
+
+		// Consecutive failures lock the link, even for the right password
+		locked, err := permission.CreateShareSet(testInstance, parent, sourceID, codes, shortcodes, subdoc, nil, false)
+		require.NoError(t, err)
+		for i := 0; i < 10; i++ {
+			tryPassword(locked.ID(), "bad_password", 403)
+		}
+		tryPassword(locked.ID(), "the_password!", 429).Cookies().IsEmpty()
 	})
 
 	t.Run("MagicLink", func(t *testing.T) {
