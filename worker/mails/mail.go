@@ -39,13 +39,63 @@ func SendMail(ctx *job.TaskContext) error {
 		return err
 	}
 
+	from, replyTo := configureInstanceMail(ctx.Instance, &opts)
+	switch opts.Mode {
+	case mail.ModeFromStack, mail.ModeCampaign, mail.ModeSupport:
+		toAddr, err := addressFromInstance(ctx.Instance)
+		if err != nil {
+			return err
+		}
+		opts.To = []*mail.Address{toAddr}
+		opts.From = from
+		if replyTo != nil {
+			opts.ReplyTo = replyTo
+		}
+		opts.RecipientName = toAddr.Name
+		if opts.Mode == mail.ModeSupport {
+			if err := sendSupportMail(ctx, &opts, ctx.Instance.Domain); err != nil {
+				return err
+			}
+		}
+	case mail.ModePendingEmail:
+		toAddr, err := pendingAddress(ctx.Instance)
+		if err != nil {
+			return err
+		}
+		opts.To = []*mail.Address{toAddr}
+		opts.From = from
+		if replyTo != nil {
+			opts.ReplyTo = replyTo
+		}
+		opts.RecipientName = toAddr.Name
+	case mail.ModeFromUser:
+		sender, err := addressFromInstance(ctx.Instance)
+		if err != nil {
+			return err
+		}
+		opts.ReplyTo = sender
+		from.Name = sender.Name
+		opts.From = from
+	default:
+		return fmt.Errorf("Mail sent with unknown mode %s", opts.Mode)
+	}
+	if opts.TemplateName != "" && opts.Locale == "" {
+		opts.Locale = ctx.Instance.Locale
+	}
+	if err = sendMail(ctx, &opts, ctx.Instance.Domain); err != nil {
+		ctx.Logger().Warnf("sendmail has failed: %s", err)
+	}
+	return err
+}
+
+func configureInstanceMail(inst *instance.Instance, opts *mail.Options) (sender, reply *mail.Address) {
 	from := config.GetConfig().NoReplyAddr
 	name := config.GetConfig().NoReplyName
 	replyTo := config.GetConfig().ReplyTo
 	if from == "" {
-		from = "noreply@" + utils.StripPort(ctx.Instance.Domain)
+		from = "noreply@" + utils.StripPort(inst.Domain)
 	}
-	if ctxSettings, ok := ctx.Instance.SettingsContext(); ok {
+	if ctxSettings, ok := inst.SettingsContext(); ok {
 		if addr, ok := ctxSettings["noreply_address"].(string); ok && addr != "" {
 			from = addr
 		}
@@ -64,7 +114,7 @@ func SendMail(ctx *job.TaskContext) error {
 		cfgPerContext = config.GetConfig().MailPerContext
 	}
 
-	ctxName := ctx.Instance.ContextName
+	ctxName := inst.ContextName
 	if ctxConfig, ok := cfgPerContext[ctxName].(map[string]interface{}); ok {
 		if host, ok := ctxConfig["host"].(string); ok && host != "" {
 			port, _ := ctxConfig["port"].(int)
@@ -88,61 +138,11 @@ func SendMail(ctx *job.TaskContext) error {
 		}
 	}
 
-	switch opts.Mode {
-	case mail.ModeFromStack, mail.ModeCampaign:
-		toAddr, err := addressFromInstance(ctx.Instance)
-		if err != nil {
-			return err
-		}
-		opts.To = []*mail.Address{toAddr}
-		opts.From = &mail.Address{Name: name, Email: from}
-		if replyTo != "" {
-			opts.ReplyTo = &mail.Address{Name: name, Email: replyTo}
-		}
-		opts.RecipientName = toAddr.Name
-	case mail.ModePendingEmail:
-		toAddr, err := pendingAddress(ctx.Instance)
-		if err != nil {
-			return err
-		}
-		opts.To = []*mail.Address{toAddr}
-		opts.From = &mail.Address{Name: name, Email: from}
-		if replyTo != "" {
-			opts.ReplyTo = &mail.Address{Name: name, Email: replyTo}
-		}
-		opts.RecipientName = toAddr.Name
-	case mail.ModeFromUser:
-		sender, err := addressFromInstance(ctx.Instance)
-		if err != nil {
-			return err
-		}
-		name = sender.Name
-		opts.ReplyTo = sender
-		opts.From = &mail.Address{Name: name, Email: from}
-	case mail.ModeSupport:
-		toAddr, err := addressFromInstance(ctx.Instance)
-		if err != nil {
-			return err
-		}
-		opts.To = []*mail.Address{toAddr}
-		opts.From = &mail.Address{Name: name, Email: from}
-		if replyTo != "" {
-			opts.ReplyTo = &mail.Address{Name: name, Email: replyTo}
-		}
-		opts.RecipientName = toAddr.Name
-		if err := sendSupportMail(ctx, &opts, ctx.Instance.Domain); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("Mail sent with unknown mode %s", opts.Mode)
+	sender = &mail.Address{Name: name, Email: from}
+	if replyTo != "" {
+		reply = &mail.Address{Name: name, Email: replyTo}
 	}
-	if opts.TemplateName != "" && opts.Locale == "" {
-		opts.Locale = ctx.Instance.Locale
-	}
-	if err = sendMail(ctx, &opts, ctx.Instance.Domain); err != nil {
-		ctx.Logger().Warnf("sendmail has failed: %s", err)
-	}
-	return err
+	return sender, reply
 }
 
 func pendingAddress(i *instance.Instance) (*mail.Address, error) {
@@ -178,6 +178,21 @@ func addressFromInstance(i *instance.Instance) (*mail.Address, error) {
 }
 
 func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
+	if err := validateMailOptions(opts); err != nil {
+		return err
+	}
+	dialer := makeMailDialer(ctx, mailDialerOptions(opts))
+	if dialer == nil {
+		return nil
+	}
+	email, err := composeMail(ctx, opts, domain)
+	if err != nil {
+		return err
+	}
+	return dialer.DialAndSend(email)
+}
+
+func validateMailOptions(opts *mail.Options) error {
 	if opts.TemplateName == "" && opts.Subject == "" {
 		return errors.New("Missing mail subject")
 	}
@@ -187,18 +202,32 @@ func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
 	if opts.From == nil {
 		return errors.New("Missing mail sender")
 	}
-	email := gomail.NewMessage()
-	dialerOptions := opts.Dialer
-	if dialerOptions == nil {
-		if opts.Mode == mail.ModeCampaign {
-			dialerOptions = config.GetConfig().CampaignMail
-		} else {
-			dialerOptions = config.GetConfig().Mail
-		}
+	return nil
+}
+
+func mailDialerOptions(opts *mail.Options) *gomail.DialerOptions {
+	if opts.Dialer != nil {
+		return opts.Dialer
 	}
+	if opts.Mode == mail.ModeCampaign {
+		return config.GetConfig().CampaignMail
+	}
+	return config.GetConfig().Mail
+}
+
+func makeMailDialer(ctx *job.TaskContext, dialerOptions *gomail.DialerOptions) *gomail.Dialer {
 	if dialerOptions.Host == "-" {
 		return nil
 	}
+	dialer := gomail.NewDialer(dialerOptions)
+	if deadline, ok := ctx.Deadline(); ok {
+		dialer.SetDeadline(deadline)
+	}
+	return dialer
+}
+
+func composeMail(ctx *job.TaskContext, opts *mail.Options, domain string) (*gomail.Message, error) {
+	email := gomail.NewMessage()
 	var date time.Time
 	if opts.Date == nil {
 		date = time.Now()
@@ -230,7 +259,7 @@ func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
 		}
 		opts.Subject, parts, err = RenderMail(ctx, opts.TemplateName, layout, opts.Locale, opts.RecipientName, opts.TemplateValues)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	} else {
 		parts = opts.Parts
@@ -252,7 +281,7 @@ func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
 
 	for _, part := range parts {
 		if err = addPart(email, part); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -260,11 +289,7 @@ func doSendMail(ctx *job.TaskContext, opts *mail.Options, domain string) error {
 		addAttachment(email, attachment)
 	}
 
-	dialer := gomail.NewDialer(dialerOptions)
-	if deadline, ok := ctx.Deadline(); ok {
-		dialer.SetDeadline(deadline)
-	}
-	return dialer.DialAndSend(email)
+	return email, nil
 }
 
 func addAttachment(email *gomail.Message, attachment *mail.Attachment) {
