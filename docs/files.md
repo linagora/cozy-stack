@@ -549,6 +549,7 @@ There are a few specificities:
 - it is wrapped in the VFS lock to avoid seeing inconsistent results
 - it automatically skips design docs
 - if the requests is coming from an OAuth client, it excludes the files and directories that are in a not synchronized folder
+- when the antivirus is enabled, and with `include_docs=true` only, it hides the files that the antivirus configuration forbids to download: such a file is either left out of the feed, or replaced by a deleted entry when a client may have downloaded it during the scan. A file in the trash is kept as is. See [Allowed actions and sync clients](workers.md#allowed-actions-and-sync-clients) for the details and the known limits. `/data/io.cozy.files/_changes` applies the same rule.
 - it only supports the options `since`, `limit`, and `include_docs` of CouchDB
 - it has an option `fields` to only include those fields in the results
 - it has an option `include_file_path` to add the `path` for files

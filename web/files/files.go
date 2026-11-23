@@ -2076,6 +2076,7 @@ func changesFeed(
 			return err
 		}
 	}
+	FilterAntivirusBlockedDocs(inst, results)
 
 	c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	c.Response().WriteHeader(http.StatusOK)

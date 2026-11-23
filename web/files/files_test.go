@@ -231,6 +231,89 @@ func TestFiles(t *testing.T) {
 			Expect().Status(204)
 	})
 
+	t.Run("ChangesHidesAntivirusBlockedFiles", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		conf := config.GetConfig()
+		if conf.Contexts == nil {
+			conf.Contexts = make(map[string]interface{})
+		}
+		// With pending allowed, an infected file becomes a tombstone and a
+		// skipped one is dropped.
+		conf.Contexts[config.DefaultInstanceContext] = map[string]interface{}{
+			"antivirus": map[string]interface{}{
+				"enabled": true,
+				"actions": map[string]interface{}{
+					"infected": []interface{}{"delete"},
+					"skipped":  []interface{}{"delete"},
+				},
+			},
+		}
+		t.Cleanup(func() { delete(conf.Contexts, config.DefaultInstanceContext) })
+
+		dirID := e.POST("/files/").
+			WithQuery("Name", "av-changes").
+			WithQuery("Type", "directory").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().NotEmpty().Raw()
+		ids := map[string]string{}
+		for _, status := range []string{vfs.AVStatusInfected, vfs.AVStatusSkipped, vfs.AVStatusClean} {
+			id := e.POST("/files/"+dirID).
+				WithQuery("Name", status).
+				WithQuery("Type", "file").
+				WithHeader("Content-Type", "text/plain").
+				WithHeader("Authorization", "Bearer "+token).
+				WithBytes([]byte(status)).
+				Expect().Status(201).
+				JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+				Object().Path("$.data.id").String().NotEmpty().Raw()
+			// Wait for the pending status, so that it does not overwrite ours.
+			var doc *vfs.FileDoc
+			testutils.WaitForOrFail(t, 2*time.Second, func() bool {
+				var err error
+				doc, err = testInstance.VFS().FileByID(id)
+				return err == nil && doc.AntivirusScan != nil
+			})
+			doc.AntivirusScan.Status = status
+			require.NoError(t, couchdb.UpdateDoc(testInstance, doc))
+			ids[status] = id
+		}
+
+		feed := func(query string) map[string]map[string]interface{} {
+			results := e.GET("/files/_changes").
+				WithQueryString(query).
+				WithHeader("Authorization", "Bearer "+token).
+				Expect().Status(200).
+				JSON().Object().Value("results").Array().Raw()
+			byID := map[string]map[string]interface{}{}
+			for _, result := range results {
+				change := result.(map[string]interface{})
+				byID[change["id"].(string)] = change
+			}
+			return byID
+		}
+
+		changes := feed("include_docs=true")
+		require.Contains(t, changes, ids[vfs.AVStatusInfected])
+		assert.Equal(t, true, changes[ids[vfs.AVStatusInfected]]["deleted"])
+		assert.NotContains(t, changes[ids[vfs.AVStatusInfected]]["doc"], "name")
+		assert.NotContains(t, changes, ids[vfs.AVStatusSkipped])
+		require.Contains(t, changes, ids[vfs.AVStatusClean])
+		assert.Equal(t, vfs.AVStatusClean, changes[ids[vfs.AVStatusClean]]["doc"].(map[string]interface{})["name"])
+
+		changes = feed("include_docs=true&skip_deleted=true")
+		assert.NotContains(t, changes, ids[vfs.AVStatusInfected])
+		assert.Contains(t, changes, ids[vfs.AVStatusClean])
+
+		e.DELETE("/files/"+dirID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200)
+		e.DELETE("/files/trash").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(204)
+	})
+
 	t.Run("CreateDirWithNoType", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
