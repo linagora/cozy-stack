@@ -148,6 +148,13 @@ func updateScanStatus(inst *instance.Instance, file *vfs.FileDoc, scan *vfs.Anti
 		if err != nil {
 			return err
 		}
+		// A verdict only applies to the scanned bytes: a content uploaded
+		// during the scan already has its own pending status and scan job.
+		if !f.SameContent(file) {
+			inst.Logger().WithNamespace("antivirus").
+				Debugf("File %s content changed during the scan, dropping the %s verdict", file.DocID, scan.Status)
+			return nil
+		}
 		newdoc := f.Clone().(*vfs.FileDoc)
 		newdoc.AntivirusScan = scan
 		err = couchdb.UpdateDoc(fs, newdoc)
