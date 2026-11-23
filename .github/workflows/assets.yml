@@ -5,6 +5,8 @@ on:
       - master
     paths:
       - 'assets/**'
+permissions:
+  contents: read
 jobs:
   build_assets:
     runs-on: ubuntu-22.04

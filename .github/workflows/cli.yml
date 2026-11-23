@@ -5,6 +5,8 @@ on:
       - master
     paths:
       - 'cmd/*.go'
+permissions:
+  contents: read
 jobs:
   build_cli:
     runs-on: ubuntu-22.04
