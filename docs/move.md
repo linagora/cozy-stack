@@ -196,7 +196,9 @@ server> {"redirect": "http://cozy.localhost:8080/auth/login"}
 
 This endpoint is used by cozy-move to select the cozy source. If the user is
 already logged in, we don't ask its password again, as the delivered token will
-still need a confirmation by mail to start moving the Cozy.
+still need a confirmation by mail to start moving the Cozy. The `redirect_uri`
+must be on the move service of the instance (`move.url` in the config, or
+`move_url` in the context), and the code can be used only once.
 
 #### Request
 

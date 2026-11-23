@@ -314,6 +314,13 @@ func getAuthorizeCode(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "bad url: bad scheme")
 	}
 
+	// The code lets its holder request a move of the whole instance: give it
+	// only to the move service of the instance.
+	moveURL, err := url.Parse(inst.MoveURL())
+	if err != nil || u.Scheme != moveURL.Scheme || u.Host != moveURL.Host {
+		return echo.NewHTTPError(http.StatusBadRequest, "bad url: not the move service")
+	}
+
 	client := &oauth.Client{ClientID: move.SourceClientID}
 	access, err := oauth.CreateAccessCode(inst, client, consts.ExportsRequests, "")
 	if err != nil {

@@ -208,6 +208,10 @@ func checkSourceCode(inst *instance.Instance, code string) error {
 	if accessCode.Scope != consts.ExportsRequests {
 		return permission.ErrInvalidToken
 	}
+	// Single use: on a concurrent use, only one delete wins.
+	if err := couchdb.DeleteDoc(inst, accessCode); err != nil {
+		return permission.ErrInvalidToken
+	}
 	return nil
 }
 
