@@ -14,7 +14,7 @@ import (
 
 // IndexViewsVersion is the version of current definition of views & indexes.
 // This number should be incremented when this file changes.
-const IndexViewsVersion int = 47
+const IndexViewsVersion int = 48
 
 // Indexes is the index list required by an instance to run properly.
 var Indexes = []*mango.Index{
@@ -38,6 +38,12 @@ var Indexes = []*mango.Index{
 	// Used to seed the recents with the most recently created directories:
 	// they have no trashed boolean, so they need their own index.
 	mango.MakeIndex(consts.Files, "by-type-created-at", mango.IndexDef{Fields: []string{"type", "created_at"}}),
+	// Used by the fixer that rescans the files whose antivirus verdict was
+	// never written
+	mango.MakeIndex(consts.Files, "by-antivirus-pending-updated-at", mango.IndexDef{
+		Fields:        []string{"updated_at"},
+		PartialFilter: mango.Equal("antivirus_scan.status", "pending"),
+	}),
 
 	// Used to sort the personal recents by their last activity
 	mango.MakeIndex(consts.FilesRecents, "by-last-activity-and-id", mango.IndexDef{Fields: []string{"last_activity_at", "_id"}}),
