@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
+	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -538,6 +540,13 @@ func AllowInstallApp(c echo.Context, appType consts.AppType, sourceURL string, v
 	pdoc, err := GetPermission(c)
 	if err != nil {
 		return err
+	}
+
+	// A file:// source makes the stack read the host filesystem: keep it for
+	// the CLI and dev builds, even with a maximal token.
+	if u, err := url.Parse(sourceURL); err == nil && u.Scheme == "file" &&
+		pdoc.Type != permission.TypeCLI && !build.IsDevRelease() {
+		return ErrForbidden
 	}
 
 	if pdoc.Permissions.IsMaximal() {
