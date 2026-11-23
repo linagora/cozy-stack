@@ -474,6 +474,38 @@ func TestQueryAnswersWithoutToolsAfterTheLastStep(t *testing.T) {
 	assert.Len(t, call.Messages, 11, "the results are all in the history")
 }
 
+func TestQueryDescribesTheActionsWhenItAnswersWithoutTheTools(t *testing.T) {
+	r := newRAGTest(t)
+	r.fake.Answer = func(call rag.LLMCall) rag.Reply {
+		return rag.Call("create_note", `{"title": "Courses", "content": "- lait"}`)
+	}
+	query := newActionsConversation(t, r, "conversation-described", "Fais-en une note", testTools(t))
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
+
+	var chat rag.ChatConversation
+	require.NoError(t, couchdb.GetDoc(r.inst, consts.ChatConversations, query.DocID, &chat))
+	chat.Messages = append(chat.Messages, rag.ChatMessage{ID: "next", Role: rag.UserRole, Content: "Une autre", CreatedAt: time.Now()})
+	require.NoError(t, couchdb.UpdateDoc(r.inst, &chat))
+	r.fake.Answer = func(call rag.LLMCall) rag.Reply {
+		if len(call.Tools) > 0 {
+			return rag.Call("delete_everything", `{}`)
+		}
+		return rag.Text("fake answer")
+	}
+	require.NoError(t, rag.Query(context.Background(), r.inst, rag.TestingLogger(), query))
+
+	queries := completions(t, r.fake, false)
+	withTools, withoutTools := queries[len(queries)-2], queries[len(queries)-1]
+	require.NotEmpty(t, withTools.Tools)
+	assert.Contains(t, string(withTools.Messages[2].ToolCalls), `"name":"create_note"`, "with the tools, the action is a call")
+	require.Empty(t, withoutTools.Tools)
+	for _, msg := range withoutTools.Messages {
+		assert.Empty(t, msg.ToolCalls, "without the tools, no tool call")
+		assert.NotEqual(t, rag.ToolRole, msg.Role)
+	}
+	assert.Equal(t, `(Proposed to the user: create_note {"content":"- lait","title":"Courses"})`, withoutTools.Messages[1].Content)
+}
+
 func TestQueryKeepsTheOutcomeOfAnAction(t *testing.T) {
 	r := newRAGTest(t)
 	r.fake.Answer = func(call rag.LLMCall) rag.Reply {
@@ -507,9 +539,12 @@ func TestQueryKeepsTheOutcomeOfAnAction(t *testing.T) {
 	assert.Equal(t, "https://notes.example.net/#/n/123", proposed.URL)
 	assert.Equal(t, rag.FakeCallID, proposed.ToolCallID)
 	call := lastLLMCall(t, r.fake)
-	assert.Equal(t, `(Proposed to the user: create_note {"content":"- lait","title":"Courses"})`, call.Messages[2].Content,
-		"an action without a result is described, not a call")
-	assert.Empty(t, call.Messages[2].ToolCalls)
+	assert.Contains(t, string(call.Messages[2].ToolCalls), `"name":"create_note"`,
+		"an action without a result of a declared tool is a call")
+	assert.Equal(t, rag.ToolRole, call.Messages[3].Role)
+	assert.Equal(t, rag.FakeCallID, call.Messages[3].ToolCallID)
+	assert.Equal(t, "Done: https://notes.example.net/#/n/123", call.Messages[3].Content,
+		"the stack answers the call with the outcome the client wrote")
 }
 
 func TestQueryGivesTheAttachmentsWithTheTools(t *testing.T) {
