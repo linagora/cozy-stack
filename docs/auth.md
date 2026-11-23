@@ -53,7 +53,7 @@ on Cozy:
 
 -   TLS is very important to secure the communications. in OAuth 1, there was a
     mechanism to sign the requests. But it was very difficult to get it right
-    for the developers and was abandonned in OAuth2, in favor of using TLS. The
+    for the developers and was abandoned in OAuth2, in favor of using TLS. The
     Cozy instance are already accessible only in HTTPS, so there is nothing
     particular to do for that.
 
@@ -77,7 +77,7 @@ If you want to learn OAuth 2 in details, I recommend the
 ## The cozy stack as an authorization server
 
 In general, the cozy stack manages the authentication itself. This is what is
-described below. In some special cases, an integration with other softwares can
+described below. In some special cases, an integration with other software can
 be mandatory: this is possible to configure via
 [delegated authentication](./delegated-auth.md).
 
@@ -87,10 +87,10 @@ Display a form with a password field to let the user authenticates herself to
 the cozy stack.
 
 This endpoint accepts a `redirect` parameter. If the user is already logged in,
-she will be redirected immediately. Else, the parameter will be transfered in
+she will be redirected immediately. Else, the parameter will be transferred in
 the POST. This parameter can only contain a link to an application installed on
 the cozy (thus to a subdomain of the cozy instance). To protect against stealing
-authorization code with redirection, the fragment is always overriden:
+authorization code with redirection, the fragment is always overridden:
 
 ```http
 GET /auth/login?redirect=https://contacts.cozy.example.org/foo?bar#baz HTTP/1.1
@@ -277,7 +277,7 @@ Authorization: Bearer app-token
 ### DELETE /auth/login/others
 
 This can be used to log-out all active sessions except the one used by the
-request. This allow to disconnect any other users currenctly authenticated on
+request. This allow to disconnect any other users currently authenticated on
 the system. An app token must be passed in the `Authorization` header, to
 protect against CSRF attack on this (this can part of bigger attacks like
 session fixation).
@@ -603,7 +603,7 @@ It can also send the optional fields:
 -   `notification_device_token`, the token used to identify the mobile device
     for notifications.
 
-The server gives to the client the previous fields and these informations:
+The server gives to the client the previous fields and these information:
 
 -   `client_id`
 -   `client_secret`
@@ -699,7 +699,7 @@ webapp. It means several things:
 
 ### GET /auth/register/:client-id
 
-This route is used by the clients to get informations about them-selves. The
+This route is used by the clients to get information about them-selves. The
 client has to send its registration access token to be able to use this
 endpoint.
 
@@ -739,7 +739,7 @@ Content-Type: application/json
 
 ### PUT /auth/register/:client-id
 
-This route is used by the clients to update informations about them-selves. The
+This route is used by the clients to update information about them-selves. The
 client has to send its registration access token to be able to use this
 endpoint.
 
@@ -1381,7 +1381,7 @@ When a user access an application, she first loads the HTML page. Inside this
 page, a token specific to this app is injected (only for private routes), via a
 templating method.
 
-We have prefered our custom solution to the implicit grant type of OAuth2 for 2
+We have preferred our custom solution to the implicit grant type of OAuth2 for 2
 reasons:
 
 1. It has a better User Experience. The implicit grant type works with 2
