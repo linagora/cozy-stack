@@ -81,6 +81,11 @@ func executeTokenExchange(c echo.Context, inst *instance.Instance, req tokenExch
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	// An app token is only issued to the owner of the instance its claim names,
+	// while an admin token may come from another member of the organization.
+	if req.ExchangeType == tokenExchangeTypeApp {
+		instance.RememberOIDCUUID(inst, validated.Claims)
+	}
 
 	var params *tokenExchangeOAuthClientParams
 	var scope string

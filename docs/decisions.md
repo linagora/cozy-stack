@@ -38,3 +38,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5266#discussion_r4631076331)
 - Why: the indices only hold docs written by the instances of this stack cluster, so a missing owner is a deleted instance whose purge failed; its former members must not keep finding its file names.
 - Scope: `model/search`, `POST /files/search`; drives of other stack clusters wait for the federated search.
+
+## 2026-11-23, [Architecture] The Stack keeps the SSO uuid of the owner
+
+- Decision: at each OIDC login and app token exchange that the SSO verified for the owner, the Stack keeps the `uuid` claim (the LDAP entryUUID) on the instance as `oidc_uuid`, and names the owner by it in the events it publishes on `activity`.
+- Decided by: agent (session of Théo Poizat, 2026-11-23), to be confirmed by a cozy-stack maintainer.
+- Why: Twake apps name people by uuid in their events (ADR 067 of linagora/twake-adr), and the webhook gateway only delivers by uuid (ADR 075); `oidc_id` holds the `sub`, which differs.
+- Scope: OIDC login, `/auth/token_exchange` with `exchange_type` `app`; admin exchanges are left out, as their token may belong to another member.

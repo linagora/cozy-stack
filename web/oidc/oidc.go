@@ -1344,6 +1344,9 @@ func checkDomainFromUserInfo(conf *Config, inst *instance.Instance, token string
 	}
 
 	err = oidcprovider.CheckClaimsForInstance(conf, inst, params)
+	if err == nil {
+		instance.RememberOIDCUUID(inst, params)
+	}
 	if err != nil && conf.Provider == oidcprovider.FranceConnectProvider {
 		if errors.Is(err, ErrAuthenticationFailed) {
 			return ErrFranceConnectFailed
@@ -1401,6 +1404,7 @@ func checkIDToken(conf *Config, inst *instance.Instance, idToken string) error {
 		return &DomainMismatchError{ExpectedDomain: inst.Domain, ActualDomain: sub}
 	}
 
+	instance.RememberOIDCUUID(inst, claims)
 	return nil
 }
 
