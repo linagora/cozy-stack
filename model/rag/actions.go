@@ -480,6 +480,20 @@ func toolCallOf(msg ChatMessage) toolCall {
 	return call
 }
 
+// unansweredContent is the content of the tool message the stack adds after
+// a call that got no result: what the client wrote on its action, if any.
+func unansweredContent(action *ChatAction) string {
+	switch {
+	case action.Status == "done" && action.URL != "":
+		return "Done: " + action.URL
+	case action.Status == "done":
+		return "Done."
+	case action.Status == "cancelled":
+		return "Cancelled by the user."
+	}
+	return "Proposed to the user; the app gave no result."
+}
+
 // resultContent is the content of the tool message of a result: never empty,
 // and an error when the app could not run the action.
 func resultContent(ok bool, content string) string {

@@ -675,9 +675,11 @@ func (m ragMessage) MarshalJSON() ([]byte, error) {
 // the LLM would answer it along with the next one.
 //
 // An action with a result is a tool call answered by a tool message. An
-// action without one is described in the content of its message: a tool
-// call must have its answer.
-func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage {
+// action without one is a tool call too when the query declares its tool,
+// answered by a tool message of the stack: described as text, it made the LLM
+// write its next calls as that text. Otherwise it is described in the content
+// of its message: a tool call needs the definition of its tool.
+func ragMessages(chat *ChatConversation, assistant *chatAssistant, defs []ToolDefinition) []ragMessage {
 	messages := make([]ragMessage, 0, len(chat.Messages)+1)
 	if assistant != nil {
 		if prompt := strings.TrimSpace(assistant.Prompt); prompt != "" {
@@ -702,10 +704,18 @@ func ragMessages(chat *ChatConversation, assistant *chatAssistant) []ragMessage 
 			continue
 		}
 		out := ragMessage{Role: msg.Role, Content: msg.Content}
-		if msg.Action != nil && answered[msg.ID] {
+		if msg.Action != nil && (answered[msg.ID] || toolFor(defs, msg.Action.Name) != nil) {
 			call := toolCallOf(msg)
 			callIDs[msg.ID] = call.ID
 			out.ToolCalls = []toolCall{call}
+			if !answered[msg.ID] {
+				messages = append(messages, out, ragMessage{
+					Role:       ToolRole,
+					ToolCallID: call.ID,
+					Content:    unansweredContent(msg.Action),
+				})
+				continue
+			}
 		} else if msg.Action != nil {
 			out.Content = strings.TrimSpace(describeAction(msg.Action) + "\n\n" + msg.Content)
 		}
@@ -812,8 +822,11 @@ type chatQuery struct {
 	conversationID string
 	// msg is the user message the query answers.
 	msg ChatMessage
-	// messages is the conversation sent to the LLM.
+	// messages is the conversation sent to the LLM with the tools.
 	messages []ragMessage
+	// described is the conversation sent without the tools, its actions
+	// described rather than called.
+	described []ragMessage
 	// metadata goes with every query to openRAG for an answer from the
 	// documents.
 	metadata map[string]interface{}
@@ -874,32 +887,37 @@ func Query(ctx context.Context, inst *instance.Instance, logger logger.Logger, q
 		}
 		metadata["workspace"] = workspaceID
 	}
+	// After the last step, the LLM answers from the results it has
+	tools := query.Tools
+	if actionSteps(chat.Messages) >= maxActionSteps {
+		tools = nil
+	}
 	q := &chatQuery{
 		inst:           inst,
 		logger:         logger,
 		conversationID: chat.DocID,
 		msg:            msg,
-		messages:       withInstructions(ragMessages(&chat, assistant), query.Instructions),
+		messages:       withInstructions(ragMessages(&chat, assistant, tools), query.Instructions),
+		described:      withInstructions(ragMessages(&chat, assistant, nil), query.Instructions),
 		metadata:       metadata,
 		stream:         query.Stream,
 		direct:         query.DirectLLM,
 		now:            time.Now().UTC(),
 		watcher:        watcher,
 	}
-	// After the last step, the LLM answers from the results it has
-	if len(query.Tools) == 0 || actionSteps(chat.Messages) >= maxActionSteps {
+	if len(tools) == 0 {
 		return q.answer(ctx)
 	}
-	return q.answerWithTools(ctx, query.Tools)
+	return q.answerWithTools(ctx, tools)
 }
 
 // body is the body of the query: from the documents with openRAG, or from
 // the LLM behind it when the client asks for an answer without them. With
 // actions, the LLM gets them as its tools, with the rules of their use.
 func (q *chatQuery) body(defs []ToolDefinition) ([]byte, error) {
-	messages := q.messages
+	messages := q.described
 	if len(defs) > 0 {
-		messages = withInstructions(messages, toolsPrompt(!q.direct, q.now))
+		messages = withInstructions(q.messages, toolsPrompt(!q.direct, q.now))
 	}
 	payload := ragPayload(q.inst, messages, q.stream, q.metadata)
 	if q.direct {

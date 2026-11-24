@@ -123,7 +123,7 @@ func TestRAGMessagesDescribeTheActions(t *testing.T) {
 		{Role: UserRole, Content: "Résume la conversation dans une note"},
 		{Role: AssistantRole, Content: "# Résumé", Action: &ChatAction{Name: "create_note", Params: map[string]interface{}{"title": "Résumé"}}},
 	}}
-	messages := ragMessages(chat, nil)
+	messages := ragMessages(chat, nil, nil)
 	assert.Equal(t, `(Proposed to the user: draft_email {"subject":"Point"})`, messages[1].Content)
 	assert.Equal(t, `(Proposed to the user: create_note {"title":"Résumé"})`+"\n\n# Résumé", messages[3].Content,
 		"the action comes before the content")

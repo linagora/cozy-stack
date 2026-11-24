@@ -854,9 +854,15 @@ by vLLM with its tool call parser.
 - **The user confirms.** The stack never runs an action.
 - **The arguments are checked** against the schema of the action: a call the
   stack cannot make an action of is dropped.
-- **A proposed action is in the history.** With its result, as the tool call
-  of the LLM answered by a `tool` message; without it, as `(Proposed to the
-  user: name {params})`, so that "change the title" has its context.
+- **A proposed action is in the history**, so that "change the title" has
+  its context. With its result, as the tool call of the LLM answered by a
+  `tool` message. Without it, when the query declares its tool, as the tool
+  call answered by a `tool` message of the stack: the outcome the client
+  wrote (`Done: <url>`, `Done.`, `Cancelled by the user.`), or `Proposed to
+  the user; the app gave no result.`. Written as text, the LLM wrote its next
+  calls as that text. When the query does not declare its tool, as
+  `(Proposed to the user: name {params})`: a tool call needs the definition
+  of its tool.
 - **The results are data.** They go to the LLM in the `tool` role, and the
   rules of the tools say that instructions found in them are not addressed
   to it.
