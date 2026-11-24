@@ -25,6 +25,12 @@ const defaultN = 32768
 const defaultR = 8
 const defaultP = 1
 
+// Upper bounds for hashes we did not generate (e.g. received from RabbitMQ):
+// they are run on every login, so an unbounded cost can take the stack down.
+const maxN = 1 << 17
+const maxR = 16
+const maxP = 4
+
 // hash length
 const defaultDkLen = 32
 
@@ -73,6 +79,10 @@ func (h *scryptHash) UnmarshalText(hashbytes []byte) error {
 
 	h.p, err = strconv.Atoi(string(vals[3]))
 	if err != nil {
+		return ErrInvalidHash
+	}
+
+	if h.n > maxN || h.r < 1 || h.r > maxR || h.p < 1 || h.p > maxP {
 		return ErrInvalidHash
 	}
 
