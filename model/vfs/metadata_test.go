@@ -1,6 +1,7 @@
 package vfs_test
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -103,4 +104,32 @@ func TestMetadata(t *testing.T) {
 		assert.True(t, ok, "target.app is present")
 		assert.Equal(t, "drive", app)
 	})
+}
+
+func TestAudioExtractorHostileFiles(t *testing.T) {
+	extract := func(r io.Reader) vfs.Metadata {
+		e := vfs.NewAudioExtractor()
+		_, err := io.Copy(e, r)
+		assert.NoError(t, err)
+		assert.NoError(t, e.Close())
+		return e.Result()
+	}
+
+	// An M4A whose \xa9alb atom has class 21 (uint8): Album() panics in the lib.
+	m4a := []byte("\x00\x00\x00\x14ftypM4A \x00\x00\x00\x00M4A " +
+		"\x00\x00\x00\x21ilst" +
+		"\x00\x00\x00\x19\xa9alb" +
+		"\x00\x00\x00\x11data\x00\x00\x00\x15\x00\x00\x00\x00\x01")
+	assert.NotContains(t, extract(bytes.NewReader(m4a)), "album")
+
+	// A file larger than what is buffered must still be fully consumed.
+	big := io.MultiReader(bytes.NewReader([]byte("ID3")), io.LimitReader(zeroReader{}, 40<<20))
+	assert.NotContains(t, extract(big), "album")
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }
