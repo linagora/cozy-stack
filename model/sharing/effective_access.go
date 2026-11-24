@@ -2,6 +2,7 @@ package sharing
 
 import (
 	"cmp"
+	"encoding/json"
 	"errors"
 	"os"
 	"path"
@@ -14,7 +15,6 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/utils"
 )
 
@@ -428,41 +428,49 @@ func (r *AccessResolver) applicableSharingsForDoc(dir *vfs.DirDoc, file *vfs.Fil
 	return sharings, rootBySharing, nil
 }
 
-// sharedRootDoc is a directory referenced by a document, found by
+// sharedRootDoc is a document referenced by a sharing, found by
 // findSharedRoots.
 type sharedRootDoc struct {
 	ID           string                 `json:"_id"`
+	Type         string                 `json:"type"`
 	Path         string                 `json:"path"`
 	Name         string                 `json:"name"`
 	ReferencedBy []couchdb.DocReference `json:"referenced_by"`
 }
 
 // findSharedRoots returns the directories at the given paths that are
-// referenced by a document, in the order of the dir-by-path index. The paths
-// must be distinct.
+// referenced by a sharing. It reads the referenced-by view, whose size grows
+// with the number of shared documents, not of directories: a Mango $in on
+// dir-by-path cannot use the index as a range and reads every directory.
 func (r *AccessResolver) findSharedRoots(ancestorPaths []string) ([]sharedRootDoc, error) {
-	// XXX: single find via dir-by-path + Go-side referenced_by filter, rather
-	// than a dedicated shared-folder-roots-by-path view — one fewer view to
-	// maintain while N ancestors is small.
-	paths := make([]any, len(ancestorPaths))
-	for i, p := range ancestorPaths {
-		paths[i] = p
+	if len(ancestorPaths) == 0 {
+		return nil, nil
+	}
+	req := &couchdb.ViewRequest{
+		StartKey:    []string{consts.Sharings},
+		EndKey:      []string{consts.Sharings, couchdb.MaxString},
+		IncludeDocs: true,
+	}
+	var res couchdb.ViewResponse
+	if err := couchdb.ExecView(r.inst, couchdb.FilesReferencedByView, req, &res); err != nil {
+		return nil, err
+	}
+	wanted := make(map[string]struct{}, len(ancestorPaths))
+	for _, p := range ancestorPaths {
+		wanted[p] = struct{}{}
 	}
 	var roots []sharedRootDoc
-	if len(paths) > 0 {
-		req := &couchdb.FindRequest{
-			UseIndex: "dir-by-path",
-			Selector: mango.And(
-				mango.In("path", paths),
-				mango.Equal("type", consts.DirType),
-				mango.Exists(couchdb.SelectorReferencedBy),
-			),
-			Fields: []string{"_id", "path", "name", "referenced_by"},
-			Limit:  len(paths),
-		}
-		if err := couchdb.FindDocs(r.inst, consts.Files, req, &roots); err != nil {
+	for _, row := range res.Rows {
+		var doc sharedRootDoc
+		if err := json.Unmarshal(row.Doc, &doc); err != nil {
 			return nil, err
 		}
+		if _, ok := wanted[doc.Path]; !ok || doc.Type != consts.DirType {
+			continue
+		}
+		// A root shared by several sharings has one row per sharing.
+		delete(wanted, doc.Path)
+		roots = append(roots, doc)
 	}
 	return roots, nil
 }
@@ -487,7 +495,7 @@ func collectRoots(roots []sharedRootDoc, ancestorPaths []string, file *vfs.FileD
 		}
 	}
 
-	// XXX: DirType selector excludes the file from the Mango find; its
+	// XXX: findSharedRoots keeps only directories, so the file is not in roots; its
 	// own scopes are added by hand so file shares stay additive at the target
 	// level.
 	if file != nil {

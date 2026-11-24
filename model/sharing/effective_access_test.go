@@ -54,6 +54,40 @@ func TestAccessResolver_AncestorsOnly(t *testing.T) {
 	assert.True(t, ea.Can(permission.PUT))
 }
 
+func TestAccessResolver_FindSharedRoots(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	tree := H{"a/": H{"b/": H{"c/": H{}}, "other/": H{}}}
+	a := createTree(t, fs, tree, consts.RootDirID)
+	b, err := fs.DirByPath(a.Fullpath + "/b")
+	require.NoError(t, err)
+	c, err := fs.DirByPath(a.Fullpath + "/b/c")
+	require.NoError(t, err)
+	other, err := fs.DirByPath(a.Fullpath + "/other")
+	require.NoError(t, err)
+
+	createActiveDirSharing(t, inst, a.ID())
+	createActiveDirSharing(t, inst, a.ID())
+	createActiveDirSharing(t, inst, other.ID())
+	olddoc := b.Clone().(*vfs.DirDoc)
+	b.AddReferencedBy(couchdb.DocReference{Type: consts.PhotosAlbums, ID: "album"})
+	require.NoError(t, fs.UpdateDirDoc(olddoc, b))
+
+	resolver := NewAccessResolver(inst)
+	roots, err := resolver.findSharedRoots(resolver.ancestorPaths(c.Fullpath, true))
+	require.NoError(t, err)
+	require.Len(t, roots, 1, "a once despite its two sharings, b is not shared, other is no ancestor")
+	assert.Equal(t, a.ID(), roots[0].ID)
+	assert.Len(t, roots[0].ReferencedBy, 2)
+}
+
 func TestAccessResolver_SelfAndAncestor(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
