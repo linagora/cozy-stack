@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/driveevent"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/note"
@@ -198,6 +199,7 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 				Infof("Cannot import note: %s", err)
 			return nil, WrapVfsError(err)
 		}
+		publishCreated(c, inst, doc, sharedDrive)
 		return NewFile(doc, inst, sharedDrive), nil
 	}
 
@@ -220,7 +222,31 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 		return nil, WrapVfsError(err)
 	}
 	maybeNotifyShareByLinkUpload(c, inst, doc.DocName, doc.ID(), doc.DirID, false)
+	publishCreated(c, inst, doc, sharedDrive)
 	return NewFile(doc, inst, sharedDrive), nil
+}
+
+// publishCreated publishes the creation of a file in a drive of the instance.
+// A member of a shared drive reports their activity as a digest instead (ADR
+// 010).
+func publishCreated(c echo.Context, inst *instance.Instance, doc *vfs.FileDoc, sharedDrive *sharing.Sharing) {
+	if sharedDrive == nil {
+		driveevent.FileCreated(c.Request().Context(), inst, doc, byOwner(c))
+	}
+}
+
+// byOwner tells if the owner of the instance made the request, rather than
+// someone with a sharing link.
+func byOwner(c echo.Context) bool {
+	perm, err := middlewares.GetPermission(c)
+	if err != nil {
+		return false
+	}
+	switch perm.Type {
+	case permission.TypeShareByLink, permission.TypeSharePreview, permission.TypeShareInteract:
+		return false
+	}
+	return true
 }
 
 // maybeNotifyShareByLinkUpload sends a notification

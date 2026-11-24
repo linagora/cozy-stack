@@ -297,6 +297,8 @@ CloudEvents read by other apps, with the event type as routing key and
   see below.
 - `com.twake.drive.folder.changed.v1`: the activity digest of an organization
   drive, see below.
+- `com.twake.drive.file.created.v1`: a file created in a personal drive, see
+  below.
 
 ### Handlers
 
@@ -608,6 +610,56 @@ counts the files that members create, update and send to the trash through
 - The window is the context setting `drive_activity.window`, 30 seconds by
   default. The counts are held in Redis, so a Stack without Redis publishes
   no digest.
+
+#### Files of a personal drive
+
+When the context setting `drive_activity.file_events` is `true`, the Stack
+publishes one event per change of a file in the personal drive of an
+instance, for the Twake webhook gateway (ADR 075 of `linagora/twake-adr`):
+
+| Routing key                       | Published when                          |
+| --------------------------------- | --------------------------------------- |
+| `com.twake.drive.file.created.v1` | a file is uploaded with `POST /files`   |
+
+For example:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "8ff66e0ee58e0a3b",
+  "source": "twake://drive",
+  "type": "com.twake.drive.file.created.v1",
+  "time": "2026-11-23T10:00:00Z",
+  "twakeorg": "org123",
+  "twakeactorid": "6208ad54-5683-1041-8c8f-c9e6dccfd4ac",
+  "data": {
+    "object": {
+      "type": "file",
+      "id": "8ff66e0ee58e0a3b",
+      "title": "invoice.pdf",
+      "folder": { "id": "a1f0c3e2d4b5" },
+      "container": { "kind": "drive", "id": "alice.example.net" }
+    },
+    "recipients": [
+      { "uuid": "6208ad54-5683-1041-8c8f-c9e6dccfd4ac", "reason": "owner" }
+    ]
+  }
+}
+```
+
+- The owner is named by the `uuid` claim of the SSO (the LDAP entryUUID), which
+  the Stack keeps on the instance as `oidc_uuid` at each OIDC login and app
+  token exchange. Until it knows it, the Stack publishes nothing.
+- `twakeactorid` is the owner when they created the file, also through a
+  konnector or a sync, which upload with `POST /files` too. A file uploaded
+  through a sharing link has no actor, and still goes to the owner.
+- `id` is the file id, so a retry of the same upload is not counted twice.
+- `time` is when the Stack published the event: the dates of the file are the
+  ones its client sent.
+- It is off by default: a sync can create thousands of files at once. The
+  members of a shared drive are counted in its digest instead; the files the
+  owner of the drive changes through `/files` on their own instance publish
+  these events, as for the rest of their drive.
 
 ### Lifecycle
 
