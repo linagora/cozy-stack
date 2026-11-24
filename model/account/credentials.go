@@ -234,6 +234,25 @@ func Decrypt(doc couchdb.JSONDoc) bool {
 	return false
 }
 
+// DropForeignEncrypted removes the *_encrypted fields of a client document
+// that are not already stored in old (nil for a new account). Encrypt keeps
+// them as they are and Decrypt opens any box, so the stack would otherwise
+// decrypt a box taken from another instance.
+func DropForeignEncrypted(doc, old map[string]interface{}) {
+	auth, _ := doc["auth"].(map[string]interface{})
+	oldAuth, _ := old["auth"].(map[string]interface{})
+	for k, v := range auth {
+		// Decrypt skips non-string values, and comparing maps would panic.
+		if s, ok := v.(string); ok && strings.HasSuffix(k, "_encrypted") && oldAuth[k] != s {
+			delete(auth, k)
+		}
+	}
+	if data, ok := doc["data"].(map[string]interface{}); ok {
+		oldData, _ := old["data"].(map[string]interface{})
+		DropForeignEncrypted(data, oldData)
+	}
+}
+
 func encryptMap(m map[string]interface{}) (encrypted bool) {
 	auth, ok := m["auth"].(map[string]interface{})
 	if !ok {

@@ -295,3 +295,25 @@ func TestAccountsEncryptDecrypt(t *testing.T) {
 		}
 	}
 }
+
+func TestDropForeignEncrypted(t *testing.T) {
+	old := map[string]interface{}{
+		"auth": map[string]interface{}{"credentials_encrypted": "stored"},
+		"data": map[string]interface{}{"auth": map[string]interface{}{"secret_encrypted": "stored"}},
+	}
+	doc := map[string]interface{}{
+		"auth": map[string]interface{}{
+			"login":                 "me",
+			"credentials_encrypted": "stored",
+			"secret_encrypted":      "foreign",
+		},
+		"data": map[string]interface{}{"auth": map[string]interface{}{"secret_encrypted": "foreign"}},
+	}
+	DropForeignEncrypted(doc, old)
+	assert.Equal(t, map[string]interface{}{"login": "me", "credentials_encrypted": "stored"}, doc["auth"])
+	assert.Empty(t, doc["data"].(map[string]interface{})["auth"])
+
+	created := map[string]interface{}{"auth": map[string]interface{}{"credentials_encrypted": "foreign"}}
+	DropForeignEncrypted(created, nil)
+	assert.Empty(t, created["auth"])
+}
