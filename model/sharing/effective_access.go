@@ -468,7 +468,8 @@ func (r *AccessResolver) findSharedRoots(ancestorPaths []string) ([]sharedRootDo
 		if _, ok := wanted[doc.Path]; !ok || doc.Type != consts.DirType {
 			continue
 		}
-		// A root shared by several sharings has one row per sharing.
+		// The view has one row per sharing for a root shared by several
+		// sharings, all with the same doc: keep the first one only.
 		delete(wanted, doc.Path)
 		roots = append(roots, doc)
 	}
