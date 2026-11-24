@@ -395,12 +395,21 @@ func NewAudioExtractor() *AudioExtractor {
 	return e
 }
 
+// maxAudioMetadataSize is how much of an audio file is kept in memory to read
+// its tags.
+// shortcut: tags after this size (ID3v1, MP4 moov at the end) are lost, read
+// from the stored file if users miss them.
+const maxAudioMetadataSize = 32 << 20
+
 // Start is used in a goroutine to start the metadata extraction
 func (e *AudioExtractor) Start() {
-	var tags tag.Metadata
+	var m Metadata
 	var buf []byte
 	var err error
-	buf, err = io.ReadAll(e.r)
+	buf, err = io.ReadAll(io.LimitReader(e.r, maxAudioMetadataSize))
+	if err == nil {
+		_, err = io.Copy(io.Discard, e.r)
+	}
 	if err != nil {
 		e.r.Close()
 		e.ch <- err
@@ -416,10 +425,36 @@ func (e *AudioExtractor) Start() {
 		} else if err != nil {
 			e.ch <- err
 		} else {
-			e.ch <- tags
+			e.ch <- m
 		}
 	}()
-	tags, err = tag.ReadFrom(bytes.NewReader(buf))
+	tags, err := tag.ReadFrom(bytes.NewReader(buf))
+	if err != nil {
+		return
+	}
+	// The getters can panic on hostile files, so they run under the recover.
+	m = NewMetadata()
+	if album := tags.Album(); album != "" {
+		m["album"] = album
+	}
+	if artist := tags.Artist(); artist != "" {
+		m["artist"] = artist
+	}
+	if composer := tags.Composer(); composer != "" {
+		m["composer"] = composer
+	}
+	if genre := tags.Genre(); genre != "" {
+		m["genre"] = genre
+	}
+	if title := tags.Title(); title != "" {
+		m["title"] = title
+	}
+	if year := tags.Year(); year != 0 {
+		m["year"] = year
+	}
+	if track, _ := tags.Track(); track != 0 {
+		m["track"] = track
+	}
 }
 
 // Write is called to push some bytes to the extractor
@@ -440,32 +475,10 @@ func (e *AudioExtractor) Abort(err error) {
 
 // Result is called to get the extracted metadata
 func (e *AudioExtractor) Result() Metadata {
-	m := NewMetadata()
-	tags := <-e.ch
-	if tags, ok := tags.(tag.Metadata); ok {
-		if album := tags.Album(); album != "" {
-			m["album"] = album
-		}
-		if artist := tags.Artist(); artist != "" {
-			m["artist"] = artist
-		}
-		if composer := tags.Composer(); composer != "" {
-			m["composer"] = composer
-		}
-		if genre := tags.Genre(); genre != "" {
-			m["genre"] = genre
-		}
-		if title := tags.Title(); title != "" {
-			m["title"] = title
-		}
-		if year := tags.Year(); year != 0 {
-			m["year"] = year
-		}
-		if track, _ := tags.Track(); track != 0 {
-			m["track"] = track
-		}
+	if m, ok := (<-e.ch).(Metadata); ok {
+		return m
 	}
-	return m
+	return NewMetadata()
 }
 
 // ShortcutExtractor is used to extract information from .url files
