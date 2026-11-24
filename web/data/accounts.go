@@ -96,19 +96,19 @@ func updateAccount(c echo.Context) error {
 
 	if doc.ID() == "" {
 		doc.SetID(docid)
+		account.DropForeignEncrypted(doc.M, nil)
 		return createNamedDoc(c, doc)
 	}
 
+	var old couchdb.JSONDoc
+	if err := couchdb.GetDoc(instance, doc.DocType(), doc.ID(), &old); err != nil {
+		return fixErrorNoDatabaseIsWrongDoctype(err)
+	}
+	old.Type = doc.DocType()
+
 	errWhole := middlewares.AllowWholeType(c, permission.PUT, doc.DocType())
 	if errWhole != nil {
-		// we cant apply to whole type, let's fetch old doc and see if it applies there
-		var old couchdb.JSONDoc
-		errFetch := couchdb.GetDoc(instance, doc.DocType(), doc.ID(), &old)
-		if errFetch != nil {
-			return errFetch
-		}
-		old.Type = doc.DocType()
-		// check if permissions set allows manipulating old doc
+		// we cant apply to whole type, check if permissions set allows manipulating old doc
 		errOld := middlewares.Allow(c, permission.PUT, &old)
 		if errOld != nil {
 			return errOld
@@ -121,6 +121,7 @@ func updateAccount(c echo.Context) error {
 		}
 	}
 
+	account.DropForeignEncrypted(doc.M, old.M)
 	account.Encrypt(doc)
 
 	if doc.M["cozyMetadata"] == nil {
@@ -167,6 +168,7 @@ func createAccount(c echo.Context) error {
 		return err
 	}
 
+	account.DropForeignEncrypted(doc.M, nil)
 	account.Encrypt(doc)
 	account.ComputeName(doc)
 
