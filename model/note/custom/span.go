@@ -52,6 +52,10 @@ func (s *spanParser) Trigger() []byte {
 func (s *spanParser) Parse(parent ast.Node, block text.Reader, pc parser.Context) ast.Node {
 	line, _ := block.PeekLine()
 	for pos := 1; pos < len(line); pos++ {
+		// The next [ gets its own call: scanning past it is quadratic on a line of [.
+		if line[pos] == '[' {
+			return nil
+		}
 		if line[pos] == ']' {
 			pos++
 			if pos >= len(line) || line[pos] != '{' {

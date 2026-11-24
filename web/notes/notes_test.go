@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -970,6 +971,22 @@ func TestNotes(t *testing.T) {
 		data = obj.Value("data").Object()
 		data.HasValue("id", fileID)
 		data.Path("$.attributes.instance").IsEqual(inst.Domain)
+	})
+
+	t.Run("ImportNoteBiggerThanTheMarkdownCap", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		body := strings.Repeat("a", note.MaxMarkdownSize+1<<20)
+
+		e.POST("/files/io.cozy.files.root-dir").
+			WithQuery("Type", "file").
+			WithQuery("Name", "A big imported note.cozy-note").
+			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Content-Type", "text/plain").
+			WithBytes([]byte(body)).
+			Expect().Status(201).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().
+			Path("$.data.attributes.size").IsEqual(fmt.Sprint(len(body)))
 	})
 
 	t.Run("CopyNoteWithAnImage", func(t *testing.T) {
