@@ -19,7 +19,8 @@ authentication:
 ```
 
 The external system can then create a JWT, with the parameter `name` as the
-instance domain, and send the user to `https://<instance>/?jwt=...`. The user
+instance domain and a short `exp` (mandatory), and send the user to
+`https://<instance>/?jwt=...`. The user
 will be logged in, and redirected to its default application.
 
 ## Open ID Connect

@@ -49,7 +49,7 @@ func CheckDelegatedJWT(instance *instance.Instance, token string) error {
 		return err
 	}
 
-	if claims.RegisteredClaims.ExpiresAt != nil && claims.RegisteredClaims.ExpiresAt.Before(time.Now()) {
+	if claims.RegisteredClaims.ExpiresAt == nil || claims.RegisteredClaims.ExpiresAt.Before(time.Now()) {
 		return errors.New("Token has expired")
 	}
 

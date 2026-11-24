@@ -65,6 +65,23 @@ func TestDelegated(t *testing.T) {
 		assert.Contains(t, err.Error(), "expired")
 	})
 
+	t.Run("BadNoExpCheckDelegatedJWT", func(t *testing.T) {
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, ExternalClaims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Subject:  "sruti",
+				IssuedAt: jwt.NewNumericDate(time.Now()),
+			},
+			Name:  "external.notmycozy.net",
+			Email: "sruti@external.notmycozy.net",
+			Code:  "student",
+		})
+		signed, err := token.SignedString(JWTSecret)
+		assert.NoError(t, err)
+		err = CheckDelegatedJWT(delegatedInst, signed)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "expired")
+	})
+
 	t.Run("BadIssuerCheckDelegatedJWT", func(t *testing.T) {
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, ExternalClaims{
 			RegisteredClaims: jwt.RegisteredClaims{
