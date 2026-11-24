@@ -45,11 +45,12 @@ func ImportFile(inst *instance.Instance, newdoc, olddoc *vfs.FileDoc, body io.Re
 
 	reader := io.TeeReader(body, file)
 	content, _, err := importReader(inst, newdoc, reader, schema)
+	// importReader stops at MaxMarkdownSize: write the rest to the file.
+	_, _ = io.Copy(io.Discard, reader)
 
 	if content != nil {
 		fillMetadata(newdoc, olddoc, schemaSpecs, content)
 	} else {
-		_, _ = io.Copy(io.Discard, reader)
 		inst.Logger().WithNamespace("notes").
 			Warnf("Cannot import notes: %s", err)
 	}
@@ -133,10 +134,7 @@ func importReader(inst *instance.Instance, doc *vfs.FileDoc, reader io.Reader, s
 	}
 
 	if !hasImages {
-		if _, err := buf.ReadFrom(reader); err != nil {
-			return nil, nil, err
-		}
-		content, err := parseFile(buf, schema)
+		content, err := parseFile(io.MultiReader(buf, reader), schema)
 		return content, nil, err
 	}
 
