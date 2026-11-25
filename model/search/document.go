@@ -65,7 +65,8 @@ func NewFileDocument(domain string, doc couchdb.JSONDoc) (*FileDocument, bool) {
 		fd.ScopedDirKey = Key(domain, fd.DirID)
 		// Trashing a folder also marks the files inside as trashed
 		// (setTrashedForFilesInsideDir), except for a folder replicated by a
-		// sharing, which is only moved.
+		// sharing, which is only moved. VisiblePaths hides those, and the
+		// files not indexed again yet.
 		fd.Trashed, _ = doc.M["trashed"].(bool)
 	}
 	return fd, true

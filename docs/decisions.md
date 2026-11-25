@@ -24,3 +24,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5260#discussion_r4681654061)
 - Why: the check reads the caller's sharings, so it belongs in the search query, which is a later change of the stack.
 - Scope: `model/search`, the `share_scopes_v1` index.
+
+## 2026-11-25, [Product] Search leaves out the trash
+
+- Decision: the search does not return trashed files and folders, as ADR 008 says.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5261#discussion_r4695299650)
+- Why: Drive shows search results without a trashed state, and the trash has its own view; showing trashed hits needs that display first.
+- Scope: `model/search`, `POST /files/search`.

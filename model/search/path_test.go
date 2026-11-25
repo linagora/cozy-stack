@@ -43,10 +43,12 @@ func TestVisiblePaths(t *testing.T) {
 		{OwnerInstanceID: caller.Domain, DirID: work.ID()},
 		{OwnerInstanceID: caller.Domain, DirID: consts.RootDirID},
 		{OwnerInstanceID: caller.Domain, DirID: trashed.ID()},
+		{OwnerInstanceID: owner.Domain, DirID: root.DirID, DriveID: "drive-1"}, // the root folder itself
 		{OwnerInstanceID: owner.Domain, DirID: root.ID(), DriveID: "drive-1"},
 		{OwnerInstanceID: owner.Domain, DirID: nested.ID(), DriveID: "drive-1"},
 		{OwnerInstanceID: owner.Domain, DirID: outside.ID(), DriveID: "drive-1"},
 		{OwnerInstanceID: owner.Domain, DirID: nested.ID(), DriveID: "unknown-drive"},
+		{DirID: nested.ID(), DriveID: "unknown-drive"}, // no owner either
 		{OwnerInstanceID: "other.example.net", DirID: nested.ID(), DriveID: "drive-1"},
 		{OwnerInstanceID: owner.Domain, DirID: nested.ID()}, // not the caller's file
 		{OwnerInstanceID: caller.Domain, DirID: "does-not-exist"},
@@ -57,10 +59,12 @@ func TestVisiblePaths(t *testing.T) {
 		{Path: "/Work/2026", OK: true},
 		{Path: "/", OK: true},
 		{},                        // parent in the trash
+		{OK: true},                // the root folder, without a path
 		{Path: "/Team", OK: true}, // the name of the root folder
 		{Path: "/Team/a/b", OK: true},
 		{}, // moved out of the drive
 		{}, // unknown drive
+		{}, // unknown drive, without owner
 		{}, // owner does not match the drive
 		{}, // file of another instance without drive
 		{}, // missing parent

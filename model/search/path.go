@@ -2,13 +2,11 @@ package search
 
 import (
 	"errors"
-	"strings"
+	"slices"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
-	"github.com/cozy/cozy-stack/pkg/consts"
-	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 )
 
@@ -43,23 +41,21 @@ type VisiblePath struct {
 //
 // A hit is not OK when its parent folder is missing or in the trash, when it
 // is no longer in its drive, or when the drive is not in drives (the drives
-// the caller is a member of, by sharing id). The
-// hits of a drive owned outside of this stack cluster are OK, with an empty
-// path.
+// the caller is a member of, by sharing id). The root folder of a drive, and
+// the hits of a drive owned outside of this stack cluster, are OK with an
+// empty path.
 func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive) ([]VisiblePath, error) {
 	out := make([]VisiblePath, len(hits))
 
 	// The folders to load, by instance: the parents, and the drive roots
 	wanted := make(map[string][]string)
 	for _, hit := range hits {
-		if hit.DriveID == "" {
-			if hit.OwnerInstanceID == caller.Domain {
-				wanted[caller.Domain] = append(wanted[caller.Domain], hit.DirID)
-			}
+		if !ownedAsExpected(caller, hit, drives) {
 			continue
 		}
-		if d, ok := drives[hit.DriveID]; ok && d.OwnerInstanceID == hit.OwnerInstanceID {
-			wanted[d.OwnerInstanceID] = append(wanted[d.OwnerInstanceID], hit.DirID, d.RootDirID)
+		wanted[hit.OwnerInstanceID] = append(wanted[hit.OwnerInstanceID], hit.DirID)
+		if hit.DriveID != "" {
+			wanted[hit.OwnerInstanceID] = append(wanted[hit.OwnerInstanceID], drives[hit.DriveID].RootDirID)
 		}
 	}
 
@@ -90,11 +86,7 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 	}
 
 	for i, hit := range hits {
-		// The folders of other instances are loaded for the drives only: a
-		// hit outside of a drive must belong to the caller.
-		d, inDrive := drives[hit.DriveID]
-		if hit.DriveID == "" && hit.OwnerInstanceID != caller.Domain ||
-			hit.DriveID != "" && (!inDrive || d.OwnerInstanceID != hit.OwnerInstanceID) {
+		if !ownedAsExpected(caller, hit, drives) {
 			continue
 		}
 		if remote[hit.OwnerInstanceID] {
@@ -102,15 +94,20 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 			continue
 		}
 		parent := dirs[hit.OwnerInstanceID][hit.DirID]
-		if parent == nil || isTrashed(parent.Fullpath) {
+		if parent == nil || vfs.IsInTrash(parent.Fullpath) {
 			continue
 		}
 		if hit.DriveID == "" {
 			out[i] = VisiblePath{Path: parent.Fullpath, OK: true}
 			continue
 		}
-		root := dirs[hit.OwnerInstanceID][d.RootDirID]
+		root := dirs[hit.OwnerInstanceID][drives[hit.DriveID].RootDirID]
 		if root == nil {
+			continue
+		}
+		if parent.DocID == root.DirID {
+			// The root folder itself (its siblings are not in the drive)
+			out[i] = VisiblePath{OK: true}
 			continue
 		}
 		scope := sharing.SharingScope{RootID: root.DocID, RootPath: root.Fullpath}
@@ -123,22 +120,29 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 	return out, nil
 }
 
-// loadDirs loads the folders with the given ids, with one request.
+// ownedAsExpected returns true when the hit belongs to the caller, or to the
+// owner of its drive. The folders of other instances are loaded for the
+// drives only, and an unknown drive has no owner.
+func ownedAsExpected(caller *instance.Instance, hit Hit, drives map[string]Drive) bool {
+	owner := caller.Domain
+	if hit.DriveID != "" {
+		owner = drives[hit.DriveID].OwnerInstanceID
+	}
+	return owner != "" && hit.OwnerInstanceID == owner
+}
+
+// loadDirs loads the folders with the given ids, with one request (none for
+// no ids).
 func loadDirs(db prefixer.Prefixer, ids []string) (map[string]*vfs.DirDoc, error) {
-	var docs []*vfs.DirDoc
-	req := &couchdb.AllDocsRequest{Keys: ids}
-	if err := couchdb.GetAllDocs(db, consts.Files, req, &docs); err != nil {
+	docs, err := vfs.DirOrFileDocsByIDs(db, slices.Compact(slices.Sorted(slices.Values(ids))))
+	if err != nil {
 		return nil, err
 	}
 	dirs := make(map[string]*vfs.DirDoc, len(docs))
-	for _, doc := range docs {
-		if doc != nil && doc.Type == consts.DirType {
-			dirs[doc.DocID] = doc
+	for id, doc := range docs {
+		if dir, _ := doc.Refine(); dir != nil {
+			dirs[id] = dir
 		}
 	}
 	return dirs, nil
-}
-
-func isTrashed(fullpath string) bool {
-	return fullpath == vfs.TrashDirName || strings.HasPrefix(fullpath, vfs.TrashDirName+"/")
 }
