@@ -8,7 +8,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/opensearch"
 )
 
-// filesIndexBody is the definition of the cozy_files_v1 index (ADR 008). The
+// filesIndexBody is the definition of the files_v1 index (ADR 008). The
 // n-gram analyzer is also used at search time, so that words longer than the
 // grams can match.
 var filesIndexBody = map[string]any{
@@ -64,9 +64,9 @@ var filesIndexBody = map[string]any{
 	},
 }
 
-// scopesIndexBody is the definition of the cozy_share_scopes_v1 index. The
-// scope docs are read with _mget, never searched by their folder keys, so
-// those keys are only stored.
+// scopesIndexBody is the definition of the share_scopes_v1 index. The scope
+// docs are never searched by their folder keys, so those keys are only kept
+// in _source.
 var scopesIndexBody = map[string]any{
 	"settings": map[string]any{
 		"number_of_shards":     1,
@@ -79,7 +79,7 @@ var scopesIndexBody = map[string]any{
 			"owner_instance_id":        keyword,
 			"root_dir_id":              keyword,
 			"active_member_principals": keyword,
-			"subtree_dir_keys":         map[string]any{"type": "keyword", "index": false},
+			"subtree_dir_keys":         map[string]any{"type": "keyword", "index": false, "doc_values": false},
 		},
 	},
 }
