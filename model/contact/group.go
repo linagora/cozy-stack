@@ -106,12 +106,14 @@ func (g *Group) GetAllContacts(db prefixer.Prefixer) ([]*Contact, error) {
 	}
 	var docs []*Contact
 	// Bookmarks can skip the next row when the previous page's last contact is
-	// deleted. The array index cannot serve $elemMatch either, so page by ID.
+	// deleted, so page by ID. The sort keeps CouchDB off the by-groups index,
+	// whose row order would make the _id cursor skip contacts.
 	for after := ""; ; {
 		var page []*Contact
 		err := couchdb.FindDocsUnoptimized(db, consts.Contacts, &couchdb.FindRequest{
 			UseIndex: "_all_docs",
 			Selector: mango.And(mango.Gt("_id", after), inGroup),
+			Sort:     mango.SortBy{{Field: "_id", Direction: mango.Asc}},
 			Limit:    pageSize,
 		}, &page)
 		if err != nil {
