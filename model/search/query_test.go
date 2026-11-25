@@ -25,7 +25,7 @@ import (
 )
 
 func TestBuildQuery(t *testing.T) {
-	body := buildQuery("bob.example.net", "report", []string{"alice.example.net:d1"}, 20, nil)
+	body := buildQuery("bob.example.net", "report", []string{"alice.example.net:d1"}, nil, 20, nil)
 	data, err := json.Marshal(body)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{
@@ -49,7 +49,7 @@ func TestBuildQuery(t *testing.T) {
 	t.Run("folder keys are sent in chunks", func(t *testing.T) {
 		termsChunkSize = 2
 		t.Cleanup(func() { termsChunkSize = 65536 })
-		body := buildQuery("bob.example.net", "x", []string{"k1", "k2", "k3"}, 20, nil)
+		body := buildQuery("bob.example.net", "x", []string{"k1", "k2", "k3"}, nil, 20, nil)
 		filter := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
 		visible := filter[0].(map[string]any)["bool"].(map[string]any)["should"].([]any)
 		require.Len(t, visible, 3)
@@ -57,14 +57,22 @@ func TestBuildQuery(t *testing.T) {
 		assert.Equal(t, []string{"k3"}, visible[2].(map[string]any)["terms"].(map[string]any)["scoped_dir_key"])
 	})
 
+	t.Run("files of single-file drives", func(t *testing.T) {
+		body := buildQuery("bob.example.net", "x", nil, []string{"alice.example.net:f1"}, 20, nil)
+		filter := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
+		visible := filter[0].(map[string]any)["bool"].(map[string]any)["should"].([]any)
+		require.Len(t, visible, 2)
+		assert.Equal(t, map[string]any{"terms": map[string]any{"resource_key": []string{"alice.example.net:f1"}}}, visible[1])
+	})
+
 	t.Run("only own files without drives", func(t *testing.T) {
-		body := buildQuery("bob.example.net", "x", nil, 20, nil)
+		body := buildQuery("bob.example.net", "x", nil, nil, 20, nil)
 		filter := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
 		assert.Len(t, filter[0].(map[string]any)["bool"].(map[string]any)["should"], 1)
 	})
 
 	t.Run("next page", func(t *testing.T) {
-		body := buildQuery("bob.example.net", "x", nil, 20, []any{1.5, "bob.example.net:f1"})
+		body := buildQuery("bob.example.net", "x", nil, nil, 20, []any{1.5, "bob.example.net:f1"})
 		assert.Equal(t, []any{1.5, "bob.example.net:f1"}, body["search_after"])
 	})
 }
@@ -114,7 +122,9 @@ func TestMemberScopes(t *testing.T) {
 				"subtree_dir_keys":["alice.example.net:root1","alice.example.net:sub1"]}},
 			{"_id":"s2","_source":{"sharing_id":"s2","owner_instance_id":"carol.example.net","root_dir_id":"root2",
 				"active_member_principals":["bob.example.net","dave.example.net"],
-				"subtree_dir_keys":["carol.example.net:root2"]}}]}}`))
+				"subtree_dir_keys":["carol.example.net:root2"]}},
+			{"_id":"s3","_source":{"sharing_id":"s3","owner_instance_id":"alice.example.net","root_dir_id":"",
+				"root_file_id":"file3","active_member_principals":["bob.example.net"],"subtree_dir_keys":null}}]}}`))
 	}))
 	t.Cleanup(srv.Close)
 	v := viper.New()
@@ -122,18 +132,20 @@ func TestMemberScopes(t *testing.T) {
 	require.NoError(t, config.UseViper(v))
 	client := config.GetConfig().Search
 
-	keys, drives, err := memberScopes(context.Background(), client, "bob.example.net")
+	dirKeys, fileKeys, drives, err := memberScopes(context.Background(), client, "bob.example.net")
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"size":10000,"query":{"term":{"active_member_principals":"bob.example.net"}}}`, body)
 	assert.Equal(t, map[string]string{
 		"alice.example.net:root1": "s1",
 		"alice.example.net:sub1":  "s1", // in the outermost drive
 		"carol.example.net:root2": "s2",
-	}, keys)
+	}, dirKeys)
+	assert.Equal(t, map[string]string{"alice.example.net:file3": "s3"}, fileKeys)
 	assert.Equal(t, map[string]Drive{
 		"s0": {OwnerInstanceID: "alice.example.net", RootDirID: "sub1"},
 		"s1": {OwnerInstanceID: "alice.example.net", RootDirID: "root1"},
 		"s2": {OwnerInstanceID: "carol.example.net", RootDirID: "root2"},
+		"s3": {OwnerInstanceID: "alice.example.net", RootFileID: "file3"},
 	}, drives)
 }
 
@@ -287,6 +299,29 @@ func TestSearchWithOpenSearch(t *testing.T) {
 			require.Len(t, res.Hits, 1, q)
 			assert.Equal(t, expected, res.Hits[0].Name, q)
 		}
+	})
+
+	t.Run("single-file drive", func(t *testing.T) {
+		private, err := vfs.Mkdir(owner.VFS(), "/Private", nil)
+		require.NoError(t, err)
+		file := createTextFile(t, owner, private.ID(), "minutes.txt")
+		createTextFile(t, owner, private.ID(), "minutes draft.txt") // not shared
+		members := []sharing.Member{{Status: sharing.MemberStatusOwner, Instance: "https://" + owner.Domain}, member}
+		rules := []sharing.Rule{{DocType: consts.Files, Values: []string{file.ID()}}}
+		s := &sharing.Sharing{SID: "drive-file", Drive: true, Active: true, Owner: true,
+			DriveRootType: sharing.DriveRootTypeFile, Rules: rules, Members: members}
+		require.NoError(t, couchdb.CreateNamedDoc(owner, s))
+		require.NoError(t, Index(ctx, owner, log)) // also writes the scope doc
+
+		var res *Results
+		require.Eventually(t, func() bool {
+			res, err = Search(ctx, client, caller, "minutes", 0, "")
+			return err == nil && len(res.Hits) > 0
+		}, 5*time.Second, 200*time.Millisecond)
+		require.Len(t, res.Hits, 1)
+		assert.Equal(t, file.ID(), res.Hits[0].DocID)
+		assert.Equal(t, "drive-file", res.Hits[0].DriveID)
+		assert.Equal(t, Drive{OwnerInstanceID: owner.Domain, RootFileID: file.ID()}, res.Drives["drive-file"])
 	})
 
 	t.Run("invalid cursor", func(t *testing.T) {

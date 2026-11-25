@@ -122,6 +122,17 @@ func TestNewScopeDocument(t *testing.T) {
 
 	bob := sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://bob.example.net"}
 
+	t.Run("single-file drive", func(t *testing.T) {
+		s := makeDrive("file-1", bob)
+		s.DriveRootType = sharing.DriveRootTypeFile
+		doc, keep, err := NewScopeDocument(inst, s)
+		require.NoError(t, err)
+		require.True(t, keep)
+		assert.Equal(t, "file-1", doc.RootFileID)
+		assert.Empty(t, doc.RootDirID)
+		assert.Empty(t, doc.SubtreeDirKeys)
+	})
+
 	t.Run("drive with nested folders", func(t *testing.T) {
 		doc, keep, err := NewScopeDocument(inst, makeDrive(root.ID(), bob))
 		require.NoError(t, err)
@@ -155,12 +166,11 @@ func TestNewScopeDocument(t *testing.T) {
 		assert.False(t, keep)
 	})
 
-	t.Run("inactive, not owned, not a drive or a file root", func(t *testing.T) {
+	t.Run("inactive, not owned or not a drive", func(t *testing.T) {
 		for _, edit := range []func(*sharing.Sharing){
 			func(s *sharing.Sharing) { s.Active = false },
 			func(s *sharing.Sharing) { s.Owner = false },
 			func(s *sharing.Sharing) { s.Drive = false },
-			func(s *sharing.Sharing) { s.DriveRootType = sharing.DriveRootTypeFile },
 		} {
 			s := makeDrive(root.ID(), bob)
 			edit(s)

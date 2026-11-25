@@ -53,6 +53,13 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Why: these letters are rare in file names and still match whole words through `name.prefix`.
 - Scope: `model/search`, the `cozy_files_v1` index.
 
+## 2026-11-25, [Product] Recipients find the file of a single-file drive by search
+
+- Decision: the scope doc of a single-file drive lists its file (`root_file_id`); the search matches it on `resource_key` and shows it without a path. The other files of its folder stay hidden.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5260#discussion_r4681694076)
+- Why: a recipient must find the files shared with them, and the parent folder of that file is not shared, so its folder key cannot be used.
+- Scope: `model/search`, the `share_scopes_v1` and `files_v1` indices.
+
 ## 2026-11-27, [Tech] Search purges a deleted instance after its databases, without retry
 
 - Decision: `Destroy` removes the search documents of an instance after its CouchDB databases are deleted, and a failure is only logged: nothing retries it.

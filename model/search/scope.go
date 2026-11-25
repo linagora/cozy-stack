@@ -36,9 +36,11 @@ const subtreePageSize = 10000
 // ScopeDocument is a shared drive in the share_scopes_v1 index: who can see
 // it, and the keys of all its folders.
 type ScopeDocument struct {
-	SharingID              string   `json:"sharing_id"`
-	OwnerInstanceID        string   `json:"owner_instance_id"`
-	RootDirID              string   `json:"root_dir_id"`
+	SharingID       string `json:"sharing_id"`
+	OwnerInstanceID string `json:"owner_instance_id"`
+	RootDirID       string `json:"root_dir_id"`
+	// RootFileID is the file of a single-file drive, which has no folder keys.
+	RootFileID             string   `json:"root_file_id,omitempty"`
 	ActiveMemberPrincipals []string `json:"active_member_principals"`
 	// ReadOnlyPrincipals are those of the active members who cannot write: a
 	// hit in nested drives is given through a drive where the caller can write.
@@ -49,13 +51,10 @@ type ScopeDocument struct {
 // NewScopeDocument builds the scope document of a shared drive, on the
 // instance of its owner. It returns false when the drive must not have a scope
 // document: not an active drive owned by the instance, no recipient has
-// accepted it, its root is a single file, or its root is missing or in the
-// trash.
-//
-// shortcut: the recipients of a single-file drive do not find its file, until
-// #5396 lists the key of the file.
+// accepted it, or its root folder is missing or in the trash. A single-file
+// drive lists its file: whether it is trashed is in the files index.
 func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocument, bool, error) {
-	if !s.Drive || !s.Owner || !s.Active || s.HasFileDriveRoot() {
+	if !s.Drive || !s.Owner || !s.Active {
 		return nil, false, nil
 	}
 	principals, readOnly := activePrincipals(s)
@@ -65,6 +64,15 @@ func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocume
 	rootID, err := s.DriveRootID()
 	if err != nil {
 		return nil, false, nil
+	}
+	if s.HasFileDriveRoot() {
+		return &ScopeDocument{
+			SharingID:              s.SID,
+			OwnerInstanceID:        inst.Domain,
+			RootFileID:             rootID,
+			ActiveMemberPrincipals: principals,
+			ReadOnlyPrincipals:     readOnly,
+		}, true, nil
 	}
 	root, err := inst.VFS().DirByID(rootID)
 	if err != nil {
