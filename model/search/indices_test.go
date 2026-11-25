@@ -16,10 +16,14 @@ import (
 )
 
 // TestIndicesWithOpenSearch needs a real OpenSearch, given by
-// COZY_TEST_OPENSEARCH_URL (it runs in CI).
+// COZY_TEST_OPENSEARCH_URL. It fails in CI without it, so that the variable
+// cannot be dropped silently from the workflow.
 func TestIndicesWithOpenSearch(t *testing.T) {
 	url := os.Getenv("COZY_TEST_OPENSEARCH_URL")
 	if url == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("COZY_TEST_OPENSEARCH_URL is not set in CI")
+		}
 		t.Skip("COZY_TEST_OPENSEARCH_URL is not set")
 	}
 	v := viper.New()
@@ -55,7 +59,7 @@ func TestIndicesWithOpenSearch(t *testing.T) {
 				} `json:"hits"`
 			} `json:"hits"`
 		}
-		require.NoError(t, client.Search(ctx, FilesIndex, query, &res))
+		assert.NoError(t, client.Search(ctx, FilesIndex, query, &res))
 		return len(res.Hits.Hits)
 	}
 

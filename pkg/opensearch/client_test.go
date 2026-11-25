@@ -165,4 +165,14 @@ func TestErrors(t *testing.T) {
 			assert.Equal(t, tc.reason, osErr.Reason)
 		})
 	}
+
+	t.Run("connection refused", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		srv.Close()
+		u, err := url.Parse(srv.URL)
+		require.NoError(t, err)
+		err = NewClient(Options{URL: u}).CreateIndex(context.Background(), "files_v1", map[string]any{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "opensearch:")
+	})
 }
