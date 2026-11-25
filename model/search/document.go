@@ -32,7 +32,8 @@ func Key(domain, docID string) string {
 
 // NewFileDocument maps an io.cozy.files document from the changes feed of the
 // instance to its search document. It returns false for the documents that
-// are not indexed: deleted docs, design docs, the root and the trash folders.
+// are not indexed: deleted docs (the caller deletes their key), design docs,
+// docs that are neither a file nor a folder, the root and the trash folders.
 func NewFileDocument(domain string, doc couchdb.JSONDoc) (*FileDocument, bool) {
 	id, _ := doc.M["_id"].(string)
 	if deleted, _ := doc.M["_deleted"].(bool); deleted || id == "" ||
@@ -53,16 +54,18 @@ func NewFileDocument(domain string, doc couchdb.JSONDoc) (*FileDocument, bool) {
 		Class:           str("class"),
 		UpdatedAt:       str("updated_at"),
 	}
+	if fd.Type != consts.FileType && fd.Type != consts.DirType {
+		return nil, false
+	}
 	if fd.Type == consts.DirType {
 		// A folder is in its own scope, so the root of a shared drive is found
 		fd.ScopedDirKey = fd.ResourceKey
-		p := str("path")
-		fd.Trashed = p == vfs.TrashDirName || strings.HasPrefix(p, vfs.TrashDirName+"/")
+		fd.Trashed = vfs.IsInTrash(str("path"))
 	} else {
 		fd.ScopedDirKey = Key(domain, fd.DirID)
-		// shortcut: files inside a trashed folder keep trashed=false (trashing
-		// a folder only moves the folder doc); hits must be filtered on their
-		// parent folder when building results (#5214/#5217).
+		// Trashing a folder also marks the files inside as trashed
+		// (setTrashedForFilesInsideDir), except for a folder replicated by a
+		// sharing, which is only moved.
 		fd.Trashed, _ = doc.M["trashed"].(bool)
 	}
 	return fd, true
