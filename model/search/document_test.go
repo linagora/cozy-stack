@@ -1,6 +1,7 @@
 package search
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -54,6 +55,27 @@ func TestNewFileDocument(t *testing.T) {
 		}, fd)
 	})
 
+	t.Run("JSON sent to OpenSearch", func(t *testing.T) {
+		fd, ok := NewFileDocument(domain, couchdb.JSONDoc{M: file})
+		require.True(t, ok)
+		data, err := json.Marshal(fd)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"resource_key":"alice.example.net:f1","owner_instance_id":"alice.example.net",
+			"doc_id":"f1","dir_id":"d1","scoped_dir_key":"alice.example.net:d1","type":"file",
+			"name":"report.pdf","mime":"application/pdf","class":"pdf",
+			"updated_at":"2026-11-15T10:00:00Z","trashed":false}`, string(data))
+
+		// A folder without path: no mime, no class, not trashed
+		noPath := map[string]any{"_id": "d2", "type": "directory", "name": "Old", "dir_id": consts.RootDirID}
+		fd, ok = NewFileDocument(domain, couchdb.JSONDoc{M: noPath})
+		require.True(t, ok)
+		data, err = json.Marshal(fd)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"resource_key":"alice.example.net:d2","owner_instance_id":"alice.example.net",
+			"doc_id":"d2","dir_id":"io.cozy.files.root-dir","scoped_dir_key":"alice.example.net:d2",
+			"type":"directory","name":"Old","trashed":false}`, string(data))
+	})
+
 	trashed := []struct {
 		name string
 		doc  map[string]any
@@ -85,6 +107,7 @@ func TestNewFileDocument(t *testing.T) {
 		{"design doc", map[string]any{"_id": "_design/by-path", "language": "query"}},
 		{"deleted doc", map[string]any{"_id": "f1", "_rev": "2-b", "_deleted": true}},
 		{"no id", map[string]any{"type": "file", "name": "x"}},
+		{"no known type", with(file, "type", "")},
 	}
 	for _, tc := range skipped {
 		t.Run("skip "+tc.name, func(t *testing.T) {
