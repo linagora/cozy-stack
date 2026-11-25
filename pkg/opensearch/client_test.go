@@ -143,6 +143,17 @@ func TestBulk(t *testing.T) {
 		assert.Equal(t, "failed to parse", osErr.Reason)
 		assert.Equal(t, "b", osErr.DocID)
 	})
+
+	t.Run("a failed item that can be retried comes first", func(t *testing.T) {
+		c, _ := newTestClient(t, 200, `{"errors":true,"items":[
+			{"index":{"_id":"b","status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse"}}},
+			{"index":{"_id":"c","status":429,"error":{"type":"es_rejected_execution_exception","reason":"queue full"}}}]}`)
+		err := c.Bulk(context.Background(), "files_v1", ndjson)
+		var osErr *Error
+		require.True(t, errors.As(err, &osErr))
+		assert.Equal(t, 429, osErr.Status)
+		assert.Equal(t, "c", osErr.DocID)
+	})
 }
 
 func TestErrors(t *testing.T) {
