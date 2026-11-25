@@ -2,6 +2,17 @@ require_relative '../boot'
 require 'minitest/autorun'
 require 'pry-rescue/minitest' unless ENV['CI']
 
+def assert_eventually(timeout: 10, interval: 0.1)
+  deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+  begin
+    yield
+  rescue Minitest::Assertion
+    raise if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+    sleep interval
+    retry
+  end
+end
+
 def assert_not_found(domain, doctype, id)
   assert_raises RestClient::NotFound do
     Helpers.couch.get_doc domain, doctype, id
@@ -148,10 +159,12 @@ describe "A sharing" do
     assert_no_triggers inst_alice, tri_ids
     assert_no_oauth_client inst_alice, client_id
 
-    # Check the sharing on the recipient
-    assert_sharing_revoked inst_bob, sharing.couch_id, false
-    assert_no_oauth_client inst_bob, client_id_recipient
-    assert_no_triggers inst_bob, tri_ids_recipient
+    # Recipient cleanup runs in a background job.
+    assert_eventually do
+      assert_sharing_revoked inst_bob, sharing.couch_id, false
+      assert_no_oauth_client inst_bob, client_id_recipient
+      assert_no_triggers inst_bob, tri_ids_recipient
+    end
 
     # Make an update: it should not be propagated
     old_name = file.name

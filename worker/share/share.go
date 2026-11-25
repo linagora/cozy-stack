@@ -2,16 +2,30 @@
 package share
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"runtime"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/account"
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/sharing"
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/rabbitmq"
 )
 
 func init() {
+	job.AddWorker(&job.WorkerConfig{
+		WorkerType:   sharing.RevocationWorker,
+		Concurrency:  runtime.NumCPU(),
+		MaxExecCount: 5,
+		Reserved:     true,
+		RetryDelay:   time.Second,
+		Timeout:      5 * time.Minute,
+		WorkerFunc:   WorkerRevoke,
+	})
+
 	job.AddWorker(&job.WorkerConfig{
 		WorkerType:   "share-group",
 		Concurrency:  runtime.NumCPU(),
@@ -82,6 +96,31 @@ func init() {
 		Timeout:      30 * time.Second,
 		WorkerFunc:   WorkerCollectedContacts,
 	})
+}
+
+// WorkerRevoke delivers a batch of recipient revocation notifications.
+func WorkerRevoke(ctx *job.TaskContext) error {
+	var msgJob sharing.RevocationJob
+	if err := ctx.UnmarshalMessage(&msgJob); err != nil {
+		return err
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(msgJob.Encrypted)
+	if err != nil {
+		return err
+	}
+	key := config.GetKeyring().CredentialsDecryptorKey()
+	if key == nil {
+		return account.ErrBadCredentials
+	}
+	plaintext, err := account.DecryptBufferWithKey(key, ciphertext)
+	if err != nil {
+		return err
+	}
+	var msg sharing.RevocationMsg
+	if err := json.Unmarshal(plaintext, &msg); err != nil {
+		return err
+	}
+	return sharing.NotifyRevocations(ctx, ctx.Instance, &msg)
 }
 
 // WorkerGroup is used to update the list of members of sharings for a group

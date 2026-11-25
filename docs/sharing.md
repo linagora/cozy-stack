@@ -1367,10 +1367,11 @@ HTTP/1.1 204 No Content
 ### DELETE /sharings/:sharing-id/recipients
 
 This route is used by an application on the owner's cozy to revoke the sharing
-for all the members. After that, the sharing active flag will be false, the
-credentials for all members will be revoked, the members that have accepted the
-sharing will have their cozy informed that the sharing has been revoked, and
-pending members can no longer accept this sharing.
+for all the members. Before returning, the owner disables the sharing, revokes
+member credentials, and removes its sharing triggers, references and permissions.
+Pending members can no longer accept the sharing. Recipient instances are notified
+asynchronously by `share-revoke` jobs, with at most 50 recipients per job. A slow
+recipient does not delay the response; transient notification failures are retried.
 
 #### Request
 
