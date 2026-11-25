@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -134,9 +135,11 @@ func affectedDrives(domain string, folders, sharings []couchdb.Change, drives []
 		folderPath, _ := change.Doc.M["path"].(string)
 		for _, d := range drives {
 			// Only a folder entering or leaving the tree changes the keys: a
-			// rename or a tag inside it does not rebuild the drive
+			// rename or a tag inside it does not rebuild the drive. The folders
+			// under a skipped folder are left out, as in subdirIDs.
 			inTree := !change.Deleted && d.rootPath != "" && !vfs.IsInTrash(folderPath) &&
-				(folderPath == d.rootPath || strings.HasPrefix(folderPath, d.rootPath+"/"))
+				(folderPath == d.rootPath ||
+					strings.HasPrefix(folderPath, d.rootPath+"/") && !inSkippedTree(path.Dir(folderPath)))
 			if inTree != d.keys[key] {
 				add(d.sharing)
 			}
