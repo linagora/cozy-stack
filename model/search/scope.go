@@ -23,11 +23,11 @@ const (
 )
 
 // subtreePageSize is the number of folders loaded per CouchDB request when
-// listing the folders of a shared drive (a variable for the tests).
-var subtreePageSize = 10000
+// listing the folders of a shared drive.
+const subtreePageSize = 10000
 
-// ScopeDocument is a shared drive in the cozy_share_scopes_v1 index: who can
-// see it, and the keys of all its folders.
+// ScopeDocument is a shared drive in the share_scopes_v1 index: who can see
+// it, and the keys of all its folders.
 type ScopeDocument struct {
 	SharingID              string   `json:"sharing_id"`
 	OwnerInstanceID        string   `json:"owner_instance_id"`
@@ -39,9 +39,13 @@ type ScopeDocument struct {
 // NewScopeDocument builds the scope document of a shared drive, on the
 // instance of its owner. It returns false when the drive must not have a scope
 // document: not an active drive owned by the instance, no recipient has
-// accepted it, or its root is missing or in the trash.
+// accepted it, its root is a single file, or its root is missing or in the
+// trash.
+//
+// shortcut: the recipients of a single-file drive do not find its file, until
+// #5396 lists the key of the file.
 func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocument, bool, error) {
-	if !s.Drive || !s.Owner || !s.Active {
+	if !s.Drive || !s.Owner || !s.Active || s.HasFileDriveRoot() {
 		return nil, false, nil
 	}
 	principals := activePrincipals(s)
@@ -62,7 +66,7 @@ func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocume
 	if strings.HasPrefix(root.Fullpath, vfs.TrashDirName+"/") {
 		return nil, false, nil
 	}
-	ids, err := subdirIDs(inst, root.Fullpath)
+	ids, err := subdirIDs(inst, root.Fullpath, subtreePageSize)
 	if err != nil {
 		return nil, false, err
 	}
@@ -81,7 +85,9 @@ func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocume
 }
 
 // activePrincipals returns the domains of the recipients who accepted the
-// sharing. Members[0] is the owner.
+// sharing, lowercased like the instance domains. Members[0] is the owner. A
+// member can change its address without proof, so the search must also check
+// that the caller holds the sharing (#5395).
 func activePrincipals(s *sharing.Sharing) []string {
 	var principals []string
 	for i, m := range s.Members {
@@ -89,7 +95,7 @@ func activePrincipals(s *sharing.Sharing) []string {
 			continue
 		}
 		if host := m.InstanceHost(); host != "" {
-			principals = append(principals, host)
+			principals = append(principals, strings.ToLower(host))
 		}
 	}
 	return principals
@@ -97,7 +103,7 @@ func activePrincipals(s *sharing.Sharing) []string {
 
 // subdirIDs returns the ids of all the folders under the given path, with
 // paged queries on the dir-by-path index (no recursive walk).
-func subdirIDs(db *instance.Instance, dirPath string) ([]string, error) {
+func subdirIDs(db *instance.Instance, dirPath string, pageSize int) ([]string, error) {
 	sel := mango.And(
 		mango.Gt("path", dirPath+"/"),
 		mango.Lt("path", dirPath+"/￰"),
@@ -109,8 +115,8 @@ func subdirIDs(db *instance.Instance, dirPath string) ([]string, error) {
 		req := &couchdb.FindRequest{
 			UseIndex: "dir-by-path",
 			Selector: sel,
-			Fields:   []string{"_id"},
-			Limit:    subtreePageSize,
+			Fields:   []string{"_id", "path"},
+			Limit:    pageSize,
 			Bookmark: bookmark,
 		}
 		var docs []couchdb.JSONDoc
@@ -119,9 +125,12 @@ func subdirIDs(db *instance.Instance, dirPath string) ([]string, error) {
 			return nil, err
 		}
 		for _, doc := range docs {
-			ids = append(ids, doc.ID())
+			// CouchDB compares case last, so the range of /Team also has /team/x
+			if p, _ := doc.M["path"].(string); strings.HasPrefix(p, dirPath+"/") {
+				ids = append(ids, doc.ID())
+			}
 		}
-		if len(docs) < subtreePageSize || res.Bookmark == "" {
+		if len(docs) < pageSize || res.Bookmark == "" {
 			return ids, nil
 		}
 		bookmark = res.Bookmark
@@ -143,16 +152,12 @@ func UpsertScope(ctx context.Context, client *opensearch.Client, doc *ScopeDocum
 }
 
 // DeleteScope removes the scope document of a shared drive. Deleting a
-// missing document is not an error.
+// missing document is not an error: OpenSearch answers not_found without
+// failing the bulk.
 func DeleteScope(ctx context.Context, client *opensearch.Client, sharingID string) error {
 	action, err := json.Marshal(map[string]any{"delete": map[string]string{"_id": sharingID}})
 	if err != nil {
 		return err
 	}
-	err = client.Bulk(ctx, ScopesIndex, append(action, '\n'))
-	var osErr *opensearch.Error
-	if errors.As(err, &osErr) && osErr.Status == 404 {
-		return nil
-	}
-	return err
+	return client.Bulk(ctx, ScopesIndex, append(action, '\n'))
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 )
 
-// FileDocument is a file or folder in the cozy_files_v1 index. It has no path
+// FileDocument is a file or folder in the files_v1 index. It has no path
 // and no member list, so moving or sharing a folder never rewrites its files.
 type FileDocument struct {
 	ResourceKey     string `json:"resource_key"`
