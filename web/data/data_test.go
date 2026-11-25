@@ -66,6 +66,49 @@ func TestData(t *testing.T) {
 		}
 	})
 
+	t.Run("AccountsDropForeignEncryptedFields", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		_, token := setup.GetTestClient(consts.Accounts)
+		require.NoError(t, couchdb.EnsureDBExist(testInstance, consts.Accounts))
+		authOf := func(id string) map[string]interface{} {
+			var doc couchdb.JSONDoc
+			require.NoError(t, couchdb.GetDoc(testInstance, consts.Accounts, id, &doc))
+			auth, _ := doc.M["auth"].(map[string]interface{})
+			return auth
+		}
+
+		stored := couchdb.JSONDoc{Type: consts.Accounts, M: map[string]interface{}{
+			"_id":  "account-with-box",
+			"auth": map[string]interface{}{"credentials_encrypted": "stored"},
+		}}
+		require.NoError(t, couchdb.CreateNamedDoc(testInstance, &stored))
+		e.PUT("/data/"+consts.Accounts+"/"+stored.ID()).
+			WithHeader("Authorization", "Bearer "+token).
+			WithJSON(M{
+				"_id":  stored.ID(),
+				"_rev": stored.Rev(),
+				"auth": M{"credentials_encrypted": "stored", "secret_encrypted": "foreign"},
+			}).
+			Expect().Status(200)
+		auth := authOf(stored.ID())
+		assert.Equal(t, "stored", auth["credentials_encrypted"])
+		assert.NotContains(t, auth, "secret_encrypted")
+
+		// POST and PUT-create have no stored doc, so every box is foreign.
+		id := e.POST("/data/"+consts.Accounts+"/").
+			WithHeader("Authorization", "Bearer "+token).
+			WithJSON(M{"auth": M{"credentials_encrypted": "foreign"}}).
+			Expect().Status(201).
+			JSON().Object().Value("id").String().Raw()
+		assert.NotContains(t, authOf(id), "credentials_encrypted")
+
+		e.PUT("/data/"+consts.Accounts+"/new-account-with-box").
+			WithHeader("Authorization", "Bearer "+token).
+			WithJSON(M{"auth": M{"credentials_encrypted": "foreign"}}).
+			Expect().Status(200)
+		assert.NotContains(t, authOf("new-account-with-box"), "credentials_encrypted")
+	})
+
 	t.Run("SuccessGet", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
