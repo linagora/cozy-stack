@@ -8,15 +8,14 @@ import (
 	"github.com/cozy/cozy-stack/pkg/opensearch"
 )
 
-// filenameFold maps the letters that asciifolding does not fold, before the
-// names are cut in n-grams: the Latin letters that fold to two letters (cut
-// first, "straße" would not match "strasse"), the Cyrillic ё and the Greek
-// accents.
+// filenameFold maps, before the names are cut in n-grams, the common letters
+// that asciifolding folds to two letters (cut first, "straße" would not match
+// "strasse") and the Cyrillic ё. The Greek accents are folded by
+// greek_lowercase.
+// shortcut: names stored decomposed (NFD) are not folded, see #5394.
 var filenameFold = []string{
 	"ß=>ss", "ẞ=>SS", "æ=>ae", "Æ=>AE", "œ=>oe", "Œ=>OE", "þ=>th", "Þ=>TH",
-	"ё=>е", "Ё=>Е", "ς=>σ",
-	"ά=>α", "έ=>ε", "ή=>η", "ί=>ι", "ό=>ο", "ύ=>υ", "ώ=>ω", "ϊ=>ι", "ϋ=>υ", "ΐ=>ι", "ΰ=>υ",
-	"Ά=>Α", "Έ=>Ε", "Ή=>Η", "Ί=>Ι", "Ό=>Ο", "Ύ=>Υ", "Ώ=>Ω", "Ϊ=>Ι", "Ϋ=>Υ",
+	"ё=>е", "Ё=>Е",
 }
 
 // filesIndexBody is the definition of the files_v1 index (ADR 008). The
@@ -30,11 +29,14 @@ var filesIndexBody = map[string]any{
 			"char_filter": map[string]any{
 				"filename_fold": map[string]any{"type": "mapping", "mappings": filenameFold},
 			},
+			"filter": map[string]any{
+				"greek_lowercase": map[string]any{"type": "lowercase", "language": "greek"},
+			},
 			"normalizer": map[string]any{
 				"LowercaseAscii": map[string]any{
 					"type":        "custom",
 					"char_filter": []string{"filename_fold"},
-					"filter":      []string{"lowercase", "asciifolding"},
+					"filter":      []string{"greek_lowercase", "asciifolding"},
 				},
 			},
 			"tokenizer": map[string]any{
@@ -50,13 +52,13 @@ var filesIndexBody = map[string]any{
 					"type":        "custom",
 					"char_filter": []string{"filename_fold"},
 					"tokenizer":   "filename_ngram",
-					"filter":      []string{"lowercase", "asciifolding"},
+					"filter":      []string{"greek_lowercase", "asciifolding"},
 				},
 				"filename_prefix": map[string]any{
 					"type":        "custom",
 					"char_filter": []string{"filename_fold"},
 					"tokenizer":   "standard",
-					"filter":      []string{"lowercase", "asciifolding"},
+					"filter":      []string{"greek_lowercase", "asciifolding"},
 				},
 			},
 		},

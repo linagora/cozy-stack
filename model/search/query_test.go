@@ -277,6 +277,7 @@ func TestSearchWithOpenSearch(t *testing.T) {
 			"calisma":     "Çalışma raporu.txt",
 			"cafe":        "naïve café.txt",
 			"aeroskobing": "Ærøskøbing kort.png",
+			"ae":          "Ærøskøbing kort.png",
 		} {
 			var res *Results
 			require.Eventually(t, func() bool {
