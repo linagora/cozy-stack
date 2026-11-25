@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,7 +55,6 @@ func TestIndex(t *testing.T) {
 	client := config.GetConfig().Search
 	require.NotNil(t, client)
 	ctx := context.Background()
-	require.NoError(t, EnsureIndices(ctx, client))
 	log := logger.WithNamespace("search-test")
 
 	var pushes int
@@ -95,6 +95,32 @@ func TestIndex(t *testing.T) {
 	t.Run("no change", func(t *testing.T) {
 		require.NoError(t, Index(ctx, inst, log))
 		assert.Equal(t, 0, pushes)
+	})
+
+	t.Run("the first job of a client creates the indices", func(t *testing.T) {
+		var mu sync.Mutex
+		var requests []string
+		fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			requests = append(requests, r.Method+" "+r.URL.Path)
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"errors":false,"items":[]}`))
+		}))
+		t.Cleanup(fake.Close)
+		saved := config.GetConfig().Search
+		u, _ := url.Parse(fake.URL)
+		config.GetConfig().Search = opensearch.NewClient(opensearch.Options{URL: u})
+		t.Cleanup(func() { config.GetConfig().Search = saved })
+
+		createTextFile(t, inst, dir.ID(), "first.txt")
+		require.NoError(t, Index(ctx, inst, log))
+		createTextFile(t, inst, dir.ID(), "second.txt")
+		require.NoError(t, Index(ctx, inst, log))
+		mu.Lock()
+		defer mu.Unlock()
+		require.Len(t, requests, 4)
+		assert.ElementsMatch(t, []string{"PUT /files_v1", "PUT /share_scopes_v1"}, requests[:2])
+		assert.Equal(t, []string{"POST /files_v1/_bulk", "POST /files_v1/_bulk"}, requests[2:])
 	})
 
 	t.Run("a refused file does not hold the checkpoint, an outage does", func(t *testing.T) {

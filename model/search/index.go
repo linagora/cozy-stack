@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/job"
@@ -30,6 +31,11 @@ const (
 // the tests).
 var batchSize = 500
 
+// readyClient is the client for which this process has created the indices.
+// The stack tries at startup, but OpenSearch may be down then, and a bulk
+// request on a missing index would create it without our mappings.
+var readyClient atomic.Pointer[opensearch.Client]
+
 // pushJob pushes another search-index job (a variable for the tests).
 var pushJob = func(inst *instance.Instance) error {
 	_, err := job.System().PushJob(inst, &job.JobRequest{WorkerType: WorkerType})
@@ -52,6 +58,13 @@ func Index(ctx context.Context, inst *instance.Instance, log logger.Logger) erro
 		return err
 	}
 	defer mu.Unlock()
+
+	if readyClient.Load() != client {
+		if err := EnsureIndices(ctx, client); err != nil {
+			return err
+		}
+		readyClient.Store(client)
+	}
 
 	cp, err := couchdb.LoadCheckpoint(inst, consts.Files, checkpointDocID)
 	if err != nil {
