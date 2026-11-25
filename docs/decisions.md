@@ -17,3 +17,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5259#discussion_r4682719679)
 - Why: a domain only has a colon with a port, which happens in dev only; a collision needs two instances of one stack that differ only by a port, plus a doc id with a colon chosen by a sharing peer.
 - Scope: `model/search`, the `files_v1` and `share_scopes_v1` indices.
+
+## 2026-11-25, [Architecture] Search scopes list the member addresses until #5395
+
+- Decision: `active_member_principals` holds the lowercased hosts of the members who accepted a drive; the search uses them as is until it also checks that the caller holds the sharing (#5395).
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5260#discussion_r4681654061)
+- Why: the check reads the caller's sharings, so it belongs in the search query, which is a later change of the stack.
+- Scope: `model/search`, the `share_scopes_v1` index.

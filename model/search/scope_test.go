@@ -35,7 +35,7 @@ func TestActivePrincipals(t *testing.T) {
 		sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://bob.example.net"},
 		sharing.Member{Status: sharing.MemberStatusPendingInvitation, Instance: "https://carol.example.net"},
 		sharing.Member{Status: sharing.MemberStatusRevoked, Instance: "https://dave.example.net"},
-		sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://erin.example.net:8443"},
+		sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://Erin.Example.net:8443"},
 		sharing.Member{Status: sharing.MemberStatusReady}, // no instance yet
 	)
 	assert.Equal(t, []string{"bob.example.net", "erin.example.net:8443"}, activePrincipals(s))
@@ -89,8 +89,11 @@ func TestNewScopeDocument(t *testing.T) {
 	require.NoError(t, err)
 	c, err := vfs.MkdirAll(fs, "/Drives/Team/c")
 	require.NoError(t, err)
-	// Outside the drive, including a sibling whose name starts like the root
+	// Outside the drive, including a sibling whose name starts like the root,
+	// and one that differs only by case (inside the path range for CouchDB)
 	_, err = vfs.MkdirAll(fs, "/Drives/Team2/x")
+	require.NoError(t, err)
+	_, err = vfs.MkdirAll(fs, "/Drives/team/x")
 	require.NoError(t, err)
 	_, err = vfs.MkdirAll(fs, "/Drives/other")
 	require.NoError(t, err)
@@ -117,12 +120,9 @@ func TestNewScopeDocument(t *testing.T) {
 	})
 
 	t.Run("folders are loaded page by page", func(t *testing.T) {
-		subtreePageSize = 1
-		t.Cleanup(func() { subtreePageSize = 10000 })
-		doc, keep, err := NewScopeDocument(inst, makeDrive(root.ID(), bob))
+		ids, err := subdirIDs(inst, root.Fullpath, 1)
 		require.NoError(t, err)
-		require.True(t, keep)
-		assert.Len(t, doc.SubtreeDirKeys, 4)
+		assert.ElementsMatch(t, []string{a.ID(), b.ID(), c.ID()}, ids)
 	})
 
 	t.Run("no accepted recipient", func(t *testing.T) {
@@ -132,11 +132,12 @@ func TestNewScopeDocument(t *testing.T) {
 		assert.False(t, keep)
 	})
 
-	t.Run("inactive, not owned or not a drive", func(t *testing.T) {
+	t.Run("inactive, not owned, not a drive or a file root", func(t *testing.T) {
 		for _, edit := range []func(*sharing.Sharing){
 			func(s *sharing.Sharing) { s.Active = false },
 			func(s *sharing.Sharing) { s.Owner = false },
 			func(s *sharing.Sharing) { s.Drive = false },
+			func(s *sharing.Sharing) { s.DriveRootType = sharing.DriveRootTypeFile },
 		} {
 			s := makeDrive(root.ID(), bob)
 			edit(s)
