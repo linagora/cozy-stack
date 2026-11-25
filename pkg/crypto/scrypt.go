@@ -82,7 +82,7 @@ func (h *scryptHash) UnmarshalText(hashbytes []byte) error {
 		return ErrInvalidHash
 	}
 
-	if h.n > maxN || h.r < 1 || h.r > maxR || h.p < 1 || h.p > maxP {
+	if h.n < 2 || h.n&(h.n-1) != 0 || h.n > maxN || h.r < 1 || h.r > maxR || h.p < 1 || h.p > maxP {
 		return ErrInvalidHash
 	}
 
@@ -94,7 +94,7 @@ func (h *scryptHash) UnmarshalText(hashbytes []byte) error {
 
 	h.dk = make([]byte, hex.DecodedLen(len(vals[5])))
 	_, err = hex.Decode(h.dk, vals[5])
-	if err != nil {
+	if err != nil || len(h.dk) == 0 { // an empty key makes pbkdf2 panic on login
 		return ErrInvalidHash
 	}
 
