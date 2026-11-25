@@ -189,6 +189,17 @@ func TestLifecycle(t *testing.T) {
 		assert.Error(t, err, "An error is expected")
 	})
 
+	t.Run("CreateInstanceRetryAfterFailure", func(t *testing.T) {
+		domain := "test.cozycloud.cc.retry"
+		// CouchDB rejects the "_bad" field of the settings doc, while the other
+		// databases get created
+		_, err := createInstance(t, &lifecycle.Options{Domain: domain, Settings: "_bad:x"})
+		require.Error(t, err)
+
+		_, err = lifecycle.Create(&lifecycle.Options{Domain: domain})
+		require.NoError(t, err)
+	})
+
 	t.Run("GetWrongInstance", func(t *testing.T) {
 		res, err := lifecycle.GetInstance("no.instance.cozycloud.cc")
 		if assert.Error(t, err, "An error is expected") {
