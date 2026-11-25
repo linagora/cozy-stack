@@ -74,7 +74,7 @@ func (b *tableParser) Open(parent ast.Node, reader text.Reader, pc parser.Contex
 	// Malformed attributes must not advance the document reader across lines.
 	line, _ = reader.PeekLine()
 	attributesReader := text.NewReader(line)
-	if attrs, ok := parser.ParseAttributes(attributesReader); ok {
+	if attrs, ok := parseFlatAttributes(attributesReader); ok {
 		_, position := attributesReader.Position()
 		reader.Advance(position.Start)
 		for _, attr := range attrs {
