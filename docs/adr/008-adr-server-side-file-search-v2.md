@@ -40,12 +40,12 @@ Maintain a second lightweight OpenSearch index (`cozy_share_scopes_v1`, or Redis
 - At search time (`POST /files/search`), `cozy-stack`:
   1. Lists the caller's active shared drive sharings (recipient side) in CouchDB, and reads their scope docs with **one `_mget`**.
   2. Keeps only the scope docs whose `active_member_principals` contains the caller's domain.
-  3. Queries `cozy_files_v1` with the caller's own files (`owner_instance_id`) **or** a single `terms` filter on `scoped_dir_key` with the folder keys of the kept scope docs, sent by the stack in chunks of 65,536 keys.
+  3. Queries `cozy_files_v1` with the caller's own files (`owner_instance_id`) **or** `terms` filters on `scoped_dir_key` with the folder keys of the kept scope docs, one filter per chunk of 65,536 keys.
   4. Reconstructs the relative visible path for the returned page (e.g., 20 hits) from the folders in CouchDB, stopping at the share's `RootID` so private parent directory names are never matched or leaked. Hits whose parent folder is in the trash are dropped there: trashing a folder does not update the files inside it.
 
 We do not use OpenSearch `terms` lookups (one per drive). We measured that each lookup takes a slot in the node's internal read queue (1,000 slots, shared by all searches): a user in ~1,000 drives always gets a 429, and a few heavy users searching at once can too.
 
-Instances of the stack cluster are found through the global CouchDB, even when another stack server serves them, so the paths of their drives are built without HTTP calls. The hits of a drive owned outside of the stack cluster are returned with an empty path until federated search is designed.
+Instances of the stack cluster are found through the global CouchDB, even when another stack server serves them, so the paths of their drives are built without HTTP calls. The indices only hold the documents of the instances of the stack cluster: a drive owned outside of it has no hits until federated search is designed, and a hit whose owner is missing from the global CouchDB (a deleted instance) is dropped.
 
 ### 4. High-Fanout Directory Defense (`node_modules`, `.git`, and 50k+ Subfolder Trees)
 
