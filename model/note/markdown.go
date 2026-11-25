@@ -13,6 +13,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	extensionast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 )
 
@@ -579,5 +580,24 @@ func markdownParser() parser.Parser {
 		parser.WithParagraphTransformers(
 			util.Prioritized(parser.LinkReferenceParagraphTransformer, 100),
 		),
+		parser.WithASTTransformers(
+			util.Prioritized(textMerger{}, 100),
+		),
 	)
+}
+
+// textMerger joins adjacent text nodes: goldmark leaves one per unmatched [,
+// and prosemirror-go concatenates them one by one, which is quadratic.
+type textMerger struct{}
+
+func (textMerger) Transform(doc *ast.Document, reader text.Reader, _ parser.Context) {
+	source := reader.Source()
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if t, ok := n.(*ast.Text); ok && entering {
+			for next := t.NextSibling(); next != nil && t.Merge(next, source); next = t.NextSibling() {
+				t.Parent().RemoveChild(t.Parent(), next)
+			}
+		}
+		return ast.WalkContinue, nil
+	})
 }
