@@ -632,3 +632,27 @@ func TestReconcileOrgGroupsNotifiesOncePerRun(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, MemberStatusPendingInvitation, s.Members[2].Status)
 }
+
+func TestReconcileOrgGroupsSkipsMembersOverTheLimit(t *testing.T) {
+	org, owner, _ := newOrgGroupInstances(t, true, false)
+	config.GetConfig().Contexts["propagation"].(map[string]interface{})["max_members_per_sharing"] = 3.0
+	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
+		OrganizationID: org.OrgID, ID: "team", Name: "Team", Members: []orgdirectory.GroupMember{
+			{Email: "carol@cozy.tools", FirstName: "Carol"},
+			{Email: "dave@cozy.tools", FirstName: "Dave"},
+			{Email: "erin@cozy.tools", FirstName: "Erin"},
+		},
+	}))
+	groupID := orgdirectory.GroupDocID(org.OrgID, "team")
+	s := createDriveSharingForGroupTest(t, owner, "Full sharing")
+	s.OrgDrive = true
+	s.Groups = []Group{{ID: groupID, Name: "Team"}}
+	require.NoError(t, couchdb.UpdateDoc(owner, s))
+	msg := job.OrgGroupsMessage{OrganizationID: org.OrgID, GroupID: groupID, SharingID: s.ID()}
+	for range 2 {
+		require.NoError(t, ReconcileOrgGroups(t.Context(), owner, msg, false), "a full sharing is logged, as retrying cannot fix it")
+	}
+	s, err := FindSharing(owner, s.ID())
+	require.NoError(t, err)
+	require.Len(t, s.Members, 3)
+}
