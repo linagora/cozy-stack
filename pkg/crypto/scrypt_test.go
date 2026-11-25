@@ -43,12 +43,15 @@ func TestUpdateHashNeedUpdate(t *testing.T) {
 	assert.True(t, needUpdate)
 }
 
-func TestValidateScryptHashFormatRejectsHugeCost(t *testing.T) {
+func TestValidateScryptHashFormatRejectsBadParams(t *testing.T) {
 	assert.NoError(t, ValidateScryptHashFormat(goodhash))
 	for _, h := range []string{
 		"scrypt$1099511627776$1$1$bc39ced1a16922f626b7036edc2711a9$84a3e30d",
 		"scrypt$32768$1024$1$bc39ced1a16922f626b7036edc2711a9$84a3e30d",
 		"scrypt$32768$8$0$bc39ced1a16922f626b7036edc2711a9$84a3e30d",
+		"scrypt$1$8$1$bc39ced1a16922f626b7036edc2711a9$84a3e30d",
+		"scrypt$1000$8$1$bc39ced1a16922f626b7036edc2711a9$84a3e30d",
+		"scrypt$32768$8$1$bc39ced1a16922f626b7036edc2711a9$",
 	} {
 		assert.ErrorIs(t, ValidateScryptHashFormat([]byte(h)), ErrInvalidHash, h)
 		_, err := CompareHashAndPassphrase([]byte(h), pass)
