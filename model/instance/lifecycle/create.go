@@ -169,6 +169,18 @@ func Create(opts *Options) (*instance.Instance, error) {
 		}
 	}
 
+	// Until the instance doc is saved, nothing else can find these databases
+	// to delete them, and a retry would fail with file_exists.
+	failed := func(err error) (*instance.Instance, error) {
+		// file_exists: the databases may belong to a concurrent creation
+		if !couchdb.IsFileExists(err) {
+			if errd := couchdb.DeleteAllDBs(i); errd != nil {
+				i.Logger().Errorf("Cannot delete the databases of a failed creation: %s", errd)
+			}
+		}
+		return nil, err
+	}
+
 	opts.trace("init couchdb", func() {
 		g, _ := errgroup.WithContext(context.Background())
 		g.Go(func() error { return couchdb.CreateDB(i, consts.Files) })
@@ -194,14 +206,14 @@ func Create(opts *Options) (*instance.Instance, error) {
 		err = g.Wait()
 	})
 	if err != nil {
-		return nil, err
+		return failed(err)
 	}
 
 	opts.trace("define views and indexes", func() {
 		err = DefineViewsAndIndex(i)
 	})
 	if err != nil {
-		return nil, err
+		return failed(err)
 	}
 
 	if magicLink := opts.MagicLink; magicLink != nil {
@@ -229,7 +241,7 @@ func Create(opts *Options) (*instance.Instance, error) {
 			})
 		})
 		if err != nil {
-			return nil, err
+			return failed(err)
 		}
 		// set the onboarding finished when specifying a passphrase. we totally
 		// skip the onboarding in that case.
@@ -246,7 +258,7 @@ func Create(opts *Options) (*instance.Instance, error) {
 	}
 
 	if err = couchdb.CreateDoc(prefixer.GlobalPrefixer, i); err != nil {
-		return nil, err
+		return failed(err)
 	}
 
 	opts.trace("init VFS", func() {
