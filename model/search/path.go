@@ -40,10 +40,9 @@ type VisiblePath struct {
 //     of the drive is shown.
 //
 // A hit is not OK when its parent folder is missing or in the trash, when it
-// is no longer in its drive, or when the drive is not in drives (the drives
-// the caller is a member of, by sharing id). The root folder of a drive, and
-// the hits of a drive owned outside of this stack cluster, are OK with an
-// empty path.
+// is no longer in its drive, when the drive is not in drives (the drives the
+// caller is a member of, by sharing id), or when its owner is not an instance
+// of this stack cluster. The root folder of a drive is OK with an empty path.
 func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive) ([]VisiblePath, error) {
 	out := make([]VisiblePath, len(hits))
 
@@ -60,7 +59,6 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 	}
 
 	dirs := make(map[string]map[string]*vfs.DirDoc, len(wanted))
-	remote := make(map[string]bool)
 	for domain, ids := range wanted {
 		var db prefixer.Prefixer = caller
 		if domain != caller.Domain {
@@ -68,10 +66,8 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 			// even those served by another stack server: no HTTP call.
 			inst, err := instance.Get(domain)
 			if errors.Is(err, instance.ErrNotFound) {
-				// shortcut: the hits of a drive owned outside of this stack
-				// cluster have no path (only our CouchDB is queried); upgrade
-				// with the federated search.
-				remote[domain] = true
+				// The indices only hold docs of this stack cluster: a missing
+				// owner is a deleted instance, whose hits are dropped.
 				continue
 			}
 			if err != nil {
@@ -87,10 +83,6 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 
 	for i, hit := range hits {
 		if !ownedAsExpected(caller, hit, drives) {
-			continue
-		}
-		if remote[hit.OwnerInstanceID] {
-			out[i] = VisiblePath{OK: true}
 			continue
 		}
 		parent := dirs[hit.OwnerInstanceID][hit.DirID]
