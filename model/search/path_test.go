@@ -70,18 +70,16 @@ func TestVisiblePaths(t *testing.T) {
 		{}, // missing parent
 	}, paths)
 
-	t.Run("drive owned outside of the stack cluster", func(t *testing.T) {
-		remote := map[string]Drive{"drive-remote": {OwnerInstanceID: "alice.remote.example", RootDirID: "r1"}}
+	t.Run("drive of an instance missing from the stack cluster", func(t *testing.T) {
+		deleted := map[string]Drive{"drive-deleted": {OwnerInstanceID: "alice.deleted.example", RootDirID: "r1"}}
 		paths, err := VisiblePaths(caller, []Hit{
-			{OwnerInstanceID: "alice.remote.example", DirID: "d1", DriveID: "drive-remote"},
+			{OwnerInstanceID: "alice.deleted.example", DirID: "d1", DriveID: "drive-deleted"},
 			{OwnerInstanceID: caller.Domain, DirID: work.ID()},
-			{OwnerInstanceID: "mallory.remote.example", DirID: "d1", DriveID: "drive-remote"},
-		}, remote)
+		}, deleted)
 		require.NoError(t, err)
 		assert.Equal(t, []VisiblePath{
-			{OK: true}, // kept, without a path
+			{}, // the leftovers of a deleted instance
 			{Path: "/Work/2026", OK: true},
-			{}, // owner does not match the drive
 		}, paths)
 	})
 }

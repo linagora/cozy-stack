@@ -31,3 +31,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5261#discussion_r4695299650)
 - Why: Drive shows search results without a trashed state, and the trash has its own view; showing trashed hits needs that display first.
 - Scope: `model/search`, `POST /files/search`.
+
+## 2026-11-25, [Product] Search drops the hits of an owner missing from the stack cluster
+
+- Decision: `VisiblePaths` drops a drive hit whose owner is not in the global CouchDB, instead of returning it with an empty path as a drive owned outside of the stack cluster.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5266#discussion_r4631076331)
+- Why: the indices only hold docs written by the instances of this stack cluster, so a missing owner is a deleted instance whose purge failed; its former members must not keep finding its file names.
+- Scope: `model/search`, `POST /files/search`; drives of other stack clusters wait for the federated search.
