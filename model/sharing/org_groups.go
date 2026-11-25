@@ -243,8 +243,8 @@ func (s *Sharing) reconcileGroupMembers(ctx context.Context, inst *instance.Inst
 			continue
 		}
 		switch err := s.addGroupMember(inst, index, c); {
-		case errors.Is(err, ErrMemberAlreadyInGroup):
-			// Retrying cannot fix a person whose groups give different roles.
+		case errors.Is(err, ErrMemberAlreadyInGroup), errors.Is(err, ErrTooManyMembers):
+			// Retrying cannot fix a person whose groups give different roles, or a full sharing.
 			inst.Logger().WithNamespace("sharing").
 				Warnf("Cannot add contact %s to group %d of sharing %s: %s", c.ID(), index, s.SID, err)
 		case err != nil:
