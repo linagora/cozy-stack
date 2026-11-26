@@ -65,10 +65,12 @@ func (r *AccessResolver) EffectiveRecipients(targetID string, member *Member) ([
 		if info.RootID == targetID {
 			kind = "self"
 		}
-		canManage := false
-		if self := s.MemberFor(r.inst); self != nil && !self.ReadOnly {
-			canManage = true
+		self := s.MemberFor(r.inst)
+		if member != nil {
+			// On a drive route, the instance is the owner's: use the caller.
+			self = s.MemberMatching(member)
 		}
+		canManage := self != nil && !self.ReadOnly
 		for i := range s.Members {
 			m := &s.Members[i]
 			if m.Status == MemberStatusRevoked {

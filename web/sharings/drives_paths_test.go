@@ -5,6 +5,7 @@ import (
 
 	"github.com/gavv/httpexpect/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSharedDriveRecipientsOfANestedDrive(t *testing.T) {
@@ -68,4 +69,37 @@ func TestSharedDriveRecipientsOfANestedDrive(t *testing.T) {
 		assert.Contains(t, body, "dave@example.net")
 		assert.Contains(t, body, "betty@example.net")
 	})
+}
+
+func TestSharedDriveRecipientsManageableByTheCaller(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	_, eB, eD := env.createClients(t)
+	// Betty can write, Dave can only read
+	driveID, rootID, _ := createSharedDrive(t, DriveCreationMethodFromFolder,
+		env.acme, env.acmeToken, env.tsA.URL, "Manageable Drive", "dm", nil)
+	acceptSharedDrive(t, env.acme, env.betty, "Betty", env.tsA.URL, env.tsB.URL, driveID)
+	acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, driveID)
+
+	manageable := func(e *httpexpect.Expect, token, email string) bool {
+		data := e.GET("/sharings/drives/"+driveID+"/recipients/"+rootID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Value("data").Array()
+		for _, v := range data.Iter() {
+			attrs := v.Object().Value("attributes").Object()
+			if attrs.Value("email").String().Raw() == email {
+				return attrs.Value("sources").Array().Value(0).Object().Value("manageable").Boolean().Raw()
+			}
+		}
+		require.Fail(t, "recipient not found", email)
+		return false
+	}
+
+	assert.False(t, manageable(eD, env.daveToken, "betty@example.net"))
+	assert.True(t, manageable(eB, env.bettyToken, "dave@example.net"))
 }

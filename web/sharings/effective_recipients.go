@@ -47,7 +47,11 @@ func GetEffectiveRecipients(c echo.Context) error {
 	if _, _, err := loadDirOrFileFromParam(c, inst, permission.GET); err != nil {
 		return err
 	}
-	return respondEffectiveRecipients(c, inst, c.Param("file-id"))
+	member, err := interactCodeMember(c, inst)
+	if err != nil {
+		return err
+	}
+	return respondEffectiveRecipients(c, inst, c.Param("file-id"), member)
 }
 
 // GetDriveEffectiveRecipients handles GET
@@ -56,7 +60,8 @@ func GetEffectiveRecipients(c echo.Context) error {
 // the drive token for recipients), so the access check and the resolution
 // see every sharing applying to the target. The target must belong to this
 // drive. Recipients inherited from sharings above the drive root are
-// included by design: their additive access is real.
+// included for the owner and for members who can read those roots, as for
+// GetEffectiveRecipients: a member of a nested drive does not see them.
 func GetDriveEffectiveRecipients(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error {
 	if _, _, err := loadDirOrFileFromParam(c, inst, permission.GET); err != nil {
 		return err
@@ -64,10 +69,10 @@ func GetDriveEffectiveRecipients(c echo.Context, inst *instance.Instance, s *sha
 	if err := checkFileInsideDrive(inst, s, c.Param("file-id")); err != nil {
 		return err
 	}
-	return respondEffectiveRecipients(c, inst, c.Param("file-id"))
+	return respondEffectiveRecipients(c, inst, c.Param("file-id"), GetSharedDriveMember(c))
 }
 
-func respondEffectiveRecipients(c echo.Context, inst *instance.Instance, fileID string) error {
+func respondEffectiveRecipients(c echo.Context, inst *instance.Instance, fileID string, member *sharing.Member) error {
 	// Public share tokens (share-by-link, share preview) are anonymous
 	// access: they must not enumerate the members of the applicable
 	// sharings, including unrelated ancestor sharings.
@@ -78,10 +83,6 @@ func respondEffectiveRecipients(c echo.Context, inst *instance.Instance, fileID 
 	switch pdoc.Type {
 	case permission.TypeShareByLink, permission.TypeSharePreview:
 		return jsonapi.Forbidden(errors.New("public share token cannot list sharing members"))
-	}
-	member, err := interactCodeMember(c, inst, pdoc)
-	if err != nil {
-		return err
 	}
 	recipients, err := sharing.NewAccessResolver(inst).EffectiveRecipients(fileID, member)
 	if err != nil {
@@ -100,8 +101,9 @@ func respondEffectiveRecipients(c echo.Context, inst *instance.Instance, fileID 
 
 // interactCodeMember gives the member a share-interact code belongs to, or nil
 // for any other token.
-func interactCodeMember(c echo.Context, inst *instance.Instance, pdoc *permission.Permission) (*sharing.Member, error) {
-	if pdoc.Type != permission.TypeShareInteract {
+func interactCodeMember(c echo.Context, inst *instance.Instance) (*sharing.Member, error) {
+	pdoc, err := middlewares.GetPermission(c)
+	if err != nil || pdoc.Type != permission.TypeShareInteract {
 		return nil, nil
 	}
 	_, sharingID, _ := strings.Cut(pdoc.SourceID, "/")
