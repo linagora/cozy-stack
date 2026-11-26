@@ -13,6 +13,7 @@ import (
 func init() {
 	job.AddWorker(&job.WorkerConfig{
 		WorkerType:   search.WorkerType,
+		Reserved:     true,
 		Concurrency:  runtime.NumCPU(),
 		MaxExecCount: 3,
 		RetryDelay:   30 * time.Second,
