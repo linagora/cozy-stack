@@ -1,0 +1,27 @@
+# The search load test (README, Search load test): OpenSearch, and the Stack configured to index into
+# it. Kept out of compose.yaml: with search configured, every new instance gets a search-index trigger,
+# whose jobs would weigh on the other scenarios.
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.17.1
+    profiles:
+      - cozy
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - load-test
+
+  cozy-stack:
+    environment:
+      COZY_SEARCH_OPENSEARCH_URL: http://opensearch:9200
+    depends_on:
+      opensearch:
+        condition: service_healthy
