@@ -90,8 +90,8 @@ github.com/cozy/gomail v0.0.0-20170313100128-1395d9a6a6c0 h1:bQVNaGvnUI7m8J8k3hk
 github.com/cozy/gomail v0.0.0-20170313100128-1395d9a6a6c0/go.mod h1:DlX8Rq7OKA0F9I1e0tz6+PCOXkKZ/l6aD+bWxCC6Qfo=
 github.com/cozy/httpcache v0.0.0-20210224123405-3f334f841945 h1:EfeD2CzaZclMHyFxSuaA1BTfqVTLaFwqlASiNNil4nE=
 github.com/cozy/httpcache v0.0.0-20210224123405-3f334f841945/go.mod h1:rLnjIcybyvs+PoCzi4+GmpOVp0+q+qdcuZKnKUKJoF4=
-github.com/cozy/prosemirror-go v0.5.3 h1:VcVydXbeHN6yWXzFTb5zTaYc/2K2gt/D4TbyQW2xUvw=
-github.com/cozy/prosemirror-go v0.5.3/go.mod h1:U3mnmp6JnmwMa64kx66ElkNUCEZc/q+DcdBlsWCPfqE=
+github.com/cozy/prosemirror-go v0.5.4 h1:Q3G9kqbG9NGMUnSczmXxvIeq14dxCu8W8eKcULOi0HU=
+github.com/cozy/prosemirror-go v0.5.4/go.mod h1:nvwXr9F5GjxunGx1BvG7qGRgjtVmg4UWfgUvVzUwjYo=
 github.com/cpuguy83/dockercfg v0.3.2 h1:DlJTyZGBDlXqUZ2Dk2Q3xHs/FtnooJJVaad2S9GKorA=
 github.com/cpuguy83/dockercfg v0.3.2/go.mod h1:sugsbF4//dDlL/i+S+rtpIWp+5h0BHJHfjj5/jFyUJc=
 github.com/cpuguy83/go-md2man/v2 v2.0.6 h1:XJtiaUW6dEEqVuZiMTn1ldk455QWwEIsMIJlo5vtkx0=
