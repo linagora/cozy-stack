@@ -297,8 +297,9 @@ CloudEvents read by other apps, with the event type as routing key and
   see below.
 - `com.twake.drive.folder.changed.v1`: the activity digest of an organization
   drive, see below.
-- `com.twake.drive.file.created.v1`: a file created in a personal drive, see
-  below.
+- `com.twake.drive.file.created.v1`, `com.twake.drive.file.updated.v1` and
+  `com.twake.drive.file.deleted.v1`: a file created, updated or moved to the
+  trash in a personal drive, see below.
 
 ### Handlers
 
@@ -617,9 +618,11 @@ When the context setting `drive_activity.file_events` is `true`, the Stack
 publishes one event per change of a file in the personal drive of an
 instance, for the Twake webhook gateway (ADR 075 of `linagora/twake-adr`):
 
-| Routing key                       | Published when                          |
-| --------------------------------- | --------------------------------------- |
-| `com.twake.drive.file.created.v1` | a file is uploaded with `POST /files`   |
+| Routing key                       | Published when                                                                |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| `com.twake.drive.file.created.v1` | a file is uploaded with `POST /files`, or OnlyOffice saves a conflicting copy |
+| `com.twake.drive.file.updated.v1` | its content is replaced with `PUT /files/:file-id`, or OnlyOffice saves it    |
+| `com.twake.drive.file.deleted.v1` | it is moved to the trash with `DELETE /files/:file-id`                        |
 
 For example:
 
@@ -653,13 +656,20 @@ For example:
 - `twakeactorid` is the owner when they created the file, also through a
   konnector or a sync, which upload with `POST /files` too. A file uploaded
   through a sharing link has no actor, and still goes to the owner.
-- `id` is the file id, so a retry of the same upload is not counted twice.
+- `id` is the file id for a creation, `<file id>/updated/<new rev>` for an
+  update and `<file id>/deleted/<rev>` for a deletion, so that a retry is not
+  counted twice.
 - `time` is when the Stack published the event: the dates of the file are the
   ones its client sent.
+- `folder` is the folder the file is in, or was in before the trash.
+- An update saved by OnlyOffice has no actor: the callback does not say who
+  edited the document.
+- Renaming or moving a file, a folder moved to the trash, the notes saved by
+  the notes editor and the sharing replication publish nothing.
 - It is off by default: a sync can create thousands of files at once. The
   members of a shared drive are counted in its digest instead; the files the
-  owner of the drive changes through `/files` on their own instance publish
-  these events, as for the rest of their drive.
+  owner of the drive changes through `/files` or OnlyOffice on their own
+  instance publish these events, as for the rest of their drive.
 
 ### Lifecycle
 

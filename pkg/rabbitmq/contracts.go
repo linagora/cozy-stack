@@ -48,6 +48,8 @@ const (
 	RoutingKeyOrgDriveRemoved             = "com.twake.drive.org_drive.removed.v1"
 	RoutingKeyDriveFolderChanged          = "com.twake.drive.folder.changed.v1"
 	RoutingKeyDriveFileCreated            = "com.twake.drive.file.created.v1"
+	RoutingKeyDriveFileUpdated            = "com.twake.drive.file.updated.v1"
+	RoutingKeyDriveFileDeleted            = "com.twake.drive.file.deleted.v1"
 )
 
 // UserDeletionRequestedMessage is published when a user asks Twake to delete the account linked to the current cozy instance.

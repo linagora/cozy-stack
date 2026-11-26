@@ -134,3 +134,28 @@ func TestFileCreated(t *testing.T) {
 		FileCreated(ctx, owner(), invoice, true)
 	})
 }
+
+func TestFileUpdated(t *testing.T) {
+	config.UseTestFile(t)
+	fileEventsContext(t, true)
+	pub := publishTo(t, nil)
+	FileUpdated(context.Background(), owner(), invoice, false)
+	event := onlyEvent(t, pub, rabbitmq.RoutingKeyDriveFileUpdated)
+	assert.Equal(t, "file-1/updated/2-abc", event.ID)
+	assert.Empty(t, event.TwakeActorID)
+	assert.WithinDuration(t, time.Now(), event.Time, time.Minute)
+	assert.Equal(t, invoiceObject, event.Data.(Data).Object)
+}
+
+func TestFileDeleted(t *testing.T) {
+	config.UseTestFile(t)
+	fileEventsContext(t, true)
+	pub := publishTo(t, nil)
+	FileDeleted(context.Background(), owner(), invoice, true)
+	event := onlyEvent(t, pub, rabbitmq.RoutingKeyDriveFileDeleted)
+	assert.Equal(t, "file-1/deleted/2-abc", event.ID)
+	assert.Equal(t, ownerUUID, event.TwakeActorID)
+	assert.WithinDuration(t, time.Now(), event.Time, time.Minute)
+	// The folder the file was in, not the trash.
+	assert.Equal(t, invoiceObject, event.Data.(Data).Object)
+}

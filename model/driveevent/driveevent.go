@@ -85,6 +85,37 @@ func FileCreated(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc
 	publish(ctx, inst, event, fileObject(inst, file), byOwner)
 }
 
+// FileUpdated publishes that the content of a file of the personal drive was
+// replaced. byOwner tells if the owner replaced it, rather than someone with a
+// sharing link or an editor of an office document.
+func FileUpdated(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc, byOwner bool) {
+	if file == nil || !FileEventsOn(inst) {
+		return
+	}
+	// A file is updated many times: its new revision tells the updates apart.
+	event := rabbitmq.CloudEvent{
+		ID:   file.DocID + "/updated/" + file.DocRev,
+		Type: rabbitmq.RoutingKeyDriveFileUpdated,
+		Time: time.Now().UTC(),
+	}
+	publish(ctx, inst, event, fileObject(inst, file), byOwner)
+}
+
+// FileDeleted publishes that a file of the personal drive was moved to the
+// trash. file is the file as it was before, in its folder.
+func FileDeleted(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc, byOwner bool) {
+	if file == nil || !FileEventsOn(inst) {
+		return
+	}
+	// A file restored then trashed again has another revision.
+	event := rabbitmq.CloudEvent{
+		ID:   file.DocID + "/deleted/" + file.DocRev,
+		Type: rabbitmq.RoutingKeyDriveFileDeleted,
+		Time: time.Now().UTC(),
+	}
+	publish(ctx, inst, event, fileObject(inst, file), byOwner)
+}
+
 func fileObject(inst *instance.Instance, file *vfs.FileDoc) Object {
 	return Object{
 		Type:      "file",

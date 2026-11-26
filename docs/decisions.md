@@ -52,3 +52,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: agent (session of Théo Poizat, 2026-11-23), to be confirmed by a cozy-stack maintainer.
 - Why: the n8n trigger of Twake Drive needs an event per file, while ADR 010 keeps the volume of a sync out of the bus by default.
 - Scope: the personal drive of an instance, uploads through `/files` only (not copies, notes, office files or sharing replication).
+
+## 2026-11-26, [Architecture] Events for the files updated and deleted in a personal drive
+
+- Decision: with `drive_activity.file_events`, the Stack also publishes `com.twake.drive.file.updated.v1` when the content of a file is replaced through `PUT /files/:file-id` or saved by OnlyOffice, and `com.twake.drive.file.deleted.v1` when a file is moved to the trash through `DELETE /files/:file-id`. The events are published from these request handlers and from the OnlyOffice callback, not from the VFS.
+- Decided by: Théo Poizat, to be confirmed by a cozy-stack maintainer.
+- Why: the digest of shared drives (ADR 010) already counts these changes in the request handlers; the VFS also writes for metadata, sharing replication and moves of instances, which would flood the bus, and it does not know who made the change.
+- Scope: personal drive; renames, moves, folders moved to the trash, notes saved by the notes editor and the sharing replication publish nothing.

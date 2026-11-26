@@ -425,7 +425,8 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 }
 
 func OverwriteFileContentHandler(c echo.Context) error {
-	_, err := OverwriteFileContent(c, nil)
+	file, err := OverwriteFileContent(c, nil)
+	driveevent.FileUpdated(c.Request().Context(), middlewares.GetInstance(c), file, byOwner(c))
 	return err
 }
 
@@ -1660,7 +1661,8 @@ func Trash(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) {
 }
 
 func TrashHandler(c echo.Context) error {
-	_, err := Trash(c, nil)
+	file, err := Trash(c, nil)
+	driveevent.FileDeleted(c.Request().Context(), middlewares.GetInstance(c), file, byOwner(c))
 	return err
 }
 

@@ -4,6 +4,7 @@ package office
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/model/driveevent"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/vfs"
@@ -205,6 +207,21 @@ func saveFile(inst *instance.Instance, detector ConflictDetector, downloadURL st
 	if cerr := f.Close(); cerr != nil && err == nil {
 		err = cerr
 	}
+	if err == nil {
+		publishSaved(inst, file, newfile)
+	}
 	updated := ConflictDetector{ID: newfile.ID(), Rev: newfile.Rev(), MD5Sum: newfile.MD5Sum}
 	return &updated, err
+}
+
+// publishSaved publishes the save of an office document: an update, or the
+// creation of a copy when it conflicts. The callback does not say who edited
+// it, so the event names no actor.
+func publishSaved(inst *instance.Instance, olddoc, newdoc *vfs.FileDoc) {
+	ctx := context.Background()
+	if olddoc == nil {
+		driveevent.FileCreated(ctx, inst, newdoc, false)
+	} else {
+		driveevent.FileUpdated(ctx, inst, newdoc, false)
+	}
 }
