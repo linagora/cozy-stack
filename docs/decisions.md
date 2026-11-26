@@ -69,9 +69,9 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 
 ## 2026-11-26, [Architecture] Search uses a drive's scope only when the caller holds the drive
 
-- Decision: the search reads the scope docs of the active drives that the caller holds as a recipient (one CouchDB query, one `_mget`), and keeps those whose owner still lists the caller. Replaces "Search scopes list the member addresses until #5395".
+- Decision: the search reads the scope docs of the sharings that the caller holds (their ids from the CouchDB index, then one `_mget`), and keeps those whose owner still lists the caller. Replaces "Search scopes list the member addresses until #5395".
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5260#discussion_r4681654061), #5395
-- Why: a member can change its address without proof, so the owner's list alone does not show who may search a drive; ADR 008 describes these two steps. Measured locally, it adds about 1 ms to a search with 10 drives and 20 ms with 200: the `active` index does not cover `drive`, so CouchDB reads each sharing doc.
+- Why: a member can change its address without proof, so the owner's list alone does not show who may search a drive; ADR 008 describes these two steps. Only the ids are read: a scope doc exists only for an active drive and lists only the members who accepted it, while a query on `active` and `drive` read every sharing doc (45 ms for 200 drives in CouchDB, against 3 ms for the ids).
 - Scope: `model/search`, `POST /files/search`.
 
 ## 2026-11-27, [Tech] Search purges a deleted instance after its databases, without retry

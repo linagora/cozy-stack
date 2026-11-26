@@ -149,15 +149,15 @@ func TestMemberScopes(t *testing.T) {
 	})
 
 	t.Run("drives held and listing the caller", func(t *testing.T) {
+		// Every sharing of the caller is looked up: only an active drive has a
+		// scope doc, and it lists the caller only if the caller accepted it
 		for _, s := range []*sharing.Sharing{
 			{SID: "s0", Drive: true, Active: true},
 			{SID: "s1", Drive: true, Active: true},
 			{SID: "s2", Drive: true, Active: true},
 			{SID: "s3", Drive: true, Active: true},
 			{SID: "s4", Drive: true, Active: true},
-			{SID: "s5", Drive: true, Active: true, Owner: true},
-			{SID: "s6", Active: true}, // not a drive
-			{SID: "s7", Drive: true},  // not active
+			{SID: "s5", Active: true},
 		} {
 			require.NoError(t, couchdb.CreateNamedDoc(inst, s))
 		}
@@ -166,8 +166,8 @@ func TestMemberScopes(t *testing.T) {
 		assert.Equal(t, "/share_scopes_v1/_mget", path)
 		var sent struct{ IDs []string }
 		require.NoError(t, json.Unmarshal([]byte(body), &sent))
-		assert.ElementsMatch(t, []string{"s0", "s1", "s2", "s3", "s4"}, sent.IDs)
-		// s2 does not list the caller, s4 has no scope doc
+		assert.ElementsMatch(t, []string{"s0", "s1", "s2", "s3", "s4", "s5"}, sent.IDs)
+		// s2 does not list the caller, s4 and s5 have no scope doc
 		assert.Equal(t, map[string]string{
 			"alice.example.net:root1": "s1",
 			"alice.example.net:sub1":  "s1", // in the outermost drive

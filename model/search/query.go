@@ -14,7 +14,6 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
-	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"golang.org/x/text/unicode/norm"
 )
@@ -118,37 +117,23 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 	return out, nil
 }
 
-// maxMemberDrives is the maximal number of drives of a member read by the
+// maxMemberDrives is the maximal number of sharings of a member read by the
 // search.
 const maxMemberDrives = 10000
 
-// memberScopes finds the scope docs of the drives that the caller holds as
-// a recipient, and keeps those whose owner still lists the caller: an
-// address is not a proof, as a member can change it. It returns their folder
-// keys and the keys of the files of single-file drives, with the drive of
-// each key, and the drives.
+// memberScopes finds the scope docs of the drives that the caller holds, and
+// keeps those whose owner still lists the caller: an address is not a proof,
+// as a member can change it. Only the ids of the caller's sharings are read,
+// not the docs: a scope doc exists only for an active drive, and lists only
+// the members who accepted it. It returns their folder keys and the keys of
+// the files of single-file drives, with the drive of each key, and the drives.
 //
-// shortcut: a member of more than maxMemberDrives drives does not find the
-// files of the others; page with a bookmark when that happens.
+// shortcut: a member of more than maxMemberDrives sharings does not find the
+// files of the others; page through the ids when that happens.
 func memberScopes(ctx context.Context, client *opensearch.Client, caller *instance.Instance) (map[string]string, map[string]string, map[string]Drive, error) {
-	var held []struct {
-		ID    string `json:"_id"`
-		Owner bool   `json:"owner"`
-	}
-	req := &couchdb.FindRequest{
-		UseIndex: "active",
-		Selector: mango.And(mango.Equal("active", true), mango.Equal("drive", true)),
-		Fields:   []string{"_id", "owner"},
-		Limit:    maxMemberDrives,
-	}
-	if err := couchdb.FindDocs(caller, consts.Sharings, req, &held); err != nil {
+	ids, err := couchdb.GetAllDocIDs(caller, consts.Sharings, maxMemberDrives)
+	if err != nil && !couchdb.IsNoDatabaseError(err) {
 		return nil, nil, nil, err
-	}
-	var ids []string
-	for _, s := range held {
-		if !s.Owner {
-			ids = append(ids, s.ID)
-		}
 	}
 	dirKeys := make(map[string]string)
 	fileKeys := make(map[string]string)
