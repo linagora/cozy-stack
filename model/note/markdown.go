@@ -554,18 +554,18 @@ func markdownNodeMapper() markdown.NodeMapper {
 func markdownParser() parser.Parser {
 	return parser.NewParser(
 		parser.WithBlockParsers(
-			util.Prioritized(custom.NewTableParser(), 50),
+			util.Prioritized(nestingLimit{custom.NewTableParser()}, 50),
 			util.Prioritized(parser.NewSetextHeadingParser(), 100),
 			util.Prioritized(parser.NewThematicBreakParser(), 200),
-			util.Prioritized(parser.NewListParser(), 300),
+			util.Prioritized(nestingLimit{parser.NewListParser()}, 300),
 			util.Prioritized(parser.NewListItemParser(), 350),
-			util.Prioritized(custom.NewDecisionListParser(), 400),
+			util.Prioritized(nestingLimit{custom.NewDecisionListParser()}, 400),
 			util.Prioritized(custom.NewDecisionItemParser(), 450),
 			util.Prioritized(parser.NewCodeBlockParser(), 500),
 			util.Prioritized(parser.NewATXHeadingParser(), 600),
 			util.Prioritized(parser.NewFencedCodeBlockParser(), 700),
-			util.Prioritized(parser.NewBlockquoteParser(), 800),
-			util.Prioritized(custom.NewPanelParser(), 900),
+			util.Prioritized(nestingLimit{parser.NewBlockquoteParser()}, 800),
+			util.Prioritized(nestingLimit{custom.NewPanelParser()}, 900),
 			util.Prioritized(parser.NewParagraphParser(), 1000),
 		),
 		parser.WithInlineParsers(
@@ -584,6 +584,25 @@ func markdownParser() parser.Parser {
 			util.Prioritized(textMerger{}, 100),
 		),
 	)
+}
+
+// maxNesting bounds the depth of the blocks: goldmark has no limit, and it
+// rescans the line from its start for each level, so a line of N ">" is O(N²).
+const maxNesting = 50
+
+// nestingLimit refuses to open a block deeper than maxNesting, so the rest of
+// the line is read as text. List and decision items are not wrapped: they open
+// only right under their list.
+type nestingLimit struct{ parser.BlockParser }
+
+func (p nestingLimit) Open(parent ast.Node, reader text.Reader, pc parser.Context) (ast.Node, parser.State) {
+	depth := 0
+	for n := parent; n != nil; n = n.Parent() {
+		if depth++; depth > maxNesting {
+			return nil, parser.NoChildren
+		}
+	}
+	return p.BlockParser.Open(parent, reader, pc)
 }
 
 // textMerger joins adjacent text nodes: goldmark leaves one per unmatched [,
