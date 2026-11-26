@@ -60,4 +60,19 @@ func TestParseFileDeepNesting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 20, strings.Count(doc.String(), "bulletList("))
 	assert.Equal(t, "x", doc.TextContent())
+
+	// At the limit, the rest of the line is kept as text. A list and its item
+	// are 2 levels, so 25 lists fit in maxNesting.
+	doc, err = parseFile(strings.NewReader(strings.Repeat("- ", maxNesting)+"tail"), schema)
+	require.NoError(t, err)
+	assert.Equal(t, maxNesting/2, strings.Count(doc.String(), "bulletList("))
+	assert.Equal(t, strings.Repeat("- ", maxNesting/2)+"tail", doc.TextContent())
+
+	// A list with two items at the limit must not stop the next list.
+	quote := strings.Repeat(">", maxNesting-1)
+	doc, err = parseFile(strings.NewReader(quote+" - a\n"+quote+" - b\n\n- outside"), schema)
+	require.NoError(t, err)
+	last, err := doc.Child(doc.ChildCount() - 1)
+	require.NoError(t, err)
+	assert.Equal(t, "bulletList", last.Type.Name)
 }
