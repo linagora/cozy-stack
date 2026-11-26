@@ -109,7 +109,7 @@ func Index(ctx context.Context, inst *instance.Instance, log logger.Logger) erro
 	if err != nil {
 		return err
 	}
-	if ndjson := bulkActions(inst.Domain, feed.Results, parents); len(ndjson) > 0 {
+	if ndjson := bulkActions(inst.Domain, inst.ID(), feed.Results, parents); len(ndjson) > 0 {
 		err := client.Bulk(ctx, FilesIndex, ndjson)
 		var osErr *opensearch.Error
 		if errors.As(err, &osErr) && osErr.DocID != "" && slices.Contains(refusedDocErrors, osErr.Type) {
@@ -149,13 +149,14 @@ func Index(ctx context.Context, inst *instance.Instance, log logger.Logger) erro
 
 // bulkActions turns the changes into the NDJSON body of a _bulk request: the
 // changed docs are indexed, the deleted ones and those in a skipped tree are
-// removed. parents are the parent folders of the changed files.
+// removed. parents are the parent folders of the changed files, ownerUID the
+// id of the instance.
 //
 // shortcut: a folder renamed or moved into or out of a skipped tree gives no
 // change for the files in it, as a file doc has no path: into it, its files
 // stay indexed; out of it, they stay out until they change. Reindex the files
 // of the folder if that matters.
-func bulkActions(domain string, changes []couchdb.Change, parents map[string]*vfs.DirDoc) []byte {
+func bulkActions(domain, ownerUID string, changes []couchdb.Change, parents map[string]*vfs.DirDoc) []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	for _, change := range changes {
@@ -169,6 +170,7 @@ func bulkActions(domain string, changes []couchdb.Change, parents map[string]*vf
 		if !ok {
 			continue
 		}
+		doc.OwnerUID = ownerUID
 		_ = enc.Encode(map[string]any{"index": map[string]string{"_id": doc.ResourceKey}})
 		_ = enc.Encode(doc)
 	}

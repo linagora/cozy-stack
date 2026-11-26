@@ -67,6 +67,7 @@ var filesIndexBody = map[string]any{
 		"properties": map[string]any{
 			"resource_key":      keyword,
 			"owner_instance_id": keyword,
+			"owner_uid":         keyword,
 			"doc_id":            keyword,
 			"dir_id":            keyword,
 			"scoped_dir_key":    keyword,

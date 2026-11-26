@@ -77,7 +77,7 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 	// The names are indexed composed (NFC), so a pasted decomposed query matches
 	q = norm.NFC.String(q)
 	// One more hit than the page tells if there is a next page
-	query := buildQuery(caller.Domain, q, slices.Sorted(maps.Keys(dirKeys)), slices.Sorted(maps.Keys(fileKeys)), limit+1, after)
+	query := buildQuery(caller.ID(), q, slices.Sorted(maps.Keys(dirKeys)), slices.Sorted(maps.Keys(fileKeys)), limit+1, after)
 
 	var res struct {
 		Hits struct {
@@ -193,8 +193,10 @@ func compareScopes(domain string, a, b ScopeDocument) int {
 // buildQuery returns the body of the search request on the files index:
 // the files of the caller, those under the folder keys, and the files of the
 // single-file drives (fewer than maxMemberDrives, so one terms filter).
-func buildQuery(domain, q string, dirKeys, fileKeys []string, limit int, after []any) map[string]any {
-	visible := []any{map[string]any{"term": map[string]any{"owner_instance_id": domain}}}
+func buildQuery(ownerUID, q string, dirKeys, fileKeys []string, limit int, after []any) map[string]any {
+	// The files of the caller, by instance id: the domain of a destroyed
+	// instance can be reused, and its docs may not have been deleted
+	visible := []any{map[string]any{"term": map[string]any{"owner_uid": ownerUID}}}
 	for chunk := range slices.Chunk(dirKeys, termsChunkSize) {
 		visible = append(visible, map[string]any{"terms": map[string]any{"scoped_dir_key": chunk}})
 	}
