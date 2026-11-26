@@ -41,3 +41,64 @@ func TestCursor(t *testing.T) {
 		assert.Equal(t, "resultD", c2.(*StartKeyCursor).NextDocID)
 	})
 }
+
+func TestStartKeyCursorStaysInRange(t *testing.T) {
+	tests := []struct {
+		name  string
+		req   ViewRequest
+		key   interface{}
+		keeps bool
+	}{
+		{
+			name:  "range, key inside",
+			req:   ViewRequest{StartKey: []string{"dir", ""}, EndKey: []string{"dir", MaxString}},
+			key:   []interface{}{"dir", "file", "b"},
+			keeps: true,
+		},
+		{
+			name: "range, key before the range",
+			req:  ViewRequest{StartKey: []string{"dir", ""}, EndKey: []string{"dir", MaxString}},
+			key:  []interface{}{""},
+		},
+		{
+			name: "range, key of another prefix",
+			req:  ViewRequest{StartKey: []string{"dir", ""}, EndKey: []string{"dir", MaxString}},
+			key:  []interface{}{"other", "file", "b"},
+		},
+		{
+			name:  "single key, same key",
+			req:   ViewRequest{Key: [2]interface{}{"doctype", "shared-by-link"}},
+			key:   []interface{}{"doctype", "shared-by-link"},
+			keeps: true,
+		},
+		{
+			name: "single key, lower key",
+			req:  ViewRequest{Key: [2]interface{}{"doctype", "shared-by-link"}},
+			key:  []interface{}{},
+		},
+		{
+			name:  "descending range, key inside",
+			req:   ViewRequest{StartKey: []string{"a", "b", MaxString}, EndKey: []string{"a", "b"}},
+			key:   []interface{}{"a", "b", "c"},
+			keeps: true,
+		},
+		{
+			name: "descending range, key outside",
+			req:  ViewRequest{StartKey: []string{"a", "b", MaxString}, EndKey: []string{"a", "b"}},
+			key:  []interface{}{"a", "x", "c"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := tc.req
+			NewKeyCursor(10, tc.key, "id").ApplyTo(&req)
+			if tc.keeps {
+				assert.Equal(t, tc.key, req.StartKey)
+				assert.Equal(t, "id", req.StartKeyDocID)
+			} else {
+				assert.NotEqual(t, tc.key, req.StartKey)
+				assert.Empty(t, req.StartKeyDocID)
+			}
+		})
+	}
+}

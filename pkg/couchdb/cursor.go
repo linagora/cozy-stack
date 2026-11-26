@@ -1,5 +1,10 @@
 package couchdb
 
+import (
+	"encoding/json"
+	"reflect"
+)
+
 // A Cursor holds a reference to a page in a couchdb View
 type Cursor interface {
 	HasMore() bool
@@ -90,7 +95,7 @@ type StartKeyCursor struct {
 // Limit or EndKey whichever comes first
 // /!\ Mutates req
 func (c *StartKeyCursor) ApplyTo(req *ViewRequest) {
-	if c.NextKey != "" && c.NextKey != nil {
+	if c.NextKey != "" && c.NextKey != nil && c.keyInRange(req) {
 		if req.Key != nil && req.StartKey == nil {
 			req.StartKey = req.Key
 			req.EndKey = req.Key
@@ -125,4 +130,30 @@ func (c *StartKeyCursor) UpdateFrom(res *ViewResponse) {
 		c.NextKey = nil
 		c.NextDocID = ""
 	}
+}
+
+// keyInRange tells if the cursor key keeps the part of the key that is fixed
+// by the request (the prefix shared by its bounds). A key outside of it is
+// ignored, so a cursor can only move inside the range chosen by the caller.
+func (c *StartKeyCursor) keyInRange(req *ViewRequest) bool {
+	var prefix []interface{}
+	switch {
+	case req.Key != nil:
+		prefix = keyParts(req.Key)
+	case req.StartKey != nil && req.EndKey != nil:
+		start, end := keyParts(req.StartKey), keyParts(req.EndKey)
+		for i := 0; i < len(start) && i < len(end) && reflect.DeepEqual(start[i], end[i]); i++ {
+			prefix = append(prefix, start[i])
+		}
+	}
+	next := keyParts(c.NextKey)
+	return len(next) >= len(prefix) && reflect.DeepEqual(next[:len(prefix)], prefix)
+}
+
+func keyParts(key interface{}) []interface{} {
+	var parts []interface{}
+	if b, err := json.Marshal(key); err == nil && json.Unmarshal(b, &parts) == nil {
+		return parts
+	}
+	return []interface{}{key}
 }
