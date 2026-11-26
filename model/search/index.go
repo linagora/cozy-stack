@@ -121,11 +121,10 @@ func bulkActions(domain string, changes []couchdb.Change) []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	for _, change := range changes {
-		if strings.HasPrefix(change.DocID, "_design/") {
-			continue
-		}
 		if change.Deleted {
-			_ = enc.Encode(map[string]any{"delete": map[string]string{"_id": Key(domain, change.DocID)}})
+			if !strings.HasPrefix(change.DocID, "_design/") {
+				_ = enc.Encode(map[string]any{"delete": map[string]string{"_id": Key(domain, change.DocID)}})
+			}
 			continue
 		}
 		doc, ok := NewFileDocument(domain, change.Doc)
