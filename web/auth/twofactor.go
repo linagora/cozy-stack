@@ -158,10 +158,8 @@ func twoFactor(c echo.Context) error {
 
 // twoFactorFailed returns the 2FA form with an error message
 func twoFactorFailed(c echo.Context, inst *instance.Instance, token []byte) error {
+	CountFailedTwoFactor(inst)
 	errorMessage := inst.Translate(TwoFactorErrorKey)
-	if err := CountFailedTwoFactor(inst); err != nil {
-		errorMessage = inst.Translate(TwoFactorExceededErrorKey)
-	}
 
 	// Render either the passcode page or a JSON message
 	if wantsJSON(c) {

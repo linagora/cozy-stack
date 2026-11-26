@@ -390,7 +390,7 @@ func checkTwoFactor(c echo.Context, inst *instance.Instance) bool {
 			if inst.ValidateTwoFactorPasscode(token, passcode) {
 				return true
 			} else {
-				_ = auth.CountFailedTwoFactor(inst)
+				auth.CountFailedTwoFactor(inst)
 				_ = c.JSON(http.StatusBadRequest, echo.Map{
 					"error":             "invalid_grant",
 					"error_description": "invalid_username_or_password",

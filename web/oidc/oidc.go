@@ -1077,7 +1077,7 @@ func AccessToken(c echo.Context) error {
 			})
 		}
 		if ok := inst.ValidateTwoFactorPasscode(token, reqBody.TwoFactorCode); !ok {
-			_ = auth.CountFailedTwoFactor(inst)
+			auth.CountFailedTwoFactor(inst)
 			return c.JSON(http.StatusForbidden, echo.Map{
 				"error": inst.Translate(auth.TwoFactorErrorKey),
 			})

@@ -346,7 +346,7 @@ func (h *HTTPHandler) updatePassphrase(c echo.Context) error {
 		case errors.Is(err, instance.ErrInvalidPassphrase):
 			auth.CountFailedPassphrase(inst)
 		case errors.Is(err, instance.ErrInvalidTwoFactor):
-			_ = auth.CountFailedTwoFactor(inst)
+			auth.CountFailedTwoFactor(inst)
 		}
 		return jsonapi.BadRequest(err)
 	}

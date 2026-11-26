@@ -779,7 +779,7 @@ func (a *AuthorizeHTTPHandler) authorizeMove(c echo.Context) error {
 		passcode := c.FormValue("two-factor-passcode")
 		correctPasscode := inst.ValidateTwoFactorPasscode(token, passcode)
 		if !correctPasscode {
-			_ = CountFailedTwoFactor(inst)
+			CountFailedTwoFactor(inst)
 			errorMessage := inst.Translate(TwoFactorErrorKey)
 			mail, _ := inst.SettingsEMail()
 			return c.Render(http.StatusOK, "move_delegated_auth.html", echo.Map{

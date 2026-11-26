@@ -128,7 +128,7 @@ func canCreateSessionCode(c echo.Context, inst *instance.Instance) (canCreateSes
 		if ok := inst.ValidateTwoFactorPasscode(token, args.TwoFactorCode); !ok {
 			// The first request has no code yet: it only asks for one.
 			if args.TwoFactorCode != "" {
-				_ = CountFailedTwoFactor(inst)
+				CountFailedTwoFactor(inst)
 			}
 			return need2FAToCreateSessionCode, ""
 		}
@@ -290,7 +290,7 @@ func loginFlagship(c echo.Context) error {
 		}
 		twoFactorToken := []byte(args.TwoFactorToken)
 		if !inst.ValidateTwoFactorPasscode(twoFactorToken, args.TwoFactorPasscode) {
-			_ = CountFailedTwoFactor(inst)
+			CountFailedTwoFactor(inst)
 			return c.JSON(http.StatusForbidden, echo.Map{
 				"error": inst.Translate(TwoFactorErrorKey),
 			})

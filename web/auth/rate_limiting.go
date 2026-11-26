@@ -28,31 +28,29 @@ func CountFailedPassphrase(i *instance.Instance) {
 	}
 }
 
-// CountFailedTwoFactor counts a wrong 2FA passcode. Past the limit, a new
-// passcode is sent, and too many of them block the instance, which the
-// returned error tells. Every check of a 2FA passcode must call it.
-func CountFailedTwoFactor(i *instance.Instance) error {
+// CountFailedTwoFactor counts a wrong 2FA passcode. Each time the limit is
+// passed, the count restarts, and too many restarts block the instance. Every
+// check of a 2FA passcode must call it.
+func CountFailedTwoFactor(i *instance.Instance) {
 	if config.GetRateLimiter().CheckRateLimit(i, limits.TwoFactorType) != limits.ErrRateLimitExceeded {
-		return nil
+		return
 	}
-	err := TwoFactorRateExceeded(i)
-	if err != nil {
+	if err := TwoFactorRateExceeded(i); err != nil {
 		i.Logger().WithNamespace("auth").Warn(err.Error())
 	}
-	return err
 }
 
-// TwoFactorRateExceeded regenerates a new 2FA passcode after too many failed
-// attempts to login
+// TwoFactorRateExceeded restarts the count of wrong 2FA passcodes, and blocks
+// the instance after too many restarts. It sends no new passcode: a passcode
+// only validates with the token returned to the client that asked for it, so
+// only the handlers send them.
 func TwoFactorRateExceeded(i *instance.Instance) error {
 	err := config.GetRateLimiter().CheckRateLimit(i, limits.TwoFactorGenerationType)
 	if limits.IsLimitReachedOrExceeded(err) {
 		return TwoFactorGenerationExceeded(i)
 	}
-	// Reset the key and send a new passcode to the user
 	config.GetRateLimiter().ResetCounter(i, limits.TwoFactorType)
-	_, err = lifecycle.SendTwoFactorPasscode(i)
-	return err
+	return nil
 }
 
 // TwoFactorGenerationExceeded checks if there was too many attempts to

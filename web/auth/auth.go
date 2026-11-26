@@ -32,9 +32,6 @@ const (
 	// TwoFactorErrorKey is the key for translating the message showed to the
 	// user when he/she enters incorrect two factor secret
 	TwoFactorErrorKey = "Login Two factor error"
-	// TwoFactorExceededErrorKey is the key for translating the message showed to the
-	// user when there were too many attempts
-	TwoFactorExceededErrorKey = "Login Two factor attempts error"
 )
 
 func wantsJSON(c echo.Context) bool {
