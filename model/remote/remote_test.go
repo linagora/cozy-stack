@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"testing"
 
+	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -175,4 +176,27 @@ Authorization: Bearer {{secret_token}}
 	err = injectVariables(r, map[string]string{})
 	assert.NoError(t, err)
 	assert.Equal(t, "Bearer 123456789", r.Headers["Authorization"])
+}
+
+func TestProxyToRefusesLoopback(t *testing.T) {
+	config.UseTestFile(t)
+	config.GetConfig().RemoteAllowCustomPort = true
+	mode := build.BuildMode
+	build.BuildMode = build.ModeProd
+	t.Cleanup(func() { build.BuildMode = mode })
+
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("internal"))
+	}))
+	t.Cleanup(ts.Close)
+
+	r, err := ParseRawRequest(doctype, "GET "+ts.URL+"/\n")
+	require.NoError(t, err)
+	in := httptest.NewRequest(http.MethodGet, "/remote/"+doctype, nil)
+	err = r.ProxyTo(nil, httptest.NewRecorder(), in, "app")
+	assert.Equal(t, ErrRequestFailed, err)
+	assert.False(t, called)
 }

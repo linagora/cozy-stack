@@ -57,6 +57,7 @@ var blockList = map[string]bool{
 	consts.AppLogs:             none,
 
 	// Only stack can write them
+	consts.Doctypes:          readable,
 	consts.Jobs:              readable,
 	consts.Triggers:          readable,
 	consts.Apps:              readable,

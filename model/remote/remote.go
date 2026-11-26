@@ -23,6 +23,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/filetype"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
+	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/cozy/httpcache"
 	"github.com/labstack/echo/v4"
 )
@@ -52,7 +53,8 @@ var (
 const rawURL = "https://raw.githubusercontent.com/cozy/cozy-doctypes/master/%s/request"
 
 var remoteClient = &http.Client{
-	Timeout: 20 * time.Second,
+	Timeout:   20 * time.Second,
+	Transport: safehttp.DefaultClient.Transport,
 }
 
 var assetsClient = &http.Client{
