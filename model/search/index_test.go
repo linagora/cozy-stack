@@ -54,6 +54,7 @@ func TestIndex(t *testing.T) {
 	inst := testutils.NewSetup(t, t.Name()).GetTestInstance()
 	client := config.GetConfig().Search
 	require.NotNil(t, client)
+	deleteTestIndices(t, osURL, client)
 	ctx := context.Background()
 	log := logger.WithNamespace("search-test")
 
