@@ -59,3 +59,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Théo Poizat, to be confirmed by a cozy-stack maintainer.
 - Why: the digest of shared drives (ADR 010) already counts these changes in the request handlers; the VFS also writes for metadata, sharing replication and moves of instances, which would flood the bus, and it does not know who made the change.
 - Scope: personal drive; renames, moves, folders moved to the trash, notes saved by the notes editor and the sharing replication publish nothing.
+
+## 2026-11-26, [Architecture] An event for each sharing received
+
+- Decision: when an instance receives a sharing request with a shortcut, the one `GET /sharings/news` counts, it publishes `com.twake.drive.share.received.v1` to its owner by uuid, with the sharing id, the id of its shortcut file and no actor, in every context.
+- Decided by: Théo Poizat, to be confirmed by a cozy-stack maintainer.
+- Why: the n8n trigger of Twake Drive starts a workflow on a new sharing; people receive few sharings, so the event needs no setting, and the person who shares is on another instance, whose uuid is unknown here.
+- Scope: Cozy to Cozy sharings and shared drives, on the instance of the recipient.

@@ -300,6 +300,8 @@ CloudEvents read by other apps, with the event type as routing key and
 - `com.twake.drive.file.created.v1`, `com.twake.drive.file.updated.v1` and
   `com.twake.drive.file.deleted.v1`: a file created, updated or moved to the
   trash in a personal drive, see below.
+- `com.twake.drive.share.received.v1`: a sharing received by an instance, see
+  below.
 
 ### Handlers
 
@@ -670,6 +672,42 @@ For example:
   members of a shared drive are counted in its digest instead; the files the
   owner of the drive changes through `/files` or OnlyOffice on their own
   instance publish these events, as for the rest of their drive.
+
+#### Sharing received
+
+When someone shares a file, a folder or a drive with the owner of an instance,
+the instance publishes `com.twake.drive.share.received.v1` as it creates the
+shortcut that `GET /sharings/news` counts, before the owner accepts it:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "c3d81f5a2b8e4f0d/received",
+  "source": "twake://drive",
+  "type": "com.twake.drive.share.received.v1",
+  "time": "2026-11-26T10:00:00Z",
+  "twakeorg": "org123",
+  "data": {
+    "object": {
+      "type": "sharing",
+      "id": "c3d81f5a2b8e4f0d",
+      "title": "Invoices",
+      "shortcut": { "id": "5e0b2a7c9d1f" },
+      "container": { "kind": "drive", "id": "alice.example.net" }
+    },
+    "recipients": [
+      { "uuid": "6208ad54-5683-1041-8c8f-c9e6dccfd4ac", "reason": "owner" }
+    ]
+  }
+}
+```
+
+- It is published in every context, as people receive few sharings, and only
+  once the Stack knows the `oidc_uuid` of the owner.
+- It names no actor: the person who shares is on another instance.
+- `GET /sharings/:sharing-id` tells who shares what. `shortcut` is the
+  shortcut file to the sharing, which an app that may only read
+  `io.cozy.files` can read with `GET /files/:file-id`.
 
 ### Lifecycle
 

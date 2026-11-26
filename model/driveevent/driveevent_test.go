@@ -159,3 +159,23 @@ func TestFileDeleted(t *testing.T) {
 	// The folder the file was in, not the trash.
 	assert.Equal(t, invoiceObject, event.Data.(Data).Object)
 }
+
+func TestShareReceived(t *testing.T) {
+	config.UseTestFile(t)
+	// Even with the file events off.
+	pub := publishTo(t, nil)
+	ShareReceived(context.Background(), owner(), "sharing-1", "Invoices", "shortcut-1")
+	event := onlyEvent(t, pub, rabbitmq.RoutingKeyDriveShareReceived)
+	assert.Equal(t, "sharing-1/received", event.ID)
+	assert.Empty(t, event.TwakeActorID)
+	assert.Equal(t, Data{
+		Object: Object{
+			Type:      "sharing",
+			ID:        "sharing-1",
+			Title:     "Invoices",
+			Shortcut:  &Reference{ID: "shortcut-1"},
+			Container: Container{Kind: "drive", ID: "alice.twake.local"},
+		},
+		Recipients: []Recipient{{UUID: ownerUUID, Reason: "owner"}},
+	}, event.Data)
+}

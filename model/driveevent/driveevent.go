@@ -36,6 +36,7 @@ type Object struct {
 	ID        string     `json:"id"`
 	Title     string     `json:"title"`
 	Folder    *Reference `json:"folder,omitempty"`
+	Shortcut  *Reference `json:"shortcut,omitempty"`
 	Container Container  `json:"container"`
 }
 
@@ -114,6 +115,30 @@ func FileDeleted(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc
 		Time: time.Now().UTC(),
 	}
 	publish(ctx, inst, event, fileObject(inst, file), byOwner)
+}
+
+// ShareReceived publishes that someone shared a file, a folder or a drive with
+// the owner of the instance, who has yet to accept it. It is published in
+// every context, as people receive few sharings. The person who shares is on
+// another instance, whose uuid this one does not know, so the event names no
+// actor. shortcutID is the shortcut to the sharing in the drive of the owner,
+// which apps without the permission on the sharings can read.
+func ShareReceived(ctx context.Context, inst *instance.Instance, sharingID, title, shortcutID string) {
+	event := rabbitmq.CloudEvent{
+		ID:   sharingID + "/received",
+		Type: rabbitmq.RoutingKeyDriveShareReceived,
+		Time: time.Now().UTC(),
+	}
+	object := Object{
+		Type:      "sharing",
+		ID:        sharingID,
+		Title:     title,
+		Container: Container{Kind: "drive", ID: inst.Domain},
+	}
+	if shortcutID != "" {
+		object.Shortcut = &Reference{ID: shortcutID}
+	}
+	publish(ctx, inst, event, object, false)
 }
 
 func fileObject(inst *instance.Instance, file *vfs.FileDoc) Object {

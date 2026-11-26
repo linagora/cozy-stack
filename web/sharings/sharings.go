@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cozy/cozy-stack/model/contact"
+	"github.com/cozy/cozy-stack/model/driveevent"
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/oauth"
 	"github.com/cozy/cozy-stack/model/permission"
@@ -151,6 +152,8 @@ func PutSharing(c echo.Context) error {
 				return wrapErrors(err)
 			}
 		}
+		// The new shortcut is what GET /sharings/news counts.
+		driveevent.ShareReceived(c.Request().Context(), inst, s.SID, s.Description, s.ShortcutID)
 	}
 
 	as := &sharing.APISharing{
