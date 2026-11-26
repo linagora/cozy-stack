@@ -13,6 +13,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/opensearch"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -71,6 +72,8 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 	if err != nil {
 		return nil, err
 	}
+	// The names are indexed composed (NFC), so a pasted decomposed query matches
+	q = norm.NFC.String(q)
 	// One more hit than the page tells if there is a next page
 	query := buildQuery(caller.Domain, q, slices.Sorted(maps.Keys(dirKeys)), slices.Sorted(maps.Keys(fileKeys)), limit+1, after)
 
@@ -99,7 +102,7 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 		doc := h.Source
 		hit := SearchHit{
 			Hit:  Hit{OwnerInstanceID: doc.OwnerInstanceID, DocID: doc.DocID, DirID: doc.DirID},
-			Type: doc.Type, Name: doc.Name, Mime: doc.Mime, Class: doc.Class, UpdatedAt: doc.UpdatedAt,
+			Type: doc.Type, Name: cmp.Or(doc.DisplayName, doc.Name), Mime: doc.Mime, Class: doc.Class, UpdatedAt: doc.UpdatedAt,
 		}
 		if doc.OwnerInstanceID != caller.Domain {
 			hit.DriveID = dirKeys[doc.ScopedDirKey]

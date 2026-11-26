@@ -11,8 +11,7 @@ import (
 // filenameFold maps, before the names are cut in n-grams, the common letters
 // that asciifolding folds to two letters (cut first, "straße" would not match
 // "strasse") and the Cyrillic ё. The Greek accents are folded by
-// greek_lowercase.
-// shortcut: names stored decomposed (NFD) are not folded, see #5394.
+// greek_lowercase. The names are composed (NFC) before they are indexed.
 var filenameFold = []string{
 	"ß=>ss", "ẞ=>SS", "æ=>ae", "Æ=>AE", "œ=>oe", "Œ=>OE", "þ=>th", "Þ=>TH",
 	"ё=>е", "Ё=>Е",
@@ -80,10 +79,11 @@ var filesIndexBody = map[string]any{
 					"exact":  map[string]any{"type": "keyword", "normalizer": "LowercaseAscii"},
 				},
 			},
-			"mime":       keyword,
-			"class":      keyword,
-			"updated_at": map[string]any{"type": "date"},
-			"trashed":    map[string]any{"type": "boolean"},
+			"display_name": map[string]any{"type": "keyword", "index": false, "doc_values": false},
+			"mime":         keyword,
+			"class":        keyword,
+			"updated_at":   map[string]any{"type": "date"},
+			"trashed":      map[string]any{"type": "boolean"},
 		},
 	},
 }
