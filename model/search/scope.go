@@ -106,7 +106,7 @@ func activePrincipals(s *sharing.Sharing) []string {
 func subdirIDs(db *instance.Instance, dirPath string, pageSize int) ([]string, error) {
 	sel := mango.And(
 		mango.Gt("path", dirPath+"/"),
-		mango.Lt("path", dirPath+"/￰"),
+		mango.Lt("path", dirPath+"/\ufff0"),
 		mango.Equal("type", consts.DirType),
 	)
 	var ids []string
