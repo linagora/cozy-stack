@@ -20,6 +20,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/realtime"
+	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/sync/errgroup"
 )
@@ -374,7 +375,7 @@ func (s *Sharing) uploadFile(inst *instance.Instance, m *Member, file map[string
 			echo.HeaderAuthorization: "Bearer " + creds.AccessToken.AccessToken,
 		},
 		Body:   content,
-		Client: http.DefaultClient,
+		Client: safehttp.ClientWithKeepAlive,
 	}
 	res2, err := request.Req(opts2)
 	if err != nil {
