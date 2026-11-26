@@ -118,4 +118,9 @@ var PlatformApps = []string{
 	"coachco2",
 	"mespapiers",
 	"dataproxy",
+	"mail",
+	"mailng",
+	"calendar",
+	"chat",
+	"chatng",
 }
