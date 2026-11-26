@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/cozy/cozy-stack/pkg/appfs"
+	build "github.com/cozy/cozy-stack/pkg/config"
 	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -49,4 +51,35 @@ func TestGitFetcherIgnoresManifestChecksum(t *testing.T) {
 	assert.Equal(t,
 		[]string{"/app/" + man.Version() + "-" + man.Checksum() + "/manifest.webapp.br"},
 		storedFiles(t, fs))
+}
+
+func TestGitFetcherRejectsNonPublicHosts(t *testing.T) {
+	oldMode := build.BuildMode
+	build.BuildMode = build.ModeProd
+	t.Cleanup(func() { build.BuildMode = oldMode })
+
+	g := newGitFetcher("manifest.webapp", logger.WithNamespace("test"))
+	man := &WebappManifest{}
+	man.SetSlug("app")
+	fs := appfs.NewAferoCopier(afero.NewBasePathFs(afero.NewOsFs(), t.TempDir()))
+
+	for _, raw := range []string{
+		"git+ssh://127.0.0.1/app.git",
+		"git://10.0.0.5/app.git",
+		"git+https://192.168.0.1/app.git",
+		"git+ssh://169.254.169.254/app.git",
+	} {
+		src, err := url.Parse(raw)
+		require.NoError(t, err)
+
+		if isGitSSHScheme(src.Scheme) {
+			_, err = g.FetchManifest(src)
+			require.Error(t, err, raw)
+			assert.Contains(t, err.Error(), "not a ", raw)
+		}
+
+		err = g.Fetch(src, fs, man)
+		require.Error(t, err, raw)
+		assert.Contains(t, err.Error(), "not a ", raw)
+	}
 }

@@ -163,6 +163,29 @@ func safeControl(network string, address string, conn syscall.RawConn) error {
 	return nil
 }
 
+// CheckHost resolves the host of a URL that will not be fetched with an HTTP
+// client (a git remote for example) and applies to its addresses the same
+// rules as the safe clients, except for the port.
+func CheckHost(host string) error {
+	if host == "" {
+		return fmt.Errorf("missing host")
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return err
+	}
+	for _, ip := range ips {
+		network := "tcp4"
+		if ip.To4() == nil {
+			network = "tcp6"
+		}
+		if err := safeControl(network, net.JoinHostPort(ip.String(), "443"), nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func isInTrustedNetwork(ip net.IP) bool {
 	for _, ipnet := range loadTrustedNetworks() {
 		if ipnet.Contains(ip) {

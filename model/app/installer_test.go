@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/app"
+	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/safehttp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,6 +82,11 @@ func storedDir(man app.Manifest) string {
 }
 
 func serveGitRep(t *testing.T) (string, context.CancelFunc) {
+	config.UseTestFile(t)
+	require.NoError(t, safehttp.SetTrustedPrivateNetworks([]string{"127.0.0.1/32", "::1/128"}))
+	t.Cleanup(func() {
+		require.NoError(t, safehttp.SetTrustedPrivateNetworks(config.GetConfig().SafeHTTPTrustedNetworks))
+	})
 	localGitDir = t.TempDir()
 	args := `
 echo '` + manifestWebapp() + `' > ` + app.WebappManifestName + ` && \

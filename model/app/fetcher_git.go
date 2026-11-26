@@ -101,6 +101,9 @@ func (g *gitFetcher) FetchManifest(src *url.URL) (r io.ReadCloser, err error) {
 
 // Use the git archive method to download a manifest from the git repository.
 func (g *gitFetcher) fetchManifestFromGitArchive(src *url.URL) (io.ReadCloser, error) {
+	if err := safehttp.CheckHost(src.Hostname()); err != nil {
+		return nil, err
+	}
 	var branch string
 	src, branch = getRemoteURL(src)
 	ctx, cancel := context.WithTimeout(context.Background(), cloneTimeout)
@@ -189,6 +192,9 @@ func (g *gitFetcher) Fetch(src *url.URL, fs appfs.Copier, man Manifest) (err err
 }
 
 func (g *gitFetcher) fetchWithGit(gitFs afero.Fs, gitDir string, src *url.URL, fs appfs.Copier, man Manifest) (err error) {
+	if err := safehttp.CheckHost(src.Hostname()); err != nil {
+		return err
+	}
 	var branch string
 	src, branch = getRemoteURL(src)
 	srcStr := src.String()
