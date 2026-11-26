@@ -33,6 +33,10 @@ func NewSpan(value string) *Span {
 	}
 }
 
+// maxAttributesLength is the maximal length in bytes of a block of attributes
+// like {.myClass rgb=#ff0000}.
+const maxAttributesLength = 1024
+
 type spanParser struct{}
 
 var defaultSpanParser = &spanParser{}
@@ -63,7 +67,12 @@ func (s *spanParser) Parse(parent ast.Node, block text.Reader, pc parser.Context
 			}
 			block.Advance(pos)
 			span := NewSpan(string(line[1 : pos-1]))
-			if attrs, ok := parseFlatAttributes(block); ok {
+			// Goldmark recurses on each nested '[' or '{' without depth limit:
+			// only let it see a bounded slice of the line.
+			attrsReader := text.NewReader(line[pos:min(len(line), pos+maxAttributesLength)])
+			if attrs, ok := parser.ParseAttributes(attrsReader); ok {
+				_, position := attrsReader.Position()
+				block.Advance(position.Start)
 				for _, attr := range attrs {
 					if value, ok := attr.Value.([]byte); ok {
 						span.SetAttribute(attr.Name, string(value))

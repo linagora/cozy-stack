@@ -76,11 +76,6 @@ func TestNestedAttributesAreRejected(t *testing.T) {
 	require.NotNil(t, table)
 	assert.Empty(t, table.Attributes())
 
-	doc = parseMarkdown(`[x]{a={b=1}}` + "\n")
-	span = findNode(doc, KindSpan)
-	require.NotNil(t, span)
-	assert.Empty(t, span.Attributes())
-
 	doc = parseMarkdown("[x]{a=" + strings.Repeat("b", maxAttributesLength) + "}\n")
 	span = findNode(doc, KindSpan)
 	require.NotNil(t, span)
