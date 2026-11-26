@@ -166,6 +166,23 @@ func TestDriveRealtimePathsAreRelativeToTheRoot(t *testing.T) {
 		assert.Equal(t, realtime.EventDelete, res.Event)
 		assert.Nil(t, docPath(res, "path"))
 	})
+
+	// As in _changes, a trashed folder and its content leave the drive.
+	t.Run("TrashedFolder", func(t *testing.T) {
+		trashed := sub.Clone().(*vfs.DirDoc)
+		trashed.Fullpath = vfs.TrashDirName + "/Meetings"
+		trashed.DirID = consts.TrashDirID
+		trashed.RestorePath = root.Fullpath
+		res, _ := send(&realtime.Event{Verb: realtime.EventUpdate, Doc: trashed, OldDoc: sub})
+		assert.Equal(t, realtime.EventDelete, res.Event)
+
+		before := &vfs.FileDoc{Type: consts.FileType, DocID: "in-trashed-folder", DocName: "a.txt", DirID: sub.ID()}
+		after := before.Clone().(*vfs.FileDoc)
+		after.Trashed = true
+		res, _ = send(&realtime.Event{Verb: realtime.EventUpdate, Doc: after, OldDoc: before})
+		assert.Equal(t, realtime.EventDelete, res.Event)
+		assert.Equal(t, "in-trashed-folder", res.Payload.ID)
+	})
 }
 
 func TestDriveRealtimeSurvivesAnAncestorRename(t *testing.T) {

@@ -261,9 +261,23 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 		return false
 	}
 
+	// Only the folders outside the trash move with an ancestor of the root:
+	// the other events leaving the drive do not need to read the root again.
+	movedFolder := func(doc realtime.Doc) bool {
+		switch d := doc.(type) {
+		case *vfs.DirDoc:
+			return !vfs.IsInTrash(d.Fullpath)
+		case *realtime.JSONDoc:
+			docType, _ := d.M["type"].(string)
+			fullpath, _ := d.M["path"].(string)
+			return docType == consts.DirType && !vfs.IsInTrash(fullpath)
+		}
+		return false
+	}
+
 	match := func(e *realtime.Event) *realtime.Event {
 		if e.Doc.ID() == dir.DocID {
-			if reloaded, err := inst.VFS().DirByID(dir.DocID); err == nil {
+			if reloaded, err := inst.VFS().GetIndexer().DirByID(dir.DocID); err == nil {
 				dir.Fullpath = reloaded.Fullpath
 			}
 			return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
@@ -271,13 +285,15 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 		if testPath(e.Doc) {
 			return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
 		}
-		if e.OldDoc != nil && (e.OldDoc.ID() == dir.DocID || testPath(e.OldDoc)) {
+		if e.OldDoc != nil && testPath(e.OldDoc) {
 			// An ancestor of the root may have been renamed or moved: the
 			// documents below it are still in the drive.
-			if reloaded, err := inst.VFS().DirByID(dir.DocID); err == nil && reloaded.Fullpath != dir.Fullpath {
-				dir.Fullpath = reloaded.Fullpath
-				if testPath(e.Doc) {
-					return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
+			if movedFolder(e.Doc) {
+				if reloaded, err := inst.VFS().GetIndexer().DirByID(dir.DocID); err == nil && reloaded.Fullpath != dir.Fullpath {
+					dir.Fullpath = reloaded.Fullpath
+					if testPath(e.Doc) {
+						return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
+					}
 				}
 			}
 			// The document has left the drive: its new location is not for

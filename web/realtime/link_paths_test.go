@@ -54,6 +54,15 @@ func TestLinkPathsRewrite(t *testing.T) {
 		assert.Equal(t, "/Private/Other", doc.M["restore_path"])
 	})
 
+	t.Run("OtherDoctype", func(t *testing.T) {
+		doc := &realtime.JSONDoc{Type: "io.cozy.todos", M: map[string]interface{}{
+			"_id": "todo", "path": "/Private/Other", "restore_path": "/Private/Other",
+		}}
+		res := l.rewrite(doc).(*realtime.JSONDoc)
+		assert.Equal(t, "/Private/Other", res.M["path"])
+		assert.Equal(t, "/Private/Other", res.M["restore_path"])
+	})
+
 	t.Run("TargetGone", func(t *testing.T) {
 		gone := &permission.Permission{Type: permission.TypeShareByLink, Permissions: permission.Set{permission.Rule{
 			Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: []string{"no-such-file"},

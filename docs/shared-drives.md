@@ -1221,6 +1221,9 @@ Recipients are transparently proxied to the owner's instance.
 
 Get the changes inside a shared drive in real-time from a websocket.
 Identical to [`GET /realtime`](realtime.md), except subscribing to the shared drive is automatically done.
+As in `_changes`, `path` and `restore_path` start at the drive root, or are
+left out, and a document that leaves the drive comes as `DELETED` with only
+its `_id`.
 
 On the recipient side, connecting marks the sharing as seen (its shortcut
 leaves the `new` status counted by `GET /sharings/news`). Background

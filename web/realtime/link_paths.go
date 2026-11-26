@@ -7,6 +7,7 @@ import (
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/realtime"
 )
 
@@ -36,11 +37,15 @@ func (l *linkPaths) restricted() bool {
 // rewrite gives a copy of the document where the paths start at a root of the
 // link, and are left out when they lead elsewhere.
 func (l *linkPaths) rewrite(doc realtime.Doc) realtime.Doc {
+	// Another doctype can have its own fields named path and restore_path
+	if doc.DocType() != consts.Files {
+		return doc
+	}
 	return vfs.RewriteEventPaths(doc, l.relative)
 }
 
 func (l *linkPaths) relative(id, _, p string) string {
-	if p == "" {
+	if p == "" || len(l.roots) == 0 {
 		return ""
 	}
 	if id != "" {
