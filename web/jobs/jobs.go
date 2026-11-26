@@ -354,6 +354,9 @@ func (h *HTTPHandler) newTrigger(c echo.Context) error {
 		if err := checkReservedWorker(req.WorkerType); err != nil {
 			return err
 		}
+		if err := job.CheckReadableEvents(t); err != nil {
+			return err
+		}
 	}
 
 	if err = sched.AddTrigger(t); err != nil {

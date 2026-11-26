@@ -152,6 +152,19 @@ func NewTrigger(db prefixer.Prefixer, infos TriggerInfos, data interface{}) (Tri
 	return trigger, nil
 }
 
+// CheckReadableEvents returns an error if the trigger listens to events of a
+// doctype that is not readable through the API.
+func CheckReadableEvents(t Trigger) error {
+	if event, ok := t.(*EventTrigger); ok {
+		for _, rule := range event.mask {
+			if err := permission.CheckReadable(rule.Type); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func fromTriggerInfos(infos *TriggerInfos) (Trigger, error) {
 	switch infos.Type {
 	case "@at":

@@ -640,6 +640,9 @@ func CreateServiceTrigger(db prefixer.Prefixer, slug, serviceName string, servic
 	if err != nil {
 		return "", err
 	}
+	if err = job.CheckReadableEvents(trigger); err != nil {
+		return "", err
+	}
 	sched := job.System()
 	if err = sched.AddTrigger(trigger); err != nil {
 		return "", err

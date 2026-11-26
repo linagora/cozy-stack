@@ -114,6 +114,20 @@ func TestJobs(t *testing.T) {
 		})
 	})
 
+	t.Run("EventTriggerOnStackDoctypes", func(t *testing.T) {
+		perms := &permission.Permission{Type: permission.TypeWebapp, SourceID: consts.Apps + "/trigger-doctypes", Permissions: permission.Set{{Type: "*", Verbs: permission.ALL}}}
+		require.NoError(t, couchdb.CreateDoc(testInstance, perms))
+		appToken, err := testInstance.MakeJWT(consts.AppAudience, "trigger-doctypes", "", "", time.Now())
+		require.NoError(t, err)
+		e := testutils.CreateTestClient(t, ts.URL)
+		for _, args := range []string{consts.Sharings, consts.Permissions + ":UPDATED", "io.cozy.foos:CREATED " + consts.OAuthClients} {
+			e.POST("/jobs/triggers").WithHeader("Authorization", "Bearer "+appToken).
+				WithJSON(map[string]interface{}{"data": map[string]interface{}{"attributes": map[string]interface{}{
+					"type": "@event", "arguments": args, "worker": "print",
+				}}}).Expect().Status(403)
+		}
+	})
+
 	t.Run("GetQueue", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
