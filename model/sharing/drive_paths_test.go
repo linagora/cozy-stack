@@ -37,3 +37,14 @@ func TestMemberDrivePathRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestPreviewDrivePathRoot(t *testing.T) {
+	s := &Sharing{Drive: true, Rules: []Rule{{DocType: consts.Files, Values: []string{"drive"}}}}
+	s.LimitDrivePaths(&permission.Permission{
+		Type:        permission.TypeSharePreview,
+		Permissions: permission.Set{{Type: consts.Files, Values: []string{"nested"}}},
+	})
+	if assert.NotNil(t, s.visibleRootID) {
+		assert.Equal(t, "nested", *s.visibleRootID)
+	}
+}

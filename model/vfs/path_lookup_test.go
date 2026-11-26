@@ -18,6 +18,8 @@ func TestResolvePathUnderRoot(t *testing.T) {
 		{"", "/Team/a.txt", ""},
 		{"/", "/", "/"},
 		{"/", "/a.txt", "/a.txt"},
+		{"/.cozy_trash/Projects/Team", "/.cozy_trash/Team/a.txt", "/.cozy_trash/Projects/Team/a.txt"},
+		{"/Projects/Team", "/.cozy_trash/Team/a.txt", ""},
 	} {
 		assert.Equal(t, tc.want, vfs.ResolvePathUnderRoot(tc.root, tc.clientPath), "%q under %q", tc.clientPath, tc.root)
 	}

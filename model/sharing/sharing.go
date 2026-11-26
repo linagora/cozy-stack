@@ -277,7 +277,10 @@ func (s *Sharing) DrivePathsHidden() bool {
 
 func (s *Sharing) driveRoot() string {
 	if !s.driveRootLoaded && s.driveRootInst != nil {
-		_ = s.LoadDriveRootPath(s.driveRootInst)
+		if err := s.LoadDriveRootPath(s.driveRootInst); err != nil {
+			s.driveRootInst.Logger().WithNamespace("sharing").
+				Warnf("cannot load the root of drive %s: %s", s.SID, err)
+		}
 	}
 	return s.driveRootPath
 }

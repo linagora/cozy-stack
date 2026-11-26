@@ -44,6 +44,14 @@ func TestLinkPaths(t *testing.T) {
 	assert.Equal(t, "/Private", RelativeToLink(whole, "/Private"))
 	assert.Equal(t, "/Private", AbsoluteFromLink(whole, "/Private"))
 
+	trashed := []LinkRoot{{ID: "docs", Path: "/.cozy_trash/Private/Clients/Docs"}}
+	assert.Equal(t, "/.cozy_trash/Docs", RelativeToLink(trashed, "/.cozy_trash/Private/Clients/Docs"))
+	assert.Equal(t, "/.cozy_trash/Docs/a.txt", RelativeToLink(trashed, "/.cozy_trash/Private/Clients/Docs/a.txt"))
+	assert.Equal(t, "/.cozy_trash/Private/Clients/Docs/a.txt", AbsoluteFromLink(trashed, "/.cozy_trash/Docs/a.txt"))
+
+	repeated := []LinkRoot{{ID: "docs", Path: "/Private/Docs"}, {ID: "docs", Path: "/Private/Docs"}}
+	assert.Equal(t, "/Private/Docs/Sub", AbsoluteFromLink(repeated, "/Docs/Sub"))
+
 	homonyms := []LinkRoot{{ID: "a", Path: "/A/Docs"}, {ID: "b", Path: "/B/Docs"}, {ID: "c", Path: "/C/Other"}}
 	assert.Empty(t, AbsoluteFromLink(homonyms, "/Docs"))
 	assert.Empty(t, AbsoluteFromLink(homonyms, "/Docs/Sub"))
@@ -52,11 +60,12 @@ func TestLinkPaths(t *testing.T) {
 
 type lookupVFS struct {
 	VFS
-	err error
+	dirs map[string]*DirDoc
+	err  error
 }
 
-func (fs lookupVFS) DirOrFileByID(string) (*DirDoc, *FileDoc, error) {
-	return nil, nil, fs.err
+func (fs lookupVFS) DirOrFileByID(id string) (*DirDoc, *FileDoc, error) {
+	return fs.dirs[id], nil, fs.err
 }
 
 func TestLinkRoots(t *testing.T) {
@@ -76,4 +85,20 @@ func TestLinkRoots(t *testing.T) {
 	roots, err = LinkRoots(lookupVFS{}, whole)
 	require.NoError(t, err)
 	assert.Nil(t, roots)
+
+	readOneWriteAll := permission.Set{
+		permission.Rule{Type: consts.Files, Verbs: permission.Verbs(permission.POST)},
+		permission.Rule{Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: []string{"docs"}},
+	}
+	dirs := map[string]*DirDoc{"docs": {Fullpath: "/Private/Docs"}, "root": {Fullpath: "/"}}
+	roots, err = LinkRoots(lookupVFS{dirs: dirs}, readOneWriteAll)
+	require.NoError(t, err)
+	assert.Equal(t, []LinkRoot{{ID: "docs", Path: "/Private/Docs"}}, roots)
+
+	// The root of the instance must not be shadowed by another root, whatever the order
+	for _, values := range [][]string{{"docs", "root"}, {"root", "docs"}} {
+		roots, err = LinkRoots(lookupVFS{dirs: dirs}, permission.Set{permission.Rule{Type: consts.Files, Values: values}})
+		require.NoError(t, err)
+		assert.Nil(t, roots, values)
+	}
 }

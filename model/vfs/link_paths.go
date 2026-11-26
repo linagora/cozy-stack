@@ -18,16 +18,21 @@ type LinkRoot struct {
 }
 
 // LinkRoots gives the targets of the rules of a public link, the ones given by
-// ID. It is nil when the link covers the whole doctype, and empty but not nil
-// when none of its targets exists anymore.
+// ID. It is nil when the link can read the whole doctype (a rule with no
+// values, or on the root of the instance), and empty but not nil when none of
+// its targets exists anymore.
 func LinkRoots(fs VFS, perms permission.Set) ([]LinkRoot, error) {
 	roots := []LinkRoot{}
 	for _, rule := range perms {
 		if !permission.MatchType(rule, consts.Files) || rule.Selector != "" {
 			continue
 		}
+		reads := rule.Verbs.Contains(permission.GET)
 		if len(rule.Values) == 0 {
-			return nil, nil
+			if reads {
+				return nil, nil
+			}
+			continue
 		}
 		for _, id := range rule.Values {
 			p, err := PathByID(fs, id)
@@ -36,6 +41,12 @@ func LinkRoots(fs VFS, perms permission.Set) ([]LinkRoot, error) {
 			}
 			if err != nil {
 				return nil, err
+			}
+			if p == "/" {
+				if reads {
+					return nil, nil
+				}
+				continue
 			}
 			roots = append(roots, LinkRoot{ID: id, Path: p})
 		}
@@ -60,13 +71,11 @@ func PathByID(fs VFS, id string) (string, error) {
 
 // RelativeToLink rewrites a path of the instance to start at the root of the
 // link it is under, which keeps its name. A path under no root gives an empty
-// string. Paths in the trash are kept as they are.
+// string. A root in the trash keeps the trash prefix, and other paths in the
+// trash are kept as they are.
 func RelativeToLink(roots []LinkRoot, p string) string {
 	if len(roots) == 0 {
 		return ""
-	}
-	if p == TrashDirName || strings.HasPrefix(p, TrashDirName+"/") {
-		return p
 	}
 	for _, root := range roots {
 		switch {
@@ -75,8 +84,15 @@ func RelativeToLink(roots []LinkRoot, p string) string {
 		case root.Path == "/":
 			return p
 		case p == root.Path || strings.HasPrefix(p, root.Path+"/"):
-			return "/" + path.Base(root.Path) + strings.TrimPrefix(p, root.Path)
+			rel := "/" + path.Base(root.Path) + strings.TrimPrefix(p, root.Path)
+			if strings.HasPrefix(root.Path, TrashDirName+"/") {
+				return TrashDirName + rel
+			}
+			return rel
 		}
+	}
+	if IsInTrash(p) {
+		return p
 	}
 	return ""
 }
@@ -95,7 +111,7 @@ func AbsoluteFromLink(roots []LinkRoot, p string) string {
 		if root.Path == "/" {
 			return candidate
 		}
-		if abs != "" {
+		if abs != "" && abs != candidate {
 			return ""
 		}
 		abs = candidate

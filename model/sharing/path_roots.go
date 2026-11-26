@@ -64,7 +64,7 @@ func singleFileRoot(perm *permission.Permission) string {
 // LimitDrivePaths applies the visiting token's path boundary to a drive request.
 func (s *Sharing) LimitDrivePaths(perm *permission.Permission) {
 	switch perm.Type {
-	case permission.TypeShareByLink:
+	case permission.TypeShareByLink, permission.TypeSharePreview:
 		s.startPathsAt(singleFileRoot(perm))
 	case permission.TypeShareInteract:
 		if root, err := s.DriveRootID(); err != nil || root != singleFileRoot(perm) {

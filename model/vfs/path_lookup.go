@@ -16,6 +16,10 @@ func ResolvePathUnderRoot(root, clientPath string) string {
 	if root == "/" {
 		return p
 	}
+	// RelativeToLink shows a root in the trash under the trash
+	if rest, ok := strings.CutPrefix(p, TrashDirName+"/"); ok && strings.HasPrefix(root, TrashDirName+"/") {
+		p = "/" + rest
+	}
 	mount := "/" + path.Base(root)
 	if p == mount {
 		return root
