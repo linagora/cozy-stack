@@ -5,6 +5,7 @@
 package driveevent
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -87,19 +88,21 @@ func FileCreated(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc
 }
 
 // FileUpdated publishes that the content of a file of the personal drive was
-// replaced. byOwner tells if the owner replaced it, rather than someone with a
-// sharing link or an editor of an office document.
-func FileUpdated(ctx context.Context, inst *instance.Instance, file *vfs.FileDoc, byOwner bool) {
-	if file == nil || !FileEventsOn(inst) {
+// replaced, from olddoc to newdoc. byOwner tells if the owner replaced it,
+// rather than someone with a sharing link or an editor of an office document.
+// The same content again is no update, and the updates of a window are
+// published as one at its end.
+func FileUpdated(ctx context.Context, inst *instance.Instance, olddoc, newdoc *vfs.FileDoc, byOwner bool) {
+	if newdoc == nil || !FileEventsOn(inst) {
 		return
 	}
-	// A file is updated many times: its new revision tells the updates apart.
-	event := rabbitmq.CloudEvent{
-		ID:   file.DocID + "/updated/" + file.DocRev,
-		Type: rabbitmq.RoutingKeyDriveFileUpdated,
-		Time: time.Now().UTC(),
+	if olddoc != nil && len(olddoc.MD5Sum) > 0 && bytes.Equal(olddoc.MD5Sum, newdoc.MD5Sum) {
+		return
 	}
-	publish(ctx, inst, event, fileObject(inst, file), byOwner)
+	if groupUpdate(inst, newdoc, byOwner) {
+		return
+	}
+	publish(ctx, inst, updatedEvent(newdoc), fileObject(inst, newdoc), byOwner)
 }
 
 // FileDeleted publishes that a file of the personal drive was moved to the
@@ -154,14 +157,22 @@ func fileObject(inst *instance.Instance, file *vfs.FileDoc) Object {
 // publish sends the event to the owner of the instance. The change is already
 // made, so the event is best effort: publish only logs its errors.
 func publish(ctx context.Context, inst *instance.Instance, event rabbitmq.CloudEvent, object Object, byOwner bool) {
-	if publisher == nil {
-		return
+	if err := publishWith(ctx, publisher, inst, event, object, byOwner); err != nil {
+		inst.Logger().WithNamespace("drive-event").
+			Warnf("Cannot publish %s for %s: %s", event.Type, object.ID, err)
+	}
+}
+
+// publishWith sends the event with pub, and returns why it could not.
+func publishWith(ctx context.Context, pub messaging.Publisher, inst *instance.Instance, event rabbitmq.CloudEvent, object Object, byOwner bool) error {
+	if pub == nil {
+		return nil
 	}
 	// The events name people by uuid only: without it, no one could get it.
 	if inst.OIDCUUID == "" {
 		inst.Logger().WithNamespace("drive-event").
 			Debugf("No %s event: the uuid of the owner is unknown until they log in", event.Type)
-		return
+		return nil
 	}
 	event.TwakeOrg = inst.OrgID
 	event.Data = Data{
@@ -171,8 +182,5 @@ func publish(ctx context.Context, inst *instance.Instance, event rabbitmq.CloudE
 	if byOwner {
 		event.TwakeActorID = inst.OIDCUUID
 	}
-	if err := publisher.Publish(ctx, rabbitmq.ActivityRequest(inst.ContextName, event)); err != nil {
-		inst.Logger().WithNamespace("drive-event").
-			Warnf("Cannot publish %s for %s: %s", event.Type, object.ID, err)
-	}
+	return pub.Publish(ctx, rabbitmq.ActivityRequest(inst.ContextName, event))
 }

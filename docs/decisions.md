@@ -66,3 +66,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Théo Poizat, to be confirmed by a cozy-stack maintainer.
 - Why: the n8n trigger of Twake Drive starts a workflow on a new sharing; people receive few sharings, so the event needs no setting, and the person who shares is on another instance, whose uuid is unknown here.
 - Scope: Cozy to Cozy sharings and shared drives, on the instance of the recipient.
+
+## 2026-11-26, [Architecture] The updates of a file are grouped per window
+
+- Decision: the first update of a file in a personal drive opens a window of `drive_activity.window` in Redis and schedules a job at its end, which closes the window, publishes one `com.twake.drive.file.updated.v1` with the file as it is then, and fails so that it is tried again when the publish fails; the next updates of the window publish nothing, and neither does content identical to the previous one. Without Redis, each update is published at once.
+- Decided by: Théo Poizat, to be confirmed by a cozy-stack maintainer.
+- Why: a sync or an editor can save a file every few seconds, and each event starts a workflow; the window is the one of the digest of shared drives (ADR 010), so a context sets one delay for both.
+- Scope: `com.twake.drive.file.updated.v1` only; created and deleted happen once per file and stay immediate.

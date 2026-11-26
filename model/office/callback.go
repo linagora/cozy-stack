@@ -222,6 +222,6 @@ func publishSaved(inst *instance.Instance, olddoc, newdoc *vfs.FileDoc) {
 	if olddoc == nil {
 		driveevent.FileCreated(ctx, inst, newdoc, false)
 	} else {
-		driveevent.FileUpdated(ctx, inst, newdoc, false)
+		driveevent.FileUpdated(ctx, inst, olddoc, newdoc, false)
 	}
 }

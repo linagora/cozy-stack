@@ -666,6 +666,12 @@ For example:
 - `folder` is the folder the file is in, or was in before the trash.
 - An update saved by OnlyOffice has no actor: the callback does not say who
   edited the document.
+- The updates of a file are grouped, like the digest of shared drives: the
+  first one opens a window of `drive_activity.window` (30 seconds by default),
+  and at its end one `file.updated` event tells the file as it is then, with
+  the owner as actor if they made one of the updates. Nothing is published for
+  a file moved to the trash meanwhile, nor for a `PUT` of the same content. A
+  Stack without Redis publishes each update at once.
 - Renaming or moving a file, a folder moved to the trash, the notes saved by
   the notes editor and the sharing replication publish nothing.
 - It is off by default: a sync can create thousands of files at once. The

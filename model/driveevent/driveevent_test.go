@@ -135,16 +135,38 @@ func TestFileCreated(t *testing.T) {
 	})
 }
 
+// withoutRedis makes the test run as on a Stack without Redis.
+func withoutRedis(t *testing.T) {
+	t.Helper()
+	previous := config.GetConfig().SessionStorage
+	config.GetConfig().SessionStorage = nil
+	t.Cleanup(func() { config.GetConfig().SessionStorage = previous })
+}
+
 func TestFileUpdated(t *testing.T) {
 	config.UseTestFile(t)
 	fileEventsContext(t, true)
-	pub := publishTo(t, nil)
-	FileUpdated(context.Background(), owner(), invoice, false)
-	event := onlyEvent(t, pub, rabbitmq.RoutingKeyDriveFileUpdated)
-	assert.Equal(t, "file-1/updated/2-abc", event.ID)
-	assert.Empty(t, event.TwakeActorID)
-	assert.WithinDuration(t, time.Now(), event.Time, time.Minute)
-	assert.Equal(t, invoiceObject, event.Data.(Data).Object)
+	withoutRedis(t)
+	before := &vfs.FileDoc{DocID: "file-1", MD5Sum: []byte{1}}
+	after := *invoice
+	after.MD5Sum = []byte{2}
+
+	t.Run("IsPublishedAtOnceWithoutRedis", func(t *testing.T) {
+		pub := publishTo(t, nil)
+		FileUpdated(context.Background(), owner(), before, &after, false)
+		event := onlyEvent(t, pub, rabbitmq.RoutingKeyDriveFileUpdated)
+		assert.Equal(t, "file-1/updated/2-abc", event.ID)
+		assert.Empty(t, event.TwakeActorID)
+		assert.WithinDuration(t, time.Now(), event.Time, time.Minute)
+		assert.Equal(t, invoiceObject, event.Data.(Data).Object)
+	})
+
+	t.Run("IgnoresTheSameContentAgain", func(t *testing.T) {
+		pub := publishTo(t, nil)
+		same := after
+		FileUpdated(context.Background(), owner(), &same, &after, true)
+		assert.Empty(t, pub.requests)
+	})
 }
 
 func TestFileDeleted(t *testing.T) {

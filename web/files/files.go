@@ -425,8 +425,14 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 }
 
 func OverwriteFileContentHandler(c echo.Context) error {
+	inst := middlewares.GetInstance(c)
+	// The file as it was, to tell an update from the same content again.
+	var olddoc *vfs.FileDoc
+	if driveevent.FileEventsOn(inst) {
+		olddoc, _ = inst.VFS().FileByID(c.Param("file-id"))
+	}
 	file, err := OverwriteFileContent(c, nil)
-	driveevent.FileUpdated(c.Request().Context(), middlewares.GetInstance(c), file, byOwner(c))
+	driveevent.FileUpdated(c.Request().Context(), inst, olddoc, file, byOwner(c))
 	return err
 }
 
