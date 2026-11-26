@@ -73,8 +73,10 @@ func (b *tableParser) Open(parent ast.Node, reader text.Reader, pc parser.Contex
 	node := NewTable()
 	// Malformed attributes must not advance the document reader across lines.
 	line, _ = reader.PeekLine()
-	attributesReader := text.NewReader(line)
-	if attrs, ok := parseFlatAttributes(attributesReader); ok {
+	// Goldmark recurses on each nested '[' or '{' without depth limit:
+	// only let it see a bounded slice of the line.
+	attributesReader := text.NewReader(line[:min(len(line), maxAttributesLength)])
+	if attrs, ok := parser.ParseAttributes(attributesReader); ok {
 		_, position := attributesReader.Position()
 		reader.Advance(position.Start)
 		for _, attr := range attrs {
