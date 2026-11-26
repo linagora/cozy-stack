@@ -71,6 +71,22 @@ func TestSharedDriveRelativePaths(t *testing.T) {
 			Object().Path("$.data.attributes.path").String().IsEqual(root + "/Meetings")
 	})
 
+	t.Run("RootInTheChanges", func(t *testing.T) {
+		_, eB, _ := env.createClients(t)
+		feed := get(eB, drive+"/_changes", nil).JSON().Object().Value("results").Array()
+		found := false
+		for _, row := range feed.Iter() {
+			obj := row.Object()
+			if obj.Value("id").String().Raw() != env.firstRootDirID {
+				continue
+			}
+			found = true
+			assert.NotEqual(t, true, obj.Raw()["deleted"])
+			obj.Path("$.doc.path").String().IsEqual(root)
+		}
+		assert.True(t, found, "the moved root is in the feed")
+	})
+
 	t.Run("MetadataByPath", func(t *testing.T) {
 		_, eB, _ := env.createClients(t)
 		res := get(eB, drive+"/metadata", map[string]string{"Path": root + "/Meetings"})

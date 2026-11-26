@@ -1433,6 +1433,8 @@ Put a file in the trash.
 Retrieve file or directory metadata by path. With a folder link, the path
 starts with the shared folder's name. Use that same path for metadata updates,
 direct downloads, download links, and the `files` list when creating an archive.
+A link with only selector rules, like an album link on `referenced_by`, has no
+folder to start at: it gets no `path` nor `restore_path`, and `404` by path.
 
 #### Request
 
@@ -1933,8 +1935,8 @@ where it is read with the access of the user checked:
   accepted it gives the item. It is what the shared drive routes give for the
   item, with the `driveId` of this drive: when several drives give the item,
   those where the user can write come first, then the outermost one. Its
-  `path` is relative to the root of the drive (`/Sub/hello.txt`), and the root
-  itself has no `path`. Its links are paths of the files routes
+  `path` starts with the name of the root of the drive (`/Team/Sub/hello.txt`),
+  as on the shared drive routes. Its links are paths of the files routes
   (`/files/:file-id`, `/files/:file-id/thumbnails/:secret/:format`), as for
   an item of the user, with a thumbnail secret of the instance of the owner.
 - a trashed item is in no drive: it is included, with the `driveId`, when a

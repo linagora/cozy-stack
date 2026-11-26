@@ -290,7 +290,8 @@ func resolveDriveRecents(ownerDomain string, member *sharing.Member, group []*re
 		// where it was may be above the root of the drive: it is not given.
 		shown := fullpath
 		if !trashed {
-			if shown, err = scope.PathFromRoot(fullpath); err != nil {
+			// The same path as on the shared drive routes, from the name of the root
+			if shown = vfs.RelativeToLink([]vfs.LinkRoot{{Path: scope.RootPath}}, fullpath); shown == "" {
 				continue
 			}
 		}

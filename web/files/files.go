@@ -880,6 +880,8 @@ func applyPatch(c echo.Context, fs vfs.VFS, patch *docPatch) (err error) {
 		return err
 	}
 
+	// The patch may have renamed or moved a root of the path scope
+	c.Set(contextPathScope, nil)
 	if dir != nil {
 		return DirData(c, http.StatusOK, dir, nil)
 	}
@@ -1401,9 +1403,6 @@ func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing, checkRead fun
 		if scope.Roots != nil || scope.Drive != nil {
 			archive.IDs = slices.Clone(archive.IDs)
 			for _, p := range archive.Files {
-				if checkRead != nil && p == "/trash" {
-					return jsonapi.Forbidden(errors.New("cannot archive the trash"))
-				}
 				dir, file, err := lookupPath(instance.VFS(), scope, p)
 				if err != nil {
 					return err
@@ -2287,7 +2286,7 @@ func (filter *changesFilter) SharedDriveChange(change *couchdb.Change) *couchdb.
 	// The path of a file is missing when its parent directory can't be read
 	path, _ := change.Doc.M["path"].(string)
 	sharedDirPath := utils.EnsureHasSuffix(filter.SharedDir.Fullpath, "/")
-	if strings.HasPrefix(path, sharedDirPath) {
+	if change.DocID == filter.SharedDir.DocID || strings.HasPrefix(path, sharedDirPath) {
 		change.Doc.M["driveId"] = filter.SharedDir.SharingID()
 		roots := filter.roots
 		if roots == nil {

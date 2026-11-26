@@ -208,4 +208,11 @@ func TestPublicLinkPaths(t *testing.T) {
 			Expect().Status(http.StatusOK)
 		noAncestorName(t, res).Path("$.data.attributes.restore_path").String().IsEqual("/Docs")
 	})
+
+	t.Run("RenameTheRootByPath", func(t *testing.T) {
+		res := client(t).PATCH("/files/metadata").WithQuery("Path", "/Docs").
+			WithHeader("Authorization", "Bearer "+writeLink).WithHeader("Content-Type", "application/vnd.api+json").
+			WithBytes([]byte(`{"data":{"attributes":{"name":"Docs2"}}}`)).Expect().Status(http.StatusOK)
+		noAncestorName(t, res).Path("$.data.attributes.path").String().IsEqual("/Docs2")
+	})
 }
