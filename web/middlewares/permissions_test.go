@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAllowInstallAppFromFile(t *testing.T) {
+func TestAllowInstallAppSources(t *testing.T) {
 	oldMode := build.BuildMode
 	build.BuildMode = build.ModeProd
 	t.Cleanup(func() { build.BuildMode = oldMode })
@@ -26,6 +26,10 @@ func TestAllowInstallAppFromFile(t *testing.T) {
 		{"maximal token from file", &permission.Permission{Type: permission.TypeOauth, Permissions: maximal}, "file:///var/lib/cozy", false},
 		{"maximal token from FILE", &permission.Permission{Type: permission.TypeOauth, Permissions: maximal}, "FILE:///var/lib/cozy", false},
 		{"maximal token from registry", &permission.Permission{Type: permission.TypeOauth, Permissions: maximal}, "registry://drive", true},
+		{"maximal token from https", &permission.Permission{Type: permission.TypeOauth, Permissions: maximal}, "https://example.org/app.tar.gz", false},
+		{"maximal token from git+ssh", &permission.Permission{Type: permission.TypeOauth, Permissions: maximal}, "git+ssh://example.org/app.git", false},
+		{"maximal token without source", &permission.Permission{Type: permission.TypeOauth, Permissions: maximal}, "", true},
+		{"CLI from https", &permission.Permission{Type: permission.TypeCLI, Permissions: maximal}, "https://example.org/app.tar.gz", true},
 		{"CLI from file", &permission.Permission{Type: permission.TypeCLI, Permissions: maximal}, "file:///var/lib/cozy", true},
 	}
 	for _, tt := range tests {

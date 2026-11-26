@@ -549,7 +549,14 @@ func AllowInstallApp(c echo.Context, appType consts.AppType, sourceURL string, v
 		return ErrForbidden
 	}
 
+	// Other sources are for the CLI and dev builds: a maximal token can
+	// still install and update from the registry, or update from the source
+	// already recorded when none is given.
 	if pdoc.Permissions.IsMaximal() {
+		if sourceURL != "" && !strings.HasPrefix(sourceURL, "registry://") &&
+			pdoc.Type != permission.TypeCLI && !build.IsDevRelease() {
+			return ErrForbidden
+		}
 		return nil
 	}
 
