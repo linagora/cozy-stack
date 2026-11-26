@@ -374,7 +374,7 @@ func (s *Sharing) addMember(inst *instance.Instance, m Member) (string, int, err
 		}
 		var found bool
 		if m.Email != "" {
-			found = m.Email == member.Email
+			found = strings.EqualFold(m.Email, member.Email)
 		} else if m.Instance != "" {
 			found = m.Instance == member.Instance
 		}
