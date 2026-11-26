@@ -67,6 +67,13 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Why: NFC composes every script, Hangul and kana included, where dropping the combining marks in the char filter only covers some; the ICU plugin would be a new requirement on the OpenSearch cluster; and the hits keep the name as stored.
 - Scope: `model/search`, the `files_v1` index.
 
+## 2026-11-26, [Architecture] Search uses a drive's scope only when the caller holds the drive
+
+- Decision: the search reads the scope docs of the active drives that the caller holds as a recipient (one CouchDB query, one `_mget`), and keeps those whose owner still lists the caller. Replaces "Search scopes list the member addresses until #5395".
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5260#discussion_r4681654061), #5395
+- Why: a member can change its address without proof, so the owner's list alone does not show who may search a drive; ADR 008 describes these two steps. Measured locally, it adds about 1 ms to a search with 10 drives and 20 ms with 200: the `active` index does not cover `drive`, so CouchDB reads each sharing doc.
+- Scope: `model/search`, `POST /files/search`.
+
 ## 2026-11-27, [Tech] Search purges a deleted instance after its databases, without retry
 
 - Decision: `Destroy` removes the search documents of an instance after its CouchDB databases are deleted, and a failure is only logged: nothing retries it.

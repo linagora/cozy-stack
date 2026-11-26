@@ -110,8 +110,7 @@ func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocume
 // activePrincipals returns the domains of the recipients who accepted the
 // sharing, lowercased like the instance domains, and those of them who cannot
 // write. Members[0] is the owner. A member can change its address without
-// proof, so the search must also check that the caller holds the sharing
-// (#5395).
+// proof, so the search also checks that the caller holds the sharing.
 func activePrincipals(s *sharing.Sharing) (principals, readOnly []string) {
 	for i, m := range s.Members {
 		if i == 0 || m.Status != sharing.MemberStatusReady {
