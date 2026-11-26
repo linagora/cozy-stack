@@ -1076,6 +1076,33 @@ func TestAuth(t *testing.T) {
 		assert.False(t, updated.Pending)
 	})
 
+	t.Run("UpdateClientKeepsSoftwareID", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		client := oauth.Client{
+			RedirectURIs: []string{"https://example.org/oauth/callback"},
+			ClientName:   "cozy-test-software-id",
+			SoftwareID:   "github.com/cozy/cozy-test",
+		}
+		require.Nil(t, client.Create(testInstance))
+
+		e.PUT("/auth/register/"+client.ClientID).
+			WithHost(domain).
+			WithHeader("Accept", "application/json").
+			WithHeader("Authorization", "Bearer "+client.RegistrationToken).
+			WithJSON(map[string]interface{}{
+				"client_id":     client.ClientID,
+				"client_name":   "cozy-test-software-id",
+				"redirect_uris": []string{"https://example.org/oauth/callback"},
+				"software_id":   "registry://drive",
+			}).
+			Expect().Status(200)
+
+		updated, err := oauth.FindClient(testInstance, client.ClientID)
+		require.NoError(t, err)
+		assert.Equal(t, "github.com/cozy/cozy-test", updated.SoftwareID)
+	})
+
 	t.Run("AuthorizeWhenNotLoggedIn", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 

@@ -622,6 +622,7 @@ func (c *Client) Update(i *instance.Instance, old *Client) *ClientRegistrationEr
 	c.CreatedAtOnboarding = old.CreatedAtOnboarding
 	c.OIDCSessionID = old.OIDCSessionID
 	c.Pending = old.Pending
+	c.SoftwareID = old.SoftwareID
 
 	// Updating metadata
 	md := metadata.New()
