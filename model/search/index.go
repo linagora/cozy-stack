@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -26,6 +26,11 @@ const (
 	// checkpointDocID is the CouchDB local document holding the checkpoint.
 	checkpointDocID = "search-index"
 )
+
+// refusedDocErrors are the types of the bulk errors about a document itself,
+// that a retry will not fix. The others, like a closed or missing index, fail
+// the job and keep the checkpoint.
+var refusedDocErrors = []string{"mapper_parsing_exception", "strict_dynamic_mapping_exception"}
 
 // batchSize is the maximal number of changes indexed by a job (a variable for
 // the tests).
@@ -86,12 +91,15 @@ func Index(ctx context.Context, inst *instance.Instance, log logger.Logger) erro
 	if ndjson := bulkActions(inst.Domain, feed.Results); len(ndjson) > 0 {
 		err := client.Bulk(ctx, FilesIndex, ndjson)
 		var osErr *opensearch.Error
-		if errors.As(err, &osErr) && osErr.DocID != "" && osErr.Status >= 400 &&
-			osErr.Status < 500 && osErr.Status != http.StatusTooManyRequests {
+		if errors.As(err, &osErr) && osErr.DocID != "" && slices.Contains(refusedDocErrors, osErr.Type) {
 			// Retrying will not fix a document that OpenSearch refuses: the
 			// others are indexed, and the checkpoint moves on.
 			log.Warnf("a file of the batch is not indexed: %s", err)
 		} else if err != nil {
+			if osErr != nil && osErr.Type == "index_not_found_exception" {
+				// The retry creates the index again, with our mappings.
+				readyClient.Store(nil)
+			}
 			return err
 		}
 	}

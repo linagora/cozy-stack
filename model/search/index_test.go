@@ -123,17 +123,27 @@ func TestIndex(t *testing.T) {
 		assert.Equal(t, []string{"POST /files_v1/_bulk", "POST /files_v1/_bulk"}, requests[2:])
 	})
 
-	t.Run("a refused file does not hold the checkpoint, an outage does", func(t *testing.T) {
-		status, answer := 0, ""
-		fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(status)
-			_, _ = w.Write([]byte(answer))
-		}))
-		t.Cleanup(fake.Close)
+	t.Run("an outage holds the checkpoint, a refused file does not", func(t *testing.T) {
 		saved := config.GetConfig().Search
-		u, _ := url.Parse(fake.URL)
-		config.GetConfig().Search = opensearch.NewClient(opensearch.Options{URL: u})
 		t.Cleanup(func() { config.GetConfig().Search = saved })
+		// useBulkAnswer installs a new client, whose indices are created and
+		// whose bulk requests get this answer.
+		useBulkAnswer := func(status int, answer string) {
+			fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					return
+				}
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(answer))
+			}))
+			t.Cleanup(fake.Close)
+			u, _ := url.Parse(fake.URL)
+			config.GetConfig().Search = opensearch.NewClient(opensearch.Options{URL: u})
+		}
+		item := func(status int, errType string) string {
+			return fmt.Sprintf(`{"errors":true,"items":[{"index":{"_id":"x","status":%d,"error":{"type":%q,"reason":"r"}}}]}`,
+				status, errType)
+		}
 		lastSeq := func() string {
 			cp, err := couchdb.LoadCheckpoint(inst, consts.Files, checkpointDocID)
 			require.NoError(t, err)
@@ -142,11 +152,25 @@ func TestIndex(t *testing.T) {
 
 		createTextFile(t, inst, dir.ID(), "outage.txt")
 		before := lastSeq()
-		status, answer = http.StatusServiceUnavailable, `{"error":{"type":"unavailable","reason":"down"},"status":503}`
-		require.Error(t, Index(ctx, inst, log))
-		assert.Equal(t, before, lastSeq(), "the batch will be retried")
+		for _, tc := range []struct {
+			name   string
+			status int
+			answer string
+		}{
+			{"a 503 on the request", http.StatusServiceUnavailable, `{"error":{"type":"unavailable","reason":"down"},"status":503}`},
+			{"a 4xx on the request", http.StatusBadRequest, `{"error":{"type":"illegal_argument_exception","reason":"bad"},"status":400}`},
+			{"an item in 429", http.StatusOK, item(http.StatusTooManyRequests, "es_rejected_execution_exception")},
+			{"an item in 5xx", http.StatusOK, item(http.StatusInternalServerError, "exception")},
+			{"a closed index", http.StatusOK, item(http.StatusBadRequest, "index_closed_exception")},
+			{"a missing index", http.StatusOK, item(http.StatusNotFound, "index_not_found_exception")},
+		} {
+			useBulkAnswer(tc.status, tc.answer)
+			assert.Error(t, Index(ctx, inst, log), tc.name)
+			assert.Equal(t, before, lastSeq(), "%s: the batch will be retried", tc.name)
+		}
+		assert.Nil(t, readyClient.Load(), "the retry creates the missing index again")
 
-		status, answer = http.StatusOK, `{"errors":true,"items":[{"index":{"_id":"x","status":400,"error":{"type":"mapper_parsing_exception","reason":"bad"}}}]}`
+		useBulkAnswer(http.StatusOK, item(http.StatusBadRequest, "mapper_parsing_exception"))
 		require.NoError(t, Index(ctx, inst, log))
 		assert.NotEqual(t, before, lastSeq(), "the checkpoint moves on")
 	})
