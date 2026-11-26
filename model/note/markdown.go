@@ -596,6 +596,11 @@ const maxNesting = 50
 type nestingLimit struct{ parser.BlockParser }
 
 func (p nestingLimit) Open(parent ast.Node, reader text.Reader, pc parser.Context) (ast.Node, parser.State) {
+	// Under a list, goldmark's list parser opens nothing but clears the flag
+	// its items set to skip it: it must run, or the next list is skipped.
+	if parent.Kind() == ast.KindList {
+		return p.BlockParser.Open(parent, reader, pc)
+	}
 	depth := 0
 	for n := parent; n != nil; n = n.Parent() {
 		if depth++; depth > maxNesting {
