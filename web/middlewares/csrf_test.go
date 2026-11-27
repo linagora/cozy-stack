@@ -105,6 +105,7 @@ func TestCSRFSecureCookieOnlyFromThisHost(t *testing.T) {
 		TokenLookup:  "form:csrf_token",
 		CookieSecure: true,
 		CookiePath:   "/auth",
+		CookieDomain: "example.org",
 	})(func(c echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
@@ -122,6 +123,7 @@ func TestCSRFSecureCookieOnlyFromThisHost(t *testing.T) {
 	require.Len(t, cookies, 1)
 	assert.Equal(t, "__Host-_csrf", cookies[0].Name)
 	assert.Equal(t, "/", cookies[0].Path)
+	assert.Empty(t, cookies[0].Domain)
 	assert.True(t, cookies[0].Secure)
 
 	// A _csrf cookie set by another host on the parent domain is ignored.
