@@ -382,18 +382,14 @@ func markdownNodeMapper() markdown.NodeMapper {
 						return err
 					}
 				}
-			case "tableHeader":
+			case "tableHeader", "tableCell":
 				if isTableCell(state.Top()) {
 					if _, err := state.CloseNode(); err != nil {
 						return err
 					}
 				}
-				attrs = cellAttributes(node)
-			case "tableCell":
-				if isTableCell(state.Top()) {
-					if _, err := state.CloseNode(); err != nil {
-						return err
-					}
+				if state.Top().Type.Name != "tableRow" {
+					return errUnbalancedTable
 				}
 				attrs = cellAttributes(node)
 			default:
