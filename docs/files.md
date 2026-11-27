@@ -407,9 +407,8 @@ This endpoint returns the size taken by the files in a directory, including
 those in subdirectories.
 
 The `files_count` attribute is the number of files in the directory, including
-those in subdirectories (directories are not counted). If the directory has
-more than 10 000 subdirectories, only the first 10 000 are taken into account
-for `size` and `files_count`.
+those in subdirectories (directories are not counted). The totals may be
+approximate if files are moved or changed while the request is running.
 
 #### Request
 
