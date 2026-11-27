@@ -234,6 +234,8 @@ echo "{\"type\": \"manifest\", \"message\": \"$(ls ${1}/manifest.konnector)\" }"
 				_, _ = fmt.Fprintf(w, `{"slug": "my-konnector-secret", "version": "1.0.0", "sha256": %q}`, sum)
 			case "/registry/my-konnector-secret/2.0.0":
 				_, _ = io.WriteString(w, `null`)
+			case "/registry/my-konnector-secret/4.0.0":
+				_, _ = fmt.Fprintf(w, `{"slug": "my-konnector-secret", "version": "4.0.0", "sha256": %q}`, sum+"zz")
 			case "/registry/my-konnector-secret/3.0.0":
 				_, _ = io.WriteString(w, `{"slug": "my-konnector-secret", "version": "3.0.0"}`)
 			default:
@@ -256,6 +258,8 @@ echo "{\"type\": \"manifest\", \"message\": \"$(ls ${1}/manifest.konnector)\" }"
 			// The registry gives no release, or a release without digest.
 			{"registry://my-konnector-secret/stable", sum, false, "2.0.0"},
 			{"registry://my-konnector-secret/stable", "", false, "3.0.0"},
+			// A digest with a valid prefix but trailing garbage.
+			{"registry://my-konnector-secret/stable", sum + "zz", false, "4.0.0"},
 			// A registry source over files from elsewhere, as an older stack
 			// could record on an update that did not fetch them.
 			{"registry://my-konnector-secret/stable", "git-0f1e2d3c", false, ""},
