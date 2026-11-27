@@ -296,14 +296,10 @@ func TestSettings(t *testing.T) {
 		cliToken, err := testInstance.MakeJWT(consts.CLIAudience, "CLI", consts.Settings, "", time.Now())
 		require.NoError(t, err)
 
-		for attrs, tok := range map[string]string{
-			`"locale": "xx"`:       token,
-			`"tz": "Mars/Olympus"`: token,
-			`"context": "no-such"`: cliToken,
-		} {
+		put := func(attrs, tok string) *httpexpect.Response {
 			doc, err := testInstance.SettingsDocument()
 			require.NoError(t, err)
-			e.PUT("/settings/instance").
+			return e.PUT("/settings/instance").
 				WithCookie(sessCookie, "connected").
 				WithHeader("Content-Type", "application/vnd.api+json").
 				WithHeader("Accept", "application/vnd.api+json").
@@ -311,8 +307,29 @@ func TestSettings(t *testing.T) {
 				WithBytes([]byte(fmt.Sprintf(`{"data": {"type": "io.cozy.settings",
 					"id": "io.cozy.settings.instance", "meta": {"rev": %q},
 					"attributes": {%s}}}`, doc.Rev(), attrs))).
-				Expect().Status(400)
+				Expect()
 		}
+		before, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		for attrs, tok := range map[string]string{
+			`"locale": "xx"`:       token,
+			`"tz": "Mars/Olympus"`: token,
+			`"tz": 1`:              token,
+			`"tz": {"name": "x"}`:  token,
+			`"context": "no-such"`: cliToken,
+		} {
+			put(attrs, tok).Status(400)
+		}
+		after, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		assert.Equal(t, before.M["tz"], after.M["tz"])
+
+		// A zone stored before this check is still accepted when sent back
+		// unchanged with another edit.
+		after.M["tz"] = "Mars/Olympus"
+		require.NoError(t, couchdb.UpdateDoc(testInstance, after))
+		put(`"tz": "Mars/Olympus", "public_name": "Legacy TZ"`, token).Status(200)
+		put(fmt.Sprintf(`"tz": %q`, before.M["tz"]), token).Status(200)
 	})
 
 	t.Run("PatchWithBadRev", func(t *testing.T) {
