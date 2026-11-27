@@ -872,6 +872,9 @@ func findDocsRaw(db prefixer.Prefixer, doctype string, req interface{}, results 
 	if !body.Docs.present {
 		return nil, errors.New("couchdb: _find response without docs")
 	}
+	if body.Docs.err != nil {
+		return &response, body.Docs.err
+	}
 	rv.Elem().Set(body.Docs.dst.Elem())
 	return &response, nil
 }
@@ -880,11 +883,13 @@ func findDocsRaw(db prefixer.Prefixer, doctype string, req interface{}, results 
 type findDocs struct {
 	present bool
 	dst     reflect.Value
+	err     error // kept until the warning is checked
 }
 
 func (d *findDocs) UnmarshalJSON(b []byte) error {
 	d.present = true
-	return json.Unmarshal(b, d.dst.Interface())
+	d.err = json.Unmarshal(b, d.dst.Interface())
+	return nil
 }
 
 // FindDocsRaw find documents

@@ -672,6 +672,19 @@ func TestFindDocsRawDecodesTheDocs(t *testing.T) {
 	assert.Error(t, err)
 	assert.Len(t, docs, 2)
 
+	// A row that fails to decode in a page with the warning: a strict query
+	// still gets no_index, an unoptimized one the decoding error.
+	serveFind(t, []byte(`{"docs":[{"_id":"c","test":42}],"warning":"No matching index found, create an index to optimize query time."}`))
+	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	var couchErr *Error
+	require.ErrorAs(t, err, &couchErr)
+	assert.Equal(t, "no_index", couchErr.Name)
+	assert.Len(t, docs, 2)
+	_, err = FindDocsUnoptimizedRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	var typeErr *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &typeErr)
+	assert.Len(t, docs, 2)
+
 	// "docs": null empties the results, and a missing "docs" is an error.
 	serveFind(t, []byte(`{"docs":null,"bookmark":"nil"}`))
 	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
