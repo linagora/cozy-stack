@@ -43,18 +43,18 @@ func TestBulkActions(t *testing.T) {
 	assert.Equal(t,
 		`{"index":{"_id":"alice.example.net:f1"}}`+"\n"+
 			`{"resource_key":"alice.example.net:f1","owner_instance_id":"alice.example.net","doc_id":"f1","dir_id":"d1",`+
-			`"scoped_dir_key":"alice.example.net:d1","type":"file","name":"a.txt","trashed":false}`+"\n"+
+			`"scoped_dir_key":"alice.example.net:d1","type":"file","name":"a.txt","trashed":false,"owner_uid":"alice-uid"}`+"\n"+
 			`{"index":{"_id":"alice.example.net:f4"}}`+"\n"+
 			`{"resource_key":"alice.example.net:f4","owner_instance_id":"alice.example.net","doc_id":"f4","dir_id":"gone",`+
-			`"scoped_dir_key":"alice.example.net:gone","type":"file","name":"b.txt","trashed":false}`+"\n"+
+			`"scoped_dir_key":"alice.example.net:gone","type":"file","name":"b.txt","trashed":false,"owner_uid":"alice-uid"}`+"\n"+
 			`{"delete":{"_id":"alice.example.net:f2"}}`+"\n"+
 			`{"delete":{"_id":"alice.example.net:f3"}}`+"\n"+
 			`{"delete":{"_id":"alice.example.net:d2"}}`+"\n"+
 			`{"index":{"_id":"alice.example.net:nm"}}`+"\n"+
 			`{"resource_key":"alice.example.net:nm","owner_instance_id":"alice.example.net","doc_id":"nm","dir_id":"code",`+
-			`"scoped_dir_key":"alice.example.net:nm","type":"directory","name":"node_modules","trashed":false}`+"\n",
-		string(bulkActions(domain, changes, parents)))
-	assert.Empty(t, bulkActions(domain, nil, nil))
+			`"scoped_dir_key":"alice.example.net:nm","type":"directory","name":"node_modules","trashed":false,"owner_uid":"alice-uid"}`+"\n",
+		string(bulkActions(domain, "alice-uid", changes, parents)))
+	assert.Empty(t, bulkActions(domain, "alice-uid", nil, nil))
 }
 
 func TestSkippedFolders(t *testing.T) {
@@ -106,6 +106,7 @@ func TestIndex(t *testing.T) {
 		assert.Equal(t, "Reports", docs[dir.ID()]["name"])
 		assert.Equal(t, "2026.txt", docs[file.ID()]["name"])
 		assert.Equal(t, Key(inst.Domain, dir.ID()), docs[file.ID()]["scoped_dir_key"])
+		assert.Equal(t, inst.ID(), docs[file.ID()]["owner_uid"])
 		assert.NotContains(t, docs, consts.RootDirID)
 		assert.NotContains(t, docs, consts.TrashDirID)
 	})

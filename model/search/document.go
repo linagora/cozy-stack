@@ -27,6 +27,10 @@ type FileDocument struct {
 	Class       string `json:"class,omitempty"`
 	UpdatedAt   string `json:"updated_at,omitempty"`
 	Trashed     bool   `json:"trashed"`
+	// OwnerUID is the id of the instance in the global CouchDB, set by the
+	// indexer: it is new at each creation, so an instance created again with
+	// the domain of a destroyed one does not match its leftover docs.
+	OwnerUID string `json:"owner_uid,omitempty"`
 }
 
 // Key returns the key of a document of an instance in the search indices.

@@ -117,8 +117,9 @@ func Destroy(domain string) error {
 
 	// After the databases: an index job reads its checkpoint and the changes
 	// from them, so none writes after the purge. A failure must not block the
-	// deletion, but the documents left behind are found by an instance created
-	// again with this domain (#5398).
+	// deletion: the search matches the files of an instance by its id, not its
+	// domain, and drops the hits of a missing owner, so the leftover documents
+	// are not shown.
 	if err := purge.CleanInstance(context.Background(), inst.Domain); err != nil {
 		logger.WithDomain(inst.Domain).WithNamespace("search").
 			Warnf("Could not remove the search documents: %s", err)

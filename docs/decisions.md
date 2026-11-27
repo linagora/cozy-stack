@@ -74,6 +74,13 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Why: a member can change its address without proof, so the owner's list alone does not show who may search a drive; ADR 008 describes these two steps. Only the ids are read: a scope doc exists only for an active drive and lists only the members who accepted it, while a query on `active` and `drive` read every sharing doc (45 ms for 200 drives in CouchDB, against 3 ms for the ids).
 - Scope: `model/search`, `POST /files/search`.
 
+## 2026-11-26, [Tech] Search matches the caller's own files by the instance id
+
+- Decision: the file docs store the id of their instance in the global CouchDB (`owner_uid`), and the search matches the caller's own files on it instead of the domain. The purge of a destroyed instance stays best-effort.
+- Decided by: Anton Shepilov (author), #5398, [review comment](https://github.com/linagora/cozy-stack/pull/5259#discussion_r4682884488)
+- Why: the purge can fail or run before a last index job writes, and the domain of a destroyed instance can be reused; the instance id is new at each creation, so the new instance never sees the leftovers, whatever happens to the purge. The leftovers of a domain that is not reused stay in OpenSearch until something deletes them.
+- Scope: `model/search`, the `files_v1` index, `POST /files/search`.
+
 ## 2026-11-27, [Tech] Search purges a deleted instance after its databases, without retry
 
 - Decision: `Destroy` removes the search documents of an instance after its CouchDB databases are deleted, and a failure is only logged: nothing retries it.

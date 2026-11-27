@@ -27,7 +27,7 @@ import (
 )
 
 func TestBuildQuery(t *testing.T) {
-	body := buildQuery("bob.example.net", "report", []string{"alice.example.net:d1"}, nil, 20, nil)
+	body := buildQuery("bob-uid", "report", []string{"alice.example.net:d1"}, nil, 20, nil)
 	data, err := json.Marshal(body)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{
@@ -40,7 +40,7 @@ func TestBuildQuery(t *testing.T) {
 				{"match": {"name.exact": {"query": "report", "boost": 4}}}
 			], "minimum_should_match": 1}}],
 			"filter": [{"bool": {"should": [
-				{"term": {"owner_instance_id": "bob.example.net"}},
+				{"term": {"owner_uid": "bob-uid"}},
 				{"terms": {"scoped_dir_key": ["alice.example.net:d1"]}}
 			], "minimum_should_match": 1}}],
 			"must_not": [{"term": {"trashed": true}}]
@@ -51,7 +51,7 @@ func TestBuildQuery(t *testing.T) {
 	t.Run("folder keys are sent in chunks", func(t *testing.T) {
 		termsChunkSize = 2
 		t.Cleanup(func() { termsChunkSize = 65536 })
-		body := buildQuery("bob.example.net", "x", []string{"k1", "k2", "k3"}, nil, 20, nil)
+		body := buildQuery("bob-uid", "x", []string{"k1", "k2", "k3"}, nil, 20, nil)
 		filter := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
 		visible := filter[0].(map[string]any)["bool"].(map[string]any)["should"].([]any)
 		require.Len(t, visible, 3)
@@ -60,7 +60,7 @@ func TestBuildQuery(t *testing.T) {
 	})
 
 	t.Run("files of single-file drives", func(t *testing.T) {
-		body := buildQuery("bob.example.net", "x", nil, []string{"alice.example.net:f1"}, 20, nil)
+		body := buildQuery("bob-uid", "x", nil, []string{"alice.example.net:f1"}, 20, nil)
 		filter := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
 		visible := filter[0].(map[string]any)["bool"].(map[string]any)["should"].([]any)
 		require.Len(t, visible, 2)
@@ -68,13 +68,13 @@ func TestBuildQuery(t *testing.T) {
 	})
 
 	t.Run("only own files without drives", func(t *testing.T) {
-		body := buildQuery("bob.example.net", "x", nil, nil, 20, nil)
+		body := buildQuery("bob-uid", "x", nil, nil, 20, nil)
 		filter := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
 		assert.Len(t, filter[0].(map[string]any)["bool"].(map[string]any)["should"], 1)
 	})
 
 	t.Run("next page", func(t *testing.T) {
-		body := buildQuery("bob.example.net", "x", nil, nil, 20, []any{1.5, "bob.example.net:f1"})
+		body := buildQuery("bob-uid", "x", nil, nil, 20, []any{1.5, "bob.example.net:f1"})
 		assert.Equal(t, []any{1.5, "bob.example.net:f1"}, body["search_after"])
 	})
 }
@@ -230,6 +230,10 @@ func TestSearchWithOpenSearch(t *testing.T) {
 	log := logger.WithNamespace("search-test")
 	require.NoError(t, Index(ctx, owner, log))
 	require.NoError(t, Index(ctx, caller, log))
+	// A doc left by a destroyed instance that had the domain of the caller
+	leftover := couchdb.Change{DocID: "leftover", Doc: couchdb.JSONDoc{M: map[string]any{
+		"_id": "leftover", "type": "file", "name": "leftover report.txt", "dir_id": consts.RootDirID}}}
+	require.NoError(t, client.Bulk(ctx, FilesIndex, bulkActions(caller.Domain, "previous-instance", []couchdb.Change{leftover}, nil)))
 
 	names := func(res *Results) map[string]SearchHit {
 		out := make(map[string]SearchHit)
