@@ -173,7 +173,7 @@ func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, int64, error) {
 		req := &couchdb.FindRequest{
 			UseIndex: "dir-by-path",
 			Selector: sel,
-			Fields:   []string{"_id"},
+			Fields:   []string{"_id", "path"},
 			Limit:    dirSizeBatch,
 			Bookmark: bookmark,
 		}
@@ -183,8 +183,16 @@ func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, int64, error) {
 			return 0, 0, err
 		}
 		for _, child := range children {
+			// CouchDB's collation can put the subdirectories of a sibling
+			// whose name differs only in case inside the range, as in MoveDir:
+			// /Photos/ < /PHOTOS/AAA < /Photos/bbb < /Photos0
+			if childPath, _ := child.M["path"].(string); !strings.HasPrefix(childPath, start) {
+				continue
+			}
 			keys = append(keys, child.ID())
 		}
+		// Stop on the rows CouchDB returned, not the ones kept: a page whose
+		// rows were all skipped can still be followed by another.
 		if len(keys) > 0 {
 			s, n, err := c.dirFilesStats(keys)
 			if err != nil {

@@ -23,29 +23,39 @@ func TestDirSizeCountsEverySubdirectory(t *testing.T) {
 	testutils.NeedCouchdb(t)
 	fs := makeAferoFS(t)
 
-	// /sizes holds a 7-byte file and six subdirectories over three levels,
-	// each holding a 1000-byte file.
+	// /sizes holds a 7-byte file and six subdirectories over three levels.
+	// Each holds a file of a different power of two, so a subdirectory
+	// counted twice or left out changes the total.
 	root, err := vfs.Mkdir(fs, "/sizes", nil)
 	require.NoError(t, err)
 	writeFile(t, fs, root, "top", 7)
-	for _, name := range []string{"/sizes/a", "/sizes/a/b", "/sizes/a/b/c", "/sizes/d", "/sizes/e", "/sizes/e/f"} {
+	for i, name := range []string{"/sizes/a", "/sizes/a/b", "/sizes/a/b/c", "/sizes/d", "/sizes/e", "/sizes/e/f"} {
 		dir, err := vfs.Mkdir(fs, name, nil)
 		require.NoError(t, err)
-		writeFile(t, fs, dir, "file", 1000)
+		writeFile(t, fs, dir, "file", 1<<i)
 	}
 	// A sibling whose path starts like the directory's is not inside it.
 	other, err := vfs.Mkdir(fs, "/sizes-other", nil)
 	require.NoError(t, err)
 	writeFile(t, fs, other, "file", 50)
+	// Nor is a sibling whose name differs only in case, though CouchDB's
+	// collation puts its subdirectories between those of /sizes.
+	cased, err := vfs.Mkdir(fs, "/SIZES", nil)
+	require.NoError(t, err)
+	casedChild, err := vfs.Mkdir(fs, "/SIZES/b", nil)
+	require.NoError(t, err)
+	writeFile(t, fs, casedChild, "file", 500)
+	writeFile(t, fs, cased, "file", 300)
 
-	// Batches that divide the six subdirectories evenly end on an empty read.
+	// The range holds seven subdirectories, /SIZES/b among them. One at a time
+	// reads a page whose only row is skipped and ends on an empty read.
 	for _, batch := range []int{1, 2, 3, 4, 10000} {
 		t.Run(fmt.Sprintf("%d at a time", batch), func(t *testing.T) {
 			t.Cleanup(vfs.SetDirSizeBatchForTest(batch))
 
 			size, count, err := fs.DirSize(root)
 			require.NoError(t, err)
-			assert.Equal(t, int64(6007), size)
+			assert.Equal(t, int64(70), size)
 			assert.Equal(t, int64(7), count)
 		})
 	}
