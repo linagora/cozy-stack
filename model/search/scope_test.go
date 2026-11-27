@@ -106,6 +106,11 @@ func TestNewScopeDocument(t *testing.T) {
 	require.NoError(t, err)
 	c, err := vfs.MkdirAll(fs, "/Drives/Team/c")
 	require.NoError(t, err)
+	// A skipped folder is in the scope, not the folders under it
+	nm, err := vfs.MkdirAll(fs, "/Drives/Team/c/node_modules")
+	require.NoError(t, err)
+	_, err = vfs.MkdirAll(fs, "/Drives/Team/c/node_modules/pkg/lib")
+	require.NoError(t, err)
 	// Outside the drive, including a sibling whose name starts like the root,
 	// and one that differs only by case (inside the path range for CouchDB)
 	_, err = vfs.MkdirAll(fs, "/Drives/Team2/x")
@@ -129,6 +134,7 @@ func TestNewScopeDocument(t *testing.T) {
 		expected := []string{
 			Key(inst.Domain, root.ID()), Key(inst.Domain, a.ID()),
 			Key(inst.Domain, b.ID()), Key(inst.Domain, c.ID()),
+			Key(inst.Domain, nm.ID()),
 		}
 		got := append([]string{}, doc.SubtreeDirKeys...)
 		sort.Strings(expected)
@@ -139,7 +145,7 @@ func TestNewScopeDocument(t *testing.T) {
 	t.Run("folders are loaded page by page", func(t *testing.T) {
 		ids, err := subdirIDs(inst, root.Fullpath, 1)
 		require.NoError(t, err)
-		assert.ElementsMatch(t, []string{a.ID(), b.ID(), c.ID()}, ids)
+		assert.ElementsMatch(t, []string{a.ID(), b.ID(), c.ID(), nm.ID()}, ids)
 	})
 
 	t.Run("no accepted recipient", func(t *testing.T) {

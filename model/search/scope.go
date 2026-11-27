@@ -17,6 +17,10 @@ import (
 	"github.com/cozy/cozy-stack/pkg/opensearch"
 )
 
+// maxScopeKeys is the number of folder keys of a scope above which a warning
+// is logged, as each search sends them all in its terms filter.
+const maxScopeKeys = 50000
+
 // Names of the search indices, before the configured prefix. They are
 // defined in package purge, so that the instance lifecycle can use them
 // without an import cycle.
@@ -81,6 +85,10 @@ func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocume
 	for _, id := range ids {
 		keys = append(keys, Key(inst.Domain, id))
 	}
+	if len(keys) > maxScopeKeys {
+		inst.Logger().WithNamespace("search").
+			Warnf("the scope of the drive %s has %d folder keys", s.SID, len(keys))
+	}
 	return &ScopeDocument{
 		SharingID:              s.SID,
 		OwnerInstanceID:        inst.Domain,
@@ -112,7 +120,8 @@ func activePrincipals(s *sharing.Sharing) (principals, readOnly []string) {
 }
 
 // subdirIDs returns the ids of all the folders under the given path, with
-// paged queries on the dir-by-path index (no recursive walk).
+// paged queries on the dir-by-path index (no recursive walk). The folders
+// under a skipped folder are left out.
 func subdirIDs(db *instance.Instance, dirPath string, pageSize int) ([]string, error) {
 	sel := mango.And(
 		mango.Gt("path", dirPath+"/"),
@@ -136,7 +145,7 @@ func subdirIDs(db *instance.Instance, dirPath string, pageSize int) ([]string, e
 		}
 		for _, doc := range docs {
 			// CouchDB compares case last, so the range of /Team also has /team/x
-			if p, _ := doc.M["path"].(string); strings.HasPrefix(p, dirPath+"/") {
+			if p, _ := doc.M["path"].(string); strings.HasPrefix(p, dirPath+"/") && !folderSkipped(p) {
 				ids = append(ids, doc.ID())
 			}
 		}

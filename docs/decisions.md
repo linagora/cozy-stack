@@ -66,3 +66,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5268#discussion_r4718930880)
 - Why: only the owner of a drive writes its scope doc, and only a move gives two instances of the stack the same owned sharing; moving an instance is switched off, and its support will be removed.
 - Scope: `model/search`, the `share_scopes_v1` index.
+
+## 2026-11-27, [Product] Search indexes the content of vendor folders
+
+- Decision: the indexer skips the content of `node_modules`, `.git`, `.venv`, `__pycache__` and `.next`, but not of `vendor`, unlike the first list of ADR 008 §4.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5270#discussion_r4721974195)
+- Why: people also name a folder `vendor` for their own documents, such as those of their suppliers, and its content would be missing from search with nothing to tell them; the libraries of a code project in a `vendor` folder cost only index space and some noise.
+- Scope: `model/search`, ADR 008 (#5262).

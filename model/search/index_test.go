@@ -26,17 +26,50 @@ import (
 func TestBulkActions(t *testing.T) {
 	changes := []couchdb.Change{
 		{DocID: "f1", Doc: couchdb.JSONDoc{M: map[string]any{"_id": "f1", "type": "file", "name": "a.txt", "dir_id": "d1"}}},
+		// Its parent was not loaded: indexed
+		{DocID: "f4", Doc: couchdb.JSONDoc{M: map[string]any{"_id": "f4", "type": "file", "name": "b.txt", "dir_id": "gone"}}},
 		{DocID: "f2", Deleted: true, Doc: couchdb.JSONDoc{M: map[string]any{"_id": "f2", "_deleted": true}}},
 		{DocID: consts.RootDirID, Doc: couchdb.JSONDoc{M: map[string]any{"_id": consts.RootDirID, "type": "directory"}}},
 		{DocID: "_design/by-path", Deleted: true},
+		// In a skipped tree: removed, but the skipped folder itself is indexed
+		{DocID: "f3", Doc: couchdb.JSONDoc{M: map[string]any{"_id": "f3", "type": "file", "name": "index.js", "dir_id": "nm"}}},
+		{DocID: "d2", Doc: couchdb.JSONDoc{M: map[string]any{"_id": "d2", "type": "directory", "name": "lib", "path": "/code/node_modules/lib"}}},
+		{DocID: "nm", Doc: couchdb.JSONDoc{M: map[string]any{"_id": "nm", "type": "directory", "name": "node_modules", "path": "/code/node_modules", "dir_id": "code"}}},
+	}
+	parents := map[string]*vfs.DirDoc{
+		"d1": {DocID: "d1", Fullpath: "/Documents"},
+		"nm": {DocID: "nm", Fullpath: "/code/node_modules"},
 	}
 	assert.Equal(t,
 		`{"index":{"_id":"alice.example.net:f1"}}`+"\n"+
 			`{"resource_key":"alice.example.net:f1","owner_instance_id":"alice.example.net","doc_id":"f1","dir_id":"d1",`+
 			`"scoped_dir_key":"alice.example.net:d1","type":"file","name":"a.txt","trashed":false}`+"\n"+
-			`{"delete":{"_id":"alice.example.net:f2"}}`+"\n",
-		string(bulkActions(domain, changes)))
-	assert.Empty(t, bulkActions(domain, nil))
+			`{"index":{"_id":"alice.example.net:f4"}}`+"\n"+
+			`{"resource_key":"alice.example.net:f4","owner_instance_id":"alice.example.net","doc_id":"f4","dir_id":"gone",`+
+			`"scoped_dir_key":"alice.example.net:gone","type":"file","name":"b.txt","trashed":false}`+"\n"+
+			`{"delete":{"_id":"alice.example.net:f2"}}`+"\n"+
+			`{"delete":{"_id":"alice.example.net:f3"}}`+"\n"+
+			`{"delete":{"_id":"alice.example.net:d2"}}`+"\n"+
+			`{"index":{"_id":"alice.example.net:nm"}}`+"\n"+
+			`{"resource_key":"alice.example.net:nm","owner_instance_id":"alice.example.net","doc_id":"nm","dir_id":"code",`+
+			`"scoped_dir_key":"alice.example.net:nm","type":"directory","name":"node_modules","trashed":false}`+"\n",
+		string(bulkActions(domain, changes, parents)))
+	assert.Empty(t, bulkActions(domain, nil, nil))
+}
+
+func TestSkippedFolders(t *testing.T) {
+	assert.False(t, contentSkipped("/"))
+	assert.False(t, contentSkipped("/code/src"))
+	assert.False(t, contentSkipped("/code/node_modules_old"))
+	assert.False(t, contentSkipped("/code/Node_Modules"), "the names are case sensitive")
+	assert.False(t, contentSkipped("/Purchases/vendor"), "vendor can hold documents")
+	assert.True(t, contentSkipped("/code/node_modules"))
+	assert.True(t, contentSkipped("/code/.git/objects"))
+	for _, name := range []string{".venv", "__pycache__", ".next"} {
+		assert.True(t, contentSkipped("/code/"+name+"/a"), name)
+	}
+	assert.False(t, folderSkipped("/code/node_modules"), "a skipped folder itself is indexed")
+	assert.True(t, folderSkipped("/code/node_modules/pkg"))
 }
 
 func TestIndex(t *testing.T) {
@@ -91,6 +124,28 @@ func TestIndex(t *testing.T) {
 		require.NoError(t, Index(ctx, inst, log))
 		docs = indexed(t, client, inst.Domain, other.ID())
 		assert.NotContains(t, docs, other.ID())
+	})
+
+	t.Run("skipped trees", func(t *testing.T) {
+		pkg, err := vfs.MkdirAll(inst.VFS(), "/Reports/node_modules/pkg")
+		require.NoError(t, err)
+		nodeModulesID := pkg.DirID
+		inside := createTextFile(t, inst, pkg.ID(), "index.js")
+		reports, err := inst.VFS().DirByPath("/Reports")
+		require.NoError(t, err)
+		moved := createTextFile(t, inst, reports.ID(), "moved.js")
+		require.NoError(t, Index(ctx, inst, log))
+		docs := indexed(t, client, inst.Domain, nodeModulesID, pkg.ID(), inside.ID(), moved.ID())
+		assert.Contains(t, docs, nodeModulesID, "node_modules itself is indexed")
+		assert.NotContains(t, docs, pkg.ID())
+		assert.NotContains(t, docs, inside.ID())
+		require.Contains(t, docs, moved.ID())
+
+		// A file moved into the skipped tree is removed
+		_, err = vfs.ModifyFileMetadata(inst.VFS(), moved, &vfs.DocPatch{DirID: &nodeModulesID})
+		require.NoError(t, err)
+		require.NoError(t, Index(ctx, inst, log))
+		assert.NotContains(t, indexed(t, client, inst.Domain, moved.ID()), moved.ID())
 	})
 
 	t.Run("no change", func(t *testing.T) {
