@@ -41,17 +41,26 @@ func (l *linkPaths) rewrite(doc realtime.Doc) realtime.Doc {
 	if doc.DocType() != consts.Files {
 		return doc
 	}
-	// Read for each event, as a root can have moved with no event for this
-	// subscription, which watches some documents only
-	scope, err := sharing.ResolveFilePaths(l.inst, l.perm)
-	if err != nil {
-		l.inst.Logger().WithNamespace("realtime").Warnf("cannot read the roots of a link: %s", err)
-	}
+	var roots []vfs.LinkRoot
+	read := false
 	return vfs.RewriteEventPaths(doc, func(_, _, p string) string {
-		if !under(scope.Roots, p) {
+		if p == "" {
 			return ""
 		}
-		return vfs.RelativeToLink(scope.Roots, p)
+		// Read once for each event with a path, as a root can have moved with
+		// no event for this subscription, which watches some documents only
+		if !read {
+			read = true
+			scope, err := sharing.ResolveFilePaths(l.inst, l.perm)
+			if err != nil {
+				l.inst.Logger().WithNamespace("realtime").Warnf("cannot read the roots of a link: %s", err)
+			}
+			roots = scope.Roots
+		}
+		if !under(roots, p) {
+			return ""
+		}
+		return vfs.RelativeToLink(roots, p)
 	})
 }
 

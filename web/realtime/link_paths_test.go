@@ -54,6 +54,15 @@ func TestLinkPathsRewrite(t *testing.T) {
 		assert.Equal(t, "/Private/Other", doc.M["restore_path"])
 	})
 
+	t.Run("NoPath", func(t *testing.T) {
+		// With no path to rewrite, the roots are not read: no instance is needed
+		none := &linkPaths{}
+		assert.NotPanics(t, func() {
+			none.rewrite(&vfs.FileDoc{DocID: "f"})
+			none.rewrite(&realtime.JSONDoc{Type: consts.Files, M: map[string]interface{}{"_id": "f"}})
+		})
+	})
+
 	t.Run("OtherDoctype", func(t *testing.T) {
 		doc := &realtime.JSONDoc{Type: "io.cozy.todos", M: map[string]interface{}{
 			"_id": "todo", "path": "/Private/Other", "restore_path": "/Private/Other",
