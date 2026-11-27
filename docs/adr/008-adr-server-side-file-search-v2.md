@@ -36,7 +36,7 @@ Index each file and directory **once** in OpenSearch (`cozy_files_v1`), keyed by
 
 Maintain a second lightweight OpenSearch index (`cozy_share_scopes_v1`, or Redis cache) containing **1 document per active sharing** (`_id = sharing_id`):
 
-- Stores `active_member_principals` (the domains of the members who accepted the drive) and `subtree_dir_keys` (the list of `<owner_instance_id>:<dir_id>` directory identifiers nested under that share's `RootID`, the root included).
+- Stores `active_member_principals` (the domains of the members who accepted the drive), `read_only_principals` (those of them who cannot write, so that a folder in nested drives is given through a drive where the caller can write, as for the recents) and `subtree_dir_keys` (the list of `<owner_instance_id>:<dir_id>` directory identifiers nested under that share's `RootID`, the root included).
 - At search time (`POST /files/search`), `cozy-stack`:
   1. Lists the caller's active shared drive sharings (recipient side) in CouchDB, and reads their scope docs with **one `_mget`**.
   2. Keeps only the scope docs whose `active_member_principals` contains the caller's domain.
