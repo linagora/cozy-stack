@@ -141,6 +141,9 @@ func TestSyncScopesWithOpenSearch(t *testing.T) {
 		rootID := root.ID()
 		folder, err = vfs.ModifyDirMetadata(owner.VFS(), folder, &vfs.DocPatch{DirID: &rootID})
 		require.NoError(t, err)
+		// A sharing change in the same batch, for its checkpoint
+		drive.Description = "Team drive"
+		require.NoError(t, couchdb.UpdateDoc(owner, drive))
 
 		// The files are indexed but not the scopes: both checkpoints stay
 		checkpoints := func() [2]string {
