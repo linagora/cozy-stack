@@ -34,11 +34,13 @@ func TestActivePrincipals(t *testing.T) {
 	s := makeDrive("root",
 		sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://bob.example.net"},
 		sharing.Member{Status: sharing.MemberStatusPendingInvitation, Instance: "https://carol.example.net"},
-		sharing.Member{Status: sharing.MemberStatusRevoked, Instance: "https://dave.example.net"},
-		sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://Erin.Example.net:8443"},
+		sharing.Member{Status: sharing.MemberStatusRevoked, Instance: "https://dave.example.net", ReadOnly: true},
+		sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://Erin.Example.net:8443", ReadOnly: true},
 		sharing.Member{Status: sharing.MemberStatusReady}, // no instance yet
 	)
-	assert.Equal(t, []string{"bob.example.net", "erin.example.net:8443"}, activePrincipals(s))
+	principals, readOnly := activePrincipals(s)
+	assert.Equal(t, []string{"bob.example.net", "erin.example.net:8443"}, principals)
+	assert.Equal(t, []string{"erin.example.net:8443"}, readOnly)
 }
 
 func TestScopeWrites(t *testing.T) {
