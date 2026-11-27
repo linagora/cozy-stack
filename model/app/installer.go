@@ -511,11 +511,7 @@ func (i *Installer) update() error {
 		if i.man.AppType() == consts.WebappType {
 			i.man.(*WebappManifest).oldServices = i.man.(*WebappManifest).val.Services
 		}
-		// The files are not fetched again: a source from another origin would
-		// not be theirs, and the konnector worker trusts the source.
-		if old, err := url.Parse(i.man.Source()); err == nil && old.Scheme == i.src.Scheme && old.Host == i.src.Host {
-			i.man.SetSource(i.src)
-		}
+		i.man.SetSource(i.src)
 		if availableVersion != "" {
 			i.man.SetAvailableVersion(availableVersion)
 		}

@@ -590,16 +590,30 @@ func (w *konnectorWorker) Slug() string {
 	return w.slug
 }
 
+// installedFromRegistry tells if the files of the konnector are the release of
+// the registry for its slug: the operator's secret is for them, not for a code
+// the user installed under the same slug. The source alone is not enough, as
+// an update could record it without fetching the files, so the checksum of the
+// installed files is compared to the one of the release.
+func (w *konnectorWorker) installedFromRegistry(ctx *job.TaskContext, i *instance.Instance) bool {
+	src, err := url.Parse(w.man.Source())
+	if err != nil || src.Scheme != "registry" || src.Host != w.slug {
+		return false
+	}
+	v, err := registry.GetVersion(w.slug, w.man.Version(), i.Registries())
+	if err != nil || v.Sha256 != w.man.Checksum() {
+		ctx.Logger().Warnf("Secret of the account type not given: %s@%s is not the release of the registry (%v)",
+			w.slug, w.man.Version(), err)
+		return false
+	}
+	return true
+}
+
 func (w *konnectorWorker) PrepareCmdEnv(ctx *job.TaskContext, i *instance.Instance) (cmd string, env []string, err error) {
 	parameters := w.man.Parameters()
 
-	// The operator's secret is for the konnector published under this slug in
-	// the registry, not for a code the user installed under the same slug.
-	src, errSrc := url.Parse(w.man.Source())
-	fromRegistry := errSrc == nil && src.Scheme == "registry" && src.Host == w.slug
-
 	accountTypes, err := account.FindAccountTypesBySlug(w.slug, i.ContextName)
-	if err == nil && fromRegistry && len(accountTypes) == 1 && accountTypes[0].HasSecretGrant() {
+	if err == nil && len(accountTypes) == 1 && accountTypes[0].HasSecretGrant() && w.installedFromRegistry(ctx, i) {
 		secret := accountTypes[0].Secret
 		if parameters == nil {
 			parameters = map[string]interface{}{"secret": secret}

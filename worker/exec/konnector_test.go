@@ -3,6 +3,8 @@ package exec
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path"
@@ -223,24 +225,48 @@ echo "{\"type\": \"manifest\", \"message\": \"$(ls ${1}/manifest.konnector)\" }"
 		ctx, cancel := job.NewTaskContext("id", job.NewJob(inst, &job.JobRequest{WorkerType: "konnector"}), inst)
 		defer cancel()
 
-		for src, hasSecret := range map[string]bool{
-			"registry://my-konnector-secret/stable":                    true,
-			"registry://other-konnector/stable":                        false,
-			"git://github.com/konnectors/cozy-konnector-trainline.git": false,
-			"git://my-konnector-secret/stable":                         false,
-			"https://example.org/my-konnector-secret.tar.gz":           false,
-			"file:///tmp/my-konnector-secret":                          false,
+		// The registry knows the release 1.0.0 of the konnector and its checksum.
+		const sum = "8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c"
+		reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/registry/my-konnector-secret/1.0.0" {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"slug": "my-konnector-secret", "version": "1.0.0", "sha256": %q}`, sum)
+		}))
+		defer reg.Close()
+		regURL, err := url.Parse(reg.URL)
+		require.NoError(t, err)
+		previous := config.GetConfig().Registries
+		config.GetConfig().Registries = map[string][]*url.URL{config.DefaultInstanceContext: {regURL}}
+		defer func() { config.GetConfig().Registries = previous }()
+
+		for _, tc := range []struct {
+			src, checksum string
+			hasSecret     bool
+		}{
+			{"registry://my-konnector-secret/stable", sum, true},
+			// A registry source over files from elsewhere, as an older stack
+			// could record on an update that did not fetch them.
+			{"registry://my-konnector-secret/stable", "git-0f1e2d3c", false},
+			{"registry://other-konnector/stable", sum, false},
+			{"git://github.com/konnectors/cozy-konnector-trainline.git", sum, false},
+			{"git://my-konnector-secret/stable", sum, false},
+			{"https://example.org/my-konnector-secret.tar.gz", sum, false},
+			{"file:///tmp/my-konnector-secret", sum, false},
 		} {
-			u, err := url.Parse(src)
+			u, err := url.Parse(tc.src)
 			require.NoError(t, err)
 			man := &app.KonnManifest{}
 			man.SetSlug("my-konnector-secret")
 			man.SetSource(u)
+			man.SetVersion("1.0.0")
+			man.SetChecksum(tc.checksum)
 			w := &konnectorWorker{slug: "my-konnector-secret", man: man, msg: &KonnectorMessage{data: []byte(`{}`)}}
 
 			_, env, err := w.PrepareCmdEnv(ctx, inst)
 			require.NoError(t, err)
-			assert.Equal(t, hasSecret, slices.Contains(env, `COZY_PARAMETERS={"secret":"s3cr3t"}`), src)
+			assert.Equal(t, tc.hasSecret, slices.Contains(env, `COZY_PARAMETERS={"secret":"s3cr3t"}`), tc.src+" "+tc.checksum)
 		}
 	})
 

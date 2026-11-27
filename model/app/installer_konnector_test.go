@@ -326,7 +326,7 @@ func TestInstallerKonnector(t *testing.T) {
 		assert.Contains(t, konnManifest.Version(), "2.0.0")
 	})
 
-	t.Run("KonnectorDeferredUpdateKeepsTheSourceOfItsFiles", func(t *testing.T) {
+	t.Run("KonnectorDeferredUpdateKeepsTheRequestedSource", func(t *testing.T) {
 		finished := true
 		config.GetConfig().Contexts = map[string]interface{}{"foocontext": map[string]interface{}{}}
 		instance, err := lifecycle.Create(&lifecycle.Options{
@@ -349,8 +349,8 @@ func TestInstallerKonnector(t *testing.T) {
 		_, err = inst.RunSync()
 		require.NoError(t, err)
 
-		// New permissions defer the update: the files are not fetched again,
-		// so a source from another host must not replace the old one.
+		// New permissions defer the update: the source asked for is kept for
+		// the next update, even if the files are not fetched yet.
 		manGen = manifestKonnector2
 		otherHost := strings.Replace(gitURL, "localhost", "127.0.0.1", 1)
 		require.NotEqual(t, gitURL, otherHost)
@@ -364,19 +364,21 @@ func TestInstallerKonnector(t *testing.T) {
 		man, err := inst.RunSync()
 		require.NoError(t, err)
 		assert.Contains(t, man.(*app.KonnManifest).AvailableVersion(), "2.0.0")
-		assert.Equal(t, gitURL, man.Source())
+		assert.Equal(t, otherHost, man.Source())
 
-		// A source on the same host, like another branch, is still recorded.
+		// The next update, without a source, uses the one saved in CouchDB.
+		reloaded, err := app.GetKonnectorBySlug(instance, "cozy-konnector-deferred")
+		require.NoError(t, err)
+		assert.Equal(t, otherHost, reloaded.Source())
 		inst, err = app.NewInstaller(instance, fs, &app.InstallerOptions{
 			Operation: app.Update,
 			Type:      consts.KonnectorType,
 			Slug:      "cozy-konnector-deferred",
-			SourceURL: gitURL + "#branch",
 		})
 		require.NoError(t, err)
 		man, err = inst.RunSync()
 		require.NoError(t, err)
-		assert.Equal(t, gitURL+"#branch", man.Source())
+		assert.Equal(t, otherHost, man.Source())
 	})
 
 	t.Run("KonnectorInstallAndUpgradeWithBranch", func(t *testing.T) {
