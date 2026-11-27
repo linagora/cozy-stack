@@ -77,6 +77,28 @@ func FilterAntivirusBlockedDocs(inst *instance.Instance, changes *couchdb.Change
 	changes.Results = results
 }
 
+// filterAntivirusBlockedFiles leaves out of a listing the files that the
+// antivirus configuration forbids to download, so that sync clients do not try
+// to fetch them. A listing has no deletion to tell: no tombstone is needed. A
+// file in the trash is kept, as in the changes feeds.
+func filterAntivirusBlockedFiles(inst *instance.Instance, results []vfs.DirOrFileDoc) []vfs.DirOrFileDoc {
+	avConfig := config.GetAntivirusConfig(inst.ContextName)
+	if avConfig == nil || !avConfig.Enabled {
+		return results
+	}
+
+	kept := make([]vfs.DirOrFileDoc, 0, len(results))
+	for _, dof := range results {
+		_, file := dof.Refine()
+		if file != nil && !file.Trashed &&
+			!isActionAllowed(avConfig, getFileAntivirusStatus(file), ActionDownload) {
+			continue
+		}
+		kept = append(kept, dof)
+	}
+	return kept
+}
+
 // blockedChangeOutcome is what a changes feed shows of a blocked file.
 type blockedChangeOutcome int
 
