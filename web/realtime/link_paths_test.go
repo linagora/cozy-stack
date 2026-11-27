@@ -118,16 +118,47 @@ func TestLinkPathsRewrite(t *testing.T) {
 		assert.Equal(t, "/.cozy_trash/Reviewed", n.rewrite(child).(*vfs.DirDoc).Fullpath)
 	})
 
+	readLink := func(t *testing.T, ids ...string) *linkPaths {
+		t.Helper()
+		l, err := newLinkPaths(inst, &permission.Permission{Type: permission.TypeShareByLink, Permissions: permission.Set{permission.Rule{
+			Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: ids,
+		}}})
+		require.NoError(t, err)
+		return l
+	}
+
 	t.Run("AncestorTrashed", func(t *testing.T) {
-		renamed, err := fs.DirByPath("/Private/Renamed")
+		reports, err := vfs.MkdirAll(fs, "/Archive/Old/Reports")
 		require.NoError(t, err)
-		_, err = vfs.TrashDir(fs, renamed)
+		a := readLink(t, reports.ID())
+		old, err := fs.DirByPath("/Archive/Old")
 		require.NoError(t, err)
+		old, err = vfs.TrashDir(fs, old)
+		require.NoError(t, err)
+		require.Equal(t, "/.cozy_trash/Old", old.Fullpath)
 
 		// Only the event of a document under the root comes
-		sub := &vfs.DirDoc{DocID: "sub", Fullpath: "/.cozy_trash/Renamed/Docs/Sub"}
-		assert.Equal(t, "/.cozy_trash/Docs/Sub", l.rewrite(sub).(*vfs.DirDoc).Fullpath)
+		sub := &vfs.DirDoc{DocID: "sub", Fullpath: "/.cozy_trash/Old/Reports/Sub"}
+		assert.Equal(t, "/.cozy_trash/Reports/Sub", a.rewrite(sub).(*vfs.DirDoc).Fullpath)
 		left := &vfs.DirDoc{DocID: "left", Fullpath: "/.cozy_trash/Other/Left"}
-		assert.Empty(t, l.rewrite(left).(*vfs.DirDoc).Fullpath)
+		assert.Empty(t, a.rewrite(left).(*vfs.DirDoc).Fullpath)
+	})
+
+	t.Run("InnerRootRenamed", func(t *testing.T) {
+		draft, err := vfs.MkdirAll(fs, "/Team/Docs/Draft")
+		require.NoError(t, err)
+		team, err := fs.DirByPath("/Team")
+		require.NoError(t, err)
+		inner, err := fs.DirByPath("/Team/Docs")
+		require.NoError(t, err)
+		o := readLink(t, inner.ID(), team.ID())
+
+		name := "Renamed"
+		_, err = vfs.ModifyDirMetadata(fs, inner, &vfs.DocPatch{Name: &name})
+		require.NoError(t, err)
+		draft, err = fs.DirByID(draft.ID())
+		require.NoError(t, err)
+		// Only the event of Draft comes, as for a subscription to it alone
+		assert.Equal(t, "/Renamed/Draft", o.rewrite(draft).(*vfs.DirDoc).Fullpath)
 	})
 }
