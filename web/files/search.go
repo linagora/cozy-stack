@@ -5,9 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"path"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/search"
 	"github.com/cozy/cozy-stack/pkg/config/config"
@@ -31,7 +34,7 @@ type apiSearchHit struct {
 	UpdatedAt string `json:"updated_at,omitempty"`
 	DirID     string `json:"dir_id"`
 	Path      string `json:"path"`
-	DriveID   string `json:"drive_id,omitempty"`
+	DriveID   string `json:"driveId,omitempty"`
 }
 
 func (h *apiSearchHit) ID() string                             { return h.DocID }
@@ -53,9 +56,7 @@ func SearchFiles(c echo.Context) error {
 		return err
 	}
 	var body struct {
-		Q      string `json:"q"`
-		Limit  int    `json:"limit"`
-		Cursor string `json:"cursor"`
+		Q string `json:"q"`
 	}
 	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
 		return jsonapi.BadRequest(err)
@@ -64,10 +65,15 @@ func SearchFiles(c echo.Context) error {
 	if q == "" || utf8.RuneCountInString(q) > maxSearchQueryLength {
 		return jsonapi.BadRequest(errors.New("q must have 1 to 256 characters"))
 	}
-	cursor := body.Cursor
-	if pageCursor := c.QueryParam("page[cursor]"); pageCursor != "" {
-		cursor = pageCursor
+	limit := search.DefaultLimit
+	if c.QueryParams().Has("page[limit]") {
+		size, err := strconv.Atoi(c.QueryParam("page[limit]"))
+		if err != nil || size < 1 {
+			return jsonapi.BadRequest(errors.New("page[limit] must be a positive integer"))
+		}
+		limit = min(size, search.MaxLimit)
 	}
+	cursor := c.QueryParam("page[cursor]")
 
 	client := config.GetConfig().Search
 	if client == nil {
@@ -75,21 +81,16 @@ func SearchFiles(c echo.Context) error {
 	}
 	inst := middlewares.GetInstance(c)
 	ctx := c.Request().Context()
-	results, err := search.Search(ctx, client, inst, q, body.Limit, cursor)
+	results, err := search.Search(ctx, client, inst, q, limit, cursor)
 	if errors.Is(err, search.ErrInvalidCursor) {
 		return jsonapi.BadRequest(err)
 	}
 	if err != nil {
-		return err
+		return searchUnavailable(inst, err)
 	}
-
-	hits := make([]search.Hit, len(results.Hits))
-	for i, h := range results.Hits {
-		hits[i] = h.Hit
-	}
-	paths, err := search.VisiblePaths(inst, hits, results.Drives)
+	paths, err := results.VisiblePaths(inst)
 	if err != nil {
-		return err
+		return searchUnavailable(inst, err)
 	}
 	objs := make([]jsonapi.Object, 0, len(results.Hits))
 	for i, h := range results.Hits {
@@ -98,13 +99,21 @@ func SearchFiles(c echo.Context) error {
 		}
 		objs = append(objs, &apiSearchHit{
 			DocID: h.DocID, Name: h.Name, Type: h.Type, Mime: h.Mime, Class: h.Class,
-			UpdatedAt: h.UpdatedAt, DirID: h.DirID, Path: paths[i].Path, DriveID: h.DriveID,
+			UpdatedAt: h.UpdatedAt, DirID: h.DirID, Path: path.Join("/", paths[i].Path, h.Name), DriveID: h.DriveID,
 		})
 	}
 
 	var links jsonapi.LinksList
 	if results.Cursor != "" {
-		links.Next = "/files/search?page[cursor]=" + url.QueryEscape(results.Cursor)
+		next := url.Values{"page[limit]": {strconv.Itoa(limit)}, "page[cursor]": {results.Cursor}}
+		links.Next = "/files/search?" + next.Encode()
 	}
 	return jsonapi.DataList(c, http.StatusOK, objs, &links)
+}
+
+// searchUnavailable logs an error of the search backend, and gives the client
+// a fixed message instead.
+func searchUnavailable(inst *instance.Instance, err error) error {
+	inst.Logger().WithNamespace("search").Errorf("search failed: %s", err)
+	return jsonapi.NewError(http.StatusServiceUnavailable, "search is unavailable")
 }

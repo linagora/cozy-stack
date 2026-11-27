@@ -13,6 +13,7 @@ import (
 // Hit is a search result for which the path to show must be computed.
 type Hit struct {
 	OwnerInstanceID string
+	DocID           string
 	DirID           string
 	// DriveID is the id of the shared drive sharing, empty for the files of
 	// the caller.
@@ -97,8 +98,8 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 		if root == nil {
 			continue
 		}
-		if parent.DocID == root.DirID {
-			// The root folder itself (its siblings are not in the drive)
+		if hit.DocID == root.DocID {
+			// The root folder itself: nothing above it is shown
 			out[i] = VisiblePath{OK: true}
 			continue
 		}
@@ -110,6 +111,16 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 		out[i] = VisiblePath{Path: "/" + root.DocName + rel, OK: true}
 	}
 	return out, nil
+}
+
+// VisiblePaths returns the visible path of each hit of the page, as the
+// function VisiblePaths does, with the drives of the caller found by Search.
+func (r *Results) VisiblePaths(caller *instance.Instance) ([]VisiblePath, error) {
+	hits := make([]Hit, len(r.Hits))
+	for i, h := range r.Hits {
+		hits[i] = h.Hit
+	}
+	return VisiblePaths(caller, hits, r.Drives)
 }
 
 // ownedAsExpected returns true when the hit belongs to the caller, or to the

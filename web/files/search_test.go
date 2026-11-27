@@ -3,6 +3,7 @@ package files
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/logger"
+	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/cozy-stack/web/errors"
 	"github.com/gavv/httpexpect/v2"
@@ -54,6 +56,8 @@ func TestSearchFiles(t *testing.T) {
 		post(t, tok, "/files/search", map[string]any{"q": "   "}).Status(400)
 		post(t, tok, "/files/search", map[string]any{}).Status(400)
 		post(t, tok, "/files/search", map[string]any{"q": strings.Repeat("é", 257)}).Status(400)
+		post(t, tok, "/files/search?page[limit]=0", map[string]any{"q": "report"}).Status(400)
+		post(t, tok, "/files/search?page[limit]=ten", map[string]any{"q": "report"}).Status(400)
 	})
 
 	t.Run("a permission on the files is required", func(t *testing.T) {
@@ -65,6 +69,19 @@ func TestSearchFiles(t *testing.T) {
 		config.GetConfig().Search = nil
 		t.Cleanup(func() { config.GetConfig().Search = saved })
 		post(t, tok, "/files/search", map[string]any{"q": "report"}).Status(503)
+		// 256 characters pass the validation
+		post(t, tok, "/files/search", map[string]any{"q": strings.Repeat("é", 256)}).Status(503)
+	})
+
+	t.Run("search unavailable", func(t *testing.T) {
+		saved := config.GetConfig().Search
+		u, err := url.Parse("http://127.0.0.1:1")
+		require.NoError(t, err)
+		config.GetConfig().Search = opensearch.NewClient(opensearch.Options{URL: u})
+		t.Cleanup(func() { config.GetConfig().Search = saved })
+		post(t, tok, "/files/search", map[string]any{"q": "report"}).Status(503).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object().
+			Value("errors").Array().Value(0).Object().HasValue("detail", "search is unavailable")
 	})
 
 	if osURL == "" {
@@ -104,26 +121,54 @@ func TestSearchFiles(t *testing.T) {
 		attrs.HasValue("mime", "application/pdf")
 		attrs.HasValue("class", "pdf")
 		attrs.HasValue("dir_id", dir.ID())
-		attrs.HasValue("path", "/Documents/2026")
-		attrs.NotContainsKey("drive_id")
+		attrs.HasValue("path", "/Documents/2026/Quarterly report.pdf")
+		attrs.NotContainsKey("driveId")
 		attrs.Value("updated_at").String().NotEmpty()
 		obj.Value("links").Object().NotContainsKey("next")
 	})
 
 	t.Run("pages", func(t *testing.T) {
-		obj := post(t, tok, "/files/search", map[string]any{"q": "report", "limit": 1}).
+		obj := post(t, tok, "/files/search?page[limit]=1", map[string]any{"q": "report"}).
 			Status(200).JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object()
 		obj.Value("data").Array().Length().IsEqual(1)
-		next := obj.Value("links").Object().Value("next").String().HasPrefix("/files/search?page[cursor]=").Raw()
+		next := obj.Value("links").Object().Value("next").String().HasPrefix("/files/search?").Raw()
+		nextURL, err := url.Parse(next)
+		require.NoError(t, err)
+		require.Equal(t, "1", nextURL.Query().Get("page[limit]"), "the next page keeps the size")
 		firstID := obj.Value("data").Array().Value(0).Object().Value("id").String().Raw()
 
-		second := post(t, tok, next, map[string]any{"q": "report", "limit": 1}).
+		// The link gives the size and the cursor: the body only has q
+		second := post(t, tok, next, map[string]any{"q": "report"}).
 			Status(200).JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object()
 		second.Value("data").Array().Length().IsEqual(1)
 		second.Value("data").Array().Value(0).Object().Value("id").String().NotEqual(firstID)
 	})
 
 	t.Run("invalid cursor", func(t *testing.T) {
-		post(t, tok, "/files/search", map[string]any{"q": "report", "cursor": "nope"}).Status(400)
+		post(t, tok, "/files/search?page[cursor]=nope", map[string]any{"q": "report"}).Status(400)
+	})
+
+	t.Run("a file whose folder was trashed after indexing is left out", func(t *testing.T) {
+		gone, err := vfs.MkdirAll(inst.VFS(), "/Gone")
+		require.NoError(t, err)
+		doc, err := vfs.NewFileDoc("zebra.txt", gone.ID(), 5, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+		require.NoError(t, err)
+		f, err := inst.VFS().CreateFile(doc, nil)
+		require.NoError(t, err)
+		_, err = f.Write([]byte("hello"))
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		require.NoError(t, search.Index(ctx, inst, logger.WithNamespace("search-test")))
+		require.Eventually(t, func() bool {
+			res, err := search.Search(ctx, client, inst, "zebra", 0, "")
+			return err == nil && len(res.Hits) == 1
+		}, 5*time.Second, 200*time.Millisecond)
+
+		// Not indexed again: the index still has the file, not in the trash
+		_, err = vfs.TrashDir(inst.VFS(), gone)
+		require.NoError(t, err)
+		post(t, tok, "/files/search", map[string]any{"q": "zebra"}).
+			Status(200).JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).Object().
+			Value("data").Array().IsEmpty()
 	})
 }

@@ -43,7 +43,9 @@ func TestVisiblePaths(t *testing.T) {
 		{OwnerInstanceID: caller.Domain, DirID: work.ID()},
 		{OwnerInstanceID: caller.Domain, DirID: consts.RootDirID},
 		{OwnerInstanceID: caller.Domain, DirID: trashed.ID()},
-		{OwnerInstanceID: owner.Domain, DirID: root.DirID, DriveID: "drive-1"}, // the root folder itself
+		{OwnerInstanceID: owner.Domain, DocID: root.ID(), DirID: root.DirID, DriveID: "drive-1"}, // the root folder itself
+		// A sibling of the root, in a stale scope doc: moved out of the drive
+		{OwnerInstanceID: owner.Domain, DocID: outside.ID(), DirID: root.DirID, DriveID: "drive-1"},
 		{OwnerInstanceID: owner.Domain, DirID: root.ID(), DriveID: "drive-1"},
 		{OwnerInstanceID: owner.Domain, DirID: nested.ID(), DriveID: "drive-1"},
 		{OwnerInstanceID: owner.Domain, DirID: outside.ID(), DriveID: "drive-1"},
@@ -60,6 +62,7 @@ func TestVisiblePaths(t *testing.T) {
 		{Path: "/", OK: true},
 		{},                        // parent in the trash
 		{OK: true},                // the root folder, without a path
+		{},                        // a sibling of the root
 		{Path: "/Team", OK: true}, // the name of the root folder
 		{Path: "/Team/a/b", OK: true},
 		{}, // moved out of the drive
