@@ -17,22 +17,18 @@ type LinkRoot struct {
 	Path string
 }
 
-// LinkRoots gives the targets of the rules of a public link, the ones given by
-// ID. It is nil when the link can read the whole doctype (a rule with no
-// values, or on the root of the instance), and empty but not nil when none of
-// its targets exists anymore.
+// LinkRoots gives the targets of the rules of a public link that can read, the
+// ones given by ID. It is nil when the link can read the whole doctype (a rule
+// with no values, or on the root of the instance), and empty but not nil when
+// none of its targets exists anymore.
 func LinkRoots(fs VFS, perms permission.Set) ([]LinkRoot, error) {
 	roots := []LinkRoot{}
 	for _, rule := range perms {
-		if !permission.MatchType(rule, consts.Files) || rule.Selector != "" {
+		if !permission.MatchType(rule, consts.Files) || rule.Selector != "" || !rule.Verbs.Contains(permission.GET) {
 			continue
 		}
-		reads := rule.Verbs.Contains(permission.GET)
 		if len(rule.Values) == 0 {
-			if reads {
-				return nil, nil
-			}
-			continue
+			return nil, nil
 		}
 		for _, id := range rule.Values {
 			p, err := PathByID(fs, id)
@@ -43,10 +39,7 @@ func LinkRoots(fs VFS, perms permission.Set) ([]LinkRoot, error) {
 				return nil, err
 			}
 			if p == "/" {
-				if reads {
-					return nil, nil
-				}
-				continue
+				return nil, nil
 			}
 			roots = append(roots, LinkRoot{ID: id, Path: p})
 		}

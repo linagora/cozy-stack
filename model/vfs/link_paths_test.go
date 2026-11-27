@@ -95,6 +95,16 @@ func TestLinkRoots(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []LinkRoot{{ID: "docs", Path: "/Private/Docs"}}, roots)
 
+	// A parent the link can only write to does not start the paths, whatever the order
+	readSub := permission.Rule{Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: []string{"sub"}}
+	writeDocs := permission.Rule{Type: consts.Files, Verbs: permission.Verbs(permission.POST), Values: []string{"docs"}}
+	dirs["sub"] = &DirDoc{Fullpath: "/Private/Docs/Sub"}
+	for _, perms := range []permission.Set{{writeDocs, readSub}, {readSub, writeDocs}} {
+		roots, err = LinkRoots(lookupVFS{dirs: dirs}, perms)
+		require.NoError(t, err)
+		assert.Equal(t, "/Sub/x", RelativeToLink(roots, "/Private/Docs/Sub/x"))
+	}
+
 	// The root of the instance must not be shadowed by another root, whatever the order
 	for _, values := range [][]string{{"docs", "root"}, {"root", "docs"}} {
 		roots, err = LinkRoots(lookupVFS{dirs: dirs}, permission.Set{permission.Rule{Type: consts.Files, Values: values}})
