@@ -553,6 +553,7 @@ func patchPermission(getPerms getPermsFunc, paramName string) echo.HandlerFunc {
 				}) {
 					return permission.ErrNotParent
 				}
+				toPatch.RemoveRule(r)
 				toPatch.AddRules(r)
 			}
 		}
