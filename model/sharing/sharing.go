@@ -218,9 +218,9 @@ func (s *Sharing) GetFileDriveRoot(inst *instance.Instance) (*vfs.FileDoc, error
 	return file, nil
 }
 
-// LoadDriveRootPath reads the path of the drive root on the given instance, to
+// loadDriveRootPath reads the path of the drive root on the given instance, to
 // be used by DriveRelativePath.
-func (s *Sharing) LoadDriveRootPath(inst *instance.Instance) error {
+func (s *Sharing) loadDriveRootPath(inst *instance.Instance) error {
 	s.driveRootLoaded = true
 	s.driveRootPath = ""
 	if s.DrivePathsHidden() {
@@ -277,7 +277,7 @@ func (s *Sharing) DrivePathsHidden() bool {
 
 func (s *Sharing) driveRoot() string {
 	if !s.driveRootLoaded && s.driveRootInst != nil {
-		if err := s.LoadDriveRootPath(s.driveRootInst); err != nil {
+		if err := s.loadDriveRootPath(s.driveRootInst); err != nil {
 			s.driveRootInst.Logger().WithNamespace("sharing").
 				Warnf("cannot load the root of drive %s: %s", s.SID, err)
 		}

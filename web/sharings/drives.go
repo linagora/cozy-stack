@@ -669,7 +669,7 @@ func applyPatch(c echo.Context, inst *instance.Instance, s *sharing.Sharing, pat
 	}
 
 	// The root itself may have been renamed or moved
-	_ = s.LoadDriveRootPath(inst)
+	s.LoadDriveRootPathOnUse(inst)
 	if dir != nil {
 		return files.DirData(c, http.StatusOK, dir, s)
 	}
