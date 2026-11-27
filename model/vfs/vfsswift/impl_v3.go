@@ -171,6 +171,9 @@ func (sfs *swiftVFSV3) CreateDir(doc *vfs.DirDoc) error {
 		return lockerr
 	}
 	defer sfs.mu.Unlock()
+	if err := vfs.CheckParentNotInTrash(sfs.Indexer, doc.DirID); err != nil {
+		return err
+	}
 	exists, err := sfs.Indexer.DirChildExists(doc.DirID, doc.DocName)
 	if err != nil {
 		return err
@@ -747,6 +750,11 @@ func (sfs *swiftVFSV3) UpdateFileDoc(olddoc, newdoc *vfs.FileDoc) error {
 		return lockerr
 	}
 	defer sfs.mu.Unlock()
+	if newdoc.DirID != olddoc.DirID && !newdoc.Trashed {
+		if err := vfs.CheckParentNotInTrash(sfs.Indexer, newdoc.DirID); err != nil {
+			return err
+		}
+	}
 	if newdoc.DirID != olddoc.DirID || newdoc.DocName != olddoc.DocName {
 		exists, err := sfs.Indexer.DirChildExists(newdoc.DirID, newdoc.DocName)
 		if err != nil {
@@ -771,6 +779,11 @@ func (sfs *swiftVFSV3) UpdateDirDoc(olddoc, newdoc *vfs.DirDoc) error {
 		return lockerr
 	}
 	defer sfs.mu.Unlock()
+	if newdoc.DirID != olddoc.DirID {
+		if err := vfs.CheckParentNotInTrash(sfs.Indexer, newdoc.DirID); err != nil {
+			return err
+		}
+	}
 	if newdoc.DirID != olddoc.DirID || newdoc.DocName != olddoc.DocName {
 		if strings.HasPrefix(newdoc.Fullpath, olddoc.Fullpath+"/") {
 			return vfs.ErrForbiddenDocMove

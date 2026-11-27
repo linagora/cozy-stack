@@ -374,6 +374,62 @@ func TestVfs(t *testing.T) {
 				}, tree)
 			})
 
+			t.Run("NoWriteIntoATrashedDir", func(t *testing.T) {
+				createTree(t, fs, H{"intotrash/": H{"dest/": H{}, "livedir/": H{}, "livefile": nil}}, consts.RootDirID)
+				dest, err := fs.DirByPath("/intotrash/dest")
+				require.NoError(t, err)
+				liveDir, err := fs.DirByPath("/intotrash/livedir")
+				require.NoError(t, err)
+				liveFile, err := fs.FileByPath("/intotrash/livefile")
+				require.NoError(t, err)
+				trashed, err := vfs.TrashDir(fs, dest)
+				require.NoError(t, err)
+				trashedID := trashed.ID()
+
+				_, err = vfs.NewDirDoc(fs, "subdir", trashedID, nil)
+				assert.Equal(t, vfs.ErrParentInTrash, err)
+				_, err = vfs.ModifyDirMetadata(fs, liveDir, &vfs.DocPatch{DirID: &trashedID})
+				assert.Equal(t, vfs.ErrParentInTrash, err)
+				_, err = vfs.ModifyFileMetadata(fs, liveFile, &vfs.DocPatch{DirID: &trashedID})
+				assert.Equal(t, vfs.ErrParentInTrash, err)
+
+				file, err := fs.FileByPath("/intotrash/livefile")
+				require.NoError(t, err)
+				assert.Equal(t, liveFile.DirID, file.DirID)
+			})
+
+			t.Run("NoWriteIntoADirTrashedMeanwhile", func(t *testing.T) {
+				// The destination is live when the writes are prepared, and
+				// trashed before they reach the VFS.
+				createTree(t, fs, H{"racetrash/": H{"dest/": H{}, "livedir/": H{}, "livefile": nil}}, consts.RootDirID)
+				dest, err := fs.DirByPath("/racetrash/dest")
+				require.NoError(t, err)
+				liveDir, err := fs.DirByPath("/racetrash/livedir")
+				require.NoError(t, err)
+				liveFile, err := fs.FileByPath("/racetrash/livefile")
+				require.NoError(t, err)
+
+				newDir, err := vfs.NewDirDoc(fs, "subdir", dest.ID(), nil)
+				require.NoError(t, err)
+				movedDir := liveDir.Clone().(*vfs.DirDoc)
+				movedDir.DirID = dest.ID()
+				movedDir.Fullpath = dest.Fullpath + "/" + liveDir.DocName
+				movedFile := liveFile.Clone().(*vfs.FileDoc)
+				movedFile.DirID = dest.ID()
+				movedFile.ResetFullpath()
+				_, err = vfs.TrashDir(fs, dest)
+				require.NoError(t, err)
+
+				assert.Equal(t, vfs.ErrParentInTrash, fs.CreateDir(newDir))
+				assert.Equal(t, vfs.ErrParentInTrash, fs.UpdateDirDoc(liveDir, movedDir))
+				assert.Equal(t, vfs.ErrParentInTrash, fs.UpdateFileDoc(liveFile, movedFile))
+				_, err = fs.DirByPath("/racetrash/livedir")
+				assert.NoError(t, err)
+				file, err := fs.FileByPath("/racetrash/livefile")
+				require.NoError(t, err)
+				assert.False(t, file.Trashed)
+			})
+
 			t.Run("EncodingOfDirName", func(t *testing.T) {
 				base := "encoding-dir"
 				nfc := "chaîne"

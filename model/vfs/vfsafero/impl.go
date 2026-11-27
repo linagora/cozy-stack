@@ -171,6 +171,9 @@ func (afs *aferoVFS) CreateDir(doc *vfs.DirDoc) error {
 		return lockerr
 	}
 	defer afs.mu.Unlock()
+	if err := vfs.CheckParentNotInTrash(afs.Indexer, doc.DirID); err != nil {
+		return err
+	}
 	err := afs.fs.Mkdir(doc.Fullpath, 0755)
 	if err != nil {
 		return err
@@ -618,6 +621,11 @@ func (afs *aferoVFS) UpdateFileDoc(olddoc, newdoc *vfs.FileDoc) error {
 		return lockerr
 	}
 	defer afs.mu.Unlock()
+	if newdoc.DirID != olddoc.DirID && !newdoc.Trashed {
+		if err := vfs.CheckParentNotInTrash(afs.Indexer, newdoc.DirID); err != nil {
+			return err
+		}
+	}
 	if newdoc.DirID != olddoc.DirID || newdoc.DocName != olddoc.DocName {
 		oldpath, err := afs.Indexer.FilePath(olddoc)
 		if err != nil {
@@ -655,6 +663,11 @@ func (afs *aferoVFS) UpdateDirDoc(olddoc, newdoc *vfs.DirDoc) error {
 		return lockerr
 	}
 	defer afs.mu.Unlock()
+	if newdoc.DirID != olddoc.DirID {
+		if err := vfs.CheckParentNotInTrash(afs.Indexer, newdoc.DirID); err != nil {
+			return err
+		}
+	}
 	if newdoc.Fullpath != olddoc.Fullpath {
 		if err := safeRenameDir(afs, olddoc.Fullpath, newdoc.Fullpath); err != nil {
 			return err
