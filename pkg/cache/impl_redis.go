@@ -101,9 +101,11 @@ func (c *Redis) SetCompressed(key string, data []byte, expiration time.Duration)
 	dataCompressed := new(bytes.Buffer)
 
 	gw := gzip.NewWriter(dataCompressed)
-	defer gw.Close()
-
-	if _, err := io.Copy(gw, bytes.NewReader(data)); err != nil {
+	if _, err := gw.Write(data); err != nil {
+		return
+	}
+	// Close writes the end of the stream and its trailer.
+	if err := gw.Close(); err != nil {
 		return
 	}
 
