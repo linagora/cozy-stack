@@ -34,11 +34,14 @@ type dir struct {
 	rel      jsonapi.RelationshipMap
 	included []jsonapi.Object
 	driveId  string
+	paths    sharing.FilePathScope
 }
 
 type dirJSON struct {
 	*vfs.DirDoc
-	DriveId string `json:"driveId,omitempty"`
+	DriveId     string `json:"driveId,omitempty"`
+	Fullpath    string `json:"path,omitempty"`
+	RestorePath string `json:"restore_path,omitempty"`
 }
 
 type file struct {
@@ -52,6 +55,7 @@ type file struct {
 	thumbSecret string
 	includePath bool
 	driveId     string
+	paths       sharing.FilePathScope
 }
 
 type fileJSON struct {
@@ -62,7 +66,8 @@ type fileJSON struct {
 	// Include the path if asked for
 	Fullpath string `json:"path,omitempty"`
 	// Shared drive identifier if exist
-	DriveId string `json:"driveId,omitempty"`
+	DriveId     string `json:"driveId,omitempty"`
+	RestorePath string `json:"restore_path,omitempty"`
 }
 
 func NewDir(doc *vfs.DirDoc, sharedDrive *sharing.Sharing) *dir {
@@ -80,7 +85,7 @@ func NewDir(doc *vfs.DirDoc, sharedDrive *sharing.Sharing) *dir {
 		driveId = sharedDrive.ID()
 	}
 
-	return &dir{doc: doc, rel: rel, driveId: driveId}
+	return &dir{doc: doc, rel: rel, driveId: driveId, paths: sharing.FilePathScope{Drive: sharedDrive}}
 }
 
 func getDirData(c echo.Context, doc *vfs.DirDoc) (int, couchdb.Cursor, []vfs.DirOrFileDoc, error) {
@@ -139,6 +144,10 @@ func getDirData(c echo.Context, doc *vfs.DirDoc) (int, couchdb.Cursor, []vfs.Dir
 
 func DirData(c echo.Context, statusCode int, doc *vfs.DirDoc, sharedDrive *sharing.Sharing) error {
 	instance := middlewares.GetInstance(c)
+	scope, err := filePathScope(c, sharedDrive)
+	if err != nil {
+		return err
+	}
 	count, cursor, children, err := getDirData(c, doc)
 	if err != nil {
 		return err
@@ -171,9 +180,12 @@ func DirData(c echo.Context, statusCode int, doc *vfs.DirDoc, sharedDrive *shari
 		relsData = append(relsData, couchdb.DocReference{ID: child.ID(), Type: child.DocType()})
 		d, f := child.Refine()
 		if d != nil {
-			included = append(included, NewDir(d, sharedDrive))
+			dd := NewDir(d, sharedDrive)
+			dd.paths = scope
+			included = append(included, dd)
 		} else {
 			file := NewFile(f, instance, sharedDrive)
+			file.paths = scope
 			if secret, ok := secrets[f.ID()]; ok {
 				file.SetThumbSecret(secret)
 			}
@@ -227,14 +239,19 @@ func DirData(c echo.Context, statusCode int, doc *vfs.DirDoc, sharedDrive *shari
 	}
 
 	d := NewDir(doc, sharedDrive)
+	d.paths = scope
 	d.rel = rel
 	d.included = included
 
 	return jsonapi.Data(c, statusCode, d, &links)
 }
 
-func dirDataList(c echo.Context, statusCode int, doc *vfs.DirDoc) error {
+func dirDataList(c echo.Context, statusCode int, doc *vfs.DirDoc, sharedDrive *sharing.Sharing) error {
 	instance := middlewares.GetInstance(c)
+	scope, err := filePathScope(c, sharedDrive)
+	if err != nil {
+		return err
+	}
 	count, cursor, children, err := getDirData(c, doc)
 	if err != nil {
 		return err
@@ -247,9 +264,13 @@ func dirDataList(c echo.Context, statusCode int, doc *vfs.DirDoc) error {
 		}
 		d, f := child.Refine()
 		if d != nil {
-			included = append(included, NewDir(d, nil))
+			dd := NewDir(d, sharedDrive)
+			dd.paths = scope
+			included = append(included, dd)
 		} else {
-			included = append(included, NewFile(f, instance, nil))
+			ff := NewFile(f, instance, sharedDrive)
+			ff.paths = scope
+			included = append(included, ff)
 		}
 	}
 
@@ -273,13 +294,18 @@ func NewFile(doc *vfs.FileDoc, i *instance.Instance, sharedDrive *sharing.Sharin
 	if sharedDrive != nil {
 		driveId = sharedDrive.ID()
 	}
-	return &file{doc, i, nil, nil, &fileJSON{}, "", false, driveId}
+	return &file{doc, i, nil, nil, &fileJSON{}, "", false, driveId, sharing.FilePathScope{Drive: sharedDrive}}
 }
 
 // FileData returns a jsonapi representation of the given file.
 func FileData(c echo.Context, statusCode int, doc *vfs.FileDoc, withVersions bool, links *jsonapi.LinksList, sharedDrive *sharing.Sharing) error {
 	instance := middlewares.GetInstance(c)
+	scope, err := filePathScope(c, sharedDrive)
+	if err != nil {
+		return err
+	}
 	f := NewFile(doc, instance, sharedDrive)
+	f.paths = scope
 	if withVersions {
 		if versions, err := vfs.VersionsFor(instance, doc.ID()); err == nil {
 			f.versions = versions
@@ -332,9 +358,10 @@ func (d *dir) Clone() couchdb.Doc                     { cloned := *d; return &cl
 func (d *dir) Relationships() jsonapi.RelationshipMap { return d.rel }
 func (d *dir) Included() []jsonapi.Object             { return d.included }
 func (d *dir) MarshalJSON() ([]byte, error) {
-	return json.Marshal(dirJSON{
-		d.doc, d.driveId,
-	})
+	res := dirJSON{d.doc, d.driveId, d.doc.Fullpath, d.doc.RestorePath}
+	res.Fullpath = d.paths.Relative(res.Fullpath)
+	res.RestorePath = d.paths.Relative(res.RestorePath)
+	return json.Marshal(res)
 }
 func (d *dir) Links() *jsonapi.LinksList {
 	return &jsonapi.LinksList{Self: "/files/" + d.doc.DocID}
@@ -396,6 +423,9 @@ func (f *file) MarshalJSON() ([]byte, error) {
 		f.jsonDoc.Fullpath, _ = f.doc.Path(nil)
 	}
 	f.jsonDoc.DriveId = f.driveId
+	f.jsonDoc.RestorePath = f.doc.RestorePath
+	f.jsonDoc.Fullpath = f.paths.Relative(f.jsonDoc.Fullpath)
+	f.jsonDoc.RestorePath = f.paths.Relative(f.jsonDoc.RestorePath)
 	res, err := json.Marshal(f.jsonDoc)
 	return res, err
 }
@@ -508,4 +538,24 @@ func hasField(fields []string, field string) bool {
 
 func (f *findFile) IncludePath(fp vfs.FilePather) {
 	f.Fullpath, _ = f.Path(fp)
+}
+
+const contextPathScope = "files.path_scope"
+
+func filePathScope(c echo.Context, drive *sharing.Sharing) (sharing.FilePathScope, error) {
+	if drive != nil {
+		return sharing.FilePathScope{Drive: drive}, nil
+	}
+	if scope, ok := c.Get(contextPathScope).(sharing.FilePathScope); ok {
+		return scope, nil
+	}
+	perm, err := middlewares.GetPermission(c)
+	if err != nil {
+		return sharing.FilePathScope{}, err
+	}
+	scope, err := sharing.ResolveFilePaths(middlewares.GetInstance(c), perm)
+	if err == nil {
+		c.Set(contextPathScope, scope)
+	}
+	return scope, err
 }

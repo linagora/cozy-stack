@@ -182,7 +182,7 @@ func TestRecentsListCompletesTheDriveItems(t *testing.T) {
 		assert.Equal(t, consts.Files, file["type"])
 		attrs := attributesOf(file)
 		assert.Equal(t, outerDrive.SID, attrs["driveId"])
-		assert.Equal(t, "/Sub/in-sub.jpg", attrs["path"])
+		assert.Equal(t, "/Team/Sub/in-sub.jpg", attrs["path"])
 		assert.Equal(t, "in-sub.jpg", attrs["name"])
 		assert.Equal(t, sub.ID(), attrs["dir_id"])
 		assert.Equal(t, false, attrs["trashed"])
@@ -199,13 +199,13 @@ func TestRecentsListCompletesTheDriveItems(t *testing.T) {
 		folder := docOf(page, "included", sub.ID())
 		require.NotNil(t, folder)
 		assert.Equal(t, outerDrive.SID, attributesOf(folder)["driveId"])
-		assert.Equal(t, "/Sub", attributesOf(folder)["path"])
+		assert.Equal(t, "/Team/Sub", attributesOf(folder)["path"])
 
-		// The root of a drive has no path.
+		// The root of a drive is named by itself.
 		root := docOf(page, "included", team.ID())
 		require.NotNil(t, root)
 		assert.Equal(t, outerDrive.SID, attributesOf(root)["driveId"])
-		assert.NotContains(t, attributesOf(root), "path")
+		assert.Equal(t, "/Team", attributesOf(root)["path"])
 
 		assert.NotContains(t, body, "Private")
 	})
@@ -215,7 +215,7 @@ func TestRecentsListCompletesTheDriveItems(t *testing.T) {
 		file := docOf(page, "included", inNested.ID())
 		require.NotNil(t, file)
 		assert.Equal(t, nestedDrive.SID, attributesOf(file)["driveId"])
-		assert.Equal(t, "/in-nested.jpg", attributesOf(file)["path"])
+		assert.Equal(t, "/Nested/in-nested.jpg", attributesOf(file)["path"])
 	})
 
 	t.Run("the requests do not depend on the number of rows of an owner", func(t *testing.T) {

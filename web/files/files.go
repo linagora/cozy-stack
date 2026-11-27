@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -98,7 +99,10 @@ func Create(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) 
 	var doc jsonapi.Object
 	var created *vfs.FileDoc
 	var createdDir *vfs.DirDoc
-	var err error
+	scope, err := filePathScope(c, sharedDrive)
+	if err != nil {
+		return nil, err
+	}
 	switch c.QueryParam("Type") {
 	case consts.FileType:
 		var f *file
@@ -121,6 +125,12 @@ func Create(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) 
 	}
 
 	recordEdit(c, createdDir, created)
+	switch o := doc.(type) {
+	case *dir:
+		o.paths = scope
+	case *file:
+		o.paths = scope
+	}
 	return created, jsonapi.Data(c, http.StatusCreated, doc, nil)
 }
 
@@ -799,7 +809,11 @@ func applyPatch(c echo.Context, fs vfs.VFS, patch *docPatch) (err error) {
 	if patch.docID != "" {
 		dir, file, err = fs.DirOrFileByID(patch.docID)
 	} else {
-		dir, file, err = fs.DirOrFileByPath(patch.docPath)
+		scope, scopeErr := filePathScope(c, nil)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		dir, file, err = lookupPath(fs, scope, patch.docPath)
 	}
 	if err != nil {
 		return err
@@ -866,6 +880,8 @@ func applyPatch(c echo.Context, fs vfs.VFS, patch *docPatch) (err error) {
 		return err
 	}
 
+	// The patch may have renamed or moved a root of the path scope
+	c.Set(contextPathScope, nil)
 	if dir != nil {
 		return DirData(c, http.StatusOK, dir, nil)
 	}
@@ -970,10 +986,14 @@ func ReadMetadataFromIDHandler(c echo.Context) error {
 		}
 	}
 
-	if dir != nil {
-		return DirData(c, http.StatusOK, dir, nil)
+	scope, err := filePathScope(c, nil)
+	if err != nil {
+		return err
 	}
-	return FileData(c, http.StatusOK, file, true, nil, nil)
+	if dir != nil {
+		return DirData(c, http.StatusOK, dir, scope.Drive)
+	}
+	return FileData(c, http.StatusOK, file, true, nil, scope.Drive)
 }
 
 // GetChildrenHandler returns a list of children of a folder
@@ -998,7 +1018,11 @@ func GetChildrenHandler(c echo.Context) error {
 		return jsonapi.Errorf(http.StatusBadRequest, "cant read children of file %v", fileID)
 	}
 
-	return dirDataList(c, http.StatusOK, dir)
+	scope, err := filePathScope(c, nil)
+	if err != nil {
+		return err
+	}
+	return dirDataList(c, http.StatusOK, dir, scope.Drive)
 }
 
 type ApiDiskSize struct {
@@ -1046,26 +1070,35 @@ func GetDirSize(c echo.Context) error {
 // ReadMetadataFromPathHandler handles all GET requests on
 // /files/metadata aiming at getting file metadata from its path.
 func ReadMetadataFromPathHandler(c echo.Context) error {
-	return ReadMetadataFromPath(c, nil)
+	return ReadMetadataFromPath(c, nil, nil)
 }
 
-func ReadMetadataFromPath(c echo.Context, sharedDrive *sharing.Sharing) error {
-	var err error
-	instance := middlewares.GetInstance(c)
-
-	dir, file, err := instance.VFS().DirOrFileByPath(c.QueryParam("Path"))
+func ReadMetadataFromPath(c echo.Context, sharedDrive *sharing.Sharing, checkRead func(string) error) error {
+	scope, err := filePathScope(c, sharedDrive)
+	if err != nil {
+		return err
+	}
+	p := c.QueryParam("Path")
+	if p == "" {
+		return jsonapi.BadRequest(vfs.ErrNonAbsolutePath)
+	}
+	dir, file, err := lookupPath(middlewares.GetInstance(c).VFS(), scope, p)
 	if err != nil {
 		return WrapVfsError(err)
 	}
-
+	if checkRead != nil {
+		if err := checkRead(targetID(dir, file)); err != nil {
+			return err
+		}
+	}
 	if err := checkPerm(c, permission.GET, dir, file); err != nil {
 		return err
 	}
 
 	if dir != nil {
-		return DirData(c, http.StatusOK, dir, sharedDrive)
+		return DirData(c, http.StatusOK, dir, scope.Drive)
 	}
-	return FileData(c, http.StatusOK, file, true, nil, sharedDrive)
+	return FileData(c, http.StatusOK, file, true, nil, scope.Drive)
 }
 
 // ReadFileContentFromIDHandler handles all GET requests on /files/:file-id
@@ -1276,7 +1309,7 @@ func saveOpenOfficeSession(c echo.Context, inst *instance.Instance, doc *vfs.Fil
 func SendFileFromDoc(instance *instance.Instance, c echo.Context, doc *vfs.FileDoc, checkPermission bool) error {
 	var err error
 	if checkPermission {
-		err = middlewares.Allow(c, permission.GET, doc)
+		err = middlewares.AllowVFS(c, permission.GET, doc)
 		if err != nil {
 			return err
 		}
@@ -1316,16 +1349,6 @@ func SendFileFromDoc(instance *instance.Instance, c echo.Context, doc *vfs.FileD
 	return nil
 }
 
-func sendFileFromPath(c echo.Context, path string, checkPermission bool) error {
-	instance := middlewares.GetInstance(c)
-
-	doc, err := instance.VFS().FileByPath(path)
-	if err != nil {
-		return WrapVfsError(err)
-	}
-	return SendFileFromDoc(instance, c, doc, checkPermission)
-}
-
 func addCSPRuleForDirectLink(c echo.Context, class, mime string) {
 	if config.GetConfig().CSPDisabled {
 		return
@@ -1340,17 +1363,21 @@ func addCSPRuleForDirectLink(c echo.Context, class, mime string) {
 // aiming at downloading a file given its path. It serves the file in in
 // attachment mode.
 func ReadFileContentFromPathHandler(c echo.Context) error {
-	return sendFileFromPath(c, c.QueryParam("Path"), true)
+	doc, err := fileFromRequestPath(c, nil, c.QueryParam("Path"))
+	if err != nil {
+		return err
+	}
+	return SendFileFromDoc(middlewares.GetInstance(c), c, doc, true)
 }
 
 func ReadFileContentFromSharingFileID(c echo.Context, fileID string) error {
-	return sendFileFromPath(c, c.QueryParam("Path"), true)
+	return ReadFileContentFromPathHandler(c)
 }
 
 // ArchiveDownload stores the archive parameters into a secret usable for the
 // download handler below. When sharedDrive is not nil, the returned link
 // points to the shared drive archive endpoint instead of /files/archive.
-func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
+func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing, checkRead func(string) error) error {
 	archive := &vfs.Archive{}
 	if _, err := jsonapi.Bind(c.Request().Body, archive); err != nil {
 		return err
@@ -1365,6 +1392,38 @@ func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 		archive.Name = "archive"
 	}
 	instance := middlewares.GetInstance(c)
+
+	// Keep client paths in the response and store the resolved targets for redemption.
+	response := *archive
+	if len(archive.Files) > 0 {
+		scope, err := filePathScope(c, sharedDrive)
+		if err != nil {
+			return err
+		}
+		if scope.Roots != nil || scope.Drive != nil {
+			archive.IDs = slices.Clone(archive.IDs)
+			for _, p := range archive.Files {
+				dir, file, err := lookupPath(instance.VFS(), scope, p)
+				if err != nil {
+					return err
+				}
+				archive.IDs = append(archive.IDs, targetID(dir, file))
+			}
+			archive.Files = nil
+		}
+	}
+	if checkRead != nil {
+		for _, id := range archive.IDs {
+			if err := checkRead(id); err != nil {
+				return err
+			}
+		}
+		for _, page := range archive.Pages {
+			if err := checkRead(page.ID); err != nil {
+				return err
+			}
+		}
+	}
 
 	entries, err := archive.GetEntries(instance.VFS())
 	if err != nil {
@@ -1395,7 +1454,7 @@ func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 		return WrapVfsError(err)
 	}
 	publiclinkevents.TrackArchive(c, instance, entries, archive.Pages)
-	archive.Secret = secret
+	response.Secret = secret
 
 	fakeName := url.PathEscape(archive.Name)
 
@@ -1410,45 +1469,49 @@ func ArchiveDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 		}
 	}
 
-	return jsonapi.Data(c, http.StatusOK, &apiArchive{archive}, links)
+	return jsonapi.Data(c, http.StatusOK, &apiArchive{&response}, links)
 }
 
 // ArchiveDownloadCreateHandler handles requests to /files/archive and stores the
 // paremeters with a secret to be used in download handler below.s
 func ArchiveDownloadCreateHandler(c echo.Context) error {
-	return ArchiveDownload(c, nil)
+	return ArchiveDownload(c, nil, nil)
 }
 
 // FileDownload stores the required path into a secret
 // usable for download handler below.
-func FileDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
+func FileDownload(c echo.Context, sharedDrive *sharing.Sharing, checkRead func(string) error) error {
 	instance := middlewares.GetInstance(c)
 	var doc *vfs.FileDoc
 	var err error
-	var path string
 	var versionID string
-
-	if path = c.QueryParam("Path"); path != "" {
-		if doc, err = instance.VFS().FileByPath(path); err != nil {
+	id := c.QueryParam("Id")
+	if p := c.QueryParam("Path"); p != "" {
+		doc, err = fileFromRequestPath(c, sharedDrive, p)
+		if err != nil {
+			return err
+		}
+		id = doc.ID()
+	} else if id == "" {
+		versionID = c.QueryParam("VersionId")
+		if versionID == "" {
+			return jsonapi.NewError(http.StatusBadRequest, "Path, Id or VersionId is required")
+		}
+		id = strings.SplitN(versionID, "/", 2)[0]
+	}
+	if checkRead != nil {
+		if err := checkRead(id); err != nil {
+			return err
+		}
+	}
+	if doc == nil {
+		doc, err = instance.VFS().FileByID(id)
+		if err != nil {
 			return WrapVfsError(err)
 		}
-	} else if id := c.QueryParam("Id"); id != "" {
-		if doc, err = instance.VFS().FileByID(id); err != nil {
-			return WrapVfsError(err)
-		}
-		if path, err = doc.Path(instance.VFS()); err != nil {
-			return WrapVfsError(err)
-		}
-	} else if versionID = c.QueryParam("VersionId"); versionID != "" {
-		docID := strings.Split(versionID, "/")[0]
-		if doc, err = instance.VFS().FileByID(docID); err != nil {
-			return WrapVfsError(err)
-		}
-	} else {
-		return jsonapi.NewError(http.StatusBadRequest, "Path, Id or VersionId is required")
 	}
 
-	err = checkPerm(c, "GET", nil, doc)
+	err = checkPerm(c, permission.GET, nil, doc)
 	if err != nil {
 		return err
 	}
@@ -1459,6 +1522,11 @@ func FileDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 
 	var secret string
 	if versionID == "" {
+		var path string
+		path, err = doc.Path(instance.VFS())
+		if err != nil {
+			return WrapVfsError(err)
+		}
 		secret, err = vfs.GetStore().AddFile(instance, path)
 	} else {
 		secret, err = vfs.GetStore().AddVersion(instance, versionID)
@@ -1491,7 +1559,7 @@ func FileDownload(c echo.Context, sharedDrive *sharing.Sharing) error {
 }
 
 func FileDownloadCreateHandler(c echo.Context) error {
-	return FileDownload(c, nil)
+	return FileDownload(c, nil, nil)
 }
 
 // ArchiveDownloadHandler handles requests to /files/archive/:secret/whatever.zip
@@ -1535,7 +1603,11 @@ func FileDownloadHandler(c echo.Context) error {
 	if err != nil {
 		return WrapVfsError(err)
 	}
-	return sendFileFromPath(c, path, false)
+	doc, err := instance.VFS().FileByPath(path)
+	if err != nil {
+		return WrapVfsError(err)
+	}
+	return SendFileFromDoc(instance, c, doc, false)
 }
 
 func versionDownloadHandler(c echo.Context, secret string) error {
@@ -1653,7 +1725,7 @@ func ReadTrashFilesHandler(c echo.Context) error {
 		return err
 	}
 
-	return dirDataList(c, http.StatusOK, trash)
+	return dirDataList(c, http.StatusOK, trash, nil)
 }
 
 // Restore handle POST requests on /files/trash/file-id and
@@ -1696,7 +1768,7 @@ func Restore(c echo.Context, sharedDrive *sharing.Sharing) error {
 			return WrapVfsError(errt)
 		}
 		recordEdit(c, doc, nil)
-		return DirData(c, http.StatusOK, doc, nil)
+		return DirData(c, http.StatusOK, doc, sharedDrive)
 	}
 
 	UpdateFileCozyMetadata(c, file, false)
@@ -1705,7 +1777,7 @@ func Restore(c echo.Context, sharedDrive *sharing.Sharing) error {
 		return WrapVfsError(errt)
 	}
 	recordEdit(c, nil, doc)
-	return FileData(c, http.StatusOK, doc, false, nil, nil)
+	return FileData(c, http.StatusOK, doc, false, nil, sharedDrive)
 }
 
 func RestoreTrashFileHandler(c echo.Context) error {
@@ -2032,7 +2104,11 @@ func changesFeed(
 	}
 
 	// Drop a clear error for parameters not supported by stack
-	filter := &changesFilter{}
+	scope, err := filePathScope(c, nil)
+	if err != nil {
+		return err
+	}
+	filter := &changesFilter{roots: scope.Roots}
 	for key := range c.QueryParams() {
 		if byCouch, ok := allowedChangesParams[key]; !ok {
 			return jsonapi.Errorf(http.StatusBadRequest, "Unsupported query parameter '%s'", key)
@@ -2126,6 +2202,7 @@ func ChangesFeedForFiles(c echo.Context) error {
 }
 
 type changesFilter struct {
+	roots       []vfs.LinkRoot
 	Fields      []string
 	IncludePath bool
 	SkipDeleted bool
@@ -2177,7 +2254,9 @@ func (filter *changesFilter) Reject(change *couchdb.Change) *couchdb.Change {
 // from a shared drive.
 func (filter *changesFilter) SharedDriveChange(change *couchdb.Change) *couchdb.Change {
 	if filter.SharedDir == nil && filter.SharedFile == nil {
-		// This is a request from GET /files/_changes: No need to map the changes
+		if filter.roots != nil && !change.Deleted {
+			filter.relativizeChangePaths(change, filter.roots)
+		}
 		return change
 	}
 	if filter.SharedFile != nil {
@@ -2186,6 +2265,13 @@ func (filter *changesFilter) SharedDriveChange(change *couchdb.Change) *couchdb.
 		}
 		if !change.Deleted {
 			change.Doc.M["driveId"] = filter.SharedFile.SharingID()
+			if filter.roots != nil {
+				filter.relativizeChangePaths(change, filter.roots)
+			} else if _, ok := change.Doc.M["path"]; ok {
+				name, _ := change.Doc.M["name"].(string)
+				change.Doc.M["path"] = "/" + name
+			}
+			delete(change.Doc.M, "restore_path")
 		}
 		return change
 	}
@@ -2200,11 +2286,28 @@ func (filter *changesFilter) SharedDriveChange(change *couchdb.Change) *couchdb.
 	// The path of a file is missing when its parent directory can't be read
 	path, _ := change.Doc.M["path"].(string)
 	sharedDirPath := utils.EnsureHasSuffix(filter.SharedDir.Fullpath, "/")
-	if strings.HasPrefix(path, sharedDirPath) {
+	if change.DocID == filter.SharedDir.DocID || strings.HasPrefix(path, sharedDirPath) {
 		change.Doc.M["driveId"] = filter.SharedDir.SharingID()
+		roots := filter.roots
+		if roots == nil {
+			roots = []vfs.LinkRoot{{Path: filter.SharedDir.Fullpath}}
+		}
+		filter.relativizeChangePaths(change, roots)
 		return change
 	}
 	return couchdb.MakeChangeForDeletion(change.DocID, change.Doc.M["_rev"].(string), change.Seq)
+}
+
+func (filter *changesFilter) relativizeChangePaths(change *couchdb.Change, roots []vfs.LinkRoot) {
+	for _, key := range []string{"path", "restore_path"} {
+		if p, ok := change.Doc.M[key].(string); ok {
+			if rel := vfs.RelativeToLink(roots, p); rel != "" {
+				change.Doc.M[key] = rel
+			} else {
+				delete(change.Doc.M, key)
+			}
+		}
+	}
 }
 
 // Stream writes the changes to the writer in JSON format, after hydrating.

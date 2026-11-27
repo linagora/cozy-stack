@@ -441,6 +441,17 @@ supports only file-shaped routes. Directory-only routes return
 `422 Unprocessable Entity`. `_changes` and realtime are available with exact
 root-file semantics for file-root shared drives.
 
+A member's file paths start at the drive root. A public link to a folder
+inside that drive starts at the linked folder. For example, the same directory
+can appear as `/Team/Meetings/Notes` to a member and `/Meetings/Notes` to a
+link visitor. A member passes the returned path to
+`GET /sharings/drives/:id/metadata`. A visitor with a link or an interact code
+can also pass it to `GET /files/metadata` on the owner's instance.
+
+When a `share-interact` code covers multiple file roots, clients can still
+use authorized document IDs. The stack omits `path` and `restore_path` and
+returns `404` for metadata requests by path.
+
 ### GET /sharings/drives/:id/download/:file-id
 
 Download a file via a drive share.
@@ -530,11 +541,12 @@ See there for request and response examples, differences are the URL and:
 
 - Any item that changed for that owner but isn't under that shared drive
   is presented as a deletion.
-- Paths are truncated to the shared drive, and formatted accordingly:
+- Paths (`path` and `restore_path`) are relative to the root of the shared
+  drive: they start with the name of the root folder, and nothing above it is
+  given. A path that leads outside of the shared drive is removed.
+  Use the returned path for metadata lookups, download links, and archive entries.
 
-  eg: `//io.cozy.files.shared-drives-dir/1/ba3b516812f636fc022f3968f991357a/Meetings/Checklist.txt`
-
-  Schema and it's version, followed by the shared drive ID, and the path within
+  eg: `/Team/Meetings/Checklist.txt` for a drive whose root folder is `Team`
 
 For file-root shared drives, this route returns only changes for the root file.
 Unrelated file changes are filtered out.

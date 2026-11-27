@@ -290,19 +290,24 @@ func resolveDriveRecents(ownerDomain string, member *sharing.Member, group []*re
 		// where it was may be above the root of the drive: it is not given.
 		shown := fullpath
 		if !trashed {
-			if shown, err = scope.PathFromRoot(fullpath); err != nil {
+			// The same path as on the shared drive routes, from the name of the root
+			if shown = vfs.RelativeToLink([]vfs.LinkRoot{{Path: scope.RootPath}}, fullpath); shown == "" {
 				continue
 			}
 		}
 		if t.Dir != nil {
 			t.Dir.Fullpath = shown
 			t.Dir.RestorePath = ""
-			found[i].file = NewDir(t.Dir, scope.Sharing)
+			d := NewDir(t.Dir, scope.Sharing)
+			// The path is already the one from the root of the scope
+			d.paths.Drive = nil
+			found[i].file = d
 			continue
 		}
 		t.File.RestorePath = ""
 		t.File.ResetFullpath()
 		f := NewFile(t.File, owner, scope.Sharing)
+		f.paths.Drive = nil
 		f.IncludePath(fixedPath(shown))
 		if t.File.Class == "image" || t.File.Class == "pdf" {
 			thumbs = append(thumbs, f)
