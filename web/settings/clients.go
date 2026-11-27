@@ -141,13 +141,10 @@ func (h *HTTPHandler) limitExceeded(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Error Must be authenticated")
 	}
 
-	// Follow the redirect only to the instance, one of its apps, or a mobile
-	// app (cozy://...).
+	// Follow the redirect only to the instance or one of its apps.
 	redirect := inst.DefaultRedirection().String()
 	if raw := c.QueryParam("redirect"); raw != "" {
-		if u, err := url.Parse(raw); err == nil && u.Scheme != "" && u.Scheme != "http" && u.Scheme != "https" {
-			redirect = raw
-		} else if u, err := auth.CheckRedirect(inst, raw); err == nil {
+		if u, err := auth.CheckRedirect(inst, raw); err == nil {
 			redirect = u.String()
 		}
 	}

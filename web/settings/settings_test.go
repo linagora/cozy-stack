@@ -1586,10 +1586,11 @@ func TestSettings(t *testing.T) {
 
 		drive := testInstance.SubDomain("drive").String()
 		for redirect, expected := range map[string]string{
-			"cozy://my-app":         "cozy://my-app",
-			drive:                   drive,
-			"https://evil.example/": testInstance.DefaultRedirection().String(),
-			"//evil.example/":       testInstance.DefaultRedirection().String(),
+			drive:                    drive,
+			"cozy://my-app":          testInstance.DefaultRedirection().String(),
+			"intent://evil.example/": testInstance.DefaultRedirection().String(),
+			"https://evil.example/":  testInstance.DefaultRedirection().String(),
+			"//evil.example/":        testInstance.DefaultRedirection().String(),
 		} {
 			e.GET("/settings/clients/limit-exceeded").
 				WithCookie(sessCookie, "connected").

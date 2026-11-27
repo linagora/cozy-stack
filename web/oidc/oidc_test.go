@@ -510,6 +510,9 @@ func TestOidc(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 		drive := testInstance.SubDomain("drive").String()
 
+		onboardingFinished := true
+		_ = lifecycle.Patch(testInstance, &lifecycle.Options{OnboardingFinished: &onboardingFinished})
+
 		for redirect, expected := range map[string]string{
 			"https://evil.example/": testInstance.DefaultRedirection().String(),
 			"//evil.example/":       testInstance.DefaultRedirection().String(),
