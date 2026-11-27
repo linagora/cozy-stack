@@ -537,3 +537,21 @@ func asRedisDoc(doc realtime.Doc) realtime.Doc {
 	}
 	return &realtime.JSONDoc{Type: doc.DocType(), M: m}
 }
+
+func TestParentsReachTheDeepestFolders(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	fs := setup.GetTestInstance().VFS()
+
+	root, err := vfs.MkdirAll(fs, "/Team")
+	require.NoError(t, err)
+	deep, err := vfs.MkdirAll(fs, "/Team"+strings.Repeat("/d", 300))
+	require.NoError(t, err)
+	in, err := parentsReach(fs.GetIndexer(), root.ID(), deep.ID())
+	require.NoError(t, err)
+	assert.True(t, in)
+}

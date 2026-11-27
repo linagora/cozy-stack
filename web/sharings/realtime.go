@@ -332,7 +332,7 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 // IDs, which stay the same while a folder moves, unlike the paths.
 func parentsReach(fs vfs.Indexer, rootID, dirID string) (bool, error) {
 	// A loop in a broken tree must not block the events
-	for depth := 0; depth < 256; depth++ {
+	for depth := 0; depth < vfs.MaxDepth; depth++ {
 		switch dirID {
 		case rootID:
 			return true, nil
