@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	job "github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/model/rag"
+	"github.com/cozy/cozy-stack/model/search/purge"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
@@ -111,6 +113,15 @@ func Destroy(domain string) error {
 	if err = couchdb.DeleteAllDBs(inst); err != nil {
 		inst.Logger().Errorf("Could not delete all CouchDB databases: %s", err.Error())
 		return retryable(err)
+	}
+
+	// After the databases: an index job reads its checkpoint and the changes
+	// from them, so none writes after the purge. A failure must not block the
+	// deletion, but the documents left behind are found by an instance created
+	// again with this domain (#5398).
+	if err := purge.CleanInstance(context.Background(), inst.Domain); err != nil {
+		logger.WithDomain(inst.Domain).WithNamespace("search").
+			Warnf("Could not remove the search documents: %s", err)
 	}
 
 	err = instance.Delete(inst)
