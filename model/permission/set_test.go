@@ -176,6 +176,12 @@ func TestSetUnmarshalJSONEdgeCases(t *testing.T) {
 	require.Len(t, s, 3)
 	assert.Equal(t, []string{"f", "c", "f"}, []string{s[0].Title, s[1].Title, s[2].Title})
 	assert.Equal(t, []string{"io.cozy.notes", "io.cozy.contacts", "io.cozy.notes"}, []string{s[0].Type, s[1].Type, s[2].Type})
+
+	// Only the last value of a duplicated title is decoded, valid or not.
+	require.NoError(t, json.Unmarshal([]byte(`{"f":1,"f":{"type":"io.cozy.files"}}`), &s))
+	require.Len(t, s, 2)
+	assert.Equal(t, []string{"io.cozy.files", "io.cozy.files"}, []string{s[0].Type, s[1].Type})
+	assert.Error(t, json.Unmarshal([]byte(`{"f":{"type":"io.cozy.files"},"f":1}`), &s))
 }
 
 func BenchmarkSetUnmarshalJSON(b *testing.B) {
@@ -192,6 +198,10 @@ func BenchmarkSetUnmarshalJSON(b *testing.B) {
 		rules = append(rules, fmt.Sprintf(`"rule%d":{"type":"io.cozy.doctype%d","description":"Required for something","verbs":["GET","POST"],"selector":"worker","values":["a","b"]}`, i, i))
 	}
 	sets["rules=22"] = []byte(`{` + strings.Join(rules, ",") + `}`)
+	for i := 22; i < 500; i++ {
+		rules = append(rules, fmt.Sprintf(`"rule%d":{"type":"io.cozy.doctype%d","verbs":["GET"]}`, i, i))
+	}
+	sets["rules=500"] = []byte(`{` + strings.Join(rules, ",") + `}`)
 	for name, j := range sets {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()

@@ -99,7 +99,15 @@ func (s *Set) UnmarshalJSON(j []byte) error {
 		var m map[string]json.RawMessage
 		return json.Unmarshal(j, &m) // the same error as for any non-object
 	}
-	set := make(Set, 0, 8)
+	// A duplicated title has always given a rule per occurrence, all with the
+	// last value, and only that value had to be valid: keep both, as the rules
+	// are a union of permissions.
+	type decoded struct {
+		rule Rule
+		err  error
+	}
+	last := make(map[string]decoded)
+	var titles []string
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
@@ -107,21 +115,21 @@ func (s *Set) UnmarshalJSON(j []byte) error {
 		}
 		title, _ := t.(string)
 		var r Rule
-		if err := dec.Decode(&r); err != nil {
-			return err
-		}
+		err = dec.Decode(&r) // the decoder reads the whole value before an error
 		r.Title = title
-		// A duplicated title has always given a rule per occurrence, all with
-		// the last value: keep it, as the rules are a union of permissions.
-		for i := range set {
-			if set[i].Title == title {
-				set[i] = r
-			}
-		}
-		set = append(set, r)
+		last[title] = decoded{r, err}
+		titles = append(titles, title)
 	}
 	if _, err := dec.Token(); err != nil {
 		return err
+	}
+	set := make(Set, 0, len(titles))
+	for _, title := range titles {
+		d := last[title]
+		if d.err != nil {
+			return d.err
+		}
+		set = append(set, d.rule)
 	}
 	*s = set
 	return nil
