@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 
@@ -43,17 +42,20 @@ job, which indexes all the files of an instance that was never indexed.
 		if err != nil {
 			return err
 		}
-		var errs error
+		failed := 0
 		for _, inst := range list {
 			domain := inst.Attrs.Domain
 			if err := ac.SearchEnable(domain); err != nil {
 				fmt.Fprintf(os.Stderr, "%s: %s\n", domain, err)
-				errs = errors.Join(errs, fmt.Errorf("%s: %w", domain, err))
+				failed++
 				continue
 			}
 			fmt.Println(domain)
 		}
-		return errs
+		if failed > 0 {
+			return fmt.Errorf("search is not enabled for %d of %d instances", failed, len(list))
+		}
+		return nil
 	},
 }
 
