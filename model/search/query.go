@@ -89,11 +89,20 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 			} `json:"hits"`
 		} `json:"hits"`
 	}
-	if err := client.Search(ctx, FilesIndex, buildQuery(caller.Domain, q, keys, limit, after), &res); err != nil {
+	// One more hit than the page tells if there is a next page. The same shard
+	// copies serve all the pages of a caller, so the scores do not change.
+	query := buildQuery(caller.Domain, q, keys, limit+1, after)
+	if err := client.SearchWithPreference(ctx, FilesIndex, caller.Domain, query, &res); err != nil {
 		return nil, err
 	}
 
 	out := &Results{Hits: make([]SearchHit, 0, len(res.Hits.Hits)), Drives: drives}
+	if len(res.Hits.Hits) > limit {
+		res.Hits.Hits = res.Hits.Hits[:limit]
+		if out.Cursor, err = encodeCursor(res.Hits.Hits[limit-1].Sort, binding); err != nil {
+			return nil, err
+		}
+	}
 	for _, h := range res.Hits.Hits {
 		doc := h.Source
 		hit := SearchHit{
@@ -104,11 +113,6 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 			hit.DriveID = driveByKey[doc.ScopedDirKey]
 		}
 		out.Hits = append(out.Hits, hit)
-	}
-	if n := len(res.Hits.Hits); n == limit {
-		if out.Cursor, err = encodeCursor(res.Hits.Hits[n-1].Sort, binding); err != nil {
-			return nil, err
-		}
 	}
 	return out, nil
 }

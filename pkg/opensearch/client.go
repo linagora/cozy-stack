@@ -123,6 +123,13 @@ func (c *Client) Search(ctx context.Context, index string, body, out any) error 
 	return c.doJSON(ctx, http.MethodPost, "/"+c.IndexName(index)+"/_search", body, out)
 }
 
+// SearchWithPreference runs a search like Search, on the shard copies chosen
+// by preference: the searches with the same preference get the same scores.
+func (c *Client) SearchWithPreference(ctx context.Context, index, preference string, body, out any) error {
+	path := "/" + c.IndexName(index) + "/_search?preference=" + url.QueryEscape(preference)
+	return c.doJSON(ctx, http.MethodPost, path, body, out)
+}
+
 // DeleteByQuery deletes the documents of an index that match the query.
 // It returns the first failure if OpenSearch could only complete part of the request.
 func (c *Client) DeleteByQuery(ctx context.Context, index string, query any) error {

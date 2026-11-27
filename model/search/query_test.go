@@ -194,11 +194,7 @@ func TestSearchWithOpenSearch(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, second.Hits, 1)
 		assert.NotEqual(t, first.Hits[0].DocID, second.Hits[0].DocID)
-		require.NotEmpty(t, second.Cursor, "the page was full")
-		third, err := Search(ctx, client, caller, "report", 1, second.Cursor)
-		require.NoError(t, err)
-		assert.Empty(t, third.Hits)
-		assert.Empty(t, third.Cursor)
+		assert.Empty(t, second.Cursor, "the last page, even if full")
 	})
 
 	t.Run("prefix of a word being typed", func(t *testing.T) {

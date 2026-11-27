@@ -73,6 +73,10 @@ func TestSearch(t *testing.T) {
 	assert.JSONEq(t, `{"size":20}`, rec.body)
 	require.Len(t, out.Hits.Hits, 1)
 	assert.Equal(t, "a", out.Hits.Hits[0].ID)
+
+	require.NoError(t, c.SearchWithPreference(context.Background(), "files_v1", "bob.example.net", map[string]any{"size": 20}, &out))
+	assert.Equal(t, "/test-files_v1/_search", rec.path)
+	assert.Equal(t, "preference=bob.example.net", rec.query)
 }
 
 func TestMget(t *testing.T) {
