@@ -835,9 +835,17 @@ func FindDocsUnoptimizedRaw(db prefixer.Prefixer, doctype string, req *FindReque
 
 func findDocsRaw(db prefixer.Prefixer, doctype string, req interface{}, results interface{}, ignoreUnoptimized bool) (*FindResponse, error) {
 	url := "_find"
-	// prepare a structure to receive the results
+	if rv := reflect.ValueOf(results); rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return nil, &json.InvalidUnmarshalError{Type: reflect.TypeOf(results)}
+	}
+	// The docs are decoded in place into results, in the same pass as the
+	// envelope, instead of being copied into a RawMessage and decoded again.
 	var response FindResponse
-	err := makeRequest(db, doctype, http.MethodPost, url, &req, &response)
+	body := struct {
+		*FindResponse
+		Docs interface{} `json:"docs"`
+	}{&response, results}
+	err := makeRequest(db, doctype, http.MethodPost, url, &req, &body)
 	if err != nil {
 		if isIndexError(err) {
 			jsonReq, errm := json.Marshal(req)
@@ -858,7 +866,7 @@ func findDocsRaw(db prefixer.Prefixer, doctype string, req interface{}, results 
 		// CouchDB surprisingly returns "nil" when there is no doc
 		response.Bookmark = ""
 	}
-	return &response, json.Unmarshal(response.Docs, results)
+	return &response, nil
 }
 
 // FindDocsRaw find documents
@@ -931,7 +939,6 @@ type UpdateResponse struct {
 type FindResponse struct {
 	Warning        string          `json:"warning"`
 	Bookmark       string          `json:"bookmark"`
-	Docs           json.RawMessage `json:"docs"`
 	ExecutionStats *ExecutionStats `json:"execution_stats,omitempty"`
 }
 
