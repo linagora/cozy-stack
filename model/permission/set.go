@@ -3,8 +3,6 @@ package permission
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
-	"io"
 	"reflect"
 	"strconv"
 	"strings"
@@ -85,55 +83,56 @@ func (s Set) MarshalJSON() ([]byte, error) {
 	return buf, nil
 }
 
-// UnmarshalJSON parses a json formated permission set
+// UnmarshalJSON parses a json formated permission set, in one pass that keeps
+// the order of the rules.
 func (s *Set) UnmarshalJSON(j []byte) error {
-	var raws map[string]json.RawMessage
-	err := json.Unmarshal(j, &raws)
+	dec := json.NewDecoder(bytes.NewReader(j))
+	t, err := dec.Token()
 	if err != nil {
 		return err
 	}
-	titles, err := extractJSONKeys(j)
-	if err != nil {
-		return err
+	if t == nil {
+		*s = make(Set, 0)
+		return nil
 	}
-
-	*s = make(Set, 0)
-	for _, title := range titles {
-		raw := raws[title]
-		var r Rule
-		err := json.Unmarshal(raw, &r)
+	if t != json.Delim('{') {
+		var m map[string]json.RawMessage
+		return json.Unmarshal(j, &m) // the same error as for any non-object
+	}
+	// A duplicated title has always given a rule per occurrence, all with the
+	// last value, and only that value had to be valid: keep both, as the rules
+	// are a union of permissions.
+	type decoded struct {
+		rule Rule
+		err  error
+	}
+	last := make(map[string]decoded)
+	var titles []string
+	for dec.More() {
+		t, err := dec.Token()
 		if err != nil {
 			return err
 		}
+		title, _ := t.(string)
+		var r Rule
+		err = dec.Decode(&r) // the decoder reads the whole value before an error
 		r.Title = title
-		*s = append(*s, r)
+		last[title] = decoded{r, err}
+		titles = append(titles, title)
 	}
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	set := make(Set, 0, len(titles))
+	for _, title := range titles {
+		d := last[title]
+		if d.err != nil {
+			return d.err
+		}
+		set = append(set, d.rule)
+	}
+	*s = set
 	return nil
-}
-
-func extractJSONKeys(j []byte) ([]string, error) {
-	var keys []string
-	dec := json.NewDecoder(bytes.NewReader(j))
-	depth := 0
-	for {
-		t, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		if t == json.Delim('{') {
-			depth++
-		} else if t == json.Delim('}') {
-			depth--
-		} else if depth == 1 {
-			if k, ok := t.(string); ok {
-				keys = append(keys, k)
-			}
-		}
-	}
-	return keys, nil
 }
 
 // Some returns true if the predicate return true for any of the rule.
