@@ -318,19 +318,29 @@ func TestSettings(t *testing.T) {
 			`"tz": ""`:             token,
 			`"tz": "Local"`:        token,
 			`"tz": {"name": "x"}`:  token,
+			`"locale": 1`:          token,
 			`"context": "no-such"`: cliToken,
+			`"context": 1`:         cliToken,
 		} {
 			put(attrs, tok).Status(400)
 		}
 		after, err := testInstance.SettingsDocument()
 		require.NoError(t, err)
-		assert.Equal(t, before.M["tz"], after.M["tz"])
+		assert.Equal(t, before.Rev(), after.Rev())
 
 		// A zone stored before this check is still accepted when sent back
 		// unchanged with another edit.
 		after.M["tz"] = "Mars/Olympus"
 		require.NoError(t, couchdb.UpdateDoc(testInstance, after))
 		put(`"tz": "Mars/Olympus", "public_name": "Legacy TZ"`, token).Status(200)
+		put(fmt.Sprintf(`"tz": %q`, before.M["tz"]), token).Status(200)
+
+		// Once the zone is unset, an empty one is not taken for the stored one.
+		unset, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		delete(unset.M, "tz")
+		require.NoError(t, couchdb.UpdateDoc(testInstance, unset))
+		put(`"tz": ""`, token).Status(400)
 		put(fmt.Sprintf(`"tz": %q`, before.M["tz"]), token).Status(200)
 	})
 
