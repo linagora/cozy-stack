@@ -47,4 +47,17 @@ func TestPreviewDrivePathRoot(t *testing.T) {
 	if assert.NotNil(t, s.visibleRootID) {
 		assert.Equal(t, "nested", *s.visibleRootID)
 	}
+
+	// A parent the link can only write to does not count as a root
+	s = &Sharing{Drive: true, Rules: []Rule{{DocType: consts.Files, Values: []string{"drive"}}}}
+	s.LimitDrivePaths(&permission.Permission{
+		Type: permission.TypeShareByLink,
+		Permissions: permission.Set{
+			{Type: consts.Files, Verbs: permission.Verbs(permission.POST), Values: []string{"drive"}},
+			{Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: []string{"nested"}},
+		},
+	})
+	if assert.NotNil(t, s.visibleRootID) {
+		assert.Equal(t, "nested", *s.visibleRootID)
+	}
 }

@@ -41,11 +41,11 @@ func (scope FilePathScope) Absolute(p string) string {
 	return p
 }
 
-// singleFileRoot returns the one distinct file ID covered by the permission.
+// singleFileRoot returns the one distinct file ID the permission can read.
 func singleFileRoot(perm *permission.Permission) string {
 	var id string
 	for _, rule := range perm.Permissions {
-		if !permission.MatchType(rule, consts.Files) {
+		if !permission.MatchType(rule, consts.Files) || !rule.Verbs.Contains(permission.GET) {
 			continue
 		}
 		if !isIDSelector(rule.Selector) || len(rule.Values) == 0 {
