@@ -25,6 +25,7 @@ cozy-stack fix <command> [flags]
 ### SEE ALSO
 
 * [cozy-stack](cozy-stack.md)	 - cozy-stack is the main command
+* [cozy-stack fix antivirus-pending](cozy-stack_fix_antivirus-pending.md)	 - Scan again the files stuck in the antivirus pending status
 * [cozy-stack fix contact-emails](cozy-stack_fix_contact-emails.md)	 - Detect and try to fix invalid emails on contacts
 * [cozy-stack fix emails](cozy-stack_fix_emails.md)	 - Backfill the email of all the instances
 * [cozy-stack fix indexes](cozy-stack_fix_indexes.md)	 - Rebuild the CouchDB views and indexes

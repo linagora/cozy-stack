@@ -1901,6 +1901,42 @@ _cozy-stack_files()
     noun_aliases=()
 }
 
+_cozy-stack_fix_antivirus-pending()
+{
+    last_command="cozy-stack_fix_antivirus-pending"
+
+    command_aliases=()
+
+    commands=()
+
+    flags=()
+    two_word_flags=()
+    local_nonpersistent_flags=()
+    flags_with_completion=()
+    flags_completion=()
+
+    flags+=("--older-than=")
+    two_word_flags+=("--older-than")
+    local_nonpersistent_flags+=("--older-than")
+    local_nonpersistent_flags+=("--older-than=")
+    flags+=("--admin-host=")
+    two_word_flags+=("--admin-host")
+    flags+=("--admin-port=")
+    two_word_flags+=("--admin-port")
+    flags+=("--config=")
+    two_word_flags+=("--config")
+    two_word_flags+=("-c")
+    flags+=("--host=")
+    two_word_flags+=("--host")
+    flags+=("--port=")
+    two_word_flags+=("--port")
+    two_word_flags+=("-p")
+
+    must_have_one_flag=()
+    must_have_one_noun=()
+    noun_aliases=()
+}
+
 _cozy-stack_fix_contact-emails()
 {
     last_command="cozy-stack_fix_contact-emails"
@@ -2234,6 +2270,7 @@ _cozy-stack_fix()
     command_aliases=()
 
     commands=()
+    commands+=("antivirus-pending")
     commands+=("contact-emails")
     commands+=("indexes")
     commands+=("jobs")

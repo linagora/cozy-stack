@@ -454,6 +454,46 @@ The fixed issues, in the same format as the checks:
 ]
 ```
 
+### POST /instances/:domain/fixers/antivirus-pending
+
+Push a new antivirus scan for the files whose antivirus status is still
+`pending` although they were last updated before the given delay. Such a file
+has no verdict because its scan job failed or was lost, and it stays blocked
+when the configuration forbids actions on pending files. Nothing is pushed when
+the antivirus is disabled for the context of the instance.
+
+The delay must be longer than a normal scan job can last, retries included, to
+avoid scanning twice a file whose scan is still running.
+
+It responds with `400 Bad Request` when `older_than` is not a valid duration.
+
+#### Query-String
+
+| Parameter  | Description                                                     |
+| ---------- | --------------------------------------------------------------- |
+| older_than | Only the files last updated before this delay (default: `1h`) |
+
+#### Request
+
+```http
+POST /instances/alice.cozy.localhost/fixers/antivirus-pending?older_than=2h HTTP/1.1
+```
+
+#### Response
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "domain": "alice.cozy.localhost",
+  "pushed_jobs": 1,
+  "file_ids": ["8737b5d6-51b6-11e7-9194-bf5b64b3bc9e"]
+}
+```
+
 ### POST /instances/fixers/emails
 
 Set the email of every instance from its settings email. Organization

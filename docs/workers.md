@@ -451,6 +451,12 @@ file document with the scan result.
 * If the file is infected, skipped, or an error occurs, a notification is sent
    to the user (if enabled)
 
+A file keeps the `pending` status forever when its scan job never writes a
+verdict, e.g. when the job was lost or failed on all its attempts. The
+`cozy-stack fix antivirus-pending <domain>` command pushes a new scan for these
+files (see `POST /instances/:domain/fixers/antivirus-pending` in the
+[admin documentation](admin.md)).
+
 ### Job arguments
 
 The worker expects a single argument:

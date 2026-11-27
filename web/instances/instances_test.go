@@ -144,4 +144,39 @@ func TestInstances(t *testing.T) {
 			WithHeader("Authorization", "Bearer "+token).
 			Expect().Status(500)
 	})
+
+	t.Run("AntivirusPendingFixer", func(t *testing.T) {
+		domain := "antivirus-pending.cozy.localhost"
+		t.Cleanup(func() { _ = lifecycle.Destroy(domain) })
+
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		e.POST("/instances").
+			WithQuery("Domain", domain).
+			WithQuery("Locale", "en").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(201)
+
+		for _, olderThan := range []string{"foo", "-1h"} {
+			e.POST("/instances/"+domain+"/fixers/antivirus-pending").
+				WithQuery("older_than", olderThan).
+				WithHeader("Authorization", "Bearer "+token).
+				Expect().Status(400)
+		}
+
+		e.POST("/instances/unknown.cozy.localhost/fixers/antivirus-pending").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(404)
+
+		// The antivirus is disabled in the test configuration, so no scan is
+		// pushed. The files found when it is enabled are covered by the tests
+		// of the antivirus worker.
+		obj := e.POST("/instances/"+domain+"/fixers/antivirus-pending").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON().Object()
+		obj.Value("domain").String().IsEqual(domain)
+		obj.Value("pushed_jobs").Number().IsEqual(0)
+		obj.Value("file_ids").Array().IsEmpty()
+	})
 }
