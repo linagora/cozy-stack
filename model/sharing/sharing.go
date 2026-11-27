@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -98,6 +99,13 @@ type Sharing struct {
 	// On the owner, credentials[i] is associated to members[i+1]
 	// On a recipient, there is only credentials[0] (for the owner)
 	Credentials []Credentials `json:"credentials,omitempty"`
+
+	driveRootPath   string
+	driveRootLoaded bool
+	driveRootInst   *instance.Instance
+	// visibleRootID replaces the drive root as the start of the paths, for a
+	// public link on a folder of the drive
+	visibleRootID *string
 }
 
 // ID returns the sharing qualified identifier
@@ -208,6 +216,91 @@ func (s *Sharing) GetFileDriveRoot(inst *instance.Instance) (*vfs.FileDoc, error
 		return nil, ErrDriveRootNotFound
 	}
 	return file, nil
+}
+
+// LoadDriveRootPath reads the path of the drive root on the given instance, to
+// be used by DriveRelativePath.
+func (s *Sharing) LoadDriveRootPath(inst *instance.Instance) error {
+	s.driveRootLoaded = true
+	s.driveRootPath = ""
+	if s.DrivePathsHidden() {
+		return nil
+	}
+	rootID, err := s.DriveRootID()
+	if err != nil {
+		return err
+	}
+	drivePath, err := pathByID(inst, rootID)
+	if err != nil || s.visibleRootID == nil {
+		s.driveRootPath = drivePath
+		return err
+	}
+	visible, err := pathByID(inst, *s.visibleRootID)
+	if err != nil {
+		return err
+	}
+	if drivePath == "/" || visible == drivePath || strings.HasPrefix(visible, drivePath+"/") {
+		s.driveRootPath = visible
+	}
+	return nil
+}
+
+func pathByID(inst *instance.Instance, id string) (string, error) {
+	p, err := vfs.PathByID(inst.VFS(), id)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", ErrDriveRootNotFound
+	}
+	return p, err
+}
+
+// LoadDriveRootPathOnUse makes the first call to DriveRelativePath or
+// DriveAbsolutePath read the drive root on the given instance, so that the
+// requests which give no path do not read it.
+func (s *Sharing) LoadDriveRootPathOnUse(inst *instance.Instance) {
+	s.driveRootInst = inst
+	s.driveRootLoaded = false
+	s.driveRootPath = ""
+}
+
+// startPathsAt makes the folder or file of the given ID, inside the drive, the
+// root of the paths instead of the drive root. An empty ID leaves no path.
+func (s *Sharing) startPathsAt(id string) {
+	s.visibleRootID = &id
+	s.driveRootLoaded = false
+	s.driveRootPath = ""
+}
+
+// DrivePathsHidden reports whether the token has no unambiguous drive path.
+func (s *Sharing) DrivePathsHidden() bool {
+	return s.visibleRootID != nil && *s.visibleRootID == ""
+}
+
+func (s *Sharing) driveRoot() string {
+	if !s.driveRootLoaded && s.driveRootInst != nil {
+		if err := s.LoadDriveRootPath(s.driveRootInst); err != nil {
+			s.driveRootInst.Logger().WithNamespace("sharing").
+				Warnf("cannot load the root of drive %s: %s", s.SID, err)
+		}
+	}
+	return s.driveRootPath
+}
+
+// DriveRelativePath rewrites a path of the owner's instance to start at the
+// drive root. A path outside of the drive, or any path when the root has not
+// been loaded, gives an empty string.
+func (s *Sharing) DriveRelativePath(p string) string {
+	root := s.driveRoot()
+	if root == "" {
+		return ""
+	}
+	return vfs.RelativeToLink([]vfs.LinkRoot{{Path: root}}, p)
+}
+
+// DriveAbsolutePath is the reverse of DriveRelativePath: it gives the path on
+// the owner's instance of a path starting at the drive root, or an empty
+// string when it does not lead to the drive.
+func (s *Sharing) DriveAbsolutePath(p string) string {
+	return vfs.ResolvePathUnderRoot(s.driveRoot(), p)
 }
 
 // IsValidDriveRootType returns true when the given drive root type is one of
