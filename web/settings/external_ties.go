@@ -27,7 +27,7 @@ func (c *apiExternalTies) SetRev(rev string)                      {}
 func (c *apiExternalTies) Relationships() jsonapi.RelationshipMap { return nil }
 func (c *apiExternalTies) Included() []jsonapi.Object             { return nil }
 func (c *apiExternalTies) Links() *jsonapi.LinksList {
-	return &jsonapi.LinksList{Self: "/settings/capabilities"}
+	return &jsonapi.LinksList{Self: "/settings/external-ties"}
 }
 func (c *apiExternalTies) Fetch(field string) []string { return nil }
 

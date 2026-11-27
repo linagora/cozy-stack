@@ -50,6 +50,7 @@ func TestExternalTies(t *testing.T) {
 			data := obj.Value("data").Object()
 			data.HasValue("type", "io.cozy.settings")
 			data.HasValue("id", "io.cozy.settings.external-ties")
+			data.Value("links").Object().HasValue("self", "/settings/external-ties")
 
 			attrs := data.Value("attributes").Object()
 			attrs.HasValue("has_blocking_subscription", true)
