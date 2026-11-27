@@ -79,6 +79,7 @@ var scopesIndexBody = map[string]any{
 			"owner_instance_id":        keyword,
 			"root_dir_id":              keyword,
 			"active_member_principals": keyword,
+			"read_only_principals":     map[string]any{"type": "keyword", "index": false, "doc_values": false},
 			"subtree_dir_keys":         map[string]any{"type": "keyword", "index": false, "doc_values": false},
 		},
 	},

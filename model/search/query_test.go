@@ -91,6 +91,15 @@ func TestCursor(t *testing.T) {
 	}
 }
 
+func TestCompareScopes(t *testing.T) {
+	outer := ScopeDocument{SharingID: "s1", SubtreeDirKeys: []string{"a:root", "a:sub"}}
+	inner := ScopeDocument{SharingID: "s0", SubtreeDirKeys: []string{"a:sub"}}
+	assert.Negative(t, compareScopes("bob.example.net", outer, inner), "the outermost drive first")
+	outer.ReadOnlyPrincipals = []string{"bob.example.net"}
+	assert.Positive(t, compareScopes("bob.example.net", outer, inner), "a drive where bob can write first")
+	assert.Negative(t, compareScopes("carol.example.net", outer, inner), "only bob is read-only")
+}
+
 func TestMemberScopes(t *testing.T) {
 	var body string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +165,8 @@ func TestSearchWithOpenSearch(t *testing.T) {
 
 	// A drive of the owner where the caller is a member, and one where not
 	member := sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://" + caller.Domain}
-	stranger := sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://stranger.example.net"}
+	// Read-only: its scope doc has read_only_principals, which the mapping accepts
+	stranger := sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://stranger.example.net", ReadOnly: true}
 	shared := createDrive(t, owner, caller, "drive-member", "/Team", member, "Sub")
 	inDrive := createTextFile(t, owner, shared.ID(), "team report.txt")
 	sub, err := owner.VFS().DirByPath("/Team/Sub")

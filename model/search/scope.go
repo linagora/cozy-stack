@@ -33,7 +33,10 @@ type ScopeDocument struct {
 	OwnerInstanceID        string   `json:"owner_instance_id"`
 	RootDirID              string   `json:"root_dir_id"`
 	ActiveMemberPrincipals []string `json:"active_member_principals"`
-	SubtreeDirKeys         []string `json:"subtree_dir_keys"`
+	// ReadOnlyPrincipals are those of the active members who cannot write: a
+	// hit in nested drives is given through a drive where the caller can write.
+	ReadOnlyPrincipals []string `json:"read_only_principals,omitempty"`
+	SubtreeDirKeys     []string `json:"subtree_dir_keys"`
 }
 
 // NewScopeDocument builds the scope document of a shared drive, on the
@@ -48,7 +51,7 @@ func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocume
 	if !s.Drive || !s.Owner || !s.Active || s.HasFileDriveRoot() {
 		return nil, false, nil
 	}
-	principals := activePrincipals(s)
+	principals, readOnly := activePrincipals(s)
 	if len(principals) == 0 {
 		return nil, false, nil
 	}
@@ -80,25 +83,29 @@ func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocume
 		OwnerInstanceID:        inst.Domain,
 		RootDirID:              rootID,
 		ActiveMemberPrincipals: principals,
+		ReadOnlyPrincipals:     readOnly,
 		SubtreeDirKeys:         keys,
 	}, true, nil
 }
 
 // activePrincipals returns the domains of the recipients who accepted the
-// sharing, lowercased like the instance domains. Members[0] is the owner. A
-// member can change its address without proof, so the search must also check
-// that the caller holds the sharing (#5395).
-func activePrincipals(s *sharing.Sharing) []string {
-	var principals []string
+// sharing, lowercased like the instance domains, and those of them who cannot
+// write. Members[0] is the owner. A member can change its address without
+// proof, so the search must also check that the caller holds the sharing
+// (#5395).
+func activePrincipals(s *sharing.Sharing) (principals, readOnly []string) {
 	for i, m := range s.Members {
 		if i == 0 || m.Status != sharing.MemberStatusReady {
 			continue
 		}
 		if host := m.InstanceHost(); host != "" {
 			principals = append(principals, strings.ToLower(host))
+			if m.ReadOnly {
+				readOnly = append(readOnly, strings.ToLower(host))
+			}
 		}
 	}
-	return principals
+	return principals, readOnly
 }
 
 // subdirIDs returns the ids of all the folders under the given path, with

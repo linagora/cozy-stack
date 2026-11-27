@@ -87,7 +87,8 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 		} `json:"hits"`
 	}
 	// One more hit than the page tells if there is a next page. The same shard
-	// copies serve all the pages of a caller, so the scores do not change.
+	// copies serve all the pages of a caller, so the scores do not differ
+	// between copies.
 	query := buildQuery(caller.Domain, q, keys, limit+1, after)
 	if err := client.SearchWithPreference(ctx, FilesIndex, caller.Domain, query, &res); err != nil {
 		return nil, err
@@ -144,7 +145,7 @@ func memberScopes(ctx context.Context, client *opensearch.Client, domain string)
 	for i, hit := range res.Hits.Hits {
 		docs[i] = hit.Source
 	}
-	slices.SortFunc(docs, compareScopes)
+	slices.SortFunc(docs, func(a, b ScopeDocument) int { return compareScopes(domain, a, b) })
 	driveByKey := make(map[string]string)
 	drives := make(map[string]Drive, len(docs))
 	for _, doc := range docs {
@@ -158,15 +159,18 @@ func memberScopes(ctx context.Context, client *opensearch.Client, domain string)
 	return driveByKey, drives, nil
 }
 
-// compareScopes orders the drives of the caller, so that a folder in nested
-// drives is in the first one, as compareDriveScopes does for the recents: the
-// roots of these drives are on a single chain, so the outermost one has the
-// most folders; then the smallest sharing id.
-//
-// shortcut: the drives where the caller can write do not come first, as the
-// scope docs do not hold the rights; read the caller's sharings of the nested
-// drives if that matters.
-func compareScopes(a, b ScopeDocument) int {
+// compareScopes orders the drives of the caller (domain), so that a folder in
+// nested drives is in the first one, as compareDriveScopes does for the
+// recents: the drives where the caller can write, then the outermost one (the
+// roots of these drives are on a single chain, so it has the most folders),
+// then the smallest sharing id.
+func compareScopes(domain string, a, b ScopeDocument) int {
+	if aRO, bRO := slices.Contains(a.ReadOnlyPrincipals, domain), slices.Contains(b.ReadOnlyPrincipals, domain); aRO != bRO {
+		if aRO {
+			return 1
+		}
+		return -1
+	}
 	return cmp.Or(
 		cmp.Compare(len(b.SubtreeDirKeys), len(a.SubtreeDirKeys)),
 		cmp.Compare(a.SharingID, b.SharingID),
