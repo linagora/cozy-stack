@@ -12,6 +12,8 @@ import (
 	"slices"
 
 	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"golang.org/x/text/unicode/norm"
 )
@@ -68,7 +70,7 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 		return nil, err
 	}
 
-	dirKeys, fileKeys, drives, err := memberScopes(ctx, client, caller.Domain)
+	dirKeys, fileKeys, drives, err := memberScopes(ctx, client, caller)
 	if err != nil {
 		return nil, err
 	}
@@ -115,40 +117,47 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 	return out, nil
 }
 
-// maxMemberDrives is the maximal number of drives of a member, the default
-// max result window of OpenSearch.
+// maxMemberDrives is the maximal number of sharings of a member read by the
+// search.
 const maxMemberDrives = 10000
 
-// memberScopes finds the scope docs that list the caller as a member, and
-// returns their folder keys and the keys of the files of single-file drives,
-// with the drive of each key, and the drives. The scope docs are written by
-// the instances of the owners: the recipient's copy of a sharing is not read.
+// memberScopes finds the scope docs of the drives that the caller holds, and
+// keeps those whose owner still lists the caller: an address is not a proof,
+// as a member can change it. Only the ids of the caller's sharings are read,
+// not the docs: a scope doc exists only for an active drive, and lists only
+// the members who accepted it. It returns their folder keys and the keys of
+// the files of single-file drives, with the drive of each key, and the drives.
 //
-// shortcut: a member of more than maxMemberDrives drives does not find the
-// files of the others; page with search_after when that happens.
-func memberScopes(ctx context.Context, client *opensearch.Client, domain string) (map[string]string, map[string]string, map[string]Drive, error) {
-	var res struct {
-		Hits struct {
-			Hits []struct {
-				Source ScopeDocument `json:"_source"`
-			} `json:"hits"`
-		} `json:"hits"`
-	}
-	query := map[string]any{
-		"size":  maxMemberDrives,
-		"query": map[string]any{"term": map[string]any{"active_member_principals": domain}},
-	}
-	if err := client.Search(ctx, ScopesIndex, query, &res); err != nil {
+// shortcut: a member of more than maxMemberDrives sharings does not find the
+// files of the others; page through the ids when that happens.
+func memberScopes(ctx context.Context, client *opensearch.Client, caller *instance.Instance) (map[string]string, map[string]string, map[string]Drive, error) {
+	ids, err := couchdb.GetAllDocIDs(caller, consts.Sharings, maxMemberDrives)
+	if err != nil && !couchdb.IsNoDatabaseError(err) {
 		return nil, nil, nil, err
 	}
-	docs := make([]ScopeDocument, len(res.Hits.Hits))
-	for i, hit := range res.Hits.Hits {
-		docs[i] = hit.Source
-	}
-	slices.SortFunc(docs, func(a, b ScopeDocument) int { return compareScopes(domain, a, b) })
 	dirKeys := make(map[string]string)
 	fileKeys := make(map[string]string)
-	drives := make(map[string]Drive, len(docs))
+	drives := make(map[string]Drive, len(ids))
+	if len(ids) == 0 {
+		return dirKeys, fileKeys, drives, nil
+	}
+
+	var res struct {
+		Docs []struct {
+			Found  bool          `json:"found"`
+			Source ScopeDocument `json:"_source"`
+		} `json:"docs"`
+	}
+	if err := client.Mget(ctx, ScopesIndex, ids, &res); err != nil {
+		return nil, nil, nil, err
+	}
+	var docs []ScopeDocument
+	for _, hit := range res.Docs {
+		if hit.Found && slices.Contains(hit.Source.ActiveMemberPrincipals, caller.Domain) {
+			docs = append(docs, hit.Source)
+		}
+	}
+	slices.SortFunc(docs, func(a, b ScopeDocument) int { return compareScopes(caller.Domain, a, b) })
 	for _, doc := range docs {
 		drives[doc.SharingID] = Drive{OwnerInstanceID: doc.OwnerInstanceID, RootDirID: doc.RootDirID, RootFileID: doc.RootFileID}
 		if doc.RootFileID != "" {

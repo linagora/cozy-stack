@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +66,23 @@ func CountAllDocs(db prefixer.Prefixer, doctype string) (int, error) {
 		return 0, err
 	}
 	return response.TotalRows, nil
+}
+
+// GetAllDocIDs returns the ids of at most limit documents of the given
+// doctype, without the design docs. It reads the index only, not the docs.
+func GetAllDocIDs(db prefixer.Prefixer, doctype string, limit int) ([]string, error) {
+	var response AllDocsResponse
+	url := "_all_docs?limit=" + strconv.Itoa(limit)
+	if err := makeRequest(db, doctype, http.MethodGet, url, nil, &response); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(response.Rows))
+	for _, row := range response.Rows {
+		if !strings.HasPrefix(row.ID, "_design") {
+			ids = append(ids, row.ID)
+		}
+	}
+	return ids, nil
 }
 
 // CountNormalDocs returns the number of documents of the given doctype,

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -18,8 +19,8 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/logger"
+	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"github.com/cozy/cozy-stack/tests/testutils"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/text/unicode/norm"
@@ -110,44 +111,74 @@ func TestCompareScopes(t *testing.T) {
 }
 
 func TestMemberScopes(t *testing.T) {
-	var body string
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	inst := testutils.NewSetup(t, t.Name()).GetTestInstance()
+	var path, body string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := io.ReadAll(r.Body)
-		body = string(data)
-		_, _ = w.Write([]byte(`{"hits":{"hits":[
-			{"_id":"s0","_source":{"sharing_id":"s0","owner_instance_id":"alice.example.net","root_dir_id":"sub1",
-				"active_member_principals":["bob.example.net"],
-				"subtree_dir_keys":["alice.example.net:sub1"]}},
-			{"_id":"s1","_source":{"sharing_id":"s1","owner_instance_id":"alice.example.net","root_dir_id":"root1",
-				"active_member_principals":["bob.example.net"],
+		path, body = r.URL.Path, string(data)
+		_, _ = fmt.Fprintf(w, `{"docs":[
+			{"_id":"s0","found":true,"_source":{"sharing_id":"s0","owner_instance_id":"alice.example.net","root_dir_id":"sub1",
+				"active_member_principals":["%[1]s"],"subtree_dir_keys":["alice.example.net:sub1"]}},
+			{"_id":"s1","found":true,"_source":{"sharing_id":"s1","owner_instance_id":"alice.example.net","root_dir_id":"root1",
+				"active_member_principals":["dave.example.net","%[1]s"],
 				"subtree_dir_keys":["alice.example.net:root1","alice.example.net:sub1"]}},
-			{"_id":"s2","_source":{"sharing_id":"s2","owner_instance_id":"carol.example.net","root_dir_id":"root2",
-				"active_member_principals":["bob.example.net","dave.example.net"],
-				"subtree_dir_keys":["carol.example.net:root2"]}},
-			{"_id":"s3","_source":{"sharing_id":"s3","owner_instance_id":"alice.example.net","root_dir_id":"",
-				"root_file_id":"file3","active_member_principals":["bob.example.net"],"subtree_dir_keys":null}}]}}`))
+			{"_id":"s2","found":true,"_source":{"sharing_id":"s2","owner_instance_id":"carol.example.net","root_dir_id":"root2",
+				"active_member_principals":["dave.example.net"],"subtree_dir_keys":["carol.example.net:root2"]}},
+			{"_id":"s3","found":true,"_source":{"sharing_id":"s3","owner_instance_id":"alice.example.net","root_dir_id":"",
+				"root_file_id":"file3","active_member_principals":["%[1]s"],"subtree_dir_keys":null}},
+			{"_id":"s4","found":false}]}`, inst.Domain)
 	}))
 	t.Cleanup(srv.Close)
-	v := viper.New()
-	v.Set("search.opensearch.url", srv.URL)
-	require.NoError(t, config.UseViper(v))
-	client := config.GetConfig().Search
-
-	dirKeys, fileKeys, drives, err := memberScopes(context.Background(), client, "bob.example.net")
+	u, err := url.Parse(srv.URL)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"size":10000,"query":{"term":{"active_member_principals":"bob.example.net"}}}`, body)
-	assert.Equal(t, map[string]string{
-		"alice.example.net:root1": "s1",
-		"alice.example.net:sub1":  "s1", // in the outermost drive
-		"carol.example.net:root2": "s2",
-	}, dirKeys)
-	assert.Equal(t, map[string]string{"alice.example.net:file3": "s3"}, fileKeys)
-	assert.Equal(t, map[string]Drive{
-		"s0": {OwnerInstanceID: "alice.example.net", RootDirID: "sub1"},
-		"s1": {OwnerInstanceID: "alice.example.net", RootDirID: "root1"},
-		"s2": {OwnerInstanceID: "carol.example.net", RootDirID: "root2"},
-		"s3": {OwnerInstanceID: "alice.example.net", RootFileID: "file3"},
-	}, drives)
+	client := opensearch.NewClient(opensearch.Options{URL: u})
+	ctx := context.Background()
+
+	t.Run("no drive", func(t *testing.T) {
+		dirKeys, fileKeys, drives, err := memberScopes(ctx, client, inst)
+		require.NoError(t, err)
+		assert.Empty(t, dirKeys)
+		assert.Empty(t, fileKeys)
+		assert.Empty(t, drives)
+		assert.Empty(t, path, "no request to OpenSearch")
+	})
+
+	t.Run("drives held and listing the caller", func(t *testing.T) {
+		// Every sharing of the caller is looked up: only an active drive has a
+		// scope doc, and it lists the caller only if the caller accepted it
+		for _, s := range []*sharing.Sharing{
+			{SID: "s0", Drive: true, Active: true},
+			{SID: "s1", Drive: true, Active: true},
+			{SID: "s2", Drive: true, Active: true},
+			{SID: "s3", Drive: true, Active: true},
+			{SID: "s4", Drive: true, Active: true},
+			{SID: "s5", Active: true},
+		} {
+			require.NoError(t, couchdb.CreateNamedDoc(inst, s))
+		}
+		dirKeys, fileKeys, drives, err := memberScopes(ctx, client, inst)
+		require.NoError(t, err)
+		assert.Equal(t, "/share_scopes_v1/_mget", path)
+		var sent struct{ IDs []string }
+		require.NoError(t, json.Unmarshal([]byte(body), &sent))
+		assert.ElementsMatch(t, []string{"s0", "s1", "s2", "s3", "s4", "s5"}, sent.IDs)
+		// s2 does not list the caller, s4 and s5 have no scope doc
+		assert.Equal(t, map[string]string{
+			"alice.example.net:root1": "s1",
+			"alice.example.net:sub1":  "s1", // in the outermost drive
+		}, dirKeys)
+		assert.Equal(t, map[string]string{"alice.example.net:file3": "s3"}, fileKeys)
+		assert.Equal(t, map[string]Drive{
+			"s0": {OwnerInstanceID: "alice.example.net", RootDirID: "sub1"},
+			"s1": {OwnerInstanceID: "alice.example.net", RootDirID: "root1"},
+			"s3": {OwnerInstanceID: "alice.example.net", RootFileID: "file3"},
+		}, drives)
+	})
 }
 
 func TestSearchWithOpenSearch(t *testing.T) {
@@ -187,6 +218,13 @@ func TestSearchWithOpenSearch(t *testing.T) {
 	inSub := createTextFile(t, owner, sub.ID(), "agenda.txt")
 	other := createDrive(t, owner, caller, "drive-stranger", "/Other", stranger)
 	createTextFile(t, owner, other.ID(), "secret report.txt")
+	// The owner lists the caller, but the caller does not hold the drive: a
+	// member took the address of the caller
+	claimed := createDrive(t, owner, caller, "drive-claimed", "/Claimed", member)
+	createTextFile(t, owner, claimed.ID(), "claimed report.txt")
+	claimedCopy, err := sharing.FindSharing(caller, "drive-claimed")
+	require.NoError(t, err)
+	require.NoError(t, couchdb.DeleteDoc(caller, claimedCopy))
 	createTextFile(t, owner, consts.RootDirID, "private report.txt")
 
 	log := logger.WithNamespace("search-test")
@@ -326,6 +364,9 @@ func TestSearchWithOpenSearch(t *testing.T) {
 		s := &sharing.Sharing{SID: "drive-file", Drive: true, Active: true, Owner: true,
 			DriveRootType: sharing.DriveRootTypeFile, Rules: rules, Members: members}
 		require.NoError(t, couchdb.CreateNamedDoc(owner, s))
+		recipientSide := &sharing.Sharing{SID: "drive-file", Drive: true, Active: true,
+			DriveRootType: sharing.DriveRootTypeFile, Rules: rules, Members: members}
+		require.NoError(t, couchdb.CreateNamedDoc(caller, recipientSide))
 		require.NoError(t, Index(ctx, owner, log)) // also writes the scope doc
 
 		var res *Results
