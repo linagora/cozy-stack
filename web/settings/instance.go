@@ -184,7 +184,7 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 }
 
 // checkInstanceSettings refuses a new locale, time zone or context that the
-// stack cannot use. An unchanged locale or context is accepted as it is.
+// stack cannot use. An unchanged locale, context or time zone is accepted as it is.
 func checkInstanceSettings(inst *instance.Instance, doc *couchdb.JSONDoc) error {
 	if locale, ok := doc.M["locale"].(string); ok && locale != inst.Locale && !slices.Contains(consts.SupportedLocales, locale) {
 		return jsonapi.BadRequest(fmt.Errorf("unsupported locale %q", locale))
