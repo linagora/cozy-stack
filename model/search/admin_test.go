@@ -27,6 +27,18 @@ func TestAdminWithoutSearch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotConfigured)
 }
 
+func TestNoTriggerWithoutSearch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	t.Setenv("COZY_SEARCH_OPENSEARCH_URL", "")
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	require.Nil(t, config.GetConfig().Search)
+	inst := testutils.NewSetup(t, t.Name()).GetTestInstance()
+	assert.False(t, job.HasSearchTrigger(inst), "an instance created without search has no trigger")
+}
+
 func TestAdmin(t *testing.T) {
 	if testing.Short() {
 		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
