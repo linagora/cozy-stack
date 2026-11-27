@@ -3,8 +3,10 @@ package exec
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -209,91 +211,36 @@ echo "{\"type\": \"manifest\", \"message\": \"$(ls ${1}/manifest.konnector)\" }"
 		wg.Wait()
 	})
 
-	t.Run("with secret from accountType", func(t *testing.T) {
-		script := `#!/bin/bash
-
-SECRET=$(echo "$COZY_PARAMETERS" | sed -e 's/.*secret"://' -e 's/[},].*//')
-echo "{\"type\": \"params\", \"message\": ${SECRET} }"
-`
-		osFs := afero.NewOsFs()
-		tmpScript := fmt.Sprintf("/tmp/test-konn-%d.sh", os.Getpid())
-		defer func() { _ = osFs.RemoveAll(tmpScript) }()
-
-		err := afero.WriteFile(osFs, tmpScript, []byte(script), 0)
-		require.NoError(t, err)
-
-		err = osFs.Chmod(tmpScript, 0777)
-		require.NoError(t, err)
-
+	t.Run("secret from accountType only for the konnector of the registry", func(t *testing.T) {
 		at := &account.AccountType{
 			GrantMode: account.SecretGrant,
-			Slug:      "my-konnector-1",
+			Slug:      "my-konnector-secret",
 			Secret:    "s3cr3t",
 		}
-		err = couchdb.CreateDoc(prefixer.SecretsPrefixer, at)
-		assert.NoError(t, err)
-		defer func() {
-			// Clean the account types
-			ats, _ := account.FindAccountTypesBySlug("my-konnector-1", "all-contexts")
-			for _, at = range ats {
-				_ = couchdb.DeleteDoc(prefixer.SecretsPrefixer, at)
-			}
-		}()
+		require.NoError(t, couchdb.CreateDoc(prefixer.SecretsPrefixer, at))
+		defer func() { _ = couchdb.DeleteDoc(prefixer.SecretsPrefixer, at) }()
 
-		installer, err := app.NewInstaller(inst, app.Copier(consts.KonnectorType, inst),
-			&app.InstallerOptions{
-				Operation: app.Install,
-				Type:      consts.KonnectorType,
-				Slug:      "my-konnector-1",
-				SourceURL: "git://github.com/konnectors/cozy-konnector-trainline.git",
-			},
-		)
-		if !errors.Is(err, app.ErrAlreadyExists) {
-			require.NoError(t, err)
-
-			_, err = installer.RunSync()
-			require.NoError(t, err)
-		}
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-
-		go func() {
-			evCh := realtime.GetHub().Subscriber(inst)
-			evCh.Subscribe(consts.JobEvents)
-			wg.Done()
-			ch := evCh.Channel
-			ev1 := <-ch
-			evCh.Close()
-			doc1 := ev1.Doc.(*couchdb.JSONDoc)
-
-			assert.Equal(t, inst.Domain, ev1.Domain)
-			assert.Equal(t, "params", doc1.M["type"])
-			msg1 := doc1.M["message"]
-			assert.Equal(t, "s3cr3t", msg1)
-			wg.Done()
-		}()
-
-		wg.Wait()
-		wg.Add(1)
-		msg, err := job.NewMessage(map[string]interface{}{
-			"konnector": "my-konnector-1",
-		})
-		assert.NoError(t, err)
-
-		j := job.NewJob(inst, &job.JobRequest{
-			Message:    msg,
-			WorkerType: "konnector",
-		})
-
-		config.GetConfig().Konnectors.Cmd = tmpScript
-		ctx, cancel := job.NewTaskContext("id", j, inst)
+		ctx, cancel := job.NewTaskContext("id", job.NewJob(inst, &job.JobRequest{WorkerType: "konnector"}), inst)
 		defer cancel()
-		ctx = ctx.WithCookie(&konnectorWorker{})
-		err = worker(ctx)
-		assert.NoError(t, err)
 
-		wg.Wait()
+		for src, hasSecret := range map[string]bool{
+			"registry://my-konnector-secret/stable":                    true,
+			"registry://other-konnector/stable":                        false,
+			"git://github.com/konnectors/cozy-konnector-trainline.git": false,
+			"https://example.org/my-konnector-secret.tar.gz":           false,
+			"file:///tmp/my-konnector-secret":                          false,
+		} {
+			u, err := url.Parse(src)
+			require.NoError(t, err)
+			man := &app.KonnManifest{}
+			man.SetSlug("my-konnector-secret")
+			man.SetSource(u)
+			w := &konnectorWorker{slug: "my-konnector-secret", man: man, msg: &KonnectorMessage{data: []byte(`{}`)}}
+
+			_, env, err := w.PrepareCmdEnv(ctx, inst)
+			require.NoError(t, err)
+			assert.Equal(t, hasSecret, slices.Contains(env, `COZY_PARAMETERS={"secret":"s3cr3t"}`), src)
+		}
 	})
 
 	t.Run("create folder", func(t *testing.T) {

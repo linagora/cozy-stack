@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -592,8 +593,13 @@ func (w *konnectorWorker) Slug() string {
 func (w *konnectorWorker) PrepareCmdEnv(ctx *job.TaskContext, i *instance.Instance) (cmd string, env []string, err error) {
 	parameters := w.man.Parameters()
 
+	// The operator's secret is for the konnector published under this slug in
+	// the registry, not for a code the user installed under the same slug.
+	src, errSrc := url.Parse(w.man.Source())
+	fromRegistry := errSrc == nil && src.Scheme == "registry" && src.Host == w.slug
+
 	accountTypes, err := account.FindAccountTypesBySlug(w.slug, i.ContextName)
-	if err == nil && len(accountTypes) == 1 && accountTypes[0].HasSecretGrant() {
+	if err == nil && fromRegistry && len(accountTypes) == 1 && accountTypes[0].HasSecretGrant() {
 		secret := accountTypes[0].Secret
 		if parameters == nil {
 			parameters = map[string]interface{}{"secret": secret}
