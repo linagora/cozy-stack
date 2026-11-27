@@ -268,7 +268,7 @@ func BindRelations(req *http.Request) ([]couchdb.DocReference, error) {
 	decoder := json.NewDecoder(req.Body)
 	var doc Document
 	if err := decoder.Decode(&doc); err != nil {
-		return nil, err
+		return nil, BadJSON()
 	}
 	if doc.Data == nil {
 		return nil, BadJSON()
@@ -277,10 +277,14 @@ func BindRelations(req *http.Request) ([]couchdb.DocReference, error) {
 	if err := json.Unmarshal(*doc.Data, &out); err != nil {
 		var ri couchdb.DocReference
 		if err = json.Unmarshal(*doc.Data, &ri); err != nil {
-			return nil, err
+			return nil, BadJSON()
 		}
 		out = []couchdb.DocReference{ri}
-		return out, nil
+	}
+	for _, ref := range out {
+		if ref.Type == "" || ref.ID == "" {
+			return nil, BadJSON()
+		}
 	}
 	return out, nil
 }

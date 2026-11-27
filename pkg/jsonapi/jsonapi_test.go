@@ -23,6 +23,22 @@ func TestBindNullInput(t *testing.T) {
 	assert.Equal(t, BadJSON(), err)
 }
 
+func TestBindRelationsMalformed(t *testing.T) {
+	for _, body := range []string{
+		`{`,
+		`{"data":"x"}`,
+		`{"data":[{"type":"","id":""}]}`,
+		`{"data":{"type":"io.cozy.photos.albums","id":""}}`,
+		`{"data":[{"type":"io.cozy.photos.albums","id":"a"},{"id":"b"}]}`,
+	} {
+		_, err := BindRelations(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
+		assert.Equal(t, BadJSON(), err, body)
+	}
+	refs, err := BindRelations(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"data":{"type":"io.cozy.photos.albums","id":"a"}}`)))
+	assert.NoError(t, err)
+	assert.Equal(t, []couchdb.DocReference{{Type: "io.cozy.photos.albums", ID: "a"}}, refs)
+}
+
 func TestJsonapi(t *testing.T) {
 	config.UseTestFile(t)
 
