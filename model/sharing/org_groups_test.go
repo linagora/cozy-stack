@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newOrgGroupInstances(t *testing.T, centralized, common bool) (*instance.Instance, *instance.Instance, *instance.Instance) {
+func setupOrgGroup(t *testing.T, centralized, common bool) func(string) *instance.Instance {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("requires CouchDB")
@@ -37,14 +37,22 @@ func newOrgGroupInstances(t *testing.T, centralized, common bool) (*instance.Ins
 		"centralized_org_directory": centralized, "common_contacts": common,
 	}}
 	t.Cleanup(func() { conf.Contexts = previous })
-	orgID := fmt.Sprintf("propagation%d", time.Now().UnixNano())
-	create := func(name string) *instance.Instance {
-		return testutils.NewSetup(t, name+orgID).GetTestInstance(&lifecycle.Options{
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	orgID := "org" + suffix
+	return func(role string) *instance.Instance {
+		t.Helper()
+		name := role + suffix
+		return testutils.NewSetup(t, name).GetTestInstance(&lifecycle.Options{
 			Domain: name + ".groups.localhost", OrgID: orgID, OrgDomain: orgID + ".example",
 			Email: name + "@cozy.tools", ContextName: "propagation",
 		})
 	}
-	return create(orgID), create("alice" + orgID), create("bob" + orgID)
+}
+
+func newCentralizedOrgAndMember(t *testing.T) (org, member *instance.Instance) {
+	t.Helper()
+	newInstance := setupOrgGroup(t, true, false)
+	return newInstance("org"), newInstance("alice")
 }
 
 func TestReconcileOrgGroupsRevokesMemberAccess(t *testing.T) {
@@ -62,7 +70,8 @@ func TestReconcileOrgGroupsRevokesMemberAccess(t *testing.T) {
 		{name: "deleted contact", centralized: true, deleteContact: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			org, owner, recipient := newOrgGroupInstances(t, tc.centralized, tc.common)
+			newInstance := setupOrgGroup(t, tc.centralized, tc.common)
+			org, owner, recipient := newInstance("org"), newInstance("alice"), newInstance("bob")
 			member := orgdirectory.GroupMember{Email: recipient.Email, WorkplaceFQDN: recipient.Domain}
 			require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
 				OrganizationID: org.OrgID, ID: "team", Name: "Team", Members: []orgdirectory.GroupMember{member},
@@ -141,15 +150,16 @@ func (b orgGroupsBroker) PushJob(db prefixer.Prefixer, req *job.JobRequest) (*jo
 }
 
 func TestQueueOrgGroupSharingsPaginatesWhileSharesDisappear(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
-	groupID := orgdirectory.GroupDocID(org.OrgID, "team")
+	newInstance := setupOrgGroup(t, true, false)
+	owner := newInstance("alice")
+	groupID := orgdirectory.GroupDocID(owner.OrgID, "team")
 	const count = 1005
 	docs := make([]interface{}, count)
 	for i := range count {
 		docs[i] = &Sharing{SID: fmt.Sprintf("sharing-%04d", i), Active: true, Owner: true, Groups: []Group{{ID: groupID}}}
 	}
 	require.NoError(t, couchdb.BulkUpdateDocs(owner, consts.Sharings, docs, make([]interface{}, count)))
-	pending := []job.OrgGroupsMessage{{OrganizationID: org.OrgID, GroupID: groupID}}
+	pending := []job.OrgGroupsMessage{{OrganizationID: owner.OrgID, GroupID: groupID}}
 	seen := map[string]bool{}
 	broker := orgGroupsBroker{push: func(db prefixer.Prefixer, req *job.JobRequest) (*job.Job, error) {
 		require.Equal(t, owner.Domain, db.DomainName())
@@ -175,7 +185,7 @@ func TestQueueOrgGroupSharingsPaginatesWhileSharesDisappear(t *testing.T) {
 }
 
 func TestReconcileOrgGroupsAddsMembersAndRefreshesMetadata(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
+	org, owner := newCentralizedOrgAndMember(t)
 	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
 		OrganizationID: org.OrgID, ID: "team", Name: "Team",
 	}))
@@ -214,7 +224,8 @@ func TestReconcileOrgGroupsAddsMembersAndRefreshesMetadata(t *testing.T) {
 }
 
 func TestGroupChangesResumeAfterPartialCompletion(t *testing.T) {
-	_, inst, _ := newOrgGroupInstances(t, true, false)
+	newInstance := setupOrgGroup(t, true, false)
+	inst := newInstance("alice")
 	group := createGroup(t, inst, "Friends")
 	c := createContactInGroups(t, inst, "Bob", []string{group.ID()})
 	s := createDriveSharingForGroupTest(t, inst, "Pending invitation")
@@ -244,7 +255,7 @@ func TestGroupChangesResumeAfterPartialCompletion(t *testing.T) {
 }
 
 func TestReconcileOrgGroupsSkipsRecipientCopies(t *testing.T) {
-	org, recipient, _ := newOrgGroupInstances(t, true, false)
+	org, recipient := newCentralizedOrgAndMember(t)
 	previousMode := build.BuildMode
 	build.BuildMode = build.ModeDev
 	t.Cleanup(func() { build.BuildMode = previousMode })
@@ -287,7 +298,7 @@ func TestReconcileOrgGroupsSkipsRecipientCopies(t *testing.T) {
 }
 
 func TestReconcileOrgGroupsRetriesRecipientNotification(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
+	org, owner := newCentralizedOrgAndMember(t)
 	previousMode := build.BuildMode
 	build.BuildMode = build.ModeDev
 	t.Cleanup(func() { build.BuildMode = previousMode })
@@ -337,7 +348,7 @@ func TestReconcileOrgGroupsRetriesRecipientNotification(t *testing.T) {
 }
 
 func TestReconcileOrgGroupsRevokesDespiteFailedAddition(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
+	org, owner := newCentralizedOrgAndMember(t)
 	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
 		OrganizationID: org.OrgID, ID: "team", Name: "Team",
 		Members: []orgdirectory.GroupMember{{Email: "dave@cozy.tools", FirstName: "Dave"}},
@@ -360,7 +371,7 @@ func TestReconcileOrgGroupsRevokesDespiteFailedAddition(t *testing.T) {
 }
 
 func TestReconcileOrgGroupsDoesNotTreatMissingDatabaseAsGroupDeletion(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
+	org, owner := newCentralizedOrgAndMember(t)
 	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
 		OrganizationID: org.OrgID, ID: "team", Name: "Team",
 		Members: []orgdirectory.GroupMember{{Email: "bob@cozy.tools", FirstName: "Bob"}},
@@ -379,7 +390,7 @@ func TestReconcileOrgGroupsDoesNotTreatMissingDatabaseAsGroupDeletion(t *testing
 }
 
 func TestReconcileOrgGroupsMatchesEmailsCaseInsensitively(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
+	org, owner := newCentralizedOrgAndMember(t)
 	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
 		OrganizationID: org.OrgID, ID: "team", Name: "Team",
 		Members: []orgdirectory.GroupMember{{Email: "Dave@cozy.tools", FirstName: "Dave"}},
@@ -399,7 +410,8 @@ func TestReconcileOrgGroupsMatchesEmailsCaseInsensitively(t *testing.T) {
 }
 
 func TestAddMemberToGroupResendsOnlyItsOwnInvitation(t *testing.T) {
-	_, inst, _ := newOrgGroupInstances(t, true, false)
+	newInstance := setupOrgGroup(t, true, false)
+	inst := newInstance("alice")
 	group := createGroup(t, inst, "Friends")
 	bob := createContactInGroups(t, inst, "Bob", []string{group.ID()})
 	s := createDriveSharingForGroupTest(t, inst, "Another pending invitation")
@@ -418,8 +430,9 @@ func TestAddMemberToGroupResendsOnlyItsOwnInvitation(t *testing.T) {
 }
 
 func TestUpdateGroupsInCentralizedMode(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
-	managedID := orgdirectory.GroupDocID(org.OrgID, "team")
+	newInstance := setupOrgGroup(t, true, false)
+	owner := newInstance("alice")
+	managedID := orgdirectory.GroupDocID(owner.OrgID, "team")
 	personal := createGroup(t, owner, "Friends")
 	s := createDriveSharingForGroupTest(t, owner, "Mixed groups")
 	s.OrgDrive = true
@@ -445,7 +458,8 @@ func TestUpdateGroupsInCentralizedMode(t *testing.T) {
 }
 
 func TestReconcileOrgGroupsExpandsOnlyGroupsAddedInTheOrganization(t *testing.T) {
-	org, owner, bob := newOrgGroupInstances(t, true, false)
+	newInstance := setupOrgGroup(t, true, false)
+	org, owner, bob := newInstance("org"), newInstance("alice"), newInstance("bob")
 	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
 		OrganizationID: org.OrgID, ID: "team", Name: "Team",
 		Members: []orgdirectory.GroupMember{{Email: "dave@cozy.tools", FirstName: "Dave"}},
@@ -475,7 +489,7 @@ func TestReconcileOrgGroupsExpandsOnlyGroupsAddedInTheOrganization(t *testing.T)
 }
 
 func TestReconcileOrgGroupsRevokesDeletedGroupFromTombstone(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
+	org, owner := newCentralizedOrgAndMember(t)
 	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{OrganizationID: org.OrgID, ID: "team", Name: "Team"}))
 	s := createDriveSharingForGroupTest(t, owner, "Deleted group")
 	s.OrgDrive = true
@@ -494,7 +508,8 @@ func TestReconcileOrgGroupsRevokesDeletedGroupFromTombstone(t *testing.T) {
 }
 
 func TestRevokeGroupContinuesPastAFailingMember(t *testing.T) {
-	_, inst, _ := newOrgGroupInstances(t, true, false)
+	newInstance := setupOrgGroup(t, true, false)
+	inst := newInstance("alice")
 	group := createGroup(t, inst, "Friends")
 	s := createDriveSharingForGroupTest(t, inst, "Partial revocation")
 	s.OrgDrive = true
@@ -529,7 +544,7 @@ func TestReconcileOrgGroupsKeepsRevokedMembersOut(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			org, owner, _ := newOrgGroupInstances(t, true, false)
+			org, owner := newCentralizedOrgAndMember(t)
 			require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
 				OrganizationID: org.OrgID, ID: "team", Name: "Team",
 			}))
@@ -560,7 +575,7 @@ func TestReconcileOrgGroupsKeepsRevokedMembersOut(t *testing.T) {
 }
 
 func TestReconcileOrgGroupsSkipsContactsWithoutIdentity(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
+	org, owner := newCentralizedOrgAndMember(t)
 	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{OrganizationID: org.OrgID, ID: "team", Name: "Team"}))
 	groupID := orgdirectory.GroupDocID(org.OrgID, "team")
 	createContactWithoutEmail(t, org, "Nobody", []string{groupID})
@@ -582,7 +597,7 @@ func TestReconcileOrgGroupsSkipsContactsWithoutIdentity(t *testing.T) {
 }
 
 func TestReconcileOrgGroupsNotifiesOncePerRun(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
+	org, owner := newCentralizedOrgAndMember(t)
 	previousMode := build.BuildMode
 	build.BuildMode = build.ModeDev
 	t.Cleanup(func() { build.BuildMode = previousMode })
@@ -634,7 +649,7 @@ func TestReconcileOrgGroupsNotifiesOncePerRun(t *testing.T) {
 }
 
 func TestReconcileOrgGroupsSkipsMembersOverTheLimit(t *testing.T) {
-	org, owner, _ := newOrgGroupInstances(t, true, false)
+	org, owner := newCentralizedOrgAndMember(t)
 	config.GetConfig().Contexts["propagation"].(map[string]interface{})["max_members_per_sharing"] = 3.0
 	require.NoError(t, orgdirectory.SyncGroupCreated(t.Context(), orgdirectory.GroupCreatedMessage{
 		OrganizationID: org.OrgID, ID: "team", Name: "Team", Members: []orgdirectory.GroupMember{
