@@ -14,7 +14,7 @@ import (
 func searchEnable(c echo.Context) error {
 	inst, err := lifecycle.GetInstance(c.Param("domain"))
 	if err != nil {
-		return err
+		return wrapError(err)
 	}
 	if err := search.Enable(c.Request().Context(), inst); err != nil {
 		return searchError(err)
@@ -27,7 +27,7 @@ func searchEnable(c echo.Context) error {
 func searchReset(c echo.Context) error {
 	inst, err := lifecycle.GetInstance(c.Param("domain"))
 	if err != nil {
-		return err
+		return wrapError(err)
 	}
 	if err := search.Reset(c.Request().Context(), inst); err != nil {
 		return searchError(err)
@@ -39,7 +39,7 @@ func searchReset(c echo.Context) error {
 func searchStatus(c echo.Context) error {
 	inst, err := lifecycle.GetInstance(c.Param("domain"))
 	if err != nil {
-		return err
+		return wrapError(err)
 	}
 	status, err := search.GetStatus(inst)
 	if err != nil {
