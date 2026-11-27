@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -835,16 +836,18 @@ func FindDocsUnoptimizedRaw(db prefixer.Prefixer, doctype string, req *FindReque
 
 func findDocsRaw(db prefixer.Prefixer, doctype string, req interface{}, results interface{}, ignoreUnoptimized bool) (*FindResponse, error) {
 	url := "_find"
-	if rv := reflect.ValueOf(results); rv.Kind() != reflect.Pointer || rv.IsNil() {
+	rv := reflect.ValueOf(results)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return nil, &json.InvalidUnmarshalError{Type: reflect.TypeOf(results)}
 	}
-	// The docs are decoded in place into results, in the same pass as the
-	// envelope, instead of being copied into a RawMessage and decoded again.
+	// The docs are decoded with the envelope, without copying them into a
+	// RawMessage, into a new value given to the caller once the response is
+	// accepted.
 	var response FindResponse
 	body := struct {
 		*FindResponse
-		Docs interface{} `json:"docs"`
-	}{&response, results}
+		Docs findDocs `json:"docs"` // a value, so that a null still calls UnmarshalJSON
+	}{&response, findDocs{dst: reflect.New(rv.Elem().Type())}}
 	err := makeRequest(db, doctype, http.MethodPost, url, &req, &body)
 	if err != nil {
 		if isIndexError(err) {
@@ -866,7 +869,22 @@ func findDocsRaw(db prefixer.Prefixer, doctype string, req interface{}, results 
 		// CouchDB surprisingly returns "nil" when there is no doc
 		response.Bookmark = ""
 	}
+	if !body.Docs.present {
+		return nil, errors.New("couchdb: _find response without docs")
+	}
+	rv.Elem().Set(body.Docs.dst.Elem())
 	return &response, nil
+}
+
+// findDocs decodes the docs of a _find response and records their presence.
+type findDocs struct {
+	present bool
+	dst     reflect.Value
+}
+
+func (d *findDocs) UnmarshalJSON(b []byte) error {
+	d.present = true
+	return json.Unmarshal(b, d.dst.Interface())
 }
 
 // FindDocsRaw find documents

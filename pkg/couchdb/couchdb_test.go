@@ -644,6 +644,7 @@ func serveFind(tb testing.TB, body []byte) {
 	}))
 	tb.Cleanup(ts.Close)
 	require.NoError(tb, config.LoadTestFile())
+	tb.Cleanup(func() { require.NoError(tb, config.LoadTestFile()) })
 	u, err := url.Parse(ts.URL + "/")
 	require.NoError(tb, err)
 	cfg := config.GetConfig()
@@ -665,7 +666,19 @@ func TestFindDocsRawDecodesTheDocs(t *testing.T) {
 	var invalid *json.InvalidUnmarshalError
 	assert.ErrorAs(t, err, &invalid)
 
-	serveFind(t, []byte(`{"docs":[],"warning":"No matching index found, create an index to optimize query time."}`))
+	// A rejected page leaves the results of the previous one untouched.
+	serveFind(t, []byte(`{"docs":[{"_id":"c","test":"z"}],"warning":"No matching index found, create an index to optimize query time."}`))
+	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	assert.Error(t, err)
+	assert.Len(t, docs, 2)
+
+	// "docs": null empties the results, and a missing "docs" is an error.
+	serveFind(t, []byte(`{"docs":null,"bookmark":"nil"}`))
+	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	require.NoError(t, err)
+	assert.Empty(t, docs)
+	docs = []testDoc{{Test: "previous"}}
+	serveFind(t, []byte(`{"bookmark":"nil"}`))
 	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
 	assert.Error(t, err)
 }
