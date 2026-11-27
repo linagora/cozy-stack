@@ -51,7 +51,7 @@ Instances of the stack cluster are found through the global CouchDB, even when a
 
 To prevent pathological directory trees (e.g., `node_modules` with 40,000 subdirectories) from exceeding OpenSearch `terms` limits or polluting search relevance:
 
-1. **Shallow-Index Vendor/VCS Artifacts**: Index the root directory entry (`node_modules`, `.git`, `.venv`, `__pycache__`, `vendor`) itself, but skip recursive indexing of its transitive child directories and files.
+1. **Shallow-Index Dependency/VCS Artifacts**: Index the root directory entry (`node_modules`, `.git`, `.venv`, `__pycache__`, `.next`) itself, but skip recursive indexing of its transitive child directories and files. `vendor` is not in the list: people also use it for their own documents (suppliers), which must stay searchable.
 2. **Depth/Fanout Anchor Coalescing (`scope_anchor_id`)**: For legitimate deep directory trees exceeding depth 3 or 500 subdirectories, child directories inherit their ancestor's `scope_anchor_id` so `subtree_dir_keys` remains strictly bounded well below OpenSearch's 65,536 `terms` limit.
 
 ### 5. Code Layout
