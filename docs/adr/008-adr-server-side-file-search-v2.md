@@ -28,24 +28,38 @@ Scope v1 to instances hosted on the same `cozy-stack` deployment (Twake Workplac
 Index each file and directory **once** in OpenSearch (`cozy_files_v1`), keyed by `resource_key` (`<owner_instance_id>:<doc_id>`).
 
 - File records store **only** local/immediate attributes: `resource_key`, `owner_instance_id`, `doc_id`, `dir_id`, `scoped_dir_key` (`<owner_instance_id>:<dir_id>`), `type`, `name`, `mime`, `class`, `updated_at`, and `trashed`.
+- For a folder, `scoped_dir_key` is the folder's own key (`<owner_instance_id>:<doc_id>`), not its parent's, so the root of a shared drive can be found by its members.
+- `name` uses the n-gram analyzer (`filename_index`) at index **and** search time. With the `standard` tokenizer at search time, a word longer than 4 letters is a single token that never matches the 3–4 letter grams, so it never matches `name`. The query must require most grams to match (`minimum_should_match`), to avoid matching any name that shares one gram.
 - **Never store `path` (`Fullpath`) or recipient member lists on file documents in OpenSearch.**
 
 ### 3. Two-Stage Permission Checking via `cozy_share_scopes_v1` & Roaring Bitmaps
 
 Maintain a second lightweight OpenSearch index (`cozy_share_scopes_v1`, or Redis cache) containing **1 document per active sharing** (`_id = sharing_id`):
 
-- Stores `active_member_principals` (authorized instance IDs and group IDs) and `subtree_dir_keys` (the list of `<owner_instance_id>:<dir_id>` directory identifiers nested under that share's `RootID`).
+- Stores `active_member_principals` (the domains of the members who accepted the drive), `read_only_principals` (those of them who cannot write, so that a folder in nested drives is given through a drive where the caller can write, as for the recents) and `subtree_dir_keys` (the list of `<owner_instance_id>:<dir_id>` directory identifiers nested under that share's `RootID`, the root included).
 - At search time (`POST /files/search`), `cozy-stack`:
-  1. Resolves the caller's active `sharing_id`s from `cozy_share_scopes_v1` where `active_member_principals` matches the caller.
-  2. Queries `cozy_files_v1` using OpenSearch's **Native `terms` Lookup** (backed by Lucene Roaring Bitmaps) so only files owned by the caller or residing in an authorized `scoped_dir_key` are matched.
-  3. Reconstructs the relative visible path for the returned page (e.g., 20 hits) from the cached Directory Graph, stopping at the share's `RootID` so private parent directory names are never matched or leaked.
+  1. Lists the caller's active shared drive sharings (recipient side) in CouchDB, and reads their scope docs with **one `_mget`**.
+  2. Keeps only the scope docs whose `active_member_principals` contains the caller's domain.
+  3. Queries `cozy_files_v1` with the caller's own files (`owner_instance_id`) **or** `terms` filters on `scoped_dir_key` with the folder keys of the kept scope docs, one filter per chunk of 65,536 keys.
+  4. Reconstructs the relative visible path for the returned page (e.g., 20 hits) from the folders in CouchDB, stopping at the share's `RootID` so private parent directory names are never matched or leaked. Hits whose parent folder is in the trash are dropped there: trashing a folder does not update the files inside it.
+
+We do not use OpenSearch `terms` lookups (one per drive). We measured that each lookup takes a slot in the node's internal read queue (1,000 slots, shared by all searches): a user in ~1,000 drives always gets a 429, and a few heavy users searching at once can too.
+
+Instances of the stack cluster are found through the global CouchDB, even when another stack server serves them, so the paths of their drives are built without HTTP calls. The indices only hold the documents of the instances of the stack cluster: a drive owned outside of it has no hits until federated search is designed, and a hit whose owner is missing from the global CouchDB (a deleted instance) is dropped.
 
 ### 4. High-Fanout Directory Defense (`node_modules`, `.git`, and 50k+ Subfolder Trees)
 
 To prevent pathological directory trees (e.g., `node_modules` with 40,000 subdirectories) from exceeding OpenSearch `terms` limits or polluting search relevance:
 
-1. **Shallow-Index Vendor/VCS Artifacts**: Index the root directory entry (`node_modules`, `.git`, `.venv`, `__pycache__`, `vendor`) itself, but skip recursive indexing of its transitive child directories and files.
+1. **Shallow-Index Dependency/VCS Artifacts**: Index the root directory entry (`node_modules`, `.git`, `.venv`, `__pycache__`, `.next`) itself, but skip recursive indexing of its transitive child directories and files. `vendor` is not in the list: people also use it for their own documents (suppliers), which must stay searchable.
 2. **Depth/Fanout Anchor Coalescing (`scope_anchor_id`)**: For legitimate deep directory trees exceeding depth 3 or 500 subdirectories, child directories inherit their ancestor's `scope_anchor_id` so `subtree_dir_keys` remains strictly bounded well below OpenSearch's 65,536 `terms` limit.
+
+### 5. Code Layout
+
+- `pkg/opensearch`: a small OpenSearch client (plain `net/http`) and its `search` configuration.
+- `model/search`: search documents, share scopes, the indexer, the search query and the visible paths.
+- `worker/search`: the `search-index` job that follows the `io.cozy.files` and `io.cozy.sharings` changes.
+- `web/files`: the `POST /files/search` route.
 
 ## Consequences
 
