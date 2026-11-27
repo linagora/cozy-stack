@@ -317,3 +317,74 @@ func TestDriveRealtimeFollowsARenamedRoot(t *testing.T) {
 	assert.Equal(t, child.ID(), res.Payload.ID)
 	assert.Equal(t, "/Renamed/New", res.Payload.Doc.(*vfs.DirDoc).Fullpath)
 }
+
+// MoveDir publishes the folders below a moved folder before saving it: the
+// events of that window must tell a moving root from a folder leaving the drive.
+func TestDriveRealtimeWhileTheRootMoves(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	root, err := vfs.MkdirAll(fs, "/Private/Team")
+	require.NoError(t, err)
+	draft, err := vfs.MkdirAll(fs, "/Private/Team/Meetings/Draft")
+	require.NoError(t, err)
+	meetings, err := fs.DirByPath("/Private/Team/Meetings")
+	require.NoError(t, err)
+	inner, err := vfs.MkdirAll(fs, "/Private/Team/Out/Inner")
+	require.NoError(t, err)
+	out, err := fs.DirByPath("/Private/Team/Out")
+	require.NoError(t, err)
+	private, err := fs.DirByPath("/Private")
+	require.NoError(t, err)
+	s := &sharing.Sharing{
+		Drive: true,
+		Rules: []sharing.Rule{{DocType: consts.Files, Values: []string{root.ID()}}},
+	}
+
+	// send gives what a member connected before the move receives for doc
+	send := func(t *testing.T, doc *vfs.DirDoc) *wsResponse {
+		t.Helper()
+		ds := &realtime.Subscriber{Channel: make(realtime.EventsChan, 1)}
+		ch := make(chan *wsResponse)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		go filterMapEvents(ctx, ds, ch, inst, s)
+		moved, err := fs.DirByID(doc.ID())
+		require.NoError(t, err)
+		ds.Channel <- &realtime.Event{Verb: realtime.EventUpdate, Doc: moved, OldDoc: doc}
+		select {
+		case res := <-ch:
+			return res
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "no event was forwarded")
+			return nil
+		}
+	}
+
+	t.Run("FolderLeavingTheDrive", func(t *testing.T) {
+		require.NoError(t, fs.GetIndexer().MoveDir(out.Fullpath, "/Private/Out"))
+		assert.Equal(t, realtime.EventDelete, send(t, inner).Event)
+
+		moved := out.Clone().(*vfs.DirDoc)
+		moved.Fullpath, moved.DirID = "/Private/Out", private.ID()
+		require.NoError(t, fs.GetIndexer().UpdateDirDoc(out, moved))
+	})
+
+	t.Run("RootMoving", func(t *testing.T) {
+		require.NoError(t, fs.GetIndexer().MoveDir(root.Fullpath, "/Private/Renamed"))
+		for doc, expected := range map[*vfs.DirDoc]string{
+			meetings: "/Renamed/Meetings",
+			draft:    "/Renamed/Meetings/Draft",
+		} {
+			res := send(t, doc)
+			assert.Equal(t, realtime.EventUpdate, res.Event)
+			assert.Equal(t, expected, res.Payload.Doc.(*vfs.DirDoc).Fullpath)
+		}
+	})
+}

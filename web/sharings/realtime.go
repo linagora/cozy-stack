@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -275,6 +276,38 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 		return false
 	}
 
+	// newRootPath gives the path of the root after the move of the folder of
+	// the event. The root may have moved with an ancestor, or be the folder
+	// that moves: MoveDir publishes the folders below it before saving it.
+	newRootPath := func(e *realtime.Event) (string, bool) {
+		reloaded, err := inst.VFS().GetIndexer().DirByID(dir.DocID)
+		if err != nil {
+			log.Warnf("filterMapEvents: cannot reload the root of sharing %s: %s", s.SID, err)
+			return "", false
+		}
+		if reloaded.Fullpath != dir.Fullpath {
+			return reloaded.Fullpath, true
+		}
+		oldPath, oldParent := folderPlace(e.OldDoc)
+		newPath, newParent := folderPlace(e.Doc)
+		rel, ok := strings.CutPrefix(oldPath, dir.Fullpath+"/")
+		if !ok || oldParent == "" || newParent != oldParent || !strings.HasSuffix(newPath, "/"+rel) {
+			return "", false
+		}
+		// When a folder between the root and this one leaves the drive, the
+		// child of the root on the way is still at its old path
+		if child, _, deeper := strings.Cut(rel, "/"); deeper {
+			_, err := inst.VFS().GetIndexer().DirByPath(dir.Fullpath + "/" + child)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				log.Warnf("filterMapEvents: cannot read a folder of sharing %s: %s", s.SID, err)
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				return "", false
+			}
+		}
+		return strings.TrimSuffix(newPath, "/"+rel), true
+	}
+
 	match := func(e *realtime.Event) *realtime.Event {
 		if e.Doc.ID() == dir.DocID {
 			if reloaded, err := inst.VFS().GetIndexer().DirByID(dir.DocID); err == nil {
@@ -289,8 +322,8 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 			// An ancestor of the root may have been renamed or moved: the
 			// documents below it are still in the drive.
 			if movedFolder(e.Doc) {
-				if reloaded, err := inst.VFS().GetIndexer().DirByID(dir.DocID); err == nil && reloaded.Fullpath != dir.Fullpath {
-					dir.Fullpath = reloaded.Fullpath
+				if root, ok := newRootPath(e); ok {
+					dir.Fullpath = root
 					if testPath(e.Doc) {
 						return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
 					}
@@ -305,6 +338,19 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 	}
 
 	forwardEvents(ctx, ds, ch, match)
+}
+
+// folderPlace gives the path and the parent of a folder in an event.
+func folderPlace(doc realtime.Doc) (string, string) {
+	switch d := doc.(type) {
+	case *vfs.DirDoc:
+		return d.Fullpath, d.DirID
+	case *realtime.JSONDoc:
+		p, _ := d.M["path"].(string)
+		parent, _ := d.M["dir_id"].(string)
+		return p, parent
+	}
+	return "", ""
 }
 
 // forwardEvents sends to ch the events of ds that match keeps, in the form it
