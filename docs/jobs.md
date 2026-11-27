@@ -123,8 +123,11 @@ The `@every` trigger uses the same syntax as golang's `time.ParseDuration` (but
 only support time units above seconds):
 
 A duration string is a possibly signed sequence of decimal numbers, each with
-optional fraction and a unit suffix, such as "300ms", "1.5h" or "2h45m". Valid
-time units are "s", "m", "h".
+optional fraction and a unit suffix, such as "1.5h" or "2h45m". Valid time
+units are "s", "m", "h".
+
+A trigger created with `POST /jobs/triggers` must have an interval of at least
+one minute: a shorter one is refused with a `400 Bad Request`.
 
 Examples
 
