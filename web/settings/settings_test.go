@@ -291,6 +291,30 @@ func TestSettings(t *testing.T) {
 			Expect().Status(200)
 	})
 
+	t.Run("PatchWithValuesTheStackCannotUse", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, tsURL)
+		cliToken, err := testInstance.MakeJWT(consts.CLIAudience, "CLI", consts.Settings, "", time.Now())
+		require.NoError(t, err)
+
+		for attrs, tok := range map[string]string{
+			`"locale": "xx"`:       token,
+			`"tz": "Mars/Olympus"`: token,
+			`"context": "no-such"`: cliToken,
+		} {
+			doc, err := testInstance.SettingsDocument()
+			require.NoError(t, err)
+			e.PUT("/settings/instance").
+				WithCookie(sessCookie, "connected").
+				WithHeader("Content-Type", "application/vnd.api+json").
+				WithHeader("Accept", "application/vnd.api+json").
+				WithHeader("Authorization", "Bearer "+tok).
+				WithBytes([]byte(fmt.Sprintf(`{"data": {"type": "io.cozy.settings",
+					"id": "io.cozy.settings.instance", "meta": {"rev": %q},
+					"attributes": {%s}}}`, doc.Rev(), attrs))).
+				Expect().Status(400)
+		}
+	})
+
 	t.Run("PatchWithBadRev", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, tsURL)
 

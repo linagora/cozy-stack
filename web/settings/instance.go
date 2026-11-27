@@ -5,7 +5,9 @@ package settings
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -153,6 +155,10 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 		}
 	}
 
+	if err := checkInstanceSettings(inst, doc); err != nil {
+		return err
+	}
+
 	if err := lifecycle.Patch(inst, &lifecycle.Options{SettingsObj: doc}); err != nil {
 		return err
 	}
@@ -175,6 +181,27 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 	doc.M["context"] = inst.ContextName
 
 	return jsonapi.Data(c, http.StatusOK, &apiInstance{doc}, nil)
+}
+
+// checkInstanceSettings refuses a new locale, time zone or context that the
+// stack cannot use. An unchanged locale or context is accepted as it is.
+func checkInstanceSettings(inst *instance.Instance, doc *couchdb.JSONDoc) error {
+	if locale, ok := doc.M["locale"].(string); ok && locale != inst.Locale && !slices.Contains(consts.SupportedLocales, locale) {
+		return jsonapi.BadRequest(fmt.Errorf("unsupported locale %q", locale))
+	}
+	if tz, ok := doc.M["tz"].(string); ok {
+		if _, err := time.LoadLocation(tz); err != nil {
+			return jsonapi.BadRequest(fmt.Errorf("invalid time zone %q", tz))
+		}
+	}
+	if name, ok := doc.M["context"].(string); ok && name != inst.ContextName {
+		_, inContexts := config.GetConfig().Contexts[name]
+		_, inRegistries := config.GetConfig().Registries[name]
+		if !inContexts && !inRegistries {
+			return jsonapi.BadRequest(fmt.Errorf("unknown context %q", name))
+		}
+	}
+	return nil
 }
 
 func (h *HTTPHandler) updateInstanceTOS(c echo.Context) error {
