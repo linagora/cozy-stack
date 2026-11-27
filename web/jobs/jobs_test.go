@@ -331,6 +331,22 @@ func TestJobs(t *testing.T) {
 		})
 	})
 
+	t.Run("EveryTriggerHasAMinimalInterval", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		post := func(interval string) *httpexpect.Response {
+			return e.POST("/jobs/triggers").
+				WithHeader("Authorization", "Bearer "+token).
+				WithJSON(map[string]interface{}{"data": map[string]interface{}{"attributes": map[string]interface{}{
+					"type": "@every", "arguments": interval, "worker": "print",
+				}}}).Expect()
+		}
+		post("1ms").Status(400)
+		post("59s").Status(400)
+		id := post("1m").Status(201).JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.id").String().Raw()
+		e.DELETE("/jobs/triggers/"+id).WithHeader("Authorization", "Bearer "+token).Expect().Status(204)
+	})
+
 	t.Run("AddGetAndDeleteTriggerIn", func(t *testing.T) {
 		var triggerID string
 

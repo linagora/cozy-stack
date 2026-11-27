@@ -343,6 +343,10 @@ func (h *HTTPHandler) newTrigger(c echo.Context) error {
 	if err != nil {
 		return wrapJobsError(err)
 	}
+	// Each tick pushes a job on the shared queues.
+	if d, err := time.ParseDuration(req.Arguments); req.Type == "@every" && err == nil && d < time.Minute {
+		return jsonapi.BadRequest(errors.New("the interval of an @every trigger must be at least 1m"))
+	}
 	if err = middlewares.Allow(c, permission.POST, t); err != nil {
 		return err
 	}
