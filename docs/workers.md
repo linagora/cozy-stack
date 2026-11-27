@@ -395,6 +395,17 @@ jobs are pushed by a trigger built in the stack, which gathers the changes of
 an instance for 10 seconds. It must be enabled on at least one process of the
 stack, as nothing else consumes these jobs.
 
+## search-index
+
+This worker is for the internal usage of the stack. It indexes the files and
+folders of an instance in OpenSearch, for the server-side file search: each job
+indexes the changes since the previous one, at most 500, and pushes another job
+when changes remain. Its jobs are pushed by a trigger built in the stack, which
+gathers the changes of `io.cozy.files` and `io.cozy.sharings` of an instance
+for 5 seconds. An instance gets this trigger when it is created on a stack where
+search is configured, or with `cozy-stack search enable` (see
+[admin](admin.md#file-search)).
+
 ## clean-clients
 
 This internal worker will delete unused OAuth clients. When an OAuth client is

@@ -1,0 +1,84 @@
+package search
+
+import (
+	"context"
+	"errors"
+
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/job"
+	"github.com/cozy/cozy-stack/model/search/purge"
+	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
+)
+
+// ErrNotConfigured is returned when search is not configured on the stack.
+var ErrNotConfigured = errors.New("search is not configured")
+
+// Status is the indexing status of an instance.
+type Status struct {
+	Trigger bool `json:"trigger"`
+	// LastSeq is the last change indexed, empty until the backfill has
+	// indexed its first batch.
+	LastSeq string `json:"last_seq"`
+}
+
+// Enable turns search on for an instance: it creates the indices if needed,
+// the trigger that follows the changes, and pushes the first job (the
+// backfill when the instance has never been indexed).
+func Enable(ctx context.Context, inst *instance.Instance) error {
+	client := config.GetConfig().Search
+	if client == nil {
+		return ErrNotConfigured
+	}
+	if err := EnsureIndices(ctx, client); err != nil {
+		return err
+	}
+	if err := job.EnsureSearchTrigger(inst); err != nil {
+		return err
+	}
+	return pushJob(inst)
+}
+
+// Reset drops the documents and the checkpoint of an instance, and pushes a
+// job to index it again.
+func Reset(ctx context.Context, inst *instance.Instance) error {
+	client := config.GetConfig().Search
+	if client == nil {
+		return ErrNotConfigured
+	}
+	if err := EnsureIndices(ctx, client); err != nil {
+		return err
+	}
+	if err := dropIndexed(ctx, inst); err != nil {
+		return err
+	}
+	return pushJob(inst)
+}
+
+// dropIndexed drops the checkpoint of an instance, then starts the purge of
+// its documents, under the index lock: even after a purge that fails, in part
+// or in full, the next job indexes the instance again.
+func dropIndexed(ctx context.Context, inst *instance.Instance) error {
+	mu := config.Lock().LongOperation(inst, indexLockName)
+	if err := mu.Lock(); err != nil {
+		return err
+	}
+	defer mu.Unlock()
+	if err := couchdb.DeleteCheckpoint(inst, consts.Files, checkpointDocID); err != nil {
+		return err
+	}
+	return purge.CleanInstance(ctx, inst.Domain)
+}
+
+// GetStatus returns the indexing status of an instance.
+func GetStatus(inst *instance.Instance) (*Status, error) {
+	if config.GetConfig().Search == nil {
+		return nil, ErrNotConfigured
+	}
+	cp, err := couchdb.LoadCheckpoint(inst, consts.Files, checkpointDocID)
+	if err != nil {
+		return nil, err
+	}
+	return &Status{Trigger: job.HasSearchTrigger(inst), LastSeq: cp.LastSeq}, nil
+}

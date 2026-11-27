@@ -52,3 +52,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5266#discussion_r4717669927)
 - Why: a synchronous delete grows with the instance and fails past the 10 s timeout of the client, and it ran unthrottled on indices shared by all the instances; the purge is best effort, so not seeing the failures of the tasks loses little.
 - Scope: `model/search/purge`, `pkg/opensearch`.
+
+## 2026-11-27, [Tech] Search accepts a rare duplicate trigger
+
+- Decision: `EnsureSearchTrigger` looks for the trigger by type and worker, and adds one when none is found, with no lock: two calls at the same time, or a CouchDB error while looking, can add a second trigger.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5267#discussion_r4718553019)
+- Why: the jobs of a duplicate find nothing left to index, as the index lock serializes them, so the data stays right; preventing it needs a lock or a fixed trigger id in the job scheduler, which is not worth it for a rollout command.
+- Scope: `model/job`, `cozy-stack search enable`.
