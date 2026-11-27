@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	netmail "net/mail"
 	"net/textproto"
 	"os"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/cozy/gomail"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const serverString = `220 hello world
@@ -410,36 +412,58 @@ func mailServer(t *testing.T, serverString string, clientStrings []string, expec
 }
 
 func TestComposeMailChecksRecipients(t *testing.T) {
-	compose := func(to string) ([]string, error) {
-		email, err := composeMail(nil, &mail.Options{
+	compose := func(to, name string) (*gomail.Message, error) {
+		return composeMail(nil, &mail.Options{
 			Mode:    mail.ModeFromUser,
 			Subject: "o",
 			From:    &mail.Address{Email: "me@me"},
-			To:      []*mail.Address{{Email: to, Name: "Bob"}},
+			To:      []*mail.Address{{Email: to, Name: name}},
 			Parts:   []*mail.Part{{Type: "text/plain", Body: "x"}},
 		}, "cozy.example")
-		if err != nil {
-			return nil, err
-		}
-		return email.GetHeader("To"), nil
+	}
+	to := func(email, name string) string {
+		m, err := compose(email, name)
+		require.NoError(t, err, email)
+		return m.GetHeader("To")[0]
 	}
 
-	to, err := compose(`"Alice" <alice@example.com>`)
-	assert.NoError(t, err)
-	assert.Equal(t, []string{`"Alice" <alice@example.com>`}, to)
-	to, err = compose("bob@example.com")
-	assert.NoError(t, err)
-	assert.Equal(t, []string{`"Bob" <bob@example.com>`}, to)
+	assert.Equal(t, `"Alice" <alice@example.com>`, to(`"Alice" <alice@example.com>`, "Bob"))
+	assert.Equal(t, `"Bob" <bob@example.com>`, to("bob@example.com", "Bob"))
+	assert.Equal(t, `bob@example.com`, to("bob@example.com", ""))
+
+	// A quoted local part stays quoted, so that the header can be parsed to send.
+	addr, err := netmail.ParseAddress(to(`"john doe"@example.com`, "John"))
+	require.NoError(t, err)
+	assert.Equal(t, "john doe@example.com", addr.Address)
+
+	// No line of the message is over 998 octets (RFC 5322 §2.1.1), even with
+	// a long display name: gomail folds it at its spaces.
+	m, err := compose("x@example.com", strings.Repeat("ab ", 700))
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	_, err = m.WriteTo(&buf)
+	require.NoError(t, err)
+	for _, line := range strings.Split(buf.String(), "\r\n") {
+		assert.LessOrEqual(t, len(line), 998)
+	}
 
 	// RFC 5321: at most 64 octets for the local part and 254 for the address.
-	for _, bad := range []string{
-		`"" <b@` + strings.Repeat("-", 1000) + `example.com>`,
-		"b@" + strings.Repeat("a", 250) + ".com",
-		strings.Repeat("a", 65) + "@example.com",
-		"Dupont, Jean <j@example.com>",
-		"not an address",
+	// An unbroken display name could not be folded under 998 octets.
+	long := strings.Repeat("a", 2000)
+	for _, bad := range []struct{ email, name string }{
+		{`"" <b@` + strings.Repeat("-", 1000) + `example.com>`, "Bob"},
+		{"b@" + strings.Repeat("a", 250) + ".com", "Bob"},
+		{strings.Repeat("a", 65) + "@example.com", "Bob"},
+		{`"` + strings.Repeat("a", 63) + ` "@example.com`, "Bob"},
+		{"Dupont, Jean <j@example.com>", "Bob"},
+		{"not an address", "Bob"},
+		{`"` + long + `" <x@example.com>`, ""},
+		{"x@example.com", long},
 	} {
-		_, err := compose(bad)
-		assert.Error(t, err, bad)
+		_, err := compose(bad.email, bad.name)
+		if assert.Error(t, err, bad.email) {
+			// The error is logged and saved in the job: no recipient data in it.
+			assert.NotContains(t, err.Error(), "example.com")
+		}
 	}
 }
