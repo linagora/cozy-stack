@@ -299,6 +299,27 @@ func IsInTrash(fullpath string) bool {
 	return fullpath == TrashDirName || strings.HasPrefix(fullpath, TrashDirName+"/")
 }
 
+// CheckParentNotInTrash returns ErrParentInTrash if dirID is a folder in the
+// trash, other than the trash itself where trashing moves things. The VFS
+// backends call it under their write lock, as the folder may have been trashed
+// since the caller read it.
+func CheckParentNotInTrash(index Indexer, dirID string) error {
+	if dirID == "" || dirID == consts.TrashDirID {
+		return nil
+	}
+	parent, err := index.DirByID(dirID)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if IsInTrash(parent.Fullpath) {
+		return ErrParentInTrash
+	}
+	return nil
+}
+
 // TrashDir is used to delete a directory given its document
 func TrashDir(fs VFS, olddoc *DirDoc) (*DirDoc, error) {
 	oldpath, err := olddoc.Path(fs)

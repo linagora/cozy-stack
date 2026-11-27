@@ -359,16 +359,6 @@ func ModifyFileMetadata(fs VFS, olddoc *FileDoc, patch *DocPatch) (*FileDoc, err
 	if trashed && olddoc.DirID != *patch.DirID {
 		return nil, ErrFileInTrash
 	}
-	if olddoc.DirID != *patch.DirID {
-		// Moving a live file into a trashed folder would lose it with the trash.
-		parent, err := fs.DirByID(*patch.DirID)
-		if err != nil {
-			return nil, err
-		}
-		if IsInTrash(parent.Fullpath) {
-			return nil, ErrParentInTrash
-		}
-	}
 
 	newdoc, err := NewFileDoc(
 		newname,
