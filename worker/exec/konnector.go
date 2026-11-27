@@ -4,6 +4,8 @@ package exec
 
 import (
 	"archive/tar"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -601,7 +603,11 @@ func (w *konnectorWorker) installedFromRegistry(ctx *job.TaskContext, i *instanc
 		return false
 	}
 	v, err := registry.GetVersion(w.slug, w.man.Version(), i.Registries())
-	if err != nil || v.Sha256 != w.man.Checksum() {
+	var digest []byte
+	if err == nil && v != nil {
+		digest, _ = hex.DecodeString(v.Sha256)
+	}
+	if len(digest) != sha256.Size || v.Sha256 != w.man.Checksum() {
 		ctx.Logger().Warnf("Secret of the account type not given: %s@%s is not the release of the registry (%v)",
 			w.slug, w.man.Version(), err)
 		return false

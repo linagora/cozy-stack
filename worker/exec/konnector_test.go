@@ -3,6 +3,7 @@ package exec
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -228,11 +229,16 @@ echo "{\"type\": \"manifest\", \"message\": \"$(ls ${1}/manifest.konnector)\" }"
 		// The registry knows the release 1.0.0 of the konnector and its checksum.
 		const sum = "8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c8a9b0d1c"
 		reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/registry/my-konnector-secret/1.0.0" {
+			switch r.URL.Path {
+			case "/registry/my-konnector-secret/1.0.0":
+				_, _ = fmt.Fprintf(w, `{"slug": "my-konnector-secret", "version": "1.0.0", "sha256": %q}`, sum)
+			case "/registry/my-konnector-secret/2.0.0":
+				_, _ = io.WriteString(w, `null`)
+			case "/registry/my-konnector-secret/3.0.0":
+				_, _ = io.WriteString(w, `{"slug": "my-konnector-secret", "version": "3.0.0"}`)
+			default:
 				http.NotFound(w, r)
-				return
 			}
-			_, _ = fmt.Fprintf(w, `{"slug": "my-konnector-secret", "version": "1.0.0", "sha256": %q}`, sum)
 		}))
 		defer reg.Close()
 		regURL, err := url.Parse(reg.URL)
@@ -244,16 +250,20 @@ echo "{\"type\": \"manifest\", \"message\": \"$(ls ${1}/manifest.konnector)\" }"
 		for _, tc := range []struct {
 			src, checksum string
 			hasSecret     bool
+			version       string
 		}{
-			{"registry://my-konnector-secret/stable", sum, true},
+			{"registry://my-konnector-secret/stable", sum, true, ""},
+			// The registry gives no release, or a release without digest.
+			{"registry://my-konnector-secret/stable", sum, false, "2.0.0"},
+			{"registry://my-konnector-secret/stable", "", false, "3.0.0"},
 			// A registry source over files from elsewhere, as an older stack
 			// could record on an update that did not fetch them.
-			{"registry://my-konnector-secret/stable", "git-0f1e2d3c", false},
-			{"registry://other-konnector/stable", sum, false},
-			{"git://github.com/konnectors/cozy-konnector-trainline.git", sum, false},
-			{"git://my-konnector-secret/stable", sum, false},
-			{"https://example.org/my-konnector-secret.tar.gz", sum, false},
-			{"file:///tmp/my-konnector-secret", sum, false},
+			{"registry://my-konnector-secret/stable", "git-0f1e2d3c", false, ""},
+			{"registry://other-konnector/stable", sum, false, ""},
+			{"git://github.com/konnectors/cozy-konnector-trainline.git", sum, false, ""},
+			{"git://my-konnector-secret/stable", sum, false, ""},
+			{"https://example.org/my-konnector-secret.tar.gz", sum, false, ""},
+			{"file:///tmp/my-konnector-secret", sum, false, ""},
 		} {
 			u, err := url.Parse(tc.src)
 			require.NoError(t, err)
@@ -261,6 +271,9 @@ echo "{\"type\": \"manifest\", \"message\": \"$(ls ${1}/manifest.konnector)\" }"
 			man.SetSlug("my-konnector-secret")
 			man.SetSource(u)
 			man.SetVersion("1.0.0")
+			if tc.version != "" {
+				man.SetVersion(tc.version)
+			}
 			man.SetChecksum(tc.checksum)
 			w := &konnectorWorker{slug: "my-konnector-secret", man: man, msg: &KonnectorMessage{data: []byte(`{}`)}}
 
