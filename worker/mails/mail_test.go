@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	netmail "net/mail"
 	"net/textproto"
 	"os"
 	"strconv"
@@ -431,13 +430,8 @@ func TestComposeMailChecksRecipients(t *testing.T) {
 	assert.Equal(t, `"Bob" <bob@example.com>`, to("bob@example.com", "Bob"))
 	assert.Equal(t, `bob@example.com`, to("bob@example.com", ""))
 
-	// A quoted local part stays quoted, so that the header can be parsed to send.
-	addr, err := netmail.ParseAddress(to(`"john doe"@example.com`, "John"))
-	require.NoError(t, err)
-	assert.Equal(t, "john doe@example.com", addr.Address)
-
-	// No line of the message is over 998 octets (RFC 5322 §2.1.1), even with
-	// a long display name: gomail folds it at its spaces.
+	// No line of the message is over 998 octets (RFC 5322 §2.1.1) with a long
+	// display name that gomail can fold at its spaces.
 	m, err := compose("x@example.com", strings.Repeat("ab ", 700))
 	require.NoError(t, err)
 	var buf bytes.Buffer
@@ -459,6 +453,10 @@ func TestComposeMailChecksRecipients(t *testing.T) {
 		{"not an address", "Bob"},
 		{`"` + long + `" <x@example.com>`, ""},
 		{"x@example.com", long},
+		// gomail folds only at spaces, not at tabs.
+		{"x@example.com", strings.Repeat("ab\t", 700)},
+		// gomail sends the address unquoted in RCPT TO.
+		{`"john doe"@example.com`, "John"},
 	} {
 		_, err := compose(bad.email, bad.name)
 		if assert.Error(t, err, bad.email) {

@@ -247,6 +247,11 @@ func composeMail(ctx *job.TaskContext, opts *mail.Options, domain string) (*goma
 		}
 		spec := (&netmail.Address{Address: addr.Address}).String()
 		spec = spec[1 : len(spec)-1] // without the angle brackets
+		// gomail sends the address unquoted in RCPT TO, so a local part that
+		// needs quotes would reach the SMTP server malformed.
+		if strings.HasPrefix(spec, `"`) {
+			return nil, fmt.Errorf("Invalid mail recipient #%d: quoted local part", i)
+		}
 		// RFC 5321 §4.5.3.1: 64 octets for the local part, 256 for the path.
 		if strings.LastIndexByte(spec, '@') > 64 || len(spec) > 254 {
 			return nil, fmt.Errorf("Invalid mail recipient #%d: too long", i)
@@ -258,9 +263,9 @@ func composeMail(ctx *job.TaskContext, opts *mail.Options, domain string) (*goma
 		if addr.Name != "" {
 			mailbox = addr.String()
 		}
-		// gomail folds a header only at spaces: a longer word would make a
-		// line over the 998 octets of RFC 5322 §2.1.1.
-		for _, word := range strings.Fields(mailbox) {
+		// gomail folds a header only at spaces (not tabs): a longer word would
+		// make a line over the 998 octets of RFC 5322 §2.1.1.
+		for _, word := range strings.Split(mailbox, " ") {
 			if len(word) > 900 {
 				return nil, fmt.Errorf("Invalid mail recipient #%d: name too long", i)
 			}
