@@ -1,6 +1,8 @@
 package files
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net/http"
@@ -4213,6 +4215,22 @@ func TestFiles(t *testing.T) {
 		e.GET("/files/"+legacyID).
 			WithHeader("Authorization", "Bearer "+token).
 			Expect().Status(404)
+	})
+
+	t.Run("FsckIgnoresOldCompressedEntry", func(t *testing.T) {
+		// The old writer stored the buffer before closing the gzip writer:
+		// a readable header, with neither the data nor the trailer.
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		_, _ = gw.Write([]byte(`[]`))
+		config.GetConfig().CacheStorage.Set("fsck:"+testInstance.DBPrefix(), bytes.Clone(buf.Bytes()), time.Hour)
+		_ = gw.Close()
+
+		e := testutils.CreateTestClient(t, ts.URL)
+		e.GET("/files/fsck").
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON().Array()
 	})
 
 	t.Run("DirSize", func(t *testing.T) {

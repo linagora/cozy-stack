@@ -2314,7 +2314,8 @@ func fsckHandler(c echo.Context) error {
 	}
 
 	noCache, _ := strconv.ParseBool(c.QueryParam("NoCache"))
-	key := "fsck:" + instance.DBPrefix()
+	// v2: the entries of the old writer could miss the end of the gzip stream.
+	key := "fsck:v2:" + instance.DBPrefix()
 	if !noCache {
 		if r, ok := cacheStorage.GetCompressed(key); ok {
 			return c.Stream(http.StatusOK, echo.MIMEApplicationJSON, r)
