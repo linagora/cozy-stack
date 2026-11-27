@@ -76,3 +76,26 @@ func TestParseFileDeepNesting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "bulletList", last.Type.Name)
 }
+
+func TestParseFileTableCellMarkerInTaskItem(t *testing.T) {
+	specs := model.SchemaSpecFromJSON(DefaultSchemaSpecs())
+	schema, err := model.NewSchema(&specs)
+	require.NoError(t, err)
+
+	node := func(typ string, children ...interface{}) map[string]interface{} {
+		n := map[string]interface{}{"type": typ}
+		if len(children) > 0 {
+			n["content"] = children
+		}
+		return n
+	}
+	doc := &Document{SchemaSpec: DefaultSchemaSpecs(), RawContent: node("doc",
+		node("taskList", node("taskItem", node("tableHeader", node("tableHeader", node("codeBlock"))))))}
+	md, err := doc.Markdown(nil)
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		_, err = parseFile(strings.NewReader(string(md)), schema)
+	}, string(md))
+	assert.ErrorIs(t, err, errUnbalancedTable)
+}
