@@ -25,6 +25,8 @@ type Hit struct {
 type Drive struct {
 	OwnerInstanceID string
 	RootDirID       string
+	// RootFileID is the file of a single-file drive (RootDirID is empty).
+	RootFileID string
 }
 
 // VisiblePath is the path to show for a hit, and whether the hit can be shown.
@@ -43,7 +45,8 @@ type VisiblePath struct {
 // A hit is not OK when its parent folder is missing or in the trash, when it
 // is no longer in its drive, when the drive is not in drives (the drives the
 // caller is a member of, by sharing id), or when its owner is not an instance
-// of this stack cluster. The root folder of a drive is OK with an empty path.
+// of this stack cluster. The root folder of a drive, and the file of a
+// single-file drive, are OK with an empty path.
 func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive) ([]VisiblePath, error) {
 	out := make([]VisiblePath, len(hits))
 
@@ -54,8 +57,8 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 			continue
 		}
 		wanted[hit.OwnerInstanceID] = append(wanted[hit.OwnerInstanceID], hit.DirID)
-		if hit.DriveID != "" {
-			wanted[hit.OwnerInstanceID] = append(wanted[hit.OwnerInstanceID], drives[hit.DriveID].RootDirID)
+		if root := drives[hit.DriveID].RootDirID; hit.DriveID != "" && root != "" {
+			wanted[hit.OwnerInstanceID] = append(wanted[hit.OwnerInstanceID], root)
 		}
 	}
 
@@ -94,7 +97,13 @@ func VisiblePaths(caller *instance.Instance, hits []Hit, drives map[string]Drive
 			out[i] = VisiblePath{Path: parent.Fullpath, OK: true}
 			continue
 		}
-		root := dirs[hit.OwnerInstanceID][drives[hit.DriveID].RootDirID]
+		d := drives[hit.DriveID]
+		if d.RootFileID != "" {
+			// The file is the whole drive: nothing above it is shown
+			out[i] = VisiblePath{OK: true}
+			continue
+		}
+		root := dirs[hit.OwnerInstanceID][d.RootDirID]
 		if root == nil {
 			continue
 		}

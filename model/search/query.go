@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
-	"sort"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/pkg/opensearch"
@@ -67,15 +67,12 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 		return nil, err
 	}
 
-	driveByKey, drives, err := memberScopes(ctx, client, caller.Domain)
+	dirKeys, fileKeys, drives, err := memberScopes(ctx, client, caller.Domain)
 	if err != nil {
 		return nil, err
 	}
-	keys := make([]string, 0, len(driveByKey))
-	for key := range driveByKey {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	// One more hit than the page tells if there is a next page
+	query := buildQuery(caller.Domain, q, slices.Sorted(maps.Keys(dirKeys)), slices.Sorted(maps.Keys(fileKeys)), limit+1, after)
 
 	var res struct {
 		Hits struct {
@@ -85,10 +82,8 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 			} `json:"hits"`
 		} `json:"hits"`
 	}
-	// One more hit than the page tells if there is a next page. The same shard
-	// copies serve all the pages of a caller, so the scores do not differ
-	// between copies.
-	query := buildQuery(caller.Domain, q, keys, limit+1, after)
+	// The same shard copies serve all the pages of a caller, so the scores
+	// do not differ between copies
 	if err := client.SearchWithPreference(ctx, FilesIndex, caller.Domain, query, &res); err != nil {
 		return nil, err
 	}
@@ -107,7 +102,10 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 			Type: doc.Type, Name: doc.Name, Mime: doc.Mime, Class: doc.Class, UpdatedAt: doc.UpdatedAt,
 		}
 		if doc.OwnerInstanceID != caller.Domain {
-			hit.DriveID = driveByKey[doc.ScopedDirKey]
+			hit.DriveID = dirKeys[doc.ScopedDirKey]
+			if hit.DriveID == "" {
+				hit.DriveID = fileKeys[doc.ResourceKey]
+			}
 		}
 		out.Hits = append(out.Hits, hit)
 	}
@@ -119,13 +117,13 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 const maxMemberDrives = 10000
 
 // memberScopes finds the scope docs that list the caller as a member, and
-// returns their folder keys, with the drive of each key, and the drives. The
-// scope docs are written by the instances of the owners: the recipient's copy
-// of a sharing is not read.
+// returns their folder keys and the keys of the files of single-file drives,
+// with the drive of each key, and the drives. The scope docs are written by
+// the instances of the owners: the recipient's copy of a sharing is not read.
 //
 // shortcut: a member of more than maxMemberDrives drives does not find the
 // files of the others; page with search_after when that happens.
-func memberScopes(ctx context.Context, client *opensearch.Client, domain string) (map[string]string, map[string]Drive, error) {
+func memberScopes(ctx context.Context, client *opensearch.Client, domain string) (map[string]string, map[string]string, map[string]Drive, error) {
 	var res struct {
 		Hits struct {
 			Hits []struct {
@@ -138,24 +136,28 @@ func memberScopes(ctx context.Context, client *opensearch.Client, domain string)
 		"query": map[string]any{"term": map[string]any{"active_member_principals": domain}},
 	}
 	if err := client.Search(ctx, ScopesIndex, query, &res); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	docs := make([]ScopeDocument, len(res.Hits.Hits))
 	for i, hit := range res.Hits.Hits {
 		docs[i] = hit.Source
 	}
 	slices.SortFunc(docs, func(a, b ScopeDocument) int { return compareScopes(domain, a, b) })
-	driveByKey := make(map[string]string)
+	dirKeys := make(map[string]string)
+	fileKeys := make(map[string]string)
 	drives := make(map[string]Drive, len(docs))
 	for _, doc := range docs {
-		drives[doc.SharingID] = Drive{OwnerInstanceID: doc.OwnerInstanceID, RootDirID: doc.RootDirID}
+		drives[doc.SharingID] = Drive{OwnerInstanceID: doc.OwnerInstanceID, RootDirID: doc.RootDirID, RootFileID: doc.RootFileID}
+		if doc.RootFileID != "" {
+			fileKeys[Key(doc.OwnerInstanceID, doc.RootFileID)] = doc.SharingID
+		}
 		for _, key := range doc.SubtreeDirKeys {
-			if _, ok := driveByKey[key]; !ok {
-				driveByKey[key] = doc.SharingID
+			if _, ok := dirKeys[key]; !ok {
+				dirKeys[key] = doc.SharingID
 			}
 		}
 	}
-	return driveByKey, drives, nil
+	return dirKeys, fileKeys, drives, nil
 }
 
 // compareScopes orders the drives of the caller (domain), so that a folder in
@@ -176,11 +178,16 @@ func compareScopes(domain string, a, b ScopeDocument) int {
 	)
 }
 
-// buildQuery returns the body of the search request on the files index.
-func buildQuery(domain, q string, dirKeys []string, limit int, after []any) map[string]any {
+// buildQuery returns the body of the search request on the files index:
+// the files of the caller, those under the folder keys, and the files of the
+// single-file drives (fewer than maxMemberDrives, so one terms filter).
+func buildQuery(domain, q string, dirKeys, fileKeys []string, limit int, after []any) map[string]any {
 	visible := []any{map[string]any{"term": map[string]any{"owner_instance_id": domain}}}
 	for chunk := range slices.Chunk(dirKeys, termsChunkSize) {
 		visible = append(visible, map[string]any{"terms": map[string]any{"scoped_dir_key": chunk}})
+	}
+	if len(fileKeys) > 0 {
+		visible = append(visible, map[string]any{"terms": map[string]any{"resource_key": fileKeys}})
 	}
 	body := map[string]any{
 		"size": limit,

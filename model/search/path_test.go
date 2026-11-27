@@ -36,8 +36,19 @@ func TestVisiblePaths(t *testing.T) {
 	outside, err := vfs.MkdirAll(owner.VFS(), "/Private/Elsewhere")
 	require.NoError(t, err)
 
+	// Parents of the files of single-file drives
+	private, err := owner.VFS().DirByPath("/Private")
+	require.NoError(t, err)
+	gone, err := vfs.MkdirAll(owner.VFS(), "/Gone")
+	require.NoError(t, err)
+	gone, err = vfs.TrashDir(owner.VFS(), gone)
+	require.NoError(t, err)
+
 	// The drives of the caller (a recipient), as listed by the scope docs
-	drives := map[string]Drive{"drive-1": {OwnerInstanceID: owner.Domain, RootDirID: root.ID()}}
+	drives := map[string]Drive{
+		"drive-1":    {OwnerInstanceID: owner.Domain, RootDirID: root.ID()},
+		"drive-file": {OwnerInstanceID: owner.Domain, RootFileID: "f1"},
+	}
 
 	hits := []Hit{
 		{OwnerInstanceID: caller.Domain, DirID: work.ID()},
@@ -54,6 +65,8 @@ func TestVisiblePaths(t *testing.T) {
 		{OwnerInstanceID: "other.example.net", DirID: nested.ID(), DriveID: "drive-1"},
 		{OwnerInstanceID: owner.Domain, DirID: nested.ID()}, // not the caller's file
 		{OwnerInstanceID: caller.Domain, DirID: "does-not-exist"},
+		{OwnerInstanceID: owner.Domain, DirID: private.ID(), DriveID: "drive-file"},
+		{OwnerInstanceID: owner.Domain, DirID: gone.ID(), DriveID: "drive-file"},
 	}
 	paths, err := VisiblePaths(caller, hits, drives)
 	require.NoError(t, err)
@@ -65,12 +78,14 @@ func TestVisiblePaths(t *testing.T) {
 		{},                        // a sibling of the root
 		{Path: "/Team", OK: true}, // the name of the root folder
 		{Path: "/Team/a/b", OK: true},
-		{}, // moved out of the drive
-		{}, // unknown drive
-		{}, // unknown drive, without owner
-		{}, // owner does not match the drive
-		{}, // file of another instance without drive
-		{}, // missing parent
+		{},         // moved out of the drive
+		{},         // unknown drive
+		{},         // unknown drive, without owner
+		{},         // owner does not match the drive
+		{},         // file of another instance without drive
+		{},         // missing parent
+		{OK: true}, // the file of a single-file drive, without a path
+		{},         // the file of a single-file drive, in a trashed folder
 	}, paths)
 
 	t.Run("drive of an instance missing from the stack cluster", func(t *testing.T) {
