@@ -43,7 +43,7 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 
 - Decision: `Destroy` removes the search documents of an instance after its CouchDB databases are deleted, and a failure is only logged: nothing retries it.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5266#discussion_r4717666580)
-- Why: an index job reads its checkpoint and the changes from CouchDB, so none can write after the purge; and a deletion that fails before the databases keeps the instance with its documents. A failed purge leaves documents that an instance created again with the domain finds, until #5398.
+- Why: an index job reads its checkpoint and the changes from CouchDB, so no new job can write after the purge; and a deletion that fails before the databases keeps the instance with its documents. A failed purge leaves documents that an instance created again with the domain finds, until #5398.
 - Scope: `model/instance/lifecycle`, `model/search/purge`.
 
 ## 2026-11-27, [Tech] Search purges in background OpenSearch tasks
