@@ -70,9 +70,14 @@ func Worker(ctx *job.TaskContext) error {
 
 	if avConfig.MaxFileSize > 0 && file.ByteSize > avConfig.MaxFileSize {
 		log.Infof("File %s is too large (%d bytes > %d max), skipping scan", msg.FileID, file.ByteSize, avConfig.MaxFileSize)
-		return updateScanStatus(inst, file, &vfs.AntivirusScan{
-			Status: vfs.AVStatusSkipped,
-		})
+		scan := &vfs.AntivirusScan{Status: vfs.AVStatusSkipped}
+		// The VFS writes skipped with the content: rewriting it would only
+		// add a revision, but the user must still be told.
+		if file.AntivirusScan != nil && file.AntivirusScan.Status == vfs.AVStatusSkipped {
+			sendNotification(inst, file, scan.Status, getIssueDescription(inst, scan))
+			return nil
+		}
+		return updateScanStatus(inst, file, scan)
 	}
 
 	// Create ClamAV client
@@ -142,6 +147,13 @@ func updateScanStatus(inst *instance.Instance, file *vfs.FileDoc, scan *vfs.Anti
 		f, err = fs.FileByID(file.DocID)
 		if err != nil {
 			return err
+		}
+		// A verdict only applies to the scanned bytes: a content uploaded
+		// during the scan already has its own pending status and scan job.
+		if !f.SameContent(file) {
+			inst.Logger().WithNamespace("antivirus").
+				Debugf("File %s content changed during the scan, dropping the %s verdict", file.DocID, scan.Status)
+			return nil
 		}
 		newdoc := f.Clone().(*vfs.FileDoc)
 		newdoc.AntivirusScan = scan

@@ -445,9 +445,12 @@ file document with the scan result.
 
 * When a file is created or its content is updated, the stack automatically
    schedules an antivirus scan job
-* The file's `antivirus_scan.status` is immediately set to `pending`
+* The file's `antivirus_scan.status` is set to `pending` in the same write as
+   the new content, or to `skipped` if the file is larger than `max_file_size`
 * The worker retrieves the file, sends it to ClamAV for scanning
-* The scan result is stored in the file document's `antivirus_scan` field
+* The scan result is stored in the file document's `antivirus_scan` field (an
+   existing `skipped` status is not rewritten, but the notification is still
+   sent)
 * If the file is infected, skipped, or an error occurs, a notification is sent
    to the user (if enabled)
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
@@ -16,12 +17,12 @@ import (
 )
 
 type couchdbIndexer struct {
-	db prefixer.Prefixer
+	db Prefixer
 }
 
 // NewCouchdbIndexer creates an Indexer instance based on couchdb to store
 // files and directories metadata and index them.
-func NewCouchdbIndexer(db prefixer.Prefixer) Indexer {
+func NewCouchdbIndexer(db Prefixer) Indexer {
 	return &couchdbIndexer{
 		db: db,
 	}
@@ -205,10 +206,41 @@ func (c *couchdbIndexer) DirSize(doc *DirDoc) (int64, int64, error) {
 	return size, count, nil
 }
 
+// NewContentAntivirusScan returns the antivirus status to write with a new
+// content, in the same write: a revision without status counts as clean, so
+// it could be downloaded before the scan job writes its verdict. It returns
+// nil when the antivirus is disabled for the context.
+func NewContentAntivirusScan(contextName string, size int64) *AntivirusScan {
+	cfg := config.GetAntivirusConfig(contextName)
+	if !cfg.Enabled {
+		return nil
+	}
+	if cfg.MaxFileSize > 0 && size > cfg.MaxFileSize {
+		return &AntivirusScan{Status: AVStatusSkipped}
+	}
+	return &AntivirusScan{Status: AVStatusPending}
+}
+
+func (c *couchdbIndexer) setAntivirusScan(olddoc, newdoc *FileDoc) {
+	if olddoc != nil && newdoc.SameContent(olddoc) {
+		// The antivirus trigger does not rescan a file whose content is
+		// unchanged, so the previous verdict must survive an upload of the
+		// same bytes, or an infected file would be served as clean.
+		if newdoc.AntivirusScan == nil && olddoc.AntivirusScan != nil {
+			newdoc.AntivirusScan = olddoc.AntivirusScan
+		}
+		return
+	}
+	if scan := NewContentAntivirusScan(c.db.GetContextName(), newdoc.ByteSize); scan != nil {
+		newdoc.AntivirusScan = scan
+	}
+}
+
 func (c *couchdbIndexer) CreateFileDoc(doc *FileDoc) error {
 	if err := c.prepareFileDoc(doc); err != nil {
 		return err
 	}
+	c.setAntivirusScan(nil, doc)
 	return couchdb.CreateDoc(c.db, doc)
 }
 
@@ -216,6 +248,7 @@ func (c *couchdbIndexer) CreateNamedFileDoc(doc *FileDoc) error {
 	if err := c.prepareFileDoc(doc); err != nil {
 		return err
 	}
+	c.setAntivirusScan(nil, doc)
 	return couchdb.CreateNamedDoc(c.db, doc)
 }
 
@@ -228,12 +261,7 @@ func (c *couchdbIndexer) UpdateFileDoc(olddoc, newdoc *FileDoc) error {
 		c.revokeSharingRefsOnFile(newdoc)
 	}
 
-	// The antivirus trigger does not rescan a file whose content is
-	// unchanged, so the previous verdict must survive an upload of the same
-	// bytes, or an infected file would be served as clean.
-	if newdoc.AntivirusScan == nil && olddoc.AntivirusScan != nil && newdoc.SameContent(olddoc) {
-		newdoc.AntivirusScan = olddoc.AntivirusScan
-	}
+	c.setAntivirusScan(olddoc, newdoc)
 
 	newdoc.SetID(olddoc.ID())
 	newdoc.SetRev(olddoc.Rev())

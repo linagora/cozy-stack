@@ -115,6 +115,10 @@ func TestAntivirus(t *testing.T) {
 		t.Run("FileVersionUpdate", func(t *testing.T) {
 			testWorkerFileVersionUpdate(t, inst)
 		})
+
+		t.Run("VerdictOnlyForScannedContent", func(t *testing.T) {
+			testVerdictOnlyForScannedContent(t, inst)
+		})
 	})
 }
 
@@ -197,6 +201,8 @@ func testWorkerSkipsLargeFiles(t *testing.T, inst *instance.Instance) {
 	largeContent := []byte("This is a file larger than 10 bytes")
 	doc := createTestFile(t, fs, "large-test.txt", largeContent)
 	defer deleteTestFile(t, fs, doc)
+	require.NotNil(t, doc.AntivirusScan)
+	require.Equal(t, vfs.AVStatusSkipped, doc.AntivirusScan.Status)
 
 	// Create and run the job
 	msg, err := job.NewMessage(&antivirus.Message{FileID: doc.DocID})
@@ -218,6 +224,7 @@ func testWorkerSkipsLargeFiles(t *testing.T, inst *instance.Instance) {
 	require.NoError(t, err)
 	require.NotNil(t, updatedDoc.AntivirusScan)
 	require.Equal(t, vfs.AVStatusSkipped, updatedDoc.AntivirusScan.Status)
+	require.Equal(t, doc.Rev(), updatedDoc.Rev())
 
 	// Verify notification was sent
 	verifyNotificationCreated(t, inst, "large-test.txt")
@@ -299,20 +306,68 @@ func deleteTestFile(t *testing.T, fs vfs.VFS, doc *vfs.FileDoc) {
 
 func verifyNotificationCreated(t *testing.T, inst *instance.Instance, fileName string) {
 	t.Helper()
+	require.True(t, hasNotification(t, inst, fileName), "Expected notification for file %s not found", fileName)
+}
+
+func hasNotification(t *testing.T, inst *instance.Instance, fileName string) bool {
+	t.Helper()
 	var notifs []*notification.Notification
 	err := couchdb.GetAllDocs(inst, consts.Notifications, nil, &notifs)
 	require.NoError(t, err)
 
-	found := false
 	for _, n := range notifs {
 		if n.Category == "antivirus-alert" {
 			if data, ok := n.Data["FileName"].(string); ok && data == fileName {
-				found = true
-				break
+				return true
 			}
 		}
 	}
-	require.True(t, found, "Expected notification for file %s not found", fileName)
+	return false
+}
+
+// testVerdictOnlyForScannedContent tests that a verdict computed for a content
+// is not written on a file whose content changed during the scan.
+func testVerdictOnlyForScannedContent(t *testing.T, inst *instance.Instance) {
+	fs := inst.VFS()
+	originalEnabled := antivirusEnabledValue(t)
+	t.Cleanup(func() {
+		setAntivirusEnabled(t, originalEnabled)
+	})
+	// No background scan job must write a verdict during this test.
+	setAntivirusEnabled(t, false)
+
+	scanned := createTestFile(t, fs, "stale-verdict-test.txt", []byte("This is the scanned content"))
+	defer deleteTestFile(t, fs, scanned)
+
+	// A new content is uploaded during the scan, and gets its own pending status.
+	current := updateTestFileContent(t, fs, scanned, []byte("This is the content uploaded during the scan"))
+	require.NotEqual(t, scanned.MD5Sum, current.MD5Sum)
+	pending := current.Clone().(*vfs.FileDoc)
+	pending.AntivirusScan = &vfs.AntivirusScan{Status: vfs.AVStatusPending}
+	require.NoError(t, couchdb.UpdateDoc(fs, pending))
+	current, err := fs.FileByID(scanned.DocID)
+	require.NoError(t, err)
+
+	verdict := &vfs.AntivirusScan{Status: vfs.AVStatusInfected, VirusName: "Stale"}
+	err = antivirus.UpdateScanStatus(inst, scanned, verdict)
+	require.NoError(t, err)
+
+	got, err := fs.FileByID(scanned.DocID)
+	require.NoError(t, err)
+	require.NotNil(t, got.AntivirusScan)
+	require.Equal(t, vfs.AVStatusPending, got.AntivirusScan.Status)
+	require.Equal(t, current.Rev(), got.Rev())
+	require.False(t, hasNotification(t, inst, "stale-verdict-test.txt"))
+
+	// The verdict on the current content is still written.
+	err = antivirus.UpdateScanStatus(inst, current, verdict)
+	require.NoError(t, err)
+
+	got, err = fs.FileByID(scanned.DocID)
+	require.NoError(t, err)
+	require.NotNil(t, got.AntivirusScan)
+	require.Equal(t, vfs.AVStatusInfected, got.AntivirusScan.Status)
+	verifyNotificationCreated(t, inst, "stale-verdict-test.txt")
 }
 
 // testWorkerFileVersionUpdate tests that when a file is updated with new content,
