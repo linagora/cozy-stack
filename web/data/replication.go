@@ -11,6 +11,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
+	"github.com/cozy/cozy-stack/web/files"
 	"github.com/cozy/cozy-stack/web/middlewares"
 	"github.com/labstack/echo/v4"
 )
@@ -257,6 +258,7 @@ func changesFeed(c echo.Context) error {
 				return err
 			}
 		}
+		files.FilterAntivirusBlockedDocs(instance, results)
 	}
 
 	return c.JSON(http.StatusOK, results)

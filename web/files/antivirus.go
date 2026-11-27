@@ -7,6 +7,8 @@ import (
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/jsonapi"
 )
 
@@ -33,6 +35,100 @@ func CheckAntivirusAction(inst *instance.Instance, file *vfs.FileDoc, action str
 		return nil
 	}
 	return newAntivirusBlockedError(file, action, status)
+}
+
+// FilterAntivirusBlockedDocs hides from a changes feed the files that the
+// antivirus configuration forbids to download, so that sync clients do not
+// try to fetch content that would be refused with a 451.
+//
+// A blocked file is dropped when the client could not have downloaded its
+// blocked content, so that it keeps its previous version. Otherwise it is
+// replaced by a tombstone, so that the client removes a content it may have
+// downloaded while the scan was running. A blocked file moved to the trash is
+// kept as is: only the download is forbidden, and trashing a file triggers
+// none on the clients.
+func FilterAntivirusBlockedDocs(inst *instance.Instance, changes *couchdb.ChangesResponse) {
+	avConfig := config.GetAntivirusConfig(inst.ContextName)
+	if avConfig == nil || !avConfig.Enabled || len(changes.Results) == 0 {
+		return
+	}
+
+	pendingBlocked := !isActionAllowed(avConfig, vfs.AVStatusPending, ActionDownload)
+	results := make([]couchdb.Change, 0, len(changes.Results))
+	for _, change := range changes.Results {
+		if change.Doc.M["type"] != consts.FileType {
+			results = append(results, change)
+			continue
+		}
+		status := getChangeAntivirusStatus(change.Doc)
+		if isActionAllowed(avConfig, status, ActionDownload) {
+			results = append(results, change)
+			continue
+		}
+		trashed, _ := change.Doc.M["trashed"].(bool)
+		switch decideBlockedChange(status, trashed, pendingBlocked) {
+		case keepBlockedChange:
+			results = append(results, change)
+		case tombstoneBlockedChange:
+			results = append(results, makeAntivirusBlockedChange(change))
+		case dropBlockedChange:
+		}
+	}
+	changes.Results = results
+}
+
+// blockedChangeOutcome is what a changes feed shows of a blocked file.
+type blockedChangeOutcome int
+
+const (
+	keepBlockedChange blockedChangeOutcome = iota
+	dropBlockedChange
+	tombstoneBlockedChange
+)
+
+// decideBlockedChange tells whether a blocked file is kept as is, dropped from
+// a changes feed or replaced by a tombstone.
+func decideBlockedChange(status string, trashed, pendingBlocked bool) blockedChangeOutcome {
+	switch {
+	case trashed:
+		// Trashing a file triggers no download on the clients.
+		return keepBlockedChange
+	case status == vfs.AVStatusPending:
+		// Every content change sets the file back to pending: a tombstone
+		// would make the clients delete and download it again each time.
+		return dropBlockedChange
+	case status == vfs.AVStatusSkipped:
+		// Skipped is written with the content: it was never downloadable.
+		return dropBlockedChange
+	case pendingBlocked:
+		// The verdict follows a pending state, during which the clients
+		// could not download the content.
+		return dropBlockedChange
+	default:
+		// The clients may have downloaded the content during the scan.
+		return tombstoneBlockedChange
+	}
+}
+
+// makeAntivirusBlockedChange hides a file whose antivirus verdict forbids the
+// download by telling the sync clients it was deleted.
+func makeAntivirusBlockedChange(change couchdb.Change) couchdb.Change {
+	var rev string
+	if len(change.Changes) > 0 {
+		rev = change.Changes[0].Rev
+	}
+	return *couchdb.MakeChangeForDeletion(change.DocID, rev, change.Seq)
+}
+
+// getChangeAntivirusStatus returns the antivirus status of a file document
+// from a changes feed, with the same "clean" default as getFileAntivirusStatus.
+func getChangeAntivirusStatus(doc couchdb.JSONDoc) string {
+	scan, _ := doc.M["antivirus_scan"].(map[string]interface{})
+	status, _ := scan["status"].(string)
+	if status == "" {
+		return vfs.AVStatusClean
+	}
+	return status
 }
 
 // getFileAntivirusStatus returns the antivirus status of a file.

@@ -474,3 +474,69 @@ for a complete example.
 
 - ClamAV daemon (`clamd`) must be running and accessible at the configured address
 - The daemon should be configured with appropriate scan limits
+
+### Allowed actions and sync clients
+
+The `actions` setting lists, for each scan status, the actions allowed on a
+file: `download`, `share`, `preview` and `delete`. A configured `actions`
+replaces the defaults entirely, and a status missing from it allows every
+action. A file without `antivirus_scan` counts as `clean`. With the defaults,
+only `infected` forbids the download.
+
+When the download of a file is forbidden, the changes feeds used by the sync
+clients (`GET /files/_changes`, the shared drives feeds and
+`GET /data/io.cozy.files/_changes`) hide it, for every client, so that the
+clients do not try to download a content that the stack would refuse with a
+`451 Unavailable For Legal Reasons`:
+
+| File | In the feed | Why |
+| ---- | ----------- | --- |
+| In the trash, whatever its status | kept as is | only the download is forbidden, and trashing a file makes the clients download nothing |
+| `pending` | left out | every new content sets the file back to `pending`: a deleted entry would make the clients delete and download it again at each change |
+| `skipped` | left out | this status is written with the content, so the clients could never download it |
+| Other status (`infected`, `error`…), when `pending` forbids `download` | left out | the clients could not download the content before the verdict |
+| Other status, when `pending` allows `download` | replaced by a deleted entry | the clients may have downloaded the content during the scan, and must remove it |
+
+A left-out change lets the clients keep the previous version of the file they
+already have, if any.
+
+#### No unscanned or infected file on the computer of a Desktop user
+
+Remove `download` from `pending`, `infected` and `error`. Remove it from
+`skipped` too if the files larger than `max_file_size` must not be
+synchronized, otherwise they reach the clients unscanned:
+
+```yaml
+contexts:
+  my-context:
+    antivirus:
+      enabled: true
+      address: localhost:3310
+      max_file_size: 104857600
+      actions:
+        pending:
+          - delete
+        clean:
+          - download
+          - share
+          - preview
+          - delete
+        infected:
+          - delete
+        error:
+          - delete
+        skipped:
+          - delete
+```
+
+#### Limits
+
+- The feeds are filtered only with `include_docs=true`, as the status is read
+  from the documents.
+- The files uploaded before the antivirus was enabled have no status, and count
+  as `clean`.
+- A configuration change creates no revision: a copy already downloaded stays
+  on the computer until the next revision of the file, for example when
+  `pending` goes from allowing `download` to forbidding it.
+- While a file is left out of the feeds, its renames and moves do not reach the
+  clients.

@@ -670,6 +670,7 @@ contexts:
         email_on_infected: true
       # Allowed actions per scan status
       # If not specified, permissive defaults are used
+      # Without download, a file is also hidden from the sync clients: see the "Allowed actions and sync clients" section of docs/workers.md
       actions:
         pending:
           - download
