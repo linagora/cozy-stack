@@ -401,6 +401,25 @@ func NewAudioExtractor() *AudioExtractor {
 // from the stored file if users miss them.
 const maxAudioMetadataSize = 32 << 20
 
+// maxMP4Containers bounds the MP4 containers dhowden/tag may enter: it
+// recurses once per container header, without limit, and a deep enough file
+// overflows the stack, which kills the process.
+const maxMP4Containers = 1000
+
+// tooManyMP4Containers tells if tag.ReadFrom could recurse too deeply on buf.
+// Each container it enters starts at a distinct occurrence of its name, so
+// counting the names bounds its depth.
+func tooManyMP4Containers(buf []byte) bool {
+	if len(buf) < 8 || string(buf[4:8]) != "ftyp" {
+		return false
+	}
+	n := 0
+	for _, name := range []string{"moov", "udta", "ilst", "meta"} {
+		n += bytes.Count(buf, []byte(name))
+	}
+	return n > maxMP4Containers
+}
+
 // Start is used in a goroutine to start the metadata extraction
 func (e *AudioExtractor) Start() {
 	var m Metadata
@@ -428,6 +447,10 @@ func (e *AudioExtractor) Start() {
 			e.ch <- m
 		}
 	}()
+	if tooManyMP4Containers(buf) {
+		err = errors.New("metadata: too many MP4 containers")
+		return
+	}
 	tags, err := tag.ReadFrom(bytes.NewReader(buf))
 	if err != nil {
 		return

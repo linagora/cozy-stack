@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -125,6 +126,19 @@ func TestAudioExtractorHostileFiles(t *testing.T) {
 	// A file larger than what is buffered must still be fully consumed.
 	big := io.MultiReader(bytes.NewReader([]byte("ID3")), io.LimitReader(zeroReader{}, 40<<20))
 	assert.NotContains(t, extract(big), "album")
+
+	// The containers of a normal M4A are still read.
+	album := []byte("\x00\x00\x00\x14ftypM4A \x00\x00\x00\x00M4A " +
+		"\x00\x00\x00\x08moov\x00\x00\x00\x08udta\x00\x00\x00\x0cmeta\x00\x00\x00\x00\x00\x00\x00\x08ilst" +
+		"\x00\x00\x00\x1d\xa9alb" +
+		"\x00\x00\x00\x15data\x00\x00\x00\x01\x00\x00\x00\x00Album")
+	assert.Equal(t, "Album", extract(bytes.NewReader(album))["album"])
+
+	// The lib recurses once per moov header: without the bound, this file
+	// overflows the stack, kept small here so that a regression fails fast.
+	defer debug.SetMaxStack(debug.SetMaxStack(8 << 20))
+	deep := append(m4a[:20:20], bytes.Repeat([]byte("\x00\x00\x00\x08moov"), 100_000)...)
+	assert.NotContains(t, extract(bytes.NewReader(deep)), "album")
 }
 
 type zeroReader struct{}
