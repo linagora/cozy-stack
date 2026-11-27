@@ -130,36 +130,14 @@ func (c *Client) SearchWithPreference(ctx context.Context, index, preference str
 	return c.doJSON(ctx, http.MethodPost, path, body, out)
 }
 
-// DeleteByQuery deletes the documents of an index that match the query.
-// It returns the first failure if OpenSearch could only complete part of the request.
-func (c *Client) DeleteByQuery(ctx context.Context, index string, query any) error {
+// DeleteByQuery starts an OpenSearch task that deletes the documents of an
+// index matching the query, at most requestsPerSecond documents per second,
+// and does not wait for it: the failures of the task are not returned.
+func (c *Client) DeleteByQuery(ctx context.Context, index string, query any, requestsPerSecond int) error {
 	body := map[string]any{"query": query}
-	path := "/" + c.IndexName(index) + "/_delete_by_query?conflicts=proceed"
-	var res deleteByQueryResponse
-	if err := c.doJSON(ctx, http.MethodPost, path, body, &res); err != nil {
-		return err
-	}
-	return res.firstFailure()
-}
-
-type deleteByQueryResponse struct {
-	Failures []struct {
-		Status int       `json:"status"`
-		Cause  errorBody `json:"cause"`  // Document failure
-		Reason errorBody `json:"reason"` // Search failure
-	} `json:"failures"`
-}
-
-func (r *deleteByQueryResponse) firstFailure() error {
-	if len(r.Failures) == 0 {
-		return nil
-	}
-	failure := r.Failures[0]
-	detail := failure.Cause
-	if detail.Type == "" {
-		detail = failure.Reason
-	}
-	return &Error{Status: failure.Status, Type: detail.Type, Reason: detail.Reason}
+	path := fmt.Sprintf("/%s/_delete_by_query?conflicts=proceed&wait_for_completion=false&requests_per_second=%d",
+		c.IndexName(index), requestsPerSecond)
+	return c.doJSON(ctx, http.MethodPost, path, body, nil)
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, body, out any) error {
@@ -207,18 +185,10 @@ type errorBody struct {
 func parseError(res *http.Response) error {
 	data, _ := io.ReadAll(io.LimitReader(res.Body, 64*1024))
 	var body struct {
-		deleteByQueryResponse
 		Error json.RawMessage `json:"error"`
 	}
 	e := &Error{Status: res.StatusCode, Reason: strings.TrimSpace(string(data))}
-	if json.Unmarshal(data, &body) != nil {
-		return e
-	}
-	if len(body.Error) == 0 {
-		if failure, ok := body.firstFailure().(*Error); ok {
-			failure.Status = res.StatusCode
-			return failure
-		}
+	if json.Unmarshal(data, &body) != nil || len(body.Error) == 0 {
 		return e
 	}
 	var detail errorBody

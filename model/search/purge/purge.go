@@ -5,7 +5,7 @@ package purge
 
 import (
 	"context"
-	"time"
+	"errors"
 
 	"github.com/cozy/cozy-stack/pkg/config/config"
 )
@@ -16,20 +16,24 @@ const (
 	ScopesIndex = "share_scopes_v1"
 )
 
-// CleanInstance deletes the documents owned by an instance from the search
-// indices. It does nothing when search is not configured.
-func CleanInstance(domain string) error {
+// purgeRate is the number of documents per second deleted from an index by a
+// purge: the indices are shared by all the instances.
+const purgeRate = 1000
+
+// CleanInstance starts deleting the documents owned by an instance from the
+// search indices, in OpenSearch tasks that it does not wait for. It does
+// nothing when search is not configured.
+func CleanInstance(ctx context.Context, domain string) error {
 	client := config.GetConfig().Search
 	if client == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	query := map[string]any{"term": map[string]any{"owner_instance_id": domain}}
+	var errs []error
 	for _, index := range []string{FilesIndex, ScopesIndex} {
-		if err := client.DeleteByQuery(ctx, index, query); err != nil {
-			return err
+		if err := client.DeleteByQuery(ctx, index, query, purgeRate); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

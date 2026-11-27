@@ -38,3 +38,17 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5266#discussion_r4631076331)
 - Why: the indices only hold docs written by the instances of this stack cluster, so a missing owner is a deleted instance whose purge failed; its former members must not keep finding its file names.
 - Scope: `model/search`, `POST /files/search`; drives of other stack clusters wait for the federated search.
+
+## 2026-11-27, [Tech] Search purges a deleted instance after its databases, without retry
+
+- Decision: `Destroy` removes the search documents of an instance after its CouchDB databases are deleted, and a failure is only logged: nothing retries it.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5266#discussion_r4717666580)
+- Why: an index job reads its checkpoint and the changes from CouchDB, so none can write after the purge; and a deletion that fails before the databases keeps the instance with its documents. A failed purge leaves documents that an instance created again with the domain finds, until #5398.
+- Scope: `model/instance/lifecycle`, `model/search/purge`.
+
+## 2026-11-27, [Tech] Search purges in background OpenSearch tasks
+
+- Decision: the purge starts one throttled `_delete_by_query` task per index (1000 documents per second), and does not wait for it.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5266#discussion_r4717669927)
+- Why: a synchronous delete grows with the instance and fails past the 10 s timeout of the client, and it ran unthrottled on indices shared by all the instances; the purge is best effort, so not seeing the failures of the tasks loses little.
+- Scope: `model/search/purge`, `pkg/opensearch`.
