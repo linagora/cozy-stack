@@ -38,3 +38,38 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5266#discussion_r4631076331)
 - Why: the indices only hold docs written by the instances of this stack cluster, so a missing owner is a deleted instance whose purge failed; its former members must not keep finding its file names.
 - Scope: `model/search`, `POST /files/search`; drives of other stack clusters wait for the federated search.
+
+## 2026-11-23, [Architecture] The Stack keeps the SSO uuid of the owner
+
+- Decision: at each OIDC login and app token exchange that the SSO verified for the owner, the Stack keeps the `uuid` claim (the LDAP entryUUID) on the instance as `oidc_uuid`, and names the owner by it in the events it publishes on `activity`.
+- Decided by: agent (session of Théo Poizat, 2026-11-23), to be confirmed by a cozy-stack maintainer.
+- Why: Twake apps name people by uuid in their events (ADR 067 of linagora/twake-adr), and the webhook gateway only delivers by uuid (ADR 075); `oidc_id` holds the `sub`, which differs.
+- Scope: OIDC login, `/auth/token_exchange` with `exchange_type` `app`; admin exchanges are left out, as their token may belong to another member.
+
+## 2026-11-23, [Architecture] One event per file created in a personal drive, off by default
+
+- Decision: with the context setting `drive_activity.file_events`, the Stack publishes `com.twake.drive.file.created.v1` for each file uploaded through `POST /files/:dir-id` in a personal drive, to its owner by uuid; shared drives keep the digest of ADR 010. The events of the personal drive live in `model/driveevent`, apart from the digest of `model/driveactivity`, so that packages the sharings depend on, such as `model/office`, can publish them too.
+- Decided by: agent (session of Théo Poizat, 2026-11-23), to be confirmed by a cozy-stack maintainer.
+- Why: the n8n trigger of Twake Drive needs an event per file, while ADR 010 keeps the volume of a sync out of the bus by default.
+- Scope: the personal drive of an instance, uploads through `/files` only (not copies, notes, office files or sharing replication).
+
+## 2026-11-26, [Architecture] Events for the files updated and deleted in a personal drive
+
+- Decision: with `drive_activity.file_events`, the Stack also publishes `com.twake.drive.file.updated.v1` when the content of a file is replaced through `PUT /files/:file-id` or saved by OnlyOffice, and `com.twake.drive.file.deleted.v1` when a file is moved to the trash through `DELETE /files/:file-id`. The events are published from these request handlers and from the OnlyOffice callback, not from the VFS.
+- Decided by: Théo Poizat, to be confirmed by a cozy-stack maintainer.
+- Why: the digest of shared drives (ADR 010) already counts these changes in the request handlers; the VFS also writes for metadata, sharing replication and moves of instances, which would flood the bus, and it does not know who made the change.
+- Scope: personal drive; renames, moves, folders moved to the trash, notes saved by the notes editor and the sharing replication publish nothing.
+
+## 2026-11-26, [Architecture] An event for each sharing received
+
+- Decision: when an instance receives a sharing request with a shortcut, the one `GET /sharings/news` counts, it publishes `com.twake.drive.share.received.v1` to its owner by uuid, with the sharing id, the id of its shortcut file and no actor, in every context.
+- Decided by: Théo Poizat, to be confirmed by a cozy-stack maintainer.
+- Why: the n8n trigger of Twake Drive starts a workflow on a new sharing; people receive few sharings, so the event needs no setting, and the person who shares is on another instance, whose uuid is unknown here.
+- Scope: Cozy to Cozy sharings and shared drives, on the instance of the recipient.
+
+## 2026-11-26, [Architecture] The updates of a file are grouped per window
+
+- Decision: the first update of a file in a personal drive opens a window of `drive_activity.window` in Redis and schedules a job at its end, which closes the window, publishes one `com.twake.drive.file.updated.v1` with the file as it is then, and fails so that it is tried again when the publish fails; the next updates of the window publish nothing, and neither does content identical to the previous one. Without Redis, each update is published at once.
+- Decided by: Théo Poizat, to be confirmed by a cozy-stack maintainer.
+- Why: a sync or an editor can save a file every few seconds, and each event starts a workflow; the window is the one of the digest of shared drives (ADR 010), so a context sets one delay for both.
+- Scope: `com.twake.drive.file.updated.v1` only; created and deleted happen once per file and stay immediate.

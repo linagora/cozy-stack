@@ -16,7 +16,9 @@ type CloudEvent struct {
 	Time        time.Time `json:"time"`
 	TwakeOrg    string    `json:"twakeorg,omitempty"`
 	TwakeActor  string    `json:"twakeactor,omitempty"`
-	Data        any       `json:"data"`
+	// TwakeActorID is the uuid of the actor (the LDAP entryUUID), when known.
+	TwakeActorID string `json:"twakeactorid,omitempty"`
+	Data         any    `json:"data"`
 }
 
 // NewActivityRequest returns the request publishing a CloudEvent of this type
