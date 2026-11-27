@@ -6,7 +6,7 @@ x-node-image: &node-image node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0
 
 services:
   couchdb:
-    image: couchdb:3.3.3
+    image: couchdb:3.5.3
     profiles:
       - cozy
     restart: "${RESTART_POLICY:-no}"

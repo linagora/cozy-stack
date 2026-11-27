@@ -42,7 +42,7 @@ jobs:
         versions:
           # Maximum supported version
           - go-version: '1.27.x'
-            couchdb-version: '3.3.3'
+            couchdb-version: '3.5.3'
           # Minimum supported version
           - go-version: '1.26.x'
             couchdb-version: '3.2.3'

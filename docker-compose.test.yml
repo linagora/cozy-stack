@@ -24,7 +24,7 @@ services:
         target: /etc/coredns/Corefile
 
   couchdb:
-    image: couchdb:3.3.3
+    image: couchdb:3.5.3
     network_mode: "service:coredns"
     # Every test instance opens tens of databases: with the default soft limit
     # of 1024 open files, CouchDB fails past a few dozen instances
