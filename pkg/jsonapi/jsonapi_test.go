@@ -39,10 +39,16 @@ func TestBindRelationsMalformed(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []couchdb.DocReference{{Type: "io.cozy.photos.albums", ID: "a"}}, refs)
 
-	// An incomplete reference stored by an older version can still be removed.
-	refs, err = BindRelations(httptest.NewRequest(http.MethodDelete, "/", strings.NewReader(`{"data":[{"type":"","id":""}]}`)))
+	// Only the removal binder accepts an explicit incomplete identifier, for a
+	// reference stored by an older version; a null member is still refused.
+	empty := `{"data":[{"type":"","id":""}]}`
+	_, err = BindRelations(httptest.NewRequest(http.MethodDelete, "/", strings.NewReader(empty)))
+	assert.Equal(t, BadJSON(), err)
+	refs, err = BindRelationsToRemove(httptest.NewRequest(http.MethodDelete, "/", strings.NewReader(empty)))
 	assert.NoError(t, err)
 	assert.Equal(t, []couchdb.DocReference{{}}, refs)
+	_, err = BindRelationsToRemove(httptest.NewRequest(http.MethodDelete, "/", strings.NewReader(`{"data":[null]}`)))
+	assert.Equal(t, BadJSON(), err)
 }
 
 func TestJsonapi(t *testing.T) {

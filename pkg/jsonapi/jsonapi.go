@@ -264,7 +264,17 @@ func BindCompound(body io.Reader) ([]*ObjectMarshalling, error) {
 
 // BindRelations extracts a Relationships request ( a list of ResourceIdentifier)
 func BindRelations(req *http.Request) ([]couchdb.DocReference, error) {
-	var out []couchdb.DocReference
+	return bindRelations(req, false)
+}
+
+// BindRelationsToRemove is BindRelations for a handler that removes the given
+// references from a document: it also accepts an identifier with an empty type
+// or id, so that such a reference stored by an older version can be removed.
+func BindRelationsToRemove(req *http.Request) ([]couchdb.DocReference, error) {
+	return bindRelations(req, true)
+}
+
+func bindRelations(req *http.Request, allowIncomplete bool) ([]couchdb.DocReference, error) {
 	decoder := json.NewDecoder(req.Body)
 	var doc Document
 	if err := decoder.Decode(&doc); err != nil {
@@ -277,18 +287,20 @@ func BindRelations(req *http.Request) ([]couchdb.DocReference, error) {
 		return nil, BadJSON()
 	}
 	// Attempt Unmarshaling either as ResourceIdentifier or []ResourceIdentifier
-	if err := json.Unmarshal(*doc.Data, &out); err != nil {
+	var refs []*couchdb.DocReference
+	if err := json.Unmarshal(*doc.Data, &refs); err != nil {
 		var ri couchdb.DocReference
 		if err = json.Unmarshal(*doc.Data, &ri); err != nil {
 			return nil, BadJSON()
 		}
-		out = []couchdb.DocReference{ri}
+		refs = []*couchdb.DocReference{&ri}
 	}
-	// A DELETE can still remove an incomplete reference stored by an older version.
-	for _, ref := range out {
-		if (ref.Type == "" || ref.ID == "") && req.Method != http.MethodDelete {
+	out := make([]couchdb.DocReference, 0, len(refs))
+	for _, ref := range refs {
+		if ref == nil || (!allowIncomplete && (ref.Type == "" || ref.ID == "")) {
 			return nil, BadJSON()
 		}
+		out = append(out, *ref)
 	}
 	return out, nil
 }

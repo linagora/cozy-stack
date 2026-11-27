@@ -3968,8 +3968,21 @@ func TestFiles(t *testing.T) {
 		dir.AddReferencedBy(album, couchdb.DocReference{})
 		require.NoError(t, testInstance.VFS().CreateDir(dir))
 
+		// A token limited to this folder is enough.
+		dirToken, err := testInstance.MakeJWT(consts.ShareAudience, "incomplete-ref", "io.cozy.files", "", time.Now())
+		require.NoError(t, err)
+		rules := permission.Set{permission.Rule{
+			Type:   "io.cozy.files",
+			Verbs:  permission.Verbs(permission.GET, permission.DELETE),
+			Values: []string{dir.ID()},
+		}}
+		expires := time.Now().Add(2 * time.Minute)
+		_, err = permission.CreateShareSet(testInstance, &permission.Permission{Type: "app", Permissions: rules},
+			"", map[string]string{"incomplete-ref": dirToken}, nil, permission.Permission{Permissions: rules}, &expires, false)
+		require.NoError(t, err)
+
 		e.DELETE("/files/"+dir.ID()+"/relationships/referenced_by").
-			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Authorization", "Bearer "+dirToken).
 			WithJSON(echo.Map{"data": []couchdb.DocReference{{}}}).
 			Expect().Status(http.StatusOK)
 		dir, err = testInstance.VFS().DirByID(dir.ID())

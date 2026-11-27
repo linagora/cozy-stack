@@ -103,12 +103,12 @@ func RemoveReferencedHandler(c echo.Context) error {
 		return WrapVfsError(err)
 	}
 
-	err = checkPerm(c, permission.DELETE, nil, file)
+	err = checkPerm(c, permission.DELETE, dir, file)
 	if err != nil {
 		return err
 	}
 
-	references, err := jsonapi.BindRelations(c.Request())
+	references, err := jsonapi.BindRelationsToRemove(c.Request())
 	if err != nil {
 		return WrapVfsError(err)
 	}

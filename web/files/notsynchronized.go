@@ -62,7 +62,7 @@ func RemoveNotSynchronizedOn(c echo.Context) error {
 		return err
 	}
 
-	references, err := jsonapi.BindRelations(c.Request())
+	references, err := jsonapi.BindRelationsToRemove(c.Request())
 	if err != nil {
 		return WrapVfsError(err)
 	}
