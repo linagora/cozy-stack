@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"bytes"
+	"io"
 	"sort"
 	"testing"
 	"time"
@@ -65,6 +67,16 @@ func TestRedisCache(t *testing.T) {
 				// Check that the pair is no more available
 				_, ok = c.Get(key)
 				assert.False(t, ok)
+			})
+
+			t.Run("SetCompressed/GetCompressed", func(t *testing.T) {
+				val := bytes.Repeat([]byte("compressed asset "), 1000)
+				c.SetCompressed("compressed", val, time.Minute)
+				r, ok := c.GetCompressed("compressed")
+				require.True(t, ok)
+				actual, err := io.ReadAll(r)
+				require.NoError(t, err)
+				assert.Equal(t, val, actual)
 			})
 
 			t.Run("Keys", func(t *testing.T) {
