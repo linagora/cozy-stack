@@ -18,9 +18,14 @@ type Error struct {
 	Status int
 	Type   string
 	Reason string
+	// DocID is set when the error is about one document of a bulk request.
+	DocID string
 }
 
 func (e *Error) Error() string {
+	if e.DocID != "" {
+		return fmt.Sprintf("opensearch: %d %s on %s: %s", e.Status, e.Type, e.DocID, e.Reason)
+	}
 	return fmt.Sprintf("opensearch: %d %s: %s", e.Status, e.Type, e.Reason)
 }
 
@@ -64,8 +69,9 @@ func (c *Client) CreateIndex(ctx context.Context, name string, body any) error {
 }
 
 // Bulk sends NDJSON actions to an index. The action lines must not set
-// _index. OpenSearch answers 200 even when some actions fail, so the first
-// failed action is returned as an error.
+// _index. OpenSearch answers 200 even when some actions fail, so a failed
+// action is returned as an error: one that can be retried (429 or 5xx) if
+// there is one, else the first one.
 func (c *Client) Bulk(ctx context.Context, index string, ndjson []byte) error {
 	var res struct {
 		Errors bool                        `json:"errors"`
@@ -78,17 +84,29 @@ func (c *Client) Bulk(ctx context.Context, index string, ndjson []byte) error {
 	if !res.Errors {
 		return nil
 	}
+	var first *Error
 	for _, item := range res.Items {
 		for _, r := range item {
-			if r.Error != nil {
-				return &Error{Status: r.Status, Type: r.Error.Type, Reason: r.Error.Reason}
+			if r.Error == nil {
+				continue
+			}
+			err := &Error{Status: r.Status, Type: r.Error.Type, Reason: r.Error.Reason, DocID: r.ID}
+			if r.Status == http.StatusTooManyRequests || r.Status >= 500 {
+				return err
+			}
+			if first == nil {
+				first = err
 			}
 		}
+	}
+	if first != nil {
+		return first
 	}
 	return &Error{Status: http.StatusInternalServerError, Reason: "bulk failed"}
 }
 
 type bulkItemResult struct {
+	ID     string     `json:"_id"`
 	Status int        `json:"status"`
 	Error  *errorBody `json:"error"`
 }

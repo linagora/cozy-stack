@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,6 +34,7 @@ func TestIndicesWithOpenSearch(t *testing.T) {
 	v.Set("search.opensearch.index_prefix", fmt.Sprintf("test-%d", time.Now().UnixNano()))
 	require.NoError(t, config.UseViper(v))
 	client := config.GetConfig().Search
+	deleteTestIndices(t, url, client)
 	ctx := context.Background()
 
 	require.NoError(t, EnsureIndices(ctx, client))
@@ -69,4 +73,20 @@ func TestIndicesWithOpenSearch(t *testing.T) {
 	assert.Equal(t, 1, count("QUART"))
 	assert.Equal(t, 0, count("zzz"))
 	assert.Equal(t, 0, count("invoice"))
+}
+
+// deleteTestIndices deletes the indices of a test client at the end of the
+// test, so that they do not pile up on a local OpenSearch.
+func deleteTestIndices(t *testing.T, osURL string, client *opensearch.Client) {
+	t.Cleanup(func() {
+		for _, name := range []string{FilesIndex, ScopesIndex} {
+			u, err := url.JoinPath(osURL, client.IndexName(name))
+			require.NoError(t, err)
+			req, err := http.NewRequest(http.MethodDelete, u, nil)
+			require.NoError(t, err)
+			res, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			res.Body.Close()
+		}
+	})
 }
