@@ -128,12 +128,19 @@ func TestAdmin(t *testing.T) {
 			require.NoError(t, client.Search(ctx, FilesIndex, q, &res))
 			return len(res.Hits.Hits)
 		}
+		sharingsSeq := func() string {
+			cp, err := couchdb.LoadCheckpoint(inst, consts.Sharings, sharingsCheckpointDocID)
+			require.NoError(t, err)
+			return cp.LastSeq
+		}
+		require.NotEmpty(t, sharingsSeq())
 		pushes = 0
 		require.NoError(t, Reset(ctx, inst))
 		assert.Equal(t, 1, pushes)
 		status, err := GetStatus(inst)
 		require.NoError(t, err)
 		assert.Empty(t, status.LastSeq)
+		assert.Empty(t, sharingsSeq(), "the scope docs are rebuilt from the sharings feed")
 		require.Eventually(t, func() bool { return count() == 0 }, 10*time.Second, 200*time.Millisecond)
 
 		// The job pushed by the reset

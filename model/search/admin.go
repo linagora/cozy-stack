@@ -40,8 +40,8 @@ func Enable(ctx context.Context, inst *instance.Instance) error {
 	return pushJob(inst)
 }
 
-// Reset drops the documents and the checkpoint of an instance, and pushes a
-// job to index it again.
+// Reset drops the documents of an instance (files and scopes of its drives)
+// and its checkpoints, and pushes a job to index it again.
 func Reset(ctx context.Context, inst *instance.Instance) error {
 	client := config.GetConfig().Search
 	if client == nil {
@@ -56,7 +56,7 @@ func Reset(ctx context.Context, inst *instance.Instance) error {
 	return pushJob(inst)
 }
 
-// dropIndexed drops the checkpoint of an instance, then starts the purge of
+// dropIndexed drops the checkpoints of an instance, then starts the purge of
 // its documents, under the index lock: even after a purge that fails, in part
 // or in full, the next job indexes the instance again.
 func dropIndexed(ctx context.Context, inst *instance.Instance) error {
@@ -66,6 +66,10 @@ func dropIndexed(ctx context.Context, inst *instance.Instance) error {
 	}
 	defer mu.Unlock()
 	if err := couchdb.DeleteCheckpoint(inst, consts.Files, checkpointDocID); err != nil {
+		return err
+	}
+	// The scope docs are rebuilt from the sharings feed
+	if err := couchdb.DeleteCheckpoint(inst, consts.Sharings, sharingsCheckpointDocID); err != nil {
 		return err
 	}
 	return purge.CleanInstance(ctx, inst.Domain)
