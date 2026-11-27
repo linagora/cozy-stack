@@ -8,6 +8,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/text/unicode/norm"
 )
 
 const domain = "alice.example.net"
@@ -74,6 +75,15 @@ func TestNewFileDocument(t *testing.T) {
 		assert.JSONEq(t, `{"resource_key":"alice.example.net:d2","owner_instance_id":"alice.example.net",
 			"doc_id":"d2","dir_id":"io.cozy.files.root-dir","scoped_dir_key":"alice.example.net:d2",
 			"type":"directory","name":"Old","trashed":false}`, string(data))
+	})
+
+	t.Run("a decomposed name is indexed composed", func(t *testing.T) {
+		stored := norm.NFD.String("Résumé 회의록.txt")
+		fd, ok := NewFileDocument(domain, couchdb.JSONDoc{M: with(file, "name", stored)})
+		require.True(t, ok)
+		assert.Equal(t, "Résumé 회의록.txt", fd.Name)
+		assert.NotEqual(t, stored, fd.Name)
+		assert.Equal(t, stored, fd.DisplayName)
 	})
 
 	trashed := []struct {

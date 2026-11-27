@@ -60,6 +60,13 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Why: a recipient must find the files shared with them, and the parent folder of that file is not shared, so its folder key cannot be used.
 - Scope: `model/search`, the `share_scopes_v1` and `files_v1` indices.
 
+## 2026-11-26, [Product] Search indexes the names composed (NFC)
+
+- Decision: the stack composes (NFC) the names before indexing them and the queries before sending them, and keeps a name stored decomposed (NFD) in `display_name`, which the hits return. Replaces "Search does not fold names stored in NFD yet".
+- Decided by: Anton Shepilov (author), #5394
+- Why: NFC composes every script, Hangul and kana included, where dropping the combining marks in the char filter only covers some; the ICU plugin would be a new requirement on the OpenSearch cluster; and the hits keep the name as stored.
+- Scope: `model/search`, the `files_v1` index.
+
 ## 2026-11-27, [Tech] Search purges a deleted instance after its databases, without retry
 
 - Decision: `Destroy` removes the search documents of an instance after its CouchDB databases are deleted, and a failure is only logged: nothing retries it.

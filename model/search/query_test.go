@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/text/unicode/norm"
 )
 
 func TestBuildQuery(t *testing.T) {
@@ -269,10 +270,16 @@ func TestSearchWithOpenSearch(t *testing.T) {
 	})
 
 	t.Run("accents and other scripts", func(t *testing.T) {
+		// Names stored decomposed (NFD), as macOS often writes them
+		chaine := norm.NFD.String("Chaîne de valeur.txt")
+		journal := norm.NFD.String("Ημερολόγιο ταξιδιού.txt")
+		newFile := norm.NFD.String("Новый файл.txt")
+		minutes := norm.NFD.String("회의록.txt")
+		saida := norm.NFD.String("Saïda.txt")
 		for _, name := range []string{
 			"Отчёт за квартал.pdf", "Straße Plan.txt", "Ελληνικές σημειώσεις.txt",
 			"会议记录.docx", "تقرير سنوي.pdf", "Çalışma raporu.txt", "naïve café.txt",
-			"Ærøskøbing kort.png",
+			"Ærøskøbing kort.png", chaine, journal, newFile, minutes, saida,
 		} {
 			createTextFile(t, caller, consts.RootDirID, name)
 		}
@@ -290,6 +297,14 @@ func TestSearchWithOpenSearch(t *testing.T) {
 			"cafe":        "naïve café.txt",
 			"aeroskobing": "Ærøskøbing kort.png",
 			"ae":          "Ærøskøbing kort.png",
+			"chaine":      chaine,
+			"chaîne":      chaine,
+			"ημερολογιο":  journal,
+			"файл":        newFile,
+			"회의록":         minutes,
+			"saida":       saida,
+			// A query pasted decomposed: Hangul jamo never match the syllables
+			norm.NFD.String("회의록"): minutes,
 		} {
 			var res *Results
 			require.Eventually(t, func() bool {

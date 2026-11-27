@@ -7,6 +7,7 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"golang.org/x/text/unicode/norm"
 )
 
 // FileDocument is a file or folder in the files_v1 index. It has no path
@@ -18,11 +19,14 @@ type FileDocument struct {
 	DirID           string `json:"dir_id"`
 	ScopedDirKey    string `json:"scoped_dir_key"`
 	Type            string `json:"type"`
-	Name            string `json:"name"`
-	Mime            string `json:"mime,omitempty"`
-	Class           string `json:"class,omitempty"`
-	UpdatedAt       string `json:"updated_at,omitempty"`
-	Trashed         bool   `json:"trashed"`
+	// Name is composed (NFC), as the queries; DisplayName is the name as
+	// stored, when it is not composed.
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+	Mime        string `json:"mime,omitempty"`
+	Class       string `json:"class,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+	Trashed     bool   `json:"trashed"`
 }
 
 // Key returns the key of a document of an instance in the search indices.
@@ -49,10 +53,13 @@ func NewFileDocument(domain string, doc couchdb.JSONDoc) (*FileDocument, bool) {
 		DocID:           id,
 		DirID:           str("dir_id"),
 		Type:            str("type"),
-		Name:            str("name"),
+		Name:            norm.NFC.String(str("name")),
 		Mime:            str("mime"),
 		Class:           str("class"),
 		UpdatedAt:       str("updated_at"),
+	}
+	if fd.Name != str("name") {
+		fd.DisplayName = str("name")
 	}
 	if fd.Type != consts.FileType && fd.Type != consts.DirType {
 		return nil, false
