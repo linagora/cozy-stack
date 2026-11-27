@@ -220,25 +220,20 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 	trashedInDrive := func(restorePath string) bool {
 		return restorePath == dir.Fullpath || strings.HasPrefix(restorePath, dir.Fullpath+"/")
 	}
-	// fileInDrive tells if the parent of a file is in the drive now. A file
-	// has no path in the events, and the path of the root follows them, so
-	// both are read again.
+	// The old and new versions of a file often have the same parent: it is
+	// checked once for each event
+	var checkedID string
+	var checkedIn bool
 	fileInDrive := func(dirID string) bool {
-		if dirID == dir.DocID {
-			return true
+		if dirID == checkedID {
+			return checkedIn
 		}
-		indexer := inst.VFS().GetIndexer()
-		parent, err := indexer.DirByID(dirID)
+		in, err := parentsReach(inst.VFS().GetIndexer(), dir.DocID, dirID)
 		if err != nil {
-			log.Warnf("filterMapEvents: failed to get parent dir %s: %s", dirID, err)
-			return false
+			log.Warnf("filterMapEvents: failed to get the parents of dir %s: %s", dirID, err)
 		}
-		root, err := indexer.DirByID(dir.DocID)
-		if err != nil {
-			log.Warnf("filterMapEvents: cannot read the root of sharing %s: %s", s.SID, err)
-			return false
-		}
-		return strings.HasPrefix(parent.Fullpath+"/", root.Fullpath+"/")
+		checkedID, checkedIn = dirID, in
+		return in
 	}
 	testPath := func(doc realtime.Doc) bool {
 		if d, ok := doc.(*vfs.DirDoc); ok {
@@ -305,6 +300,7 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 	// The path of the root follows the events, and not the database, as they
 	// can wait behind other moves.
 	match := func(e *realtime.Event) *realtime.Event {
+		checkedID, checkedIn = "", false
 		if e.Doc.ID() == dir.DocID {
 			if p, _ := folderPlace(e.Doc); p != "" {
 				dir.Fullpath = p
@@ -330,6 +326,26 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 	}
 
 	forwardEvents(ctx, ds, ch, match)
+}
+
+// parentsReach tells if rootID is dirID or one of its parents. It follows the
+// IDs, which stay the same while a folder moves, unlike the paths.
+func parentsReach(fs vfs.Indexer, rootID, dirID string) (bool, error) {
+	// A loop in a broken tree must not block the events
+	for depth := 0; depth < 256; depth++ {
+		switch dirID {
+		case rootID:
+			return true, nil
+		case "", consts.RootDirID, consts.TrashDirID:
+			return false, nil
+		}
+		parent, err := fs.DirByID(dirID)
+		if err != nil {
+			return false, err
+		}
+		dirID = parent.DirID
+	}
+	return false, nil
 }
 
 // folderPlace gives the path and the parent of a folder in an event.

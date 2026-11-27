@@ -346,24 +346,35 @@ func TestDriveRealtimeWhileTheRootMoves(t *testing.T) {
 	require.NoError(t, err)
 	private, err := fs.DirByPath("/Private")
 	require.NoError(t, err)
+	report, err := vfs.NewFileDoc("report.txt", meetings.ID(), -1, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+	require.NoError(t, err)
+	f, err := fs.CreateFile(report, nil)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 	s := &sharing.Sharing{
 		Drive: true,
 		Rules: []sharing.Rule{{DocType: consts.Files, Values: []string{root.ID()}}},
 	}
 
+	// moved gives the event of a folder after the move
+	moved := func(t *testing.T, doc *vfs.DirDoc) *realtime.Event {
+		t.Helper()
+		newDoc, err := fs.DirByID(doc.ID())
+		require.NoError(t, err)
+		return &realtime.Event{Verb: realtime.EventUpdate, Doc: newDoc, OldDoc: doc}
+	}
+
 	// watch connects a member before the move, and gives what it receives for
-	// the move of each document, in order
-	watch := func(t *testing.T) func(doc *vfs.DirDoc) *wsResponse {
+	// each event, in order
+	watch := func(t *testing.T) func(e *realtime.Event) *wsResponse {
 		ds := &realtime.Subscriber{Channel: make(realtime.EventsChan, 1)}
 		ch := make(chan *wsResponse)
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		go filterMapEvents(ctx, ds, ch, inst, s)
-		return func(doc *vfs.DirDoc) *wsResponse {
+		return func(e *realtime.Event) *wsResponse {
 			t.Helper()
-			moved, err := fs.DirByID(doc.ID())
-			require.NoError(t, err)
-			ds.Channel <- &realtime.Event{Verb: realtime.EventUpdate, Doc: moved, OldDoc: doc}
+			ds.Channel <- e
 			select {
 			case res := <-ch:
 				return res
@@ -377,7 +388,7 @@ func TestDriveRealtimeWhileTheRootMoves(t *testing.T) {
 	t.Run("FolderLeavingTheDrive", func(t *testing.T) {
 		send := watch(t)
 		require.NoError(t, fs.GetIndexer().MoveDir(out.Fullpath, "/Private/Out"))
-		assert.Equal(t, realtime.EventDelete, send(inner).Event)
+		assert.Equal(t, realtime.EventDelete, send(moved(t, inner)).Event)
 
 		moved := out.Clone().(*vfs.DirDoc)
 		moved.Fullpath, moved.DirID = "/Private/Out", private.ID()
@@ -389,10 +400,17 @@ func TestDriveRealtimeWhileTheRootMoves(t *testing.T) {
 		require.NoError(t, fs.GetIndexer().MoveDir(root.Fullpath, "/Private/Renamed"))
 		// In the order of MoveDir
 		for _, doc := range []*vfs.DirDoc{meetings, draft} {
-			res := send(doc)
+			res := send(moved(t, doc))
 			assert.Equal(t, realtime.EventUpdate, res.Event)
 			assert.Equal(t, strings.Replace(doc.Fullpath, "/Private/Team", "/Renamed", 1), res.Payload.Doc.(*vfs.DirDoc).Fullpath)
 		}
+
+		// A file changed before the move, with its parent already moved
+		file, err := fs.FileByID(report.ID())
+		require.NoError(t, err)
+		res := send(&realtime.Event{Verb: realtime.EventUpdate, Doc: file, OldDoc: file})
+		assert.Equal(t, realtime.EventUpdate, res.Event)
+		assert.Equal(t, report.ID(), res.Payload.ID)
 	})
 }
 
