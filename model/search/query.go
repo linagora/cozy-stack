@@ -37,7 +37,6 @@ var ErrInvalidCursor = errors.New("search: invalid cursor")
 // SearchHit is a file or folder found by a search.
 type SearchHit struct {
 	Hit
-	DocID     string
 	Type      string
 	Name      string
 	Mime      string
@@ -104,8 +103,8 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 	for _, h := range res.Hits.Hits {
 		doc := h.Source
 		hit := SearchHit{
-			Hit:   Hit{OwnerInstanceID: doc.OwnerInstanceID, DirID: doc.DirID},
-			DocID: doc.DocID, Type: doc.Type, Name: doc.Name, Mime: doc.Mime, Class: doc.Class, UpdatedAt: doc.UpdatedAt,
+			Hit:  Hit{OwnerInstanceID: doc.OwnerInstanceID, DocID: doc.DocID, DirID: doc.DirID},
+			Type: doc.Type, Name: doc.Name, Mime: doc.Mime, Class: doc.Class, UpdatedAt: doc.UpdatedAt,
 		}
 		if doc.OwnerInstanceID != caller.Domain {
 			hit.DriveID = driveByKey[doc.ScopedDirKey]

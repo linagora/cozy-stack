@@ -196,8 +196,8 @@ func TestSearchWithOpenSearch(t *testing.T) {
 	require.Contains(t, found, "budget report.txt")
 	require.Contains(t, found, "team report.txt")
 	assert.Equal(t, SearchHit{
-		Hit:   Hit{OwnerInstanceID: caller.Domain, DirID: consts.RootDirID},
-		DocID: own.ID(), Type: "file", Name: "budget report.txt", Mime: "text/plain", Class: "text",
+		Hit:  Hit{OwnerInstanceID: caller.Domain, DocID: own.ID(), DirID: consts.RootDirID},
+		Type: "file", Name: "budget report.txt", Mime: "text/plain", Class: "text",
 		UpdatedAt: found["budget report.txt"].UpdatedAt,
 	}, found["budget report.txt"])
 	assert.Equal(t, "drive-member", found["team report.txt"].DriveID)
