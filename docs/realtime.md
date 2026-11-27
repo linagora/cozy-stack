@@ -98,6 +98,9 @@ document in case of `UPDATED` or `DELETED`.
 With a sharing token, such as a public link, the `path` and `restore_path` of
 the files start at the shared folder, as on the files routes, and are left out
 when the document is no longer under it, even in the trash.
+While the shared folder itself is renamed or moved, the events of its
+subfolders can come before it is saved, and then have no path, or one that
+starts at an outer shared folder.
 
 ## Synthetic types
 

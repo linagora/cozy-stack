@@ -161,4 +161,26 @@ func TestLinkPathsRewrite(t *testing.T) {
 		// Only the event of Draft comes, as for a subscription to it alone
 		assert.Equal(t, "/Renamed/Draft", o.rewrite(draft).(*vfs.DirDoc).Fullpath)
 	})
+
+	t.Run("RootNameReused", func(t *testing.T) {
+		draft, err := vfs.MkdirAll(fs, "/Office/Planning/Draft")
+		require.NoError(t, err)
+		inner, err := vfs.MkdirAll(fs, "/Office/Docs")
+		require.NoError(t, err)
+		office, err := fs.DirByPath("/Office")
+		require.NoError(t, err)
+		planning, err := fs.DirByPath("/Office/Planning")
+		require.NoError(t, err)
+		r := readLink(t, inner.ID(), office.ID())
+
+		// No event comes for Docs, as the subscription watches Draft only
+		archive, reused := "Archive", "Docs"
+		_, err = vfs.ModifyDirMetadata(fs, inner, &vfs.DocPatch{Name: &archive})
+		require.NoError(t, err)
+		_, err = vfs.ModifyDirMetadata(fs, planning, &vfs.DocPatch{Name: &reused})
+		require.NoError(t, err)
+		draft, err = fs.DirByID(draft.ID())
+		require.NoError(t, err)
+		assert.Equal(t, "/Office/Docs/Draft", r.rewrite(draft).(*vfs.DirDoc).Fullpath)
+	})
 }
