@@ -802,6 +802,32 @@ func TestPermissions(t *testing.T) {
 		perms.Path("$.otherperm.type").String().Equal("io.cozy.contacts")
 	})
 
+	t.Run("PatchReplaceRule", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+
+		id, _, err := createTestSubPermissions(e, token, "paul")
+		require.NoError(t, err)
+
+		// A rule with the title of an existing one replaces it: the response
+		// must not have the title twice.
+		body := e.PATCH("/permissions/"+id).
+			WithHeader("Authorization", "Bearer "+token).
+			WithHeader("Content-Type", "application/json").
+			WithBytes([]byte(`{"data": {"attributes": {"permissions": {
+				"whatever": {"type": "io.cozy.contacts", "verbs": ["GET"]}
+			}}}}`)).
+			Expect().Status(200).
+			Body().Raw()
+		assert.Equal(t, 1, strings.Count(body, `"whatever":`), body)
+
+		obj := e.GET("/permissions/"+id).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+		obj.Path("$.data.attributes.permissions.whatever.type").String().Equal("io.cozy.contacts")
+	})
+
 	t.Run("PatchRemoveRule", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 
