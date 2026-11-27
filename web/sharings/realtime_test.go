@@ -420,6 +420,11 @@ func TestDriveRealtimeQueuedMoves(t *testing.T) {
 	require.NoError(t, err)
 	private, err := fs.DirByPath("/Private")
 	require.NoError(t, err)
+	report, err := vfs.NewFileDoc("report.txt", meetings.ID(), -1, nil, "text/plain", "text", time.Now(), false, false, false, nil)
+	require.NoError(t, err)
+	f, err := fs.CreateFile(report, nil)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 	s := &sharing.Sharing{
 		Drive: true,
 		Rules: []sharing.Rule{{DocType: consts.Files, Values: []string{root.ID()}}},
@@ -431,7 +436,19 @@ func TestDriveRealtimeQueuedMoves(t *testing.T) {
 	ch := make(chan *wsResponse)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go filterMapEvents(ctx, ds, ch, inst, s)
+	// As through Redis, the documents keep only their JSON: a file has no path
+	redis := &realtime.Subscriber{Channel: make(realtime.EventsChan, 100)}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e := <-ds.Channel:
+				redis.Channel <- &realtime.Event{Verb: e.Verb, Doc: asRedisDoc(e.Doc), OldDoc: asRedisDoc(e.OldDoc)}
+			}
+		}
+	}()
+	go filterMapEvents(ctx, redis, ch, inst, s)
 
 	// drain gives the events forwarded after the writer has waited on the event
 	// of a new folder while the owner made the changes
@@ -448,8 +465,8 @@ func TestDriveRealtimeQueuedMoves(t *testing.T) {
 				require.NoError(t, err)
 				assert.NotContains(t, string(body), "Private")
 				got := res.Event
-				if d, ok := res.Payload.Doc.(*vfs.DirDoc); ok && res.Event != realtime.EventDelete {
-					got = d.Fullpath
+				if p, _ := res.Payload.Doc.(*realtime.JSONDoc).M["path"].(string); p != "" {
+					got = p
 				}
 				received[res.Payload.ID] = append(received[res.Payload.ID], got)
 			case <-time.After(time.Second):
@@ -475,10 +492,30 @@ func TestDriveRealtimeQueuedMoves(t *testing.T) {
 				require.NoError(t, err)
 				_, err = vfs.ModifyDirMetadata(fs, current, &vfs.DocPatch{Name: &name})
 				require.NoError(t, err)
+				if name == "Spring" {
+					// A file changed between the two renames
+					doc, err := fs.FileByID(report.ID())
+					require.NoError(t, err)
+					tags := []string{"reviewed"}
+					_, err = vfs.ModifyFileMetadata(fs, doc, &vfs.DocPatch{Tags: &tags})
+					require.NoError(t, err)
+				}
 			}
 		})
+		assert.Equal(t, []string{realtime.EventUpdate}, received[report.ID()])
 		assert.Equal(t, []string{"/Spring/Meetings", "/Summer/Meetings"}, received[meetings.ID()])
 		assert.Equal(t, []string{"/Spring/Meetings/Draft", "/Summer/Meetings/Draft"}, received[draft.ID()])
 		assert.Equal(t, []string{"/Spring", "/Summer"}, received[root.ID()])
 	})
+}
+
+func asRedisDoc(doc realtime.Doc) realtime.Doc {
+	if doc == nil {
+		return nil
+	}
+	m := map[string]interface{}{}
+	if buf, err := json.Marshal(doc); err == nil {
+		_ = json.Unmarshal(buf, &m)
+	}
+	return &realtime.JSONDoc{Type: doc.DocType(), M: m}
 }

@@ -220,6 +220,26 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 	trashedInDrive := func(restorePath string) bool {
 		return restorePath == dir.Fullpath || strings.HasPrefix(restorePath, dir.Fullpath+"/")
 	}
+	// fileInDrive tells if the parent of a file is in the drive now. A file
+	// has no path in the events, and the path of the root follows them, so
+	// both are read again.
+	fileInDrive := func(dirID string) bool {
+		if dirID == dir.DocID {
+			return true
+		}
+		indexer := inst.VFS().GetIndexer()
+		parent, err := indexer.DirByID(dirID)
+		if err != nil {
+			log.Warnf("filterMapEvents: failed to get parent dir %s: %s", dirID, err)
+			return false
+		}
+		root, err := indexer.DirByID(dir.DocID)
+		if err != nil {
+			log.Warnf("filterMapEvents: cannot read the root of sharing %s: %s", s.SID, err)
+			return false
+		}
+		return strings.HasPrefix(parent.Fullpath+"/", root.Fullpath+"/")
+	}
 	testPath := func(doc realtime.Doc) bool {
 		if d, ok := doc.(*vfs.DirDoc); ok {
 			return strings.HasPrefix(d.Fullpath, dir.Fullpath+"/")
@@ -228,11 +248,7 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 			if f.Trashed {
 				return trashedInDrive(f.RestorePath)
 			}
-			p, err := f.Path(inst.VFS())
-			if err != nil {
-				return false
-			}
-			return strings.HasPrefix(p, dir.Fullpath+"/")
+			return fileInDrive(f.DirID)
 		}
 		// Handle realtime.JSONDoc (happens when events come through Redis in multi-stack)
 		if j, ok := doc.(*realtime.JSONDoc); ok {
@@ -250,14 +266,7 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 				log.Warnf("filterMapEvents: failed to get dir_id in event doc with id:%s", doc.ID())
 				return false
 			}
-			parentDir, err := inst.VFS().DirByID(dirID)
-			if err != nil {
-				log.Warnf("filterMapEvents: failed to get parent dir %s: %s", dirID, err)
-				return false
-			}
-			name, _ := j.M["name"].(string)
-			filePath := parentDir.Fullpath + "/" + name
-			return strings.HasPrefix(filePath, dir.Fullpath+"/")
+			return fileInDrive(dirID)
 		}
 		return false
 	}
