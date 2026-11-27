@@ -3,6 +3,7 @@ package sharing
 import (
 	"testing"
 
+	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/consts"
 
@@ -60,4 +61,11 @@ func TestPreviewDrivePathRoot(t *testing.T) {
 	if assert.NotNil(t, s.visibleRootID) {
 		assert.Equal(t, "nested", *s.visibleRootID)
 	}
+}
+
+func TestNoDriveRootReadWithoutPath(t *testing.T) {
+	s := &Sharing{Drive: true}
+	s.LoadDriveRootPathOnUse(&instance.Instance{Domain: "member.example.net"})
+	assert.Empty(t, s.DriveRelativePath(""))
+	assert.False(t, s.driveRootLoaded)
 }

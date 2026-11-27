@@ -289,6 +289,10 @@ func (s *Sharing) driveRoot() string {
 // drive root. A path outside of the drive, or any path when the root has not
 // been loaded, gives an empty string.
 func (s *Sharing) DriveRelativePath(p string) string {
+	// The responses with no path do not read the root
+	if p == "" {
+		return ""
+	}
 	root := s.driveRoot()
 	if root == "" {
 		return ""
