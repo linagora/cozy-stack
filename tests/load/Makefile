@@ -117,6 +117,9 @@ help:
 	@echo "make upload-capacity BASE_URL=https://... FILE_SIZE=10M"
 	@echo "make upload-regression BASE_URL=https://... VUS=2 ITERATIONS_PER_VU=5"
 	@echo "make mixed-capacity MIXED_DOMAIN=... CAPACITY_MAX=8  The highest workflow rate a tree fixture sustains"
+	@echo "make search-up | make search-down             Restart the local Stack with or without OpenSearch"
+	@echo "make search-load-prepare ACTORS_DOMAIN=...     Build the search fixture: drives shared with an organization"
+	@echo "make search-load ACTORS_DOMAIN=... SEARCH_RATE=5  Search load at a fixed rate per drive count"
 	@echo "make status | make logs | make down"
 
 doctor:
@@ -294,6 +297,47 @@ mixed-capacity: MIXED_PROFILE := capacity
 mixed-workload mixed-soak mixed-capacity: $(NODE_MODULES_MARKER)
 	@MIXED_PROFILE="$(MIXED_PROFILE)" MIXED_WARMUP="$(MIXED_WARMUP)" MIXED_DRAIN="$(MIXED_DRAIN)" SOAK_TRIAL="$(SOAK_TRIAL)" SOAK_MAX_GOROUTINE_GROWTH="$(SOAK_MAX_GOROUTINE_GROWTH)" SOAK_MAX_HEAP_GROWTH="$(SOAK_MAX_HEAP_GROWTH)" MIXED_DOMAIN="$(MIXED_DOMAIN)" MIXED_RATE="$(MIXED_RATE)" MIXED_DURATION="$(MIXED_DURATION)" MIXED_MAX_VUS="$(MIXED_MAX_VUS)" MIXED_OBSERVERS="$(MIXED_OBSERVERS)" MIN_SUCCESS_RATE="$(MIN_SUCCESS_RATE)" P95_LIMIT_MS="$(P95_LIMIT_MS)" MAX_VUS="$(MAX_VUS)" MAX_REQUESTS="$(MAX_REQUESTS)" MAX_UPLOAD_BYTES="$(MAX_UPLOAD_BYTES)" MAX_RUNTIME="$(MAX_RUNTIME)" LOAD_TARGET="$(LOAD_TARGET)" EXECUTION_ID="$(EXECUTION_ID)" \
 		$(RECORD_EXIT) $(if $(filter dev,$(LOAD_TARGET)),bash campaigns/lib/shared-dev-lock.sh "$(DEV_LOCK_FILE)") node --import tsx src/scripts/mixed-campaign.ts
+
+# The search load test (README, Search load test): search-up restarts the Stack with OpenSearch,
+# search-load-prepare builds drives for an organization fixture once, search-load searches as its
+# members at a fixed rate per drive count, and search-down restarts the Stack without search.
+SEARCH_SETTINGS := SEARCH_LEVELS SEARCH_USERS_PER_LEVEL SEARCH_FILES_PER_DRIVE SEARCH_OWN_FILES SEARCH_BIG_DRIVE_FOLDERS SEARCH_SETTLE_MS
+$(foreach setting,$(SEARCH_SETTINGS),$(if $(filter undefined,$(origin $(setting))),,$(eval export $(setting))))
+SEARCH_COMPOSE := $(COZY_COMPOSE) -f compose.yaml -f compose.search.yaml
+SEARCH_RATE ?= 5
+SEARCH_DURATION ?= 1m
+SEARCH_MAX_VUS ?= 50
+
+.PHONY: search-up search-down search-load-prepare search-load search-load-run
+search-up:
+	@$(SEARCH_COMPOSE) up -d --build --wait couchdb redis rabbitmq opensearch cozy-stack
+
+search-down:
+	@$(COZY_COMPOSE) up -d --wait cozy-stack
+	@$(SEARCH_COMPOSE) stop opensearch
+
+search-load-prepare: $(NODE_MODULES_MARKER)
+	@node --import tsx src/scripts/search-load.ts prepare
+
+search-load: $(NODE_MODULES_MARKER)
+	@EXECUTION_ID="$(EXECUTION_ID)" node --import tsx src/scripts/search-load.ts run
+
+# SEARCH_USERS holds the members' tokens: passed from the environment, never on the command line.
+search-load-run: observability-up
+	@mkdir -p data/results
+	@$(SEARCH_COMPOSE) run --rm \
+		-e ACTOR_HOSTS="$(ACTOR_HOSTS)" \
+		-e SEARCH_USERS \
+		-e SEARCH_RATE="$(SEARCH_RATE)" \
+		-e SEARCH_DURATION="$(SEARCH_DURATION)" \
+		-e SEARCH_MAX_VUS="$(SEARCH_MAX_VUS)" \
+		-e EXECUTION_ID="$(EXECUTION_ID)" \
+		k6 run -o experimental-prometheus-rw \
+		--tag executionid="$(EXECUTION_ID)" \
+		--tag load_target=local \
+		--tag mode=search \
+		--tag topology="$(LOAD_TOPOLOGY)" \
+		/scripts/search-load.ts
 
 # The shared-drive ramp through the campaign runner: LOAD_TARGET=dev holds the shared DEV lock, as for
 # uploads. The runner creates or reuses the test drive itself.
