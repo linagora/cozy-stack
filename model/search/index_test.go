@@ -159,7 +159,8 @@ func TestIndex(t *testing.T) {
 			answer string
 		}{
 			{"a 503 on the request", http.StatusServiceUnavailable, `{"error":{"type":"unavailable","reason":"down"},"status":503}`},
-			{"a 4xx on the request", http.StatusBadRequest, `{"error":{"type":"illegal_argument_exception","reason":"bad"},"status":400}`},
+			// A refused type, but for the request, not a document: no DocID
+			{"a 4xx on the request", http.StatusBadRequest, `{"error":{"type":"mapper_parsing_exception","reason":"bad"},"status":400}`},
 			{"an item in 429", http.StatusOK, item(http.StatusTooManyRequests, "es_rejected_execution_exception")},
 			{"an item in 5xx", http.StatusOK, item(http.StatusInternalServerError, "exception")},
 			{"a closed index", http.StatusOK, item(http.StatusBadRequest, "index_closed_exception")},
