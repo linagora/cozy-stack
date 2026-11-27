@@ -3,7 +3,11 @@ package search
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +15,9 @@ import (
 	"github.com/cozy/cozy-stack/model/job"
 	"github.com/cozy/cozy-stack/pkg/config/config"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/logger"
+	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -133,5 +139,30 @@ func TestAdmin(t *testing.T) {
 		// The job pushed by the reset
 		require.NoError(t, Index(ctx, inst, log))
 		require.Eventually(t, func() bool { return count() > 0 }, 5*time.Second, 200*time.Millisecond)
+	})
+
+	t.Run("a purge that fails in part still drops the checkpoint", func(t *testing.T) {
+		lastSeq := func() string {
+			cp, err := couchdb.LoadCheckpoint(inst, consts.Files, checkpointDocID)
+			require.NoError(t, err)
+			return cp.LastSeq
+		}
+		require.NotEmpty(t, lastSeq())
+		// The files delete is accepted, the scopes one fails
+		fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, ScopesIndex) && strings.HasSuffix(r.URL.Path, "/_delete_by_query") {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = w.Write([]byte(`{"acknowledged":true,"task":"node:1"}`))
+		}))
+		t.Cleanup(fake.Close)
+		u, _ := url.Parse(fake.URL)
+		config.GetConfig().Search = opensearch.NewClient(opensearch.Options{URL: u})
+		t.Cleanup(func() { config.GetConfig().Search = client })
+		pushes = 0
+		assert.Error(t, Reset(ctx, inst))
+		assert.Equal(t, 0, pushes)
+		assert.Empty(t, lastSeq(), "the next job indexes the instance again")
 	})
 }

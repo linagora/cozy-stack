@@ -56,19 +56,19 @@ func Reset(ctx context.Context, inst *instance.Instance) error {
 	return pushJob(inst)
 }
 
-// dropIndexed starts the purge of the documents of an instance, then drops
-// its checkpoint, under the index lock: a purge that fails leaves the
-// checkpoint, so the instance stays indexed.
+// dropIndexed drops the checkpoint of an instance, then starts the purge of
+// its documents, under the index lock: even after a purge that fails, in part
+// or in full, the next job indexes the instance again.
 func dropIndexed(ctx context.Context, inst *instance.Instance) error {
 	mu := config.Lock().LongOperation(inst, indexLockName)
 	if err := mu.Lock(); err != nil {
 		return err
 	}
 	defer mu.Unlock()
-	if err := purge.CleanInstance(ctx, inst.Domain); err != nil {
+	if err := couchdb.DeleteCheckpoint(inst, consts.Files, checkpointDocID); err != nil {
 		return err
 	}
-	return couchdb.DeleteCheckpoint(inst, consts.Files, checkpointDocID)
+	return purge.CleanInstance(ctx, inst.Domain)
 }
 
 // GetStatus returns the indexing status of an instance.
