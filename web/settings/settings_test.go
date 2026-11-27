@@ -315,6 +315,8 @@ func TestSettings(t *testing.T) {
 			`"locale": "xx"`:       token,
 			`"tz": "Mars/Olympus"`: token,
 			`"tz": 1`:              token,
+			`"tz": ""`:             token,
+			`"tz": "Local"`:        token,
 			`"tz": {"name": "x"}`:  token,
 			`"context": "no-such"`: cliToken,
 		} {

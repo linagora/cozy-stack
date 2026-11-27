@@ -114,6 +114,7 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 		return err
 	}
 
+	var current *couchdb.JSONDoc // the stored settings, when already loaded
 	pdoc, err := middlewares.GetPermission(c)
 	if err != nil || pdoc.Type != permission.TypeCLI {
 		delete(doc.M, "auth_mode")
@@ -142,7 +143,7 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 		if inst.HasSignup() {
 			guarded = append(guarded, "phone", "recovery_email")
 		}
-		current, err := inst.SettingsDocument()
+		current, err = inst.SettingsDocument()
 		if err != nil {
 			return err
 		}
@@ -155,7 +156,7 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 		}
 	}
 
-	if err := checkInstanceSettings(inst, doc); err != nil {
+	if err := checkInstanceSettings(inst, doc, current); err != nil {
 		return err
 	}
 
@@ -184,15 +185,27 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 }
 
 // checkInstanceSettings refuses a new locale, time zone or context that the
-// stack cannot use. An unchanged locale, context or time zone is accepted as it is.
-func checkInstanceSettings(inst *instance.Instance, doc *couchdb.JSONDoc) error {
+// stack cannot use. An unchanged locale, context or time zone is accepted as it
+// is. current is the stored settings document, or nil if not loaded yet.
+func checkInstanceSettings(inst *instance.Instance, doc, current *couchdb.JSONDoc) error {
 	if locale, ok := doc.M["locale"].(string); ok && locale != inst.Locale && !slices.Contains(consts.SupportedLocales, locale) {
 		return jsonapi.BadRequest(fmt.Errorf("unsupported locale %q", locale))
 	}
 	switch tz := doc.M["tz"].(type) {
 	case nil: // omitted or unset
 	case string:
-		if _, err := time.LoadLocation(tz); err != nil && tz != storedTimeZone(inst) {
+		// LoadLocation also accepts "" (UTC) and "Local" (the host's zone),
+		// which are not IANA identifiers clients can use.
+		if _, err := time.LoadLocation(tz); err == nil && tz != "" && tz != "Local" {
+			break
+		}
+		if current == nil {
+			var err error
+			if current, err = inst.SettingsDocument(); err != nil {
+				return err
+			}
+		}
+		if stored, _ := current.M["tz"].(string); tz != stored {
 			return jsonapi.BadRequest(fmt.Errorf("invalid time zone %q", tz))
 		}
 	default:
@@ -206,17 +219,6 @@ func checkInstanceSettings(inst *instance.Instance, doc *couchdb.JSONDoc) error 
 		}
 	}
 	return nil
-}
-
-// storedTimeZone returns the time zone of the settings document, so that a
-// zone saved before it was checked can still be sent back unchanged.
-func storedTimeZone(inst *instance.Instance) string {
-	doc, err := inst.SettingsDocument()
-	if err != nil {
-		return ""
-	}
-	tz, _ := doc.M["tz"].(string)
-	return tz
 }
 
 func (h *HTTPHandler) updateInstanceTOS(c echo.Context) error {
