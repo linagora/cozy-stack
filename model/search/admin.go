@@ -40,25 +40,35 @@ func Enable(ctx context.Context, inst *instance.Instance) error {
 	return pushJob(inst)
 }
 
-// Reset drops the checkpoint and the documents of an instance, and pushes a
+// Reset drops the documents and the checkpoint of an instance, and pushes a
 // job to index it again.
 func Reset(ctx context.Context, inst *instance.Instance) error {
-	if config.GetConfig().Search == nil {
+	client := config.GetConfig().Search
+	if client == nil {
 		return ErrNotConfigured
 	}
+	if err := EnsureIndices(ctx, client); err != nil {
+		return err
+	}
+	if err := dropIndexed(ctx, inst); err != nil {
+		return err
+	}
+	return pushJob(inst)
+}
+
+// dropIndexed starts the purge of the documents of an instance, then drops
+// its checkpoint, under the index lock: a purge that fails leaves the
+// checkpoint, so the instance stays indexed.
+func dropIndexed(ctx context.Context, inst *instance.Instance) error {
 	mu := config.Lock().LongOperation(inst, indexLockName)
 	if err := mu.Lock(); err != nil {
 		return err
 	}
-	err := couchdb.DeleteCheckpoint(inst, consts.Files, checkpointDocID)
-	if err == nil {
-		err = purge.CleanInstance(ctx, inst.Domain)
-	}
-	mu.Unlock()
-	if err != nil {
+	defer mu.Unlock()
+	if err := purge.CleanInstance(ctx, inst.Domain); err != nil {
 		return err
 	}
-	return pushJob(inst)
+	return couchdb.DeleteCheckpoint(inst, consts.Files, checkpointDocID)
 }
 
 // GetStatus returns the indexing status of an instance.

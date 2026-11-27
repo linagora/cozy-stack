@@ -75,37 +75,51 @@ func TestAdmin(t *testing.T) {
 		assert.NotEmpty(t, status.LastSeq)
 	})
 
-	t.Run("enable does not add a second trigger", func(t *testing.T) {
+	searchTriggers := func() []job.Trigger {
+		triggers, err := job.System().GetAllTriggers(inst)
+		require.NoError(t, err)
+		var found []job.Trigger
+		for _, tr := range triggers {
+			if tr.Infos().WorkerType == WorkerType {
+				found = append(found, tr)
+			}
+		}
+		return found
+	}
+
+	t.Run("enable adds the trigger once to an instance created before search", func(t *testing.T) {
+		for _, tr := range searchTriggers() {
+			require.NoError(t, job.System().DeleteTrigger(inst, tr.ID()))
+		}
+		require.False(t, job.HasSearchTrigger(inst))
 		pushes = 0
 		require.NoError(t, Enable(ctx, inst))
 		require.NoError(t, Enable(ctx, inst))
 		assert.Equal(t, 2, pushes)
-		triggers, err := job.System().GetAllTriggers(inst)
-		require.NoError(t, err)
-		n := 0
-		for _, tr := range triggers {
-			if tr.Infos().WorkerType == WorkerType {
-				n++
-			}
-		}
-		assert.Equal(t, 1, n)
+		assert.Len(t, searchTriggers(), 1)
 	})
 
-	t.Run("reset drops the checkpoint and the documents", func(t *testing.T) {
-		pushes = 0
-		require.NoError(t, Reset(ctx, inst))
-		assert.Equal(t, 1, pushes)
-		status, err := GetStatus(inst)
-		require.NoError(t, err)
-		assert.Empty(t, status.LastSeq)
-		require.Eventually(t, func() bool {
+	t.Run("reset drops the documents and indexes the instance again", func(t *testing.T) {
+		count := func() int {
 			var res struct {
 				Hits struct {
 					Hits []any `json:"hits"`
 				} `json:"hits"`
 			}
 			q := map[string]any{"query": map[string]any{"term": map[string]any{"owner_instance_id": inst.Domain}}}
-			return client.Search(ctx, FilesIndex, q, &res) == nil && len(res.Hits.Hits) == 0
-		}, 5*time.Second, 200*time.Millisecond)
+			require.NoError(t, client.Search(ctx, FilesIndex, q, &res))
+			return len(res.Hits.Hits)
+		}
+		pushes = 0
+		require.NoError(t, Reset(ctx, inst))
+		assert.Equal(t, 1, pushes)
+		status, err := GetStatus(inst)
+		require.NoError(t, err)
+		assert.Empty(t, status.LastSeq)
+		require.Eventually(t, func() bool { return count() == 0 }, 10*time.Second, 200*time.Millisecond)
+
+		// The job pushed by the reset
+		require.NoError(t, Index(ctx, inst, log))
+		require.Eventually(t, func() bool { return count() > 0 }, 5*time.Second, 200*time.Millisecond)
 	})
 }
