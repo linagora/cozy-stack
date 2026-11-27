@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-22.04
     services:
       redis:
-        image: redis
+        image: redis:8.12.0
         ports:
           - 6379:6379
       opensearch:

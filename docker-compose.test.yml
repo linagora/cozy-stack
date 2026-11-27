@@ -45,7 +45,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:7
+    image: redis:8.12.0
     network_mode: "service:coredns"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
