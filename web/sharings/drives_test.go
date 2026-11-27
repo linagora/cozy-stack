@@ -7716,3 +7716,145 @@ func TestSharedDriveOpenReadWriteByRecipient(t *testing.T) {
 		}
 	})
 }
+
+// TestSharedDriveItemLinks checks that the items served through a drive have
+// links that the member can use on their own instance.
+func TestSharedDriveItemLinks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	eA, eB, _ := env.createClients(t)
+	prefix := "/sharings/drives/" + env.firstSharingID + "/"
+	photoID := createFileWithMime(t, eA, env.meetingsDirID, "photo.jpg", env.acmeToken, "image/jpeg")
+
+	getData := func(e *httpexpect.Expect, token, path string) *httpexpect.Object {
+		return e.GET(path).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Value("data").Object()
+	}
+
+	t.Run("a file", func(t *testing.T) {
+		data := getData(eB, env.bettyToken, prefix+photoID)
+		data.Path("$.links.self").String().IsEqual(prefix + photoID)
+		for _, format := range []string{"tiny", "small", "medium", "large"} {
+			data.Path("$.links." + format).String().HasPrefix(prefix + photoID + "/thumbnails/")
+		}
+		data.Path("$.relationships.parent.links.related").String().IsEqual(prefix + env.meetingsDirID)
+		data.Path("$.relationships.referenced_by.links.self").String().
+			IsEqual(prefix + photoID + "/relationships/references")
+	})
+
+	t.Run("a folder and its contents", func(t *testing.T) {
+		obj := eB.GET(prefix+env.meetingsDirID).
+			WithHeader("Authorization", "Bearer "+env.bettyToken).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object()
+		data := obj.Value("data").Object()
+		data.Path("$.links.self").String().IsEqual(prefix + env.meetingsDirID)
+		data.Path("$.relationships.parent.links.self").String().IsEqual(prefix + env.firstRootDirID)
+		data.Path("$.relationships.contents.links.self").String().
+			IsEqual(prefix + env.meetingsDirID + "/relationships/contents")
+		data.Path("$.relationships.not_synchronized_on.links.self").String().
+			IsEqual(prefix + env.meetingsDirID + "/relationships/not_synchronized_on")
+		data.Path("$.relationships.referenced_by.links.self").String().
+			IsEqual(prefix + env.meetingsDirID + "/relationships/references")
+
+		included := obj.Value("included").Array()
+		included.Length().IsEqual(2)
+		for _, item := range included.Iter() {
+			id := item.Object().Value("id").String().Raw()
+			item.Object().Path("$.links.self").String().IsEqual(prefix + id)
+		}
+	})
+
+	// The parent of the root of a drive is outside the drive.
+	t.Run("the root has no parent link for a member", func(t *testing.T) {
+		data := getData(eB, env.bettyToken, prefix+env.firstRootDirID)
+		parent := data.Path("$.relationships.parent").Object()
+		parent.NotContainsKey("links")
+		parent.Path("$.data.id").String().IsEqual(consts.RootDirID)
+	})
+
+	t.Run("the root has a parent link for the owner", func(t *testing.T) {
+		data := getData(eA, env.acmeToken, prefix+env.firstRootDirID)
+		data.Path("$.relationships.parent.links.self").String().IsEqual(prefix + consts.RootDirID)
+	})
+
+	t.Run("the root file of a file-root drive", func(t *testing.T) {
+		rootFileID := createFile(t, eA, "", "root-document.txt", env.acmeToken)
+		sharingID, _ := createFileRootSharedDrive(
+			t,
+			env.acme,
+			env.acmeToken,
+			env.tsA.URL,
+			rootFileID,
+			"File-root links drive",
+			[]RecipientInfo{{Name: "Betty", Email: "betty@example.net", ReadOnly: false}},
+		)
+		acceptSharedDriveForBetty(t, env.acme, env.betty, env.tsA.URL, env.tsB.URL, sharingID)
+		filePrefix := "/sharings/drives/" + sharingID + "/"
+
+		member := getData(eB, env.bettyToken, filePrefix+rootFileID)
+		member.Path("$.links.self").String().IsEqual(filePrefix + rootFileID)
+		parent := member.Path("$.relationships.parent").Object()
+		parent.NotContainsKey("links")
+		parent.Path("$.data.id").String().IsEqual(consts.RootDirID)
+
+		owner := getData(eA, env.acmeToken, filePrefix+rootFileID)
+		owner.Path("$.relationships.parent.links.related").String().IsEqual(filePrefix + consts.RootDirID)
+	})
+}
+
+// TestSharedDriveThumbnailRoute checks that the thumbnail link of a drive item
+// works with its secret alone: a plain image request carries no token.
+func TestSharedDriveThumbnailRoute(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+
+	env := setupSharedDrivesEnv(t)
+	acceptSharedDrive(t, env.acme, env.dave, "Dave", env.tsA.URL, env.tsD.URL, env.firstSharingID)
+	eA, eB, eD := env.createClients(t)
+	prefix := "/sharings/drives/" + env.firstSharingID + "/"
+	photoID := createFileWithMime(t, eA, env.meetingsDirID, "photo.jpg", env.acmeToken, "image/jpeg")
+
+	smallLink := func(e *httpexpect.Expect, token string) string {
+		return e.GET(prefix+photoID).
+			WithHeader("Authorization", "Bearer "+token).
+			Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: "application/vnd.api+json"}).
+			Object().Path("$.data.links.small").String().NotEmpty().Raw()
+	}
+
+	// The thumbnail may not be generated yet, and the placeholder is then
+	// served with a 404: both tell that the secret was accepted.
+	expectImage := func(t *testing.T, e *httpexpect.Expect, link string) {
+		res := e.GET(link).Expect()
+		assert.Contains(t, []int{http.StatusOK, http.StatusNotFound}, res.Raw().StatusCode)
+		contentType := res.Header("Content-Type").Raw()
+		assert.True(t, strings.HasPrefix(contentType, "image/"), contentType)
+	}
+
+	t.Run("a member loads a thumbnail without a token", func(t *testing.T) {
+		expectImage(t, eB, smallLink(eB, env.bettyToken))
+	})
+
+	t.Run("a read-only member loads a thumbnail without a token", func(t *testing.T) {
+		expectImage(t, eD, smallLink(eD, env.daveToken))
+	})
+
+	t.Run("a wrong secret is refused", func(t *testing.T) {
+		eB.GET(prefix + photoID + "/thumbnails/wrong-secret/small").
+			Expect().Status(http.StatusBadRequest)
+	})
+
+	t.Run("the secret of another file is refused", func(t *testing.T) {
+		link := strings.Replace(smallLink(eB, env.bettyToken), prefix+photoID, prefix+env.checklistID, 1)
+		eB.GET(link).Expect().Status(http.StatusBadRequest)
+	})
+}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/note"
+	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/model/sharing"
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
@@ -52,6 +53,8 @@ type file struct {
 	thumbSecret string
 	includePath bool
 	driveId     string
+	driveRootID string
+	ownerReader bool
 }
 
 type fileJSON struct {
@@ -65,19 +68,51 @@ type fileJSON struct {
 	DriveId string `json:"driveId,omitempty"`
 }
 
-func NewDir(doc *vfs.DirDoc, sharedDrive *sharing.Sharing) *dir {
-	rel := jsonapi.RelationshipMap{
-		"referenced_by": jsonapi.Relationship{
-			Links: &jsonapi.LinksList{
-				Self: "/files/" + doc.ID() + "/relationships/references",
-			},
-			Data: doc.ReferencedBy,
-		},
+// linksPrefix returns the start of the links of an item. An item served
+// through a drive points to the routes of the drive, which a member can use on
+// their own instance, unlike the files routes.
+func linksPrefix(driveId string) string {
+	if driveId != "" {
+		return "/sharings/drives/" + driveId + "/"
 	}
+	return "/files/"
+}
 
+// hidesParentLink tells if the link to the parent of an item is left out: the
+// parent of the root of a drive is outside the drive, and only the owner can
+// follow it.
+func hidesParentLink(driveId, driveRootID, id string, ownerReader bool) bool {
+	return driveId != "" && id == driveRootID && !ownerReader
+}
+
+// isDriveOwnerReader tells if the request comes from the owner of a drive,
+// with a token of their own: the members and the visitors of a link come with
+// a token of a sharing.
+func isDriveOwnerReader(c echo.Context) bool {
+	pdoc, err := middlewares.GetPermission(c)
+	if err != nil {
+		return false
+	}
+	switch pdoc.Type {
+	case permission.TypeShareInteract, permission.TypeShareByLink, permission.TypeSharePreview:
+		return false
+	}
+	return true
+}
+
+func NewDir(doc *vfs.DirDoc, sharedDrive *sharing.Sharing) *dir {
 	var driveId string
 	if sharedDrive != nil {
 		driveId = sharedDrive.ID()
+	}
+
+	rel := jsonapi.RelationshipMap{
+		"referenced_by": jsonapi.Relationship{
+			Links: &jsonapi.LinksList{
+				Self: linksPrefix(driveId) + doc.ID() + "/relationships/references",
+			},
+			Data: doc.ReferencedBy,
+		},
 	}
 
 	return &dir{doc: doc, rel: rel, driveId: driveId}
@@ -181,16 +216,27 @@ func DirData(c echo.Context, statusCode int, doc *vfs.DirDoc, sharedDrive *shari
 		}
 	}
 
+	d := NewDir(doc, sharedDrive)
+	prefix := linksPrefix(d.driveId)
+
 	var parent jsonapi.Relationship
 	if doc.ID() != consts.RootDirID {
 		parent = jsonapi.Relationship{
-			Links: &jsonapi.LinksList{
-				Self: "/files/" + doc.DirID,
-			},
 			Data: couchdb.DocReference{
 				ID:   doc.DirID,
 				Type: consts.Files,
 			},
+		}
+		var driveRootID string
+		var ownerReader bool
+		if sharedDrive != nil {
+			driveRootID, _ = sharedDrive.DriveRootID()
+			ownerReader = isDriveOwnerReader(c)
+		}
+		if !hidesParentLink(d.driveId, driveRootID, doc.ID(), ownerReader) {
+			parent.Links = &jsonapi.LinksList{
+				Self: prefix + doc.DirID,
+			}
 		}
 	}
 	rel := jsonapi.RelationshipMap{
@@ -198,18 +244,18 @@ func DirData(c echo.Context, statusCode int, doc *vfs.DirDoc, sharedDrive *shari
 		"contents": jsonapi.Relationship{
 			Meta: &jsonapi.Meta{Count: &count},
 			Links: &jsonapi.LinksList{
-				Self: "/files/" + doc.DocID + "/relationships/contents",
+				Self: prefix + doc.DocID + "/relationships/contents",
 			},
 			Data: relsData},
 		"not_synchronized_on": jsonapi.Relationship{
 			Links: &jsonapi.LinksList{
-				Self: "/files/" + doc.ID() + "/relationships/not_synchronized_on",
+				Self: prefix + doc.ID() + "/relationships/not_synchronized_on",
 			},
 			Data: doc.NotSynchronizedOn,
 		},
 		"referenced_by": jsonapi.Relationship{
 			Links: &jsonapi.LinksList{
-				Self: "/files/" + doc.ID() + "/relationships/references",
+				Self: prefix + doc.ID() + "/relationships/references",
 			},
 			Data: doc.ReferencedBy,
 		},
@@ -221,12 +267,11 @@ func DirData(c echo.Context, statusCode int, doc *vfs.DirDoc, sharedDrive *shari
 		if err != nil {
 			return err
 		}
-		next := "/files/" + doc.DocID + "/relationships/contents?" + params.Encode()
+		next := prefix + doc.DocID + "/relationships/contents?" + params.Encode()
 		rel["contents"].Links.Next = next
-		links.Next = "/files/" + doc.DocID + "?" + params.Encode()
+		links.Next = prefix + doc.DocID + "?" + params.Encode()
 	}
 
-	d := NewDir(doc, sharedDrive)
 	d.rel = rel
 	d.included = included
 
@@ -269,17 +314,21 @@ func dirDataList(c echo.Context, statusCode int, doc *vfs.DirDoc) error {
 
 // NewFile creates an instance of file struct from a vfs.FileDoc document.
 func NewFile(doc *vfs.FileDoc, i *instance.Instance, sharedDrive *sharing.Sharing) *file {
-	var driveId string
+	var driveId, driveRootID string
 	if sharedDrive != nil {
 		driveId = sharedDrive.ID()
+		driveRootID, _ = sharedDrive.DriveRootID()
 	}
-	return &file{doc, i, nil, nil, &fileJSON{}, "", false, driveId}
+	return &file{doc, i, nil, nil, &fileJSON{}, "", false, driveId, driveRootID, false}
 }
 
 // FileData returns a jsonapi representation of the given file.
 func FileData(c echo.Context, statusCode int, doc *vfs.FileDoc, withVersions bool, links *jsonapi.LinksList, sharedDrive *sharing.Sharing) error {
 	instance := middlewares.GetInstance(c)
 	f := NewFile(doc, instance, sharedDrive)
+	if sharedDrive != nil {
+		f.ownerReader = isDriveOwnerReader(c)
+	}
 	if withVersions {
 		if versions, err := vfs.VersionsFor(instance, doc.ID()); err == nil {
 			f.versions = versions
@@ -337,7 +386,7 @@ func (d *dir) MarshalJSON() ([]byte, error) {
 	})
 }
 func (d *dir) Links() *jsonapi.LinksList {
-	return &jsonapi.LinksList{Self: "/files/" + d.doc.DocID}
+	return &jsonapi.LinksList{Self: linksPrefix(d.driveId) + d.doc.DocID}
 }
 
 func (f *file) ID() string                   { return f.doc.ID() }
@@ -349,19 +398,23 @@ func (f *file) Clone() couchdb.Doc           { cloned := *f; return &cloned }
 func (f *file) SetThumbSecret(secret string) { f.thumbSecret = secret }
 
 func (f *file) Relationships() jsonapi.RelationshipMap {
-	rels := jsonapi.RelationshipMap{
-		"parent": jsonapi.Relationship{
-			Links: &jsonapi.LinksList{
-				Related: "/files/" + f.doc.DirID,
-			},
-			Data: couchdb.DocReference{
-				ID:   f.doc.DirID,
-				Type: consts.Files,
-			},
+	prefix := linksPrefix(f.driveId)
+	parent := jsonapi.Relationship{
+		Data: couchdb.DocReference{
+			ID:   f.doc.DirID,
+			Type: consts.Files,
 		},
+	}
+	if !hidesParentLink(f.driveId, f.driveRootID, f.doc.ID(), f.ownerReader) {
+		parent.Links = &jsonapi.LinksList{
+			Related: prefix + f.doc.DirID,
+		}
+	}
+	rels := jsonapi.RelationshipMap{
+		"parent": parent,
 		"referenced_by": jsonapi.Relationship{
 			Links: &jsonapi.LinksList{
-				Self: "/files/" + f.doc.ID() + "/relationships/references",
+				Self: prefix + f.doc.ID() + "/relationships/references",
 			},
 			Data: f.doc.ReferencedBy,
 		},
@@ -401,7 +454,8 @@ func (f *file) MarshalJSON() ([]byte, error) {
 }
 
 func (f *file) Links() *jsonapi.LinksList {
-	links := jsonapi.LinksList{Self: "/files/" + f.doc.DocID}
+	self := linksPrefix(f.driveId) + f.doc.DocID
+	links := jsonapi.LinksList{Self: self}
 	if f.doc.Class == "image" || f.doc.Class == "pdf" {
 		if f.thumbSecret == "" {
 			if secret, err := vfs.GetStore().AddThumb(f.instance, f.doc.DocID); err == nil {
@@ -409,10 +463,10 @@ func (f *file) Links() *jsonapi.LinksList {
 			}
 		}
 		if f.thumbSecret != "" {
-			links.Tiny = "/files/" + f.doc.DocID + "/thumbnails/" + f.thumbSecret + "/tiny"
-			links.Small = "/files/" + f.doc.DocID + "/thumbnails/" + f.thumbSecret + "/small"
-			links.Medium = "/files/" + f.doc.DocID + "/thumbnails/" + f.thumbSecret + "/medium"
-			links.Large = "/files/" + f.doc.DocID + "/thumbnails/" + f.thumbSecret + "/large"
+			links.Tiny = self + "/thumbnails/" + f.thumbSecret + "/tiny"
+			links.Small = self + "/thumbnails/" + f.thumbSecret + "/small"
+			links.Medium = self + "/thumbnails/" + f.thumbSecret + "/medium"
+			links.Large = self + "/thumbnails/" + f.thumbSecret + "/large"
 		}
 	}
 	return &links

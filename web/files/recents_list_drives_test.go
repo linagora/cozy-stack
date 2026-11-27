@@ -186,12 +186,15 @@ func TestRecentsListCompletesTheDriveItems(t *testing.T) {
 		assert.Equal(t, "in-sub.jpg", attrs["name"])
 		assert.Equal(t, sub.ID(), attrs["dir_id"])
 		assert.Equal(t, false, attrs["trashed"])
-		// The links are paths of the files routes, as for an item of the
-		// user, and the secret of the thumbnails is one of the instance of the
-		// owner.
+		// The links are paths of the routes of the drive, usable by the
+		// member, and the secret of the thumbnails is one of the instance of
+		// the owner.
+		prefix := "/sharings/drives/" + outerDrive.SID + "/"
 		links := file["links"].(map[string]interface{})
-		assert.Equal(t, "/files/"+inSub.ID(), links["self"])
-		secret := strings.TrimSuffix(strings.TrimPrefix(links["small"].(string), "/files/"+inSub.ID()+"/thumbnails/"), "/small")
+		assert.Equal(t, prefix+inSub.ID(), links["self"])
+		small := links["small"].(string)
+		assert.True(t, strings.HasPrefix(small, prefix+inSub.ID()+"/thumbnails/"), small)
+		secret := strings.TrimSuffix(strings.TrimPrefix(small, prefix+inSub.ID()+"/thumbnails/"), "/small")
 		got, err := vfs.GetStore().GetThumb(ownerInst, secret)
 		require.NoError(t, err)
 		assert.Equal(t, inSub.ID(), got)
@@ -200,6 +203,7 @@ func TestRecentsListCompletesTheDriveItems(t *testing.T) {
 		require.NotNil(t, folder)
 		assert.Equal(t, outerDrive.SID, attributesOf(folder)["driveId"])
 		assert.Equal(t, "/Sub", attributesOf(folder)["path"])
+		assert.Equal(t, prefix+sub.ID(), folder["links"].(map[string]interface{})["self"])
 
 		// The root of a drive has no path.
 		root := docOf(page, "included", team.ID())
@@ -338,4 +342,24 @@ func TestRecentsListCompletesTheDriveItems(t *testing.T) {
 		assert.NotContains(t, body, "renamed-after-the-revocation")
 		assert.NotContains(t, body, "/Sub")
 	})
+}
+
+// The parent of the root of a drive is outside the drive: the member gets no
+// link to it.
+func TestRecentsListGivesTheRootFileOfADriveWithoutParentLink(t *testing.T) {
+	env := recentsSetup(t)
+	ownerInst := testutils.NewSetup(t, t.Name()+"Owner").GetTestInstance()
+	owner := &driveOwner{inst: ownerInst, member: env.inst}
+
+	root := owner.createFile(t, "alone.jpg", consts.RootDirID, "2030-01-10T10:00:00Z")
+	drive := owner.share(t, root.ID(), sharing.DriveRootTypeFile, true)
+
+	page, _ := env.getRecents(t)
+	file := docOf(page, "included", root.ID())
+	require.NotNil(t, file)
+	assert.Equal(t, drive.SID, attributesOf(file)["driveId"])
+	assert.Equal(t, "/sharings/drives/"+drive.SID+"/"+root.ID(), file["links"].(map[string]interface{})["self"])
+	parent := file["relationships"].(map[string]interface{})["parent"].(map[string]interface{})
+	assert.NotContains(t, parent, "links")
+	assert.Equal(t, map[string]interface{}{"type": consts.Files, "id": consts.RootDirID}, parent["data"])
 }

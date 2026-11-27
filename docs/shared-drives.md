@@ -366,6 +366,14 @@ The response body is the sharing, as for `GET /sharings/:id`.
 Unless stated otherwise, a permission on the whole `io.cozy.files` doctype is
 required to use the following routes.
 
+The files and directories served by these routes, like the items of a shared
+drive in `GET /files/recents`, have their links under `/sharings/drives/:id/`
+(`links.self`, the thumbnail links, the links of the relationships), so that a
+member can use them as they are on their own instance. The link to the parent
+of the root of the drive is given to the owner only, as this parent is outside
+the drive. The links of the `referenced_by`, `contents` and
+`not_synchronized_on` relationships have no drive route yet.
+
 Authorization is resolved against the **effective access** of the target file
 or folder, not only the membership of the route's shared drive. The effective
 access combines every sharing scope applying to the target (the sharing of
@@ -461,6 +469,19 @@ Drive tokens (share-interact) are checked against the member's effective read ac
 Download the file prepared by the `POST /sharings/drives/:id/downloads` call above. The `:fake-name` segment is ignored by the server — it exists solely so browsers use it as the suggested save-as filename.
 
 Does not require an `Authorization` header (the secret acts as the credential).
+
+### GET /sharings/drives/:id/:file-id/thumbnails/:secret/:format
+
+Serve a thumbnail of an image or a PDF of a shared drive. Identical call to
+[`GET /files/:file-id/thumbnails/:secret/:format`](files.md#get-filesfile-idthumbnailssecretformat)
+but over a shared drive: the link is the one given in the `links` of the file
+(`tiny`, `small`, `medium`, `large`) by the other routes of the drive.
+
+Does not require an `Authorization` header, so that a browser can load it as a
+plain image: the secret acts as the credential, and expires 10 minutes after
+its creation. The link should be treated as a capability. A request that
+reaches the owner with the token of a member is still checked against the
+effective read access of that member on the file.
 
 ### POST /sharings/drives/:id/archive
 
