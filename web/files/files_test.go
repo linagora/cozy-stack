@@ -3959,6 +3959,37 @@ func TestFiles(t *testing.T) {
 		ref.ValueEqual("type", "io.cozy.photos.albums")
 	})
 
+	t.Run("RemoveIncompleteReferencedBy", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		// An older version could store a reference with an empty type or id.
+		album := couchdb.DocReference{Type: consts.PhotosAlbums, ID: "album-kept"}
+		dir, err := vfs.NewDirDocWithPath("WithIncompleteRef", consts.RootDirID, "/", nil)
+		require.NoError(t, err)
+		dir.AddReferencedBy(album, couchdb.DocReference{})
+		require.NoError(t, testInstance.VFS().CreateDir(dir))
+
+		// A token limited to this folder is enough.
+		dirToken, err := testInstance.MakeJWT(consts.ShareAudience, "incomplete-ref", "io.cozy.files", "", time.Now())
+		require.NoError(t, err)
+		rules := permission.Set{permission.Rule{
+			Type:   "io.cozy.files",
+			Verbs:  permission.Verbs(permission.GET, permission.DELETE),
+			Values: []string{dir.ID()},
+		}}
+		expires := time.Now().Add(2 * time.Minute)
+		_, err = permission.CreateShareSet(testInstance, &permission.Permission{Type: "app", Permissions: rules},
+			"", map[string]string{"incomplete-ref": dirToken}, nil, permission.Permission{Permissions: rules}, &expires, false)
+		require.NoError(t, err)
+
+		e.DELETE("/files/"+dir.ID()+"/relationships/referenced_by").
+			WithHeader("Authorization", "Bearer "+dirToken).
+			WithJSON(echo.Map{"data": []couchdb.DocReference{{}}}).
+			Expect().Status(http.StatusOK)
+		dir, err = testInstance.VFS().DirByID(dir.ID())
+		require.NoError(t, err)
+		assert.Equal(t, []couchdb.DocReference{album}, dir.ReferencedBy)
+	})
+
 	t.Run("MagicFolder", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 		magicPath := "/files/" + url.PathEscape("io.cozy.apps/mail")
