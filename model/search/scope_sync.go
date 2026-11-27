@@ -3,7 +3,6 @@ package search
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -11,6 +10,7 @@ import (
 	"github.com/cozy/cozy-stack/model/vfs"
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
+	"github.com/cozy/cozy-stack/pkg/logger"
 	"github.com/cozy/cozy-stack/pkg/opensearch"
 )
 
@@ -22,6 +22,7 @@ const sharingsCheckpointDocID = "search-index-sharings"
 // if a folder change affects its scope.
 type ownedDrive struct {
 	sharing  *sharing.Sharing
+	rootID   string          // empty when the sharing has no root
 	rootPath string          // empty when the root is missing
 	keys     map[string]bool // the folder keys of its current scope doc
 }
@@ -40,9 +41,13 @@ func syncScopes(ctx context.Context, client *opensearch.Client, inst *instance.I
 		return nil
 	}
 
-	drives, err := loadOwnedDrives(ctx, client, inst, len(folders) > 0)
-	if err != nil {
-		return err
+	// Only the folder changes need the drives
+	var drives []ownedDrive
+	if len(folders) > 0 {
+		var err error
+		if drives, err = loadOwnedDrives(ctx, client, inst); err != nil {
+			return err
+		}
 	}
 	rebuild, deleted := affectedDrives(inst.Domain, folders, sharings, drives)
 	for _, id := range deleted {
@@ -67,39 +72,32 @@ func syncScopes(ctx context.Context, client *opensearch.Client, inst *instance.I
 	return nil
 }
 
-// loadOwnedDrives returns the active drives owned by the instance. With
-// withScopes, it also loads their current scope docs and root folders, needed
-// to check the folder changes.
-func loadOwnedDrives(ctx context.Context, client *opensearch.Client, inst *instance.Instance, withScopes bool) ([]ownedDrive, error) {
+// loadOwnedDrives returns the active drives owned by the instance, with their
+// current scope docs and root folders, needed to check the folder changes.
+func loadOwnedDrives(ctx context.Context, client *opensearch.Client, inst *instance.Instance) ([]ownedDrive, error) {
 	all, err := sharing.ListDrives(inst)
 	if err != nil {
 		return nil, err
 	}
 	var drives []ownedDrive
+	var ids, rootIDs []string
 	for _, s := range all {
-		if s.Owner {
-			drives = append(drives, ownedDrive{sharing: s, keys: map[string]bool{}})
+		if !s.Owner {
+			continue
 		}
-	}
-	if !withScopes || len(drives) == 0 {
-		return drives, nil
-	}
-
-	ids := make([]string, len(drives))
-	var rootIDs []string
-	for i, d := range drives {
-		ids[i] = d.sharing.SID
-		if rootID, err := d.sharing.DriveRootID(); err == nil {
+		rootID, _ := s.DriveRootID()
+		drives = append(drives, ownedDrive{sharing: s, rootID: rootID, keys: map[string]bool{}})
+		ids = append(ids, s.SID)
+		if rootID != "" {
 			rootIDs = append(rootIDs, rootID)
 		}
 	}
-	var res struct {
-		Docs []struct {
-			Found  bool          `json:"found"`
-			Source ScopeDocument `json:"_source"`
-		} `json:"docs"`
+	if len(drives) == 0 {
+		return nil, nil
 	}
-	if err := client.Mget(ctx, ScopesIndex, ids, &res); err != nil {
+
+	scopes, err := ownedScopes(ctx, client, inst.Domain, ids)
+	if err != nil {
 		return nil, err
 	}
 	roots, err := loadDirs(inst, rootIDs)
@@ -107,13 +105,13 @@ func loadOwnedDrives(ctx context.Context, client *opensearch.Client, inst *insta
 		return nil, err
 	}
 	for i := range drives {
-		if i < len(res.Docs) && res.Docs[i].Found && res.Docs[i].Source.OwnerInstanceID == inst.Domain {
-			for _, key := range res.Docs[i].Source.SubtreeDirKeys {
+		if scopes[i] != nil {
+			for _, key := range scopes[i].SubtreeDirKeys {
 				drives[i].keys[key] = true
 			}
 		}
-		if rootID, err := drives[i].sharing.DriveRootID(); err == nil && roots[rootID] != nil {
-			drives[i].rootPath = roots[rootID].Fullpath
+		if root := roots[drives[i].rootID]; root != nil {
+			drives[i].rootPath = root.Fullpath
 		}
 	}
 	return drives, nil
@@ -135,14 +133,11 @@ func affectedDrives(domain string, folders, sharings []couchdb.Change, drives []
 		key := Key(domain, change.DocID)
 		folderPath, _ := change.Doc.M["path"].(string)
 		for _, d := range drives {
-			// Removed from the tree: moved out, trashed or deleted
-			if d.keys[key] {
-				add(d.sharing)
-				continue
-			}
-			// Added to the tree: created or moved in
-			if !change.Deleted && d.rootPath != "" && !vfs.IsInTrash(folderPath) &&
-				strings.HasPrefix(folderPath, d.rootPath+"/") {
+			// Only a folder entering or leaving the tree changes the keys: a
+			// rename or a tag inside it does not rebuild the drive
+			inTree := !change.Deleted && d.rootPath != "" && !vfs.IsInTrash(folderPath) &&
+				(folderPath == d.rootPath || strings.HasPrefix(folderPath, d.rootPath+"/"))
+			if inTree != d.keys[key] {
 				add(d.sharing)
 			}
 		}
@@ -154,13 +149,16 @@ func affectedDrives(domain string, folders, sharings []couchdb.Change, drives []
 			continue
 		}
 		if change.Deleted {
-			if !slices.Contains(deleted, change.DocID) {
-				deleted = append(deleted, change.DocID)
-			}
+			deleted = append(deleted, change.DocID)
 			continue
 		}
 		s, err := sharingFromChange(change)
-		if err != nil || !s.Drive || !s.Owner {
+		if err != nil {
+			logger.WithDomain(domain).WithNamespace("search").
+				Warnf("the sharing %s is not read, its scope is not updated: %s", change.DocID, err)
+			continue
+		}
+		if !s.Drive || !s.Owner {
 			continue // the recipients have no scope doc
 		}
 		add(s)

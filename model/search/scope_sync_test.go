@@ -3,7 +3,11 @@ package search
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +18,7 @@ import (
 	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb"
 	"github.com/cozy/cozy-stack/pkg/logger"
+	"github.com/cozy/cozy-stack/pkg/opensearch"
 	"github.com/cozy/cozy-stack/tests/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,6 +54,8 @@ func TestAffectedDrives(t *testing.T) {
 		{"created deep in a drive", []couchdb.Change{folderChange("new", "/HR/a/b/c")}, []string{"hr"}},
 		{"outside of the drives", []couchdb.Change{folderChange("new", "/Private")}, nil},
 		{"sibling with the same prefix", []couchdb.Change{folderChange("new", "/Teamwork")}, nil},
+		{"renamed in a drive", []couchdb.Change{folderChange("old", "/Team/renamed")}, nil},
+		{"the root renamed", []couchdb.Change{folderChange("team-root", "/Team")}, nil},
 		{"moved out of a drive", []couchdb.Change{folderChange("old", "/Private/old")}, []string{"team"}},
 		{"moved from a drive to another", []couchdb.Change{folderChange("old", "/HR/old")}, []string{"team", "hr"}},
 		{"trashed", []couchdb.Change{folderChange("old", "/.cozy_trash/old")}, []string{"team"}},
@@ -71,7 +78,6 @@ func TestAffectedDrives(t *testing.T) {
 			{DocID: "team", Doc: couchdb.JSONDoc{M: map[string]any{"_id": "team", "drive": true, "owner": true, "active": true}}},
 			{DocID: "recipient", Doc: couchdb.JSONDoc{M: map[string]any{"_id": "recipient", "drive": true, "active": true}}},
 			{DocID: "not-a-drive", Doc: couchdb.JSONDoc{M: map[string]any{"_id": "not-a-drive", "owner": true}}},
-			{DocID: "gone", Deleted: true},
 			{DocID: "gone", Deleted: true},
 			{DocID: "_design/sharings", Deleted: true},
 		}
@@ -102,17 +108,9 @@ func TestSyncScopesWithOpenSearch(t *testing.T) {
 	t.Cleanup(func() { pushJob = defaultPushJob })
 
 	scope := func() *ScopeDocument {
-		var res struct {
-			Docs []struct {
-				Found  bool          `json:"found"`
-				Source ScopeDocument `json:"_source"`
-			} `json:"docs"`
-		}
-		require.NoError(t, client.Mget(ctx, ScopesIndex, []string{"drive-1"}, &res))
-		if !res.Docs[0].Found {
-			return nil
-		}
-		return &res.Docs[0].Source
+		scopes, err := ownedScopes(ctx, client, owner.Domain, []string{"drive-1"})
+		require.NoError(t, err)
+		return scopes[0]
 	}
 
 	root, err := vfs.Mkdir(owner.VFS(), "/Team", nil)
@@ -143,6 +141,32 @@ func TestSyncScopesWithOpenSearch(t *testing.T) {
 		rootID := root.ID()
 		folder, err = vfs.ModifyDirMetadata(owner.VFS(), folder, &vfs.DocPatch{DirID: &rootID})
 		require.NoError(t, err)
+
+		// The files are indexed but not the scopes: both checkpoints stay
+		checkpoints := func() [2]string {
+			files, err := couchdb.LoadCheckpoint(owner, consts.Files, checkpointDocID)
+			require.NoError(t, err)
+			sharings, err := couchdb.LoadCheckpoint(owner, consts.Sharings, sharingsCheckpointDocID)
+			require.NoError(t, err)
+			return [2]string{files.LastSeq, sharings.LastSeq}
+		}
+		before := checkpoints()
+		fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPut: // the indices exist
+			case strings.HasSuffix(r.URL.Path, "/_mget"):
+				w.WriteHeader(http.StatusServiceUnavailable)
+			default:
+				_, _ = w.Write([]byte(`{"errors":false,"items":[]}`))
+			}
+		}))
+		t.Cleanup(fake.Close)
+		u, _ := url.Parse(fake.URL)
+		config.GetConfig().Search = opensearch.NewClient(opensearch.Options{URL: u})
+		assert.Error(t, Index(ctx, owner, log))
+		config.GetConfig().Search = client
+		assert.Equal(t, before, checkpoints(), "the batch will be retried")
+
 		require.NoError(t, Index(ctx, owner, log))
 		assert.ElementsMatch(t, []string{Key(owner.Domain, root.ID()), Key(owner.Domain, folder.ID())}, scope().SubtreeDirKeys)
 	})

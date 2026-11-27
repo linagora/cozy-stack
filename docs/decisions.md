@@ -59,3 +59,10 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5267#discussion_r4718553019)
 - Why: the jobs of a duplicate find nothing left to index, as the index lock serializes them, so the data stays right; preventing it needs a lock or a fixed trigger id in the job scheduler, which is not worth it for a rollout command.
 - Scope: `model/job`, `cozy-stack search enable`.
+
+## 2026-11-27, [Tech] Search writes a scope doc without checking its owner
+
+- Decision: `UpsertScope` writes the scope doc of a drive on its sharing id without reading it first, unlike `DeleteScope`, which leaves the doc of another instance alone.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5268#discussion_r4718930880)
+- Why: only the owner of a drive writes its scope doc, and only a move gives two instances of the stack the same owned sharing; moving an instance is switched off, and its support will be removed.
+- Scope: `model/search`, the `share_scopes_v1` index.

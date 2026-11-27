@@ -147,7 +147,9 @@ func subdirIDs(db *instance.Instance, dirPath string, pageSize int) ([]string, e
 	}
 }
 
-// UpsertScope writes the scope document of a shared drive.
+// UpsertScope writes the scope document of a shared drive. Unlike DeleteScope,
+// it does not check the owner of the doc: only the owner of a drive writes it,
+// and only a move, which is switched off, gives two owners to a sharing.
 func UpsertScope(ctx context.Context, client *opensearch.Client, doc *ScopeDocument) error {
 	action, err := json.Marshal(map[string]any{"index": map[string]string{"_id": doc.SharingID}})
 	if err != nil {
@@ -167,21 +169,35 @@ func UpsertScope(ctx context.Context, client *opensearch.Client, doc *ScopeDocum
 // a missing document is not an error: OpenSearch answers not_found without
 // failing the bulk.
 func DeleteScope(ctx context.Context, client *opensearch.Client, domain, sharingID string) error {
-	var res struct {
-		Docs []struct {
-			Found  bool          `json:"found"`
-			Source ScopeDocument `json:"_source"`
-		} `json:"docs"`
-	}
-	if err := client.Mget(ctx, ScopesIndex, []string{sharingID}, &res); err != nil {
+	scopes, err := ownedScopes(ctx, client, domain, []string{sharingID})
+	if err != nil || scopes[0] == nil {
 		return err
-	}
-	if len(res.Docs) == 0 || !res.Docs[0].Found || res.Docs[0].Source.OwnerInstanceID != domain {
-		return nil
 	}
 	action, err := json.Marshal(map[string]any{"delete": map[string]string{"_id": sharingID}})
 	if err != nil {
 		return err
 	}
 	return client.Bulk(ctx, ScopesIndex, append(action, '\n'))
+}
+
+// ownedScopes reads the scope documents of these sharings, one per id: nil
+// when it is missing or belongs to another instance, as a sharing has the
+// same id on the instances of its owner and of its recipients.
+func ownedScopes(ctx context.Context, client *opensearch.Client, domain string, ids []string) ([]*ScopeDocument, error) {
+	var res struct {
+		Docs []struct {
+			Found  bool          `json:"found"`
+			Source ScopeDocument `json:"_source"`
+		} `json:"docs"`
+	}
+	if err := client.Mget(ctx, ScopesIndex, ids, &res); err != nil {
+		return nil, err
+	}
+	scopes := make([]*ScopeDocument, len(ids))
+	for i := range min(len(ids), len(res.Docs)) {
+		if res.Docs[i].Found && res.Docs[i].Source.OwnerInstanceID == domain {
+			scopes[i] = &res.Docs[i].Source
+		}
+	}
+	return scopes, nil
 }
