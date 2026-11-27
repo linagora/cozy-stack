@@ -148,6 +148,8 @@ func TestSearchWithOpenSearch(t *testing.T) {
 
 	// Files of the caller
 	own := createTextFile(t, caller, consts.RootDirID, "budget report.txt")
+	createTextFile(t, caller, consts.RootDirID, "invoice invoice")
+	createTextFile(t, caller, consts.RootDirID, "invoice")
 	trashed := createTextFile(t, caller, consts.RootDirID, "old report.txt")
 	_, err := vfs.TrashFile(caller.VFS(), trashed)
 	require.NoError(t, err)
@@ -155,8 +157,11 @@ func TestSearchWithOpenSearch(t *testing.T) {
 	// A drive of the owner where the caller is a member, and one where not
 	member := sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://" + caller.Domain}
 	stranger := sharing.Member{Status: sharing.MemberStatusReady, Instance: "https://stranger.example.net"}
-	shared := createDrive(t, owner, caller, "drive-member", "/Team", member)
+	shared := createDrive(t, owner, caller, "drive-member", "/Team", member, "Sub")
 	inDrive := createTextFile(t, owner, shared.ID(), "team report.txt")
+	sub, err := owner.VFS().DirByPath("/Team/Sub")
+	require.NoError(t, err)
+	inSub := createTextFile(t, owner, sub.ID(), "agenda.txt")
 	other := createDrive(t, owner, caller, "drive-stranger", "/Other", stranger)
 	createTextFile(t, owner, other.ID(), "secret report.txt")
 	createTextFile(t, owner, consts.RootDirID, "private report.txt")
@@ -188,6 +193,8 @@ func TestSearchWithOpenSearch(t *testing.T) {
 	assert.Equal(t, "drive-member", found["team report.txt"].DriveID)
 	assert.Equal(t, inDrive.ID(), found["team report.txt"].DocID)
 	assert.Empty(t, res.Cursor, "a single page")
+	assert.Contains(t, res.Drives, "drive-member")
+	assert.NotContains(t, res.Drives, "drive-stranger")
 
 	t.Run("pages", func(t *testing.T) {
 		first, err := Search(ctx, client, caller, "report", 1, "")
@@ -201,11 +208,42 @@ func TestSearchWithOpenSearch(t *testing.T) {
 		assert.Empty(t, second.Cursor, "the last page, even if full")
 	})
 
+	t.Run("a file in a subfolder of a drive", func(t *testing.T) {
+		res, err := Search(ctx, client, caller, "agenda", 0, "")
+		require.NoError(t, err)
+		require.Len(t, res.Hits, 1)
+		assert.Equal(t, inSub.ID(), res.Hits[0].DocID)
+		assert.Equal(t, "drive-member", res.Hits[0].DriveID)
+	})
+
 	t.Run("prefix of a word being typed", func(t *testing.T) {
 		res, err := Search(ctx, client, caller, "budg", 0, "")
 		require.NoError(t, err)
 		require.Len(t, res.Hits, 1)
 		assert.Equal(t, "budget report.txt", res.Hits[0].Name)
+
+		// Two letters give no n-gram: only the prefix clause matches them
+		res, err = Search(ctx, client, caller, "bu", 0, "")
+		require.NoError(t, err)
+		require.Len(t, res.Hits, 1)
+		assert.Equal(t, "budget report.txt", res.Hits[0].Name)
+	})
+
+	t.Run("substring inside a word", func(t *testing.T) {
+		// Not a prefix: only the n-gram clause matches it
+		res, err := Search(ctx, client, caller, "udge", 0, "")
+		require.NoError(t, err)
+		require.Len(t, res.Hits, 1)
+		assert.Equal(t, "budget report.txt", res.Hits[0].Name)
+	})
+
+	t.Run("the whole name comes first", func(t *testing.T) {
+		// Without the clause on the whole name, the name with the word twice
+		// would come first
+		res, err := Search(ctx, client, caller, "invoice", 0, "")
+		require.NoError(t, err)
+		require.Len(t, res.Hits, 2)
+		assert.Equal(t, "invoice", res.Hits[0].Name)
 	})
 
 	t.Run("invalid cursor", func(t *testing.T) {
@@ -220,12 +258,16 @@ func TestSearchWithOpenSearch(t *testing.T) {
 	})
 }
 
-// createDrive creates a folder shared as a drive by owner: the sharing on
-// both sides, and the scope doc.
-func createDrive(t *testing.T, owner, recipient *instance.Instance, id, path string, member sharing.Member) *vfs.DirDoc {
+// createDrive creates a folder shared as a drive by owner, with the given
+// subfolders: the sharing on both sides, and the scope doc.
+func createDrive(t *testing.T, owner, recipient *instance.Instance, id, path string, member sharing.Member, subfolders ...string) *vfs.DirDoc {
 	t.Helper()
 	root, err := vfs.Mkdir(owner.VFS(), path, nil)
 	require.NoError(t, err)
+	for _, name := range subfolders {
+		_, err := vfs.Mkdir(owner.VFS(), path+"/"+name, nil)
+		require.NoError(t, err)
+	}
 	members := []sharing.Member{{Status: sharing.MemberStatusOwner, Instance: "https://" + owner.Domain}, member}
 	rules := []sharing.Rule{{DocType: consts.Files, Values: []string{root.ID()}}}
 	ownerSide := &sharing.Sharing{SID: id, Drive: true, Active: true, Owner: true, Description: path[1:], Rules: rules, Members: members}
