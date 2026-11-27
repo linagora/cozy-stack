@@ -405,7 +405,10 @@ are not related to OAuth. The document still need to be injected manually in
 of the konnector,  but `secret` can be a map instead of a simple string if
 several secrets are needed for this service.
 
-The secret is given to the konnector in the `COZY_PARAMETERS` env variable.
+The secret is given to the konnector in the `COZY_PARAMETERS` env variable,
+only if the konnector was installed from the registry under this slug
+(`registry://<slug>/...`): a konnector installed from git, http(s) or `file://`
+does not receive it.
 
 ### Overloading an account type for a given context
 

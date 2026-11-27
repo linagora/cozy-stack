@@ -227,6 +227,7 @@ echo "{\"type\": \"manifest\", \"message\": \"$(ls ${1}/manifest.konnector)\" }"
 			"registry://my-konnector-secret/stable":                    true,
 			"registry://other-konnector/stable":                        false,
 			"git://github.com/konnectors/cozy-konnector-trainline.git": false,
+			"git://my-konnector-secret/stable":                         false,
 			"https://example.org/my-konnector-secret.tar.gz":           false,
 			"file:///tmp/my-konnector-secret":                          false,
 		} {

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/cozy/cozy-stack/model/feature"
@@ -174,4 +176,18 @@ func Test_GetBySlug(t *testing.T) {
 		assert.Nil(t, man)
 		assert.ErrorIs(t, err, ErrInvalidAppType)
 	})
+}
+
+func TestKonnManifestSourceSurvivesReload(t *testing.T) {
+	// "ſ" folds to "s" when decoding JSON, and "ſource" sorts after "source".
+	pkg := `{"slug": "k", "ſource": "registry://k/stable"}`
+	var old KonnManifest
+	require.NoError(t, json.Unmarshal([]byte(`{}`), &old))
+	man, err := old.ReadManifest(strings.NewReader(pkg), "k", "git://example.org/k.git")
+	require.NoError(t, err)
+	b, err := json.Marshal(man)
+	require.NoError(t, err)
+	var reloaded KonnManifest
+	require.NoError(t, json.Unmarshal(b, &reloaded))
+	assert.Equal(t, "git://example.org/k.git", reloaded.Source())
 }

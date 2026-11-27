@@ -217,6 +217,9 @@ func (m *KonnManifest) UnmarshalJSON(j []byte) error {
 	if err := json.Unmarshal(j, &m.val); err != nil {
 		return err
 	}
+	// Keys match case-insensitively (even "ſ" for "s"), so a key from the
+	// package could override the source set by the installer: use the exact one.
+	m.val.Source, _ = m.doc.M["source"].(string)
 	return nil
 }
 

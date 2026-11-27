@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"strings"
 	"testing"
 	"time"
 
@@ -323,6 +324,59 @@ func TestInstallerKonnector(t *testing.T) {
 		assert.False(t, man.Permissions().HasSameRules(man2.Permissions()))
 		assert.Empty(t, konnManifest.AvailableVersion())
 		assert.Contains(t, konnManifest.Version(), "2.0.0")
+	})
+
+	t.Run("KonnectorDeferredUpdateKeepsTheSourceOfItsFiles", func(t *testing.T) {
+		finished := true
+		config.GetConfig().Contexts = map[string]interface{}{"foocontext": map[string]interface{}{}}
+		instance, err := lifecycle.Create(&lifecycle.Options{
+			Domain:             "test-deferred-source",
+			ContextName:        "foocontext",
+			OnboardingFinished: &finished,
+		})
+		require.NoError(t, err)
+		defer func() { _ = lifecycle.Destroy("test-deferred-source") }()
+
+		manGen = manifestKonnector1
+		manName = app.KonnectorManifestName
+		inst, err := app.NewInstaller(instance, fs, &app.InstallerOptions{
+			Operation: app.Install,
+			Type:      consts.KonnectorType,
+			Slug:      "cozy-konnector-deferred",
+			SourceURL: gitURL,
+		})
+		require.NoError(t, err)
+		_, err = inst.RunSync()
+		require.NoError(t, err)
+
+		// New permissions defer the update: the files are not fetched again,
+		// so a source from another host must not replace the old one.
+		manGen = manifestKonnector2
+		otherHost := strings.Replace(gitURL, "localhost", "127.0.0.1", 1)
+		require.NotEqual(t, gitURL, otherHost)
+		inst, err = app.NewInstaller(instance, fs, &app.InstallerOptions{
+			Operation: app.Update,
+			Type:      consts.KonnectorType,
+			Slug:      "cozy-konnector-deferred",
+			SourceURL: otherHost,
+		})
+		require.NoError(t, err)
+		man, err := inst.RunSync()
+		require.NoError(t, err)
+		assert.Contains(t, man.(*app.KonnManifest).AvailableVersion(), "2.0.0")
+		assert.Equal(t, gitURL, man.Source())
+
+		// A source on the same host, like another branch, is still recorded.
+		inst, err = app.NewInstaller(instance, fs, &app.InstallerOptions{
+			Operation: app.Update,
+			Type:      consts.KonnectorType,
+			Slug:      "cozy-konnector-deferred",
+			SourceURL: gitURL + "#branch",
+		})
+		require.NoError(t, err)
+		man, err = inst.RunSync()
+		require.NoError(t, err)
+		assert.Equal(t, gitURL+"#branch", man.Source())
 	})
 
 	t.Run("KonnectorInstallAndUpgradeWithBranch", func(t *testing.T) {
