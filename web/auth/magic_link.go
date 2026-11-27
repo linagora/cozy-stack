@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/subtle"
+	"errors"
 	"net/http"
 
 	"github.com/cozy/cozy-stack/model/bitwarden/settings"
@@ -28,6 +29,9 @@ func sendMagicLink(c echo.Context) error {
 
 	redirect := c.FormValue("redirect")
 	if err := lifecycle.SendMagicLink(inst, redirect); err != nil {
+		if errors.Is(err, lifecycle.ErrMagicLinkNotAvailable) {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		return err
 	}
 	return c.Render(http.StatusOK, "error.html", echo.Map{
