@@ -258,7 +258,8 @@ func TestAuth(t *testing.T) {
 			WithHeader("Accept", "application/json").
 			WithCookie("__Host-_csrf", token).
 			WithFormField("csrf_token", token).
-			Expect().Status(400)
+			Expect().Status(400).
+			Body().Contains("magic link is not available on this instance")
 	})
 
 	t.Run("LoginWithBadPassphrase", func(t *testing.T) {
