@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -262,8 +262,7 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 		return false
 	}
 
-	// Only the folders outside the trash move with an ancestor of the root:
-	// the other events leaving the drive do not need to read the root again.
+	// Only the folders outside the trash can move with the root
 	movedFolder := func(doc realtime.Doc) bool {
 		switch d := doc.(type) {
 		case *vfs.DirDoc:
@@ -276,57 +275,41 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 		return false
 	}
 
-	// newRootPath gives the path of the root after the move of the folder of
-	// the event. The root may have moved with an ancestor, or be the folder
-	// that moves: MoveDir publishes the folders below it before saving it.
-	newRootPath := func(e *realtime.Event) (string, bool) {
-		reloaded, err := inst.VFS().GetIndexer().DirByID(dir.DocID)
-		if err != nil {
-			log.Warnf("filterMapEvents: cannot reload the root of sharing %s: %s", s.SID, err)
-			return "", false
-		}
-		if reloaded.Fullpath != dir.Fullpath {
-			return reloaded.Fullpath, true
-		}
+	// movingRootPath gives the new path of the root when the folder of the
+	// event is a child of the root that moves with it. MoveDir publishes the
+	// folders below a moved folder in the order of their paths, so a child of
+	// the root comes before the other folders, and the root comes last.
+	movingRootPath := func(e *realtime.Event) (string, bool) {
 		oldPath, oldParent := folderPlace(e.OldDoc)
 		newPath, newParent := folderPlace(e.Doc)
-		rel, ok := strings.CutPrefix(oldPath, dir.Fullpath+"/")
-		if !ok || oldParent == "" || newParent != oldParent || !strings.HasSuffix(newPath, "/"+rel) {
+		name, ok := strings.CutPrefix(oldPath, dir.Fullpath+"/")
+		if !ok || oldParent != dir.DocID || newParent != dir.DocID || path.Base(newPath) != name {
 			return "", false
 		}
-		// When a folder between the root and this one leaves the drive, the
-		// child of the root on the way is still at its old path
-		if child, _, deeper := strings.Cut(rel, "/"); deeper {
-			_, err := inst.VFS().GetIndexer().DirByPath(dir.Fullpath + "/" + child)
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				log.Warnf("filterMapEvents: cannot read a folder of sharing %s: %s", s.SID, err)
-			}
-			if !errors.Is(err, os.ErrNotExist) {
-				return "", false
-			}
-		}
-		return strings.TrimSuffix(newPath, "/"+rel), true
+		return path.Dir(newPath), true
 	}
 
+	forward := func(e *realtime.Event) *realtime.Event {
+		return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
+	}
+
+	// The path of the root follows the events, and not the database, as they
+	// can wait behind other moves.
 	match := func(e *realtime.Event) *realtime.Event {
 		if e.Doc.ID() == dir.DocID {
-			if reloaded, err := inst.VFS().GetIndexer().DirByID(dir.DocID); err == nil {
-				dir.Fullpath = reloaded.Fullpath
+			if p, _ := folderPlace(e.Doc); p != "" {
+				dir.Fullpath = p
 			}
-			return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
+			return forward(e)
 		}
 		if testPath(e.Doc) {
-			return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
+			return forward(e)
 		}
 		if e.OldDoc != nil && testPath(e.OldDoc) {
-			// An ancestor of the root may have been renamed or moved: the
-			// documents below it are still in the drive.
 			if movedFolder(e.Doc) {
-				if root, ok := newRootPath(e); ok {
+				if root, ok := movingRootPath(e); ok {
 					dir.Fullpath = root
-					if testPath(e.Doc) {
-						return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
-					}
+					return forward(e)
 				}
 			}
 			// The document has left the drive: its new location is not for

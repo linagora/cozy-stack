@@ -3,6 +3,7 @@ package sharings
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,6 +108,9 @@ func TestDriveRealtimePathsAreRelativeToTheRoot(t *testing.T) {
 		moved := root.Clone().(*vfs.DirDoc)
 		moved.Fullpath = "/Private/Renamed/Team"
 		res, _ := send(&realtime.Event{Verb: realtime.EventUpdate, Doc: moved, OldDoc: root})
+		assert.Equal(t, "/Team", docPath(res, "path"))
+		// The root follows its events: it comes back for the next subtests
+		res, _ = send(&realtime.Event{Verb: realtime.EventUpdate, Doc: root, OldDoc: moved})
 		assert.Equal(t, "/Team", docPath(res, "path"))
 	})
 
@@ -347,29 +351,33 @@ func TestDriveRealtimeWhileTheRootMoves(t *testing.T) {
 		Rules: []sharing.Rule{{DocType: consts.Files, Values: []string{root.ID()}}},
 	}
 
-	// send gives what a member connected before the move receives for doc
-	send := func(t *testing.T, doc *vfs.DirDoc) *wsResponse {
-		t.Helper()
+	// watch connects a member before the move, and gives what it receives for
+	// the move of each document, in order
+	watch := func(t *testing.T) func(doc *vfs.DirDoc) *wsResponse {
 		ds := &realtime.Subscriber{Channel: make(realtime.EventsChan, 1)}
 		ch := make(chan *wsResponse)
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		go filterMapEvents(ctx, ds, ch, inst, s)
-		moved, err := fs.DirByID(doc.ID())
-		require.NoError(t, err)
-		ds.Channel <- &realtime.Event{Verb: realtime.EventUpdate, Doc: moved, OldDoc: doc}
-		select {
-		case res := <-ch:
-			return res
-		case <-time.After(5 * time.Second):
-			require.FailNow(t, "no event was forwarded")
-			return nil
+		return func(doc *vfs.DirDoc) *wsResponse {
+			t.Helper()
+			moved, err := fs.DirByID(doc.ID())
+			require.NoError(t, err)
+			ds.Channel <- &realtime.Event{Verb: realtime.EventUpdate, Doc: moved, OldDoc: doc}
+			select {
+			case res := <-ch:
+				return res
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "no event was forwarded")
+				return nil
+			}
 		}
 	}
 
 	t.Run("FolderLeavingTheDrive", func(t *testing.T) {
+		send := watch(t)
 		require.NoError(t, fs.GetIndexer().MoveDir(out.Fullpath, "/Private/Out"))
-		assert.Equal(t, realtime.EventDelete, send(t, inner).Event)
+		assert.Equal(t, realtime.EventDelete, send(inner).Event)
 
 		moved := out.Clone().(*vfs.DirDoc)
 		moved.Fullpath, moved.DirID = "/Private/Out", private.ID()
@@ -377,14 +385,100 @@ func TestDriveRealtimeWhileTheRootMoves(t *testing.T) {
 	})
 
 	t.Run("RootMoving", func(t *testing.T) {
+		send := watch(t)
 		require.NoError(t, fs.GetIndexer().MoveDir(root.Fullpath, "/Private/Renamed"))
-		for doc, expected := range map[*vfs.DirDoc]string{
-			meetings: "/Renamed/Meetings",
-			draft:    "/Renamed/Meetings/Draft",
-		} {
-			res := send(t, doc)
+		// In the order of MoveDir
+		for _, doc := range []*vfs.DirDoc{meetings, draft} {
+			res := send(doc)
 			assert.Equal(t, realtime.EventUpdate, res.Event)
-			assert.Equal(t, expected, res.Payload.Doc.(*vfs.DirDoc).Fullpath)
+			assert.Equal(t, strings.Replace(doc.Fullpath, "/Private/Team", "/Renamed", 1), res.Payload.Doc.(*vfs.DirDoc).Fullpath)
 		}
+	})
+}
+
+// The events of a member can wait while the owner keeps moving folders: each
+// one is formatted for the state of its own move.
+func TestDriveRealtimeQueuedMoves(t *testing.T) {
+	if testing.Short() {
+		t.Skip("an instance is required for this test: test skipped due to the use of --short flag")
+	}
+	config.UseTestFile(t)
+	testutils.NeedCouchdb(t)
+	setup := testutils.NewSetup(t, t.Name())
+	inst := setup.GetTestInstance()
+	fs := inst.VFS()
+
+	root, err := vfs.MkdirAll(fs, "/Private/Team")
+	require.NoError(t, err)
+	draft, err := vfs.MkdirAll(fs, "/Private/Team/Meetings/Draft")
+	require.NoError(t, err)
+	meetings, err := fs.DirByPath("/Private/Team/Meetings")
+	require.NoError(t, err)
+	inner, err := vfs.MkdirAll(fs, "/Private/Team/Out/Inner")
+	require.NoError(t, err)
+	out, err := fs.DirByPath("/Private/Team/Out")
+	require.NoError(t, err)
+	private, err := fs.DirByPath("/Private")
+	require.NoError(t, err)
+	s := &sharing.Sharing{
+		Drive: true,
+		Rules: []sharing.Rule{{DocType: consts.Files, Values: []string{root.ID()}}},
+	}
+
+	ds := realtime.GetHub().Subscriber(inst)
+	defer ds.Close()
+	ds.Subscribe(consts.Files)
+	ch := make(chan *wsResponse)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go filterMapEvents(ctx, ds, ch, inst, s)
+
+	// drain gives the events forwarded after the writer has waited on the event
+	// of a new folder while the owner made the changes
+	drain := func(t *testing.T, blocker string, changes func()) map[string][]string {
+		t.Helper()
+		_, err := vfs.Mkdir(fs, blocker, nil)
+		require.NoError(t, err)
+		changes()
+		received := map[string][]string{}
+		for {
+			select {
+			case res := <-ch:
+				body, err := json.Marshal(res)
+				require.NoError(t, err)
+				assert.NotContains(t, string(body), "Private")
+				got := res.Event
+				if d, ok := res.Payload.Doc.(*vfs.DirDoc); ok && res.Event != realtime.EventDelete {
+					got = d.Fullpath
+				}
+				received[res.Payload.ID] = append(received[res.Payload.ID], got)
+			case <-time.After(time.Second):
+				return received
+			}
+		}
+	}
+
+	t.Run("FolderLeftTheDrive", func(t *testing.T) {
+		received := drain(t, "/Private/Team/Blocker", func() {
+			privateID := private.ID()
+			_, err := vfs.ModifyDirMetadata(fs, out, &vfs.DocPatch{DirID: &privateID})
+			require.NoError(t, err)
+		})
+		assert.Equal(t, []string{realtime.EventDelete}, received[inner.ID()])
+		assert.Equal(t, []string{realtime.EventDelete}, received[out.ID()])
+	})
+
+	t.Run("RootRenamedTwice", func(t *testing.T) {
+		received := drain(t, "/Private/Team/Blocker2", func() {
+			for _, name := range []string{"Spring", "Summer"} {
+				current, err := fs.DirByID(root.ID())
+				require.NoError(t, err)
+				_, err = vfs.ModifyDirMetadata(fs, current, &vfs.DocPatch{Name: &name})
+				require.NoError(t, err)
+			}
+		})
+		assert.Equal(t, []string{"/Spring/Meetings", "/Summer/Meetings"}, received[meetings.ID()])
+		assert.Equal(t, []string{"/Spring/Meetings/Draft", "/Summer/Meetings/Draft"}, received[draft.ID()])
+		assert.Equal(t, []string{"/Spring", "/Summer"}, received[root.ID()])
 	})
 }
