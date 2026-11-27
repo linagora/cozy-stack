@@ -113,6 +113,14 @@ func CSRFWithConfig(config CSRFConfig) echo.MiddlewareFunc {
 	if config.CookieSameSite == 0 {
 		config.CookieSameSite = DefaultCSRFConfig.CookieSameSite
 	}
+	// Another host of the same site can set a cookie on the parent domain,
+	// and the token would then be its own: a __Host- cookie only comes from
+	// this host. The browsers require it to be secure, on / and without domain.
+	if config.CookieSecure {
+		config.CookieName = "__Host-" + config.CookieName
+		config.CookiePath = "/"
+		config.CookieDomain = ""
+	}
 
 	// Initialize
 	parts := strings.Split(config.TokenLookup, ":")

@@ -98,3 +98,36 @@ func TestCsrf(t *testing.T) {
 		csrfTokenFromQuery("csrf")
 	})
 }
+
+func TestCSRFSecureCookieOnlyFromThisHost(t *testing.T) {
+	e := echo.New()
+	h := CSRFWithConfig(CSRFConfig{
+		TokenLookup:  "form:csrf_token",
+		CookieSecure: true,
+		CookiePath:   "/auth",
+	})(func(c echo.Context) error {
+		return c.String(http.StatusOK, "test")
+	})
+	post := func(cookie, token string) error {
+		form := url.Values{"csrf_token": {token}}
+		req := httptest.NewRequest(http.MethodPost, "/auth/authorize", strings.NewReader(form.Encode()))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationForm)
+		req.Header.Set(echo.HeaderCookie, cookie)
+		return h(e.NewContext(req, httptest.NewRecorder()))
+	}
+
+	rec := httptest.NewRecorder()
+	require.NoError(t, h(e.NewContext(httptest.NewRequest(http.MethodGet, "/auth/login", nil), rec)))
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.Equal(t, "__Host-_csrf", cookies[0].Name)
+	assert.Equal(t, "/", cookies[0].Path)
+	assert.True(t, cookies[0].Secure)
+
+	// A _csrf cookie set by another host on the parent domain is ignored.
+	var he *echo.HTTPError
+	require.ErrorAs(t, post("_csrf=tossed", "tossed"), &he)
+	assert.Equal(t, http.StatusForbidden, he.Code)
+
+	assert.NoError(t, post("__Host-_csrf="+cookies[0].Value, cookies[0].Value))
+}

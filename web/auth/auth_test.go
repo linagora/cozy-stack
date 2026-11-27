@@ -255,7 +255,7 @@ func TestAuth(t *testing.T) {
 
 		e.POST("/auth/login").
 			WithHost(domain).
-			WithCookie("_csrf", token).
+			WithCookie("__Host-_csrf", token).
 			WithFormField("csrf_token", token).
 			WithFormField("passphrase", "Nope").
 			Expect().Status(401)
@@ -269,14 +269,14 @@ func TestAuth(t *testing.T) {
 		res := e.POST("/auth/login").
 			WithHost(domain).
 			WithRedirectPolicy(httpexpect.DontFollowRedirects).
-			WithCookie("_csrf", token).
+			WithCookie("__Host-_csrf", token).
 			WithFormField("csrf_token", token).
 			WithFormField("passphrase", "MyPassphrase").
 			Expect().Status(303)
 
 		res.Header("Location").Equal("https://home.cozy.example.net/")
 		res.Cookies().Length().Equal(2)
-		res.Cookie("_csrf").Value().Equal(token)
+		res.Cookie("__Host-_csrf").Value().Equal(token)
 		res.Cookie(session.CookieName(testInstance)).Value().NotEmpty()
 
 		var results []*session.LoginEntry
@@ -301,7 +301,7 @@ func TestAuth(t *testing.T) {
 			e.POST("/auth/login").
 				WithHost(domain).
 				WithRedirectPolicy(httpexpect.DontFollowRedirects).
-				WithCookie("_csrf", token).
+				WithCookie("__Host-_csrf", token).
 				WithFormField("csrf_token", token).
 				WithFormField("passphrase", "MyPassphrase").
 				WithFormField("redirect", "https://sub."+domain+"/#myfragment").
@@ -316,7 +316,7 @@ func TestAuth(t *testing.T) {
 			e.POST("/auth/login").
 				WithHost(domain).
 				WithRedirectPolicy(httpexpect.DontFollowRedirects).
-				WithCookie("_csrf", token).
+				WithCookie("__Host-_csrf", token).
 				WithFormField("csrf_token", token).
 				WithFormField("passphrase", "MyPassphrase").
 				WithFormField("redirect", "foo.bar").
@@ -1128,7 +1128,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("csrf_token", "azertyuiop").
 			WithFormField("response_type", "code").
 			WithHost(domain).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			Expect().Status(403).
 			Text(httpexpect.ContentOpts{MediaType: "text/plain"}).
 			Contains("invalid csrf token")
@@ -1144,7 +1144,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("csrf_token", csrfToken).
 			WithFormField("response_type", "code").
 			WithHost(domain).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			Expect().Status(400).
 			ContentType("text/html", "utf-8").
 			Body().Contains("The state parameter is mandatory")
@@ -1160,7 +1160,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("csrf_token", csrfToken).
 			WithFormField("response_type", "code").
 			WithHost(domain).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			Expect().Status(400).
 			ContentType("text/html", "utf-8").
 			Body().Contains("The client_id parameter is mandatory")
@@ -1177,7 +1177,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("csrf_token", csrfToken).
 			WithFormField("response_type", "code").
 			WithHost(domain).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			Expect().Status(400).
 			ContentType("text/html", "utf-8").
 			Body().Contains("The client must be registered")
@@ -1193,7 +1193,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("csrf_token", csrfToken).
 			WithFormField("response_type", "code").
 			WithHost(domain).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			Expect().Status(400).
 			ContentType("text/html", "utf-8").
 			Body().Contains("The redirect_uri parameter is mandatory")
@@ -1210,7 +1210,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("csrf_token", csrfToken).
 			WithFormField("response_type", "code").
 			WithHost(domain).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			Expect().Status(400).
 			ContentType("text/html", "utf-8").
 			Body().Contains("The redirect_uri parameter doesn&#39;t match the registered ones")
@@ -1226,7 +1226,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("csrf_token", csrfToken).
 			WithFormField("response_type", "code").
 			WithHost(domain).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			Expect().Status(400).
 			ContentType("text/html", "utf-8").
 			Body().Contains("The scope parameter is mandatory")
@@ -1243,7 +1243,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("csrf_token", csrfToken).
 			WithFormField("response_type", "code").
 			WithHost(domain).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			WithCookie(session.CookieName(testInstance), sessionID).
 			WithRedirectPolicy(httpexpect.DontFollowRedirects).
 			Expect().Status(302).
@@ -1595,7 +1595,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("code_challenge", challenge).
 			WithFormField("code_challenge_method", "S256").
 			WithHost(domain).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			WithCookie(session.CookieName(testInstance), sessionID).
 			WithRedirectPolicy(httpexpect.DontFollowRedirects).
 			Expect().Status(302)
@@ -1760,12 +1760,12 @@ func TestAuth(t *testing.T) {
 		res := e1.POST("/auth/login").
 			WithFormField("passphrase", "MyPassphrase").
 			WithFormField("csrf_token", csrfToken).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			WithHost(domain).
 			WithRedirectPolicy(httpexpect.DontFollowRedirects).
 			Expect().Status(303)
 
-		res.Cookie("_csrf").Value().NotEmpty()
+		res.Cookie("__Host-_csrf").Value().NotEmpty()
 
 		// Retrieve the session id from cozysessid
 		rawSessID1 := res.Cookie("cozysessid").Value().NotEmpty().Raw()
@@ -1778,12 +1778,12 @@ func TestAuth(t *testing.T) {
 		res = e2.POST("/auth/login").
 			WithFormField("passphrase", "MyPassphrase").
 			WithFormField("csrf_token", csrfToken).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			WithHost(domain).
 			WithRedirectPolicy(httpexpect.DontFollowRedirects).
 			Expect().Status(303)
 
-		res.Cookie("_csrf").Value().NotEmpty()
+		res.Cookie("__Host-_csrf").Value().NotEmpty()
 		res.Cookie("cozysessid").Value().NotEmpty()
 
 		token := testInstance.BuildAppToken("home", sessionID1)
@@ -1827,11 +1827,11 @@ func TestAuth(t *testing.T) {
 		csrfToken := e.GET("/auth/passphrase_reset").
 			WithHost(domain).
 			Expect().Status(200).
-			Cookie("_csrf").Value().Raw()
+			Cookie("__Host-_csrf").Value().Raw()
 
 		e.POST("/auth/passphrase_reset").
 			WithFormField("csrf_token", csrfToken).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			WithHost(domain).
 			Expect().Status(200).
 			ContentType("text/html", "utf-8")
@@ -1892,11 +1892,11 @@ func TestAuth(t *testing.T) {
 		csrfToken := e.GET("/auth/passphrase_reset").
 			WithHost(d).
 			Expect().Status(200).
-			Cookie("_csrf").Value().Raw()
+			Cookie("__Host-_csrf").Value().Raw()
 
 		e.POST("/auth/passphrase_reset").
 			WithFormField("csrf_token", csrfToken).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			WithHost(d).
 			Expect().Status(200)
 
@@ -1907,7 +1907,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("passphrase_reset_token", hex.EncodeToString(in2.PassphraseResetToken)).
 			WithFormField("passphrase", "NewPassphrase").
 			WithFormField("csrf_token", csrfToken).
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			WithHost(d).
 			WithRedirectPolicy(httpexpect.DontFollowRedirects).
 			Expect().Status(303).
@@ -2054,7 +2054,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("passphrase", "MyPassphrase").
 			WithFormField("csrf_token", "123456").
 			WithFormField("state", "342dd650-599b-0139-cfb0-543d7eb8149c").
-			WithCookie("_csrf", csrfToken).
+			WithCookie("__Host-_csrf", csrfToken).
 			WithHost(domain).
 			Expect().Status(403)
 	})
@@ -2069,7 +2069,7 @@ func TestAuth(t *testing.T) {
 			WithFormField("passphrase", "InvalidPassphrase"). // invalid
 			WithFormField("csrf_token", token).
 			WithFormField("state", "342dd650-599b-0139-cfb0-543d7eb8149c").
-			WithCookie("_csrf", token).
+			WithCookie("__Host-_csrf", token).
 			WithHost(domain).
 			Expect().Status(401)
 	})
@@ -2087,7 +2087,7 @@ func TestAuth(t *testing.T) {
 				WithFormField("passphrase", "MyPassphrase").
 				WithFormField("csrf_token", token).
 				WithFormField("state", "342dd650-599b-0139-cfb0-543d7eb8149c").
-				WithCookie("_csrf", token).
+				WithCookie("__Host-_csrf", token).
 				WithHost(domain).
 				Expect().Status(200).
 				JSON().Object()
@@ -2363,15 +2363,15 @@ func TestAuth(t *testing.T) {
 			require.NoError(t, err)
 			client := testutils.CreateTestClient(t, ts.URL)
 			csrf := client.GET("/auth/magic_link").WithHost(d).WithQuery("code", code).
-				Expect().Status(200).Cookie("_csrf").Value().Raw()
+				Expect().Status(200).Cookie("__Host-_csrf").Value().Raw()
 			require.NoError(t, lifecycle.CheckMagicLink(inst, code))
 			client.POST("/auth/magic_link/twofactor").WithHost(d).
-				WithCookie("_csrf", csrf).WithFormField("csrf_token", csrf).
+				WithCookie("__Host-_csrf", csrf).WithFormField("csrf_token", csrf).
 				WithFormField("magic_code", code).WithFormField("passphrase", "wrong").
 				Expect().Status(401)
 			require.NoError(t, lifecycle.CheckMagicLink(inst, code))
 			client.POST("/auth/magic_link/twofactor").WithHost(d).
-				WithCookie("_csrf", csrf).WithFormField("csrf_token", csrf).
+				WithCookie("__Host-_csrf", csrf).WithFormField("csrf_token", csrf).
 				WithFormField("magic_code", code).WithFormField("passphrase", "magic-link-password").
 				Expect().Status(200)
 			assert.ErrorIs(t, lifecycle.CheckMagicLink(inst, code), lifecycle.ErrInvalidMagicLink)
@@ -3747,7 +3747,7 @@ func getLoginCSRFToken(e *httpexpect.Expect) string {
 	return e.GET("/auth/login").
 		WithHost(domain).
 		Expect().Status(200).
-		Cookie("_csrf").Value().Raw()
+		Cookie("__Host-_csrf").Value().Raw()
 }
 
 func getConfirmCSRFToken(e *httpexpect.Expect) string {
@@ -3755,7 +3755,7 @@ func getConfirmCSRFToken(e *httpexpect.Expect) string {
 		WithQuery("state", "123").
 		WithHost(domain).
 		Expect().Status(200).
-		Cookie("_csrf").Value().Raw()
+		Cookie("__Host-_csrf").Value().Raw()
 }
 
 func fakeAPI(g *echo.Group) {
