@@ -33,6 +33,25 @@ func init() {
 		Timeout:      2 * time.Hour,
 		WorkerFunc:   WorkerCleanOldTrashed,
 	})
+
+	job.AddWorker(&job.WorkerConfig{
+		WorkerType:   "clean-uploads",
+		Concurrency:  runtime.NumCPU(),
+		MaxExecCount: 2,
+		Reserved:     true,
+		Timeout:      1 * time.Hour,
+		WorkerFunc:   WorkerCleanUploads,
+	})
+}
+
+// WorkerCleanUploads removes the resumable uploads that have expired, with
+// their content.
+func WorkerCleanUploads(ctx *job.TaskContext) error {
+	removed, err := vfs.CleanUploads(ctx.Instance.VFS())
+	if removed > 0 {
+		ctx.Logger().Infof("Removed %d expired uploads", removed)
+	}
+	return err
 }
 
 // WorkerTrashFiles is a worker to remove files in Swift after they have been

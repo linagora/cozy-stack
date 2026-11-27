@@ -1078,16 +1078,26 @@ func (f *s3FileCreation) Close() (err error) {
 		return vfs.ErrContentLengthMismatch
 	}
 
-	lockerr := f.fs.mu.Lock()
-	if lockerr != nil {
+	return f.fs.commitFile(newdoc, olddoc, f.size, f.capsize, f.allowTrash, nil)
+}
+
+// commitFile adds a file, whose content is already in its object, to the
+// index. check, when given, runs with the lock of the VFS held.
+func (sfs *s3VFS) commitFile(newdoc, olddoc *vfs.FileDoc, size, capsize int64, allowTrash bool, check func() error) error {
+	if lockerr := sfs.mu.Lock(); lockerr != nil {
 		return lockerr
 	}
-	defer f.fs.mu.Unlock()
+	defer sfs.mu.Unlock()
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 
 	// Check again that a file with the same path does not exist. It can happen
 	// when the same file is uploaded twice in parallel.
 	if olddoc == nil {
-		exists, err := f.fs.Indexer.DirChildExists(newdoc.DirID, newdoc.DocName)
+		exists, err := sfs.Indexer.DirChildExists(newdoc.DirID, newdoc.DocName)
 		if err != nil {
 			return err
 		}
@@ -1096,36 +1106,35 @@ func (f *s3FileCreation) Close() (err error) {
 		}
 	}
 
-	var newpath string
-	newpath, err = f.fs.Indexer.FilePath(newdoc)
+	newpath, err := sfs.Indexer.FilePath(newdoc)
 	if err != nil {
 		return err
 	}
 	newdoc.Trashed = strings.HasPrefix(newpath, vfs.TrashDirName+"/")
-	if olddoc == nil && newdoc.Trashed && !f.allowTrash {
+	if olddoc == nil && newdoc.Trashed && !allowTrash {
 		return vfs.ErrParentInTrash
 	}
 
 	var v *vfs.Version
 	if olddoc != nil {
 		v = vfs.NewVersion(olddoc)
-		err = f.fs.Indexer.UpdateFileDoc(olddoc, newdoc)
+		err = sfs.Indexer.UpdateFileDoc(olddoc, newdoc)
 	} else if newdoc.ID() == "" {
-		err = f.fs.Indexer.CreateFileDoc(newdoc)
+		err = sfs.Indexer.CreateFileDoc(newdoc)
 	} else {
-		err = f.fs.Indexer.CreateNamedFileDoc(newdoc)
+		err = sfs.Indexer.CreateNamedFileDoc(newdoc)
 	}
 	if err != nil {
 		return err
 	}
 
 	if v != nil {
-		actionV, toClean, _ := vfs.FindVersionsToClean(f.fs, newdoc.DocID, v)
+		actionV, toClean, _ := vfs.FindVersionsToClean(sfs, newdoc.DocID, v)
 		if bytes.Equal(newdoc.MD5Sum, olddoc.MD5Sum) {
 			actionV = vfs.CleanCandidateVersion
 		}
 		if actionV == vfs.KeepCandidateVersion {
-			if errv := f.fs.Indexer.CreateVersion(v); errv != nil {
+			if errv := sfs.Indexer.CreateVersion(v); errv != nil {
 				actionV = vfs.CleanCandidateVersion
 			}
 		}
@@ -1134,20 +1143,20 @@ func (f *s3FileCreation) Close() (err error) {
 			if parts := strings.SplitN(v.DocID, "/", 2); len(parts) > 1 {
 				internalID = parts[1]
 			}
-			objKey := MakeObjectKey(f.fs.keyPrefix, newdoc.DocID, internalID)
-			if err := f.fs.removeObject(objKey); err != nil {
-				f.fs.log.Warnf("Could not delete previous version %q: %s", objKey, err.Error())
+			objKey := MakeObjectKey(sfs.keyPrefix, newdoc.DocID, internalID)
+			if err := sfs.removeObject(objKey); err != nil {
+				sfs.log.Warnf("Could not delete previous version %q: %s", objKey, err.Error())
 			}
 		}
 		for _, old := range toClean {
-			if err := f.fs.cleanOldVersion(newdoc.DocID, old); err != nil {
-				f.fs.log.Warnf("Could not delete old versions for %s: %s", newdoc.DocID, err.Error())
+			if err := sfs.cleanOldVersion(newdoc.DocID, old); err != nil {
+				sfs.log.Warnf("Could not delete old versions for %s: %s", newdoc.DocID, err.Error())
 			}
 		}
 	}
 
-	if f.capsize > 0 && f.size >= f.capsize {
-		vfs.PushDiskQuotaAlert(f.fs, true)
+	if capsize > 0 && size >= capsize {
+		vfs.PushDiskQuotaAlert(sfs, true)
 	}
 
 	return nil

@@ -105,6 +105,14 @@ fs:
   #   max_number_of_versions_to_keep: 20
   #   min_delay_between_two_versions: 15m
 
+  # resumable uploads (draft-ietf-httpbis-resumable-upload)
+  # resumable_uploads:
+  #   part_size: 16777216 # bytes written to the storage at once, 5 MiB minimum,
+  #                       # buffered in the temporary directory for each request
+  #   max_age: 168h # an upload without a new byte for this long is removed
+  #   max_per_account: 20 # uploads in progress for one account of an instance
+  #   max_per_instance: 200 # uploads in progress for an instance, all accounts
+
   # contexts:
   #   cozy_beta:
   #     max_number_of_versions_to_keep: 10
@@ -179,6 +187,7 @@ jobs:
   #   - "thumbnailck":       generate missing thumbnails for all images
   #   - "trash-files":       async deletion of files in the trash
   #   - "clean-old-trashed": deletion of old files and directories after some time
+  #   - "clean-uploads":     deletion of the expired resumable uploads
   #   - "unzip":             unzipping tarball
   #   - "zip":               creating a zip tarball
   #

@@ -33,6 +33,7 @@ var blockList = map[string]bool{
 	consts.PublicLinkEvents:    none,
 	consts.PublicLinkReports:   none,
 	consts.FilesRecents:        none,
+	consts.FilesUploads:        none,
 
 	// Synthetic doctypes (API only)
 	consts.CertifiedCarbonCopy:     none,

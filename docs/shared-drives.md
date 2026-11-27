@@ -969,6 +969,18 @@ shared-drive requests, `trashedBy.kind` is `member` and
 `trashedBy.displayName` / `trashedBy.domain` are derived from the sharing
 member linked to the `DriveToken`.
 
+### Resumable uploads
+
+`POST /sharings/drives/:id/:dir-id` and `PUT /sharings/drives/:id/:file-id`
+accept the [resumable uploads](files.md#resumable-uploads), like `/files`.
+The upload is resumed with `HEAD`, `PATCH` and `DELETE` on
+`/sharings/drives/:id/uploads/:upload-id`, the `Location` given by the
+stack. The upload is kept on the instance of the owner, and the rights of the
+member are checked at each request. `OPTIONS
+/sharings/drives/:id/uploads` answers with an `Upload-Limit` header when the
+uploads to the drive can be resumable on the stack of the owner. See [the
+design](files-resumable-upload.md#shared-drives).
+
 ## Share-by-link permissions
 
 The following routes manage share-by-link permissions scoped to files inside a

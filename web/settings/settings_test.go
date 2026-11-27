@@ -621,6 +621,7 @@ func TestSettings(t *testing.T) {
 		attrs.HasValue("can_auth_with_password", true)
 		attrs.HasValue("can_auth_with_magic_links", false)
 		attrs.HasValue("can_auth_with_oidc", false)
+		attrs.HasValue("resumable_uploads", true)
 	})
 
 	t.Run("GetInstance", func(t *testing.T) {

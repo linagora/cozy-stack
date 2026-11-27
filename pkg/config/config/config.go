@@ -234,6 +234,7 @@ type Fs struct {
 	CanQueryInfo          bool
 	AutoCleanTrashedAfter map[string]string
 	Versioning            FsVersioning
+	ResumableUploads      FsResumableUploads
 	Contexts              map[string]interface{}
 	S3                    FsS3
 	// MigrationTarget, when set, is an alternate storage URL (e.g. s3://...)
@@ -254,6 +255,22 @@ type FsS3 struct {
 type FsS3Bucket struct {
 	Name string `mapstructure:"name"`
 	URL  string `mapstructure:"url"`
+}
+
+// FsResumableUploads configures the resumable uploads
+// (draft-ietf-httpbis-resumable-upload).
+type FsResumableUploads struct {
+	// PartSize is the size of the parts written to the storage. S3 requires
+	// at least 5 MiB.
+	PartSize int64
+	// MaxAge is how long an upload is kept after its last received byte.
+	MaxAge time.Duration
+	// MaxPerAccount is the maximal number of uploads in progress for one
+	// account of an instance.
+	MaxPerAccount int
+	// MaxPerInstance is the maximal number of uploads in progress for an
+	// instance, all accounts together.
+	MaxPerInstance int
 }
 
 // FsVersioning contains the configuration for the versioning of files
@@ -864,6 +881,10 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("assets_polling_interval", 2*time.Minute)
 	v.SetDefault("fs.versioning.max_number_of_versions_to_keep", 20)
 	v.SetDefault("fs.versioning.min_delay_between_two_versions", 15*time.Minute)
+	v.SetDefault("fs.resumable_uploads.part_size", 16<<20)
+	v.SetDefault("fs.resumable_uploads.max_age", 7*24*time.Hour)
+	v.SetDefault("fs.resumable_uploads.max_per_account", 20)
+	v.SetDefault("fs.resumable_uploads.max_per_instance", 200)
 }
 
 func envMap() map[string]string {
@@ -873,6 +894,14 @@ func envMap() map[string]string {
 		env[i[0:sep]] = i[sep+1:]
 	}
 	return env
+}
+
+// uploadPartSize applies the minimal size of a part on S3.
+func uploadPartSize(size int64) int64 {
+	if size < 5<<20 {
+		return 5 << 20
+	}
+	return size
 }
 
 // math.Max() is a float64 function, so we define int function here
@@ -1264,6 +1293,12 @@ func UseViper(v *viper.Viper) error {
 			Versioning: FsVersioning{
 				MaxNumberToKeep:            v.GetInt("fs.versioning.max_number_of_versions_to_keep"),
 				MinDelayBetweenTwoVersions: v.GetDuration("fs.versioning.min_delay_between_two_versions"),
+			},
+			ResumableUploads: FsResumableUploads{
+				PartSize:       uploadPartSize(v.GetInt64("fs.resumable_uploads.part_size")),
+				MaxAge:         v.GetDuration("fs.resumable_uploads.max_age"),
+				MaxPerAccount:  v.GetInt("fs.resumable_uploads.max_per_account"),
+				MaxPerInstance: v.GetInt("fs.resumable_uploads.max_per_instance"),
 			},
 			Contexts:        v.GetStringMap("fs.contexts"),
 			S3:              s3,
