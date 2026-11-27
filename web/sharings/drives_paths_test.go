@@ -8,6 +8,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/gavv/httpexpect/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -451,6 +452,38 @@ func TestSharedDriveLinkAndChildrenPaths(t *testing.T) {
 		for _, p := range []string{root + "/Meetings", root, "/Private/Clients" + root + "/Meetings"} {
 			assert.Equal(t, missing, byPath(p).Status(404).Body().Raw(), p)
 		}
+	})
+
+	// A parent the link can only write to does not change where its paths start
+	t.Run("WriteOnlyParent", func(t *testing.T) {
+		eA, _, _ := env.createClients(t)
+		rule := func(verb, id string) map[string]interface{} {
+			return map[string]interface{}{"type": consts.Files, "verbs": []string{verb}, "values": []string{id}}
+		}
+		payload := mustJSON(t, map[string]interface{}{"data": map[string]interface{}{
+			"type": consts.Permissions,
+			"attributes": map[string]interface{}{"permissions": map[string]interface{}{
+				"read":  rule("GET", env.meetingsDirID),
+				"write": rule("POST", env.firstRootDirID),
+			}},
+		}})
+		mixed := eA.POST("/permissions").WithQuery("codes", "link").
+			WithHeader("Authorization", "Bearer "+env.acmeToken).
+			WithHeader("Content-Type", jsonAPIContentType).
+			WithBytes(payload).Expect().Status(200).
+			JSON(httpexpect.ContentOpts{MediaType: jsonAPIContentType}).
+			Object().Path("$.data.attributes.codes.link").String().NotEmpty().Raw()
+		get := func(p string) *httpexpect.Request {
+			return eA.GET(p).WithHeader("Authorization", "Bearer "+mixed)
+		}
+
+		drive := "/sharings/drives/" + env.firstSharingID
+		for _, p := range []string{"/files/" + notesID, drive + "/" + notesID} {
+			noPrivateName(t, get(p).Expect().Status(200)).
+				Path("$.data.attributes.path").String().IsEqual("/Meetings/Notes")
+		}
+		noPrivateName(t, get(drive+"/metadata").WithQuery("Path", "/Meetings/Notes").Expect().Status(200)).
+			Path("$.data.id").String().IsEqual(notesID)
 	})
 }
 
