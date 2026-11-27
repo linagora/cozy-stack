@@ -2,12 +2,14 @@ package vfs
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/permission"
 	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/realtime"
 )
 
 // LinkRoot is a folder or a file targeted by a public link, with its path on
@@ -21,7 +23,7 @@ type LinkRoot struct {
 // ones given by ID. It is nil when the link can read the whole doctype (a rule
 // with no values, or on the root of the instance), and empty but not nil when
 // none of its targets exists anymore.
-func LinkRoots(fs VFS, perms permission.Set) ([]LinkRoot, error) {
+func LinkRoots(fs Indexer, perms permission.Set) ([]LinkRoot, error) {
 	roots := []LinkRoot{}
 	for _, rule := range perms {
 		if !permission.MatchType(rule, consts.Files) || rule.Selector != "" || !rule.Verbs.Contains(permission.GET) {
@@ -48,7 +50,7 @@ func LinkRoots(fs VFS, perms permission.Set) ([]LinkRoot, error) {
 }
 
 // PathByID gives the instance path of a file or directory.
-func PathByID(fs VFS, id string) (string, error) {
+func PathByID(fs Indexer, id string) (string, error) {
 	dir, file, err := fs.DirOrFileByID(id)
 	if err != nil {
 		return "", err
@@ -110,4 +112,39 @@ func AbsoluteFromLink(roots []LinkRoot, p string) string {
 		abs = candidate
 	}
 	return abs
+}
+
+// RewriteEventPaths copies a file event before changing its path and restore_path.
+func RewriteEventPaths(doc realtime.Doc, relative func(id, name, p string) string) realtime.Doc {
+	switch d := doc.(type) {
+	case *DirDoc:
+		c := d.Clone().(*DirDoc)
+		c.Fullpath = relative(c.DocID, c.DocName, c.Fullpath)
+		c.RestorePath = relative("", "", c.RestorePath)
+		return c
+	case *FileDoc:
+		c := d.Clone().(*FileDoc)
+		c.RestorePath = relative("", "", c.RestorePath)
+		return c
+	case *realtime.JSONDoc:
+		m := maps.Clone(d.M)
+		for _, key := range []string{"path", "restore_path"} {
+			p, ok := m[key].(string)
+			if !ok {
+				continue
+			}
+			id, name := "", ""
+			if key == "path" {
+				id = d.ID()
+				name, _ = m["name"].(string)
+			}
+			if rel := relative(id, name, p); rel != "" {
+				m[key] = rel
+			} else {
+				delete(m, key)
+			}
+		}
+		return &realtime.JSONDoc{Type: d.Type, M: m}
+	}
+	return doc
 }

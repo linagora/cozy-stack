@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -169,6 +170,18 @@ func wsWrite(ws *websocket.Conn, ch chan *wsResponse, errc chan *wsError) error 
 func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsResponse, inst *instance.Instance, s *sharing.Sharing) {
 	log := inst.Logger().WithNamespace("sharing-realtime")
 
+	eventDoc := func(doc realtime.Doc, root, rootID string) realtime.Doc {
+		return vfs.RewriteEventPaths(doc, func(id, name, p string) string {
+			if s.DrivePathsHidden() {
+				return ""
+			}
+			if id != "" && id == rootID {
+				return "/" + name
+			}
+			return vfs.RelativeToLink([]vfs.LinkRoot{{Path: root}}, p)
+		})
+	}
+
 	if s.HasFileDriveRoot() {
 		rootFileID, err := s.DriveRootID()
 		if err != nil {
@@ -180,8 +193,11 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 		isRoot := func(doc realtime.Doc) bool {
 			return doc != nil && doc.ID() == rootFileID
 		}
-		forwardEvents(ctx, ds, ch, func(e *realtime.Event) bool {
-			return isRoot(e.Doc) || isRoot(e.OldDoc)
+		forwardEvents(ctx, ds, ch, func(e *realtime.Event) *realtime.Event {
+			if !isRoot(e.Doc) && !isRoot(e.OldDoc) {
+				return nil
+			}
+			return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, "", rootFileID)}
 		})
 		return
 	}
@@ -198,23 +214,36 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 	}
 	log.Debugf("filterMapEvents: watching %s for sharing %s", dir.Fullpath, s.SID)
 
+	// RestorePath is the fullpath of the directory that contained the file,
+	// so a file trashed at the very root of the shared folder has an equal
+	// RestorePath
+	trashedInDrive := func(restorePath string) bool {
+		return restorePath == dir.Fullpath || strings.HasPrefix(restorePath, dir.Fullpath+"/")
+	}
+	// The old and new versions of a file often have the same parent: it is
+	// checked once for each event
+	var checkedID string
+	var checkedIn bool
+	fileInDrive := func(dirID string) bool {
+		if dirID == checkedID {
+			return checkedIn
+		}
+		in, err := parentsReach(inst.VFS().GetIndexer(), dir.DocID, dirID)
+		if err != nil {
+			log.Warnf("filterMapEvents: failed to get the parents of dir %s: %s", dirID, err)
+		}
+		checkedID, checkedIn = dirID, in
+		return in
+	}
 	testPath := func(doc realtime.Doc) bool {
 		if d, ok := doc.(*vfs.DirDoc); ok {
 			return strings.HasPrefix(d.Fullpath, dir.Fullpath+"/")
 		}
 		if f, ok := doc.(*vfs.FileDoc); ok {
 			if f.Trashed {
-				// RestorePath is the fullpath of the directory that
-				// contained the file, so a file trashed at the very root
-				// of the shared folder has an equal RestorePath
-				return f.RestorePath == dir.Fullpath ||
-					strings.HasPrefix(f.RestorePath, dir.Fullpath+"/")
+				return trashedInDrive(f.RestorePath)
 			}
-			p, err := f.Path(inst.VFS())
-			if err != nil {
-				return false
-			}
-			return strings.HasPrefix(p, dir.Fullpath+"/")
+			return fileInDrive(f.DirID)
 		}
 		// Handle realtime.JSONDoc (happens when events come through Redis in multi-stack)
 		if j, ok := doc.(*realtime.JSONDoc); ok {
@@ -223,52 +252,126 @@ func filterMapEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsRe
 				fullpath, _ := j.M["path"].(string)
 				return strings.HasPrefix(fullpath, dir.Fullpath+"/")
 			}
+			if trashed, _ := j.M["trashed"].(bool); trashed {
+				restorePath, _ := j.M["restore_path"].(string)
+				return trashedInDrive(restorePath)
+			}
 			dirID, _ := j.M["dir_id"].(string)
 			if dirID == "" {
 				log.Warnf("filterMapEvents: failed to get dir_id in event doc with id:%s", doc.ID())
 				return false
 			}
-			parentDir, err := inst.VFS().DirByID(dirID)
-			if err != nil {
-				log.Warnf("filterMapEvents: failed to get parent dir %s: %s", dirID, err)
-				return false
-			}
-			name, _ := j.M["name"].(string)
-			filePath := parentDir.Fullpath + "/" + name
-			return strings.HasPrefix(filePath, dir.Fullpath+"/")
+			return fileInDrive(dirID)
 		}
 		return false
 	}
 
-	match := func(e *realtime.Event) bool {
-		if e.Doc.ID() == dir.DocID {
-			return true
-		}
-		if e.OldDoc != nil && e.OldDoc.ID() == dir.DocID {
-			return true
-		}
-		if testPath(e.Doc) {
-			return true
-		}
-		if e.OldDoc != nil && testPath(e.OldDoc) {
-			return true
+	// Only the folders outside the trash can move with the root
+	movedFolder := func(doc realtime.Doc) bool {
+		switch d := doc.(type) {
+		case *vfs.DirDoc:
+			return !vfs.IsInTrash(d.Fullpath)
+		case *realtime.JSONDoc:
+			docType, _ := d.M["type"].(string)
+			fullpath, _ := d.M["path"].(string)
+			return docType == consts.DirType && !vfs.IsInTrash(fullpath)
 		}
 		return false
+	}
+
+	// movingRootPath gives the new path of the root when the folder of the
+	// event is a child of the root that moves with it. MoveDir publishes the
+	// folders below a moved folder in the order of their paths, so a child of
+	// the root comes before the other folders, and the root comes last.
+	movingRootPath := func(e *realtime.Event) (string, bool) {
+		oldPath, oldParent := folderPlace(e.OldDoc)
+		newPath, newParent := folderPlace(e.Doc)
+		name, ok := strings.CutPrefix(oldPath, dir.Fullpath+"/")
+		if !ok || oldParent != dir.DocID || newParent != dir.DocID || path.Base(newPath) != name {
+			return "", false
+		}
+		return path.Dir(newPath), true
+	}
+
+	forward := func(e *realtime.Event) *realtime.Event {
+		return &realtime.Event{Verb: e.Verb, Doc: eventDoc(e.Doc, dir.Fullpath, dir.DocID)}
+	}
+
+	// The path of the root follows the events, and not the database, as they
+	// can wait behind other moves.
+	match := func(e *realtime.Event) *realtime.Event {
+		checkedID, checkedIn = "", false
+		if e.Doc.ID() == dir.DocID {
+			if p, _ := folderPlace(e.Doc); p != "" {
+				dir.Fullpath = p
+			}
+			return forward(e)
+		}
+		if testPath(e.Doc) {
+			return forward(e)
+		}
+		if e.OldDoc != nil && testPath(e.OldDoc) {
+			if movedFolder(e.Doc) {
+				if root, ok := movingRootPath(e); ok {
+					dir.Fullpath = root
+					return forward(e)
+				}
+			}
+			// The document has left the drive: its new location is not for
+			// the members.
+			gone := &realtime.JSONDoc{Type: e.Doc.DocType(), M: map[string]interface{}{"_id": e.Doc.ID()}}
+			return &realtime.Event{Verb: realtime.EventDelete, Doc: gone}
+		}
+		return nil
 	}
 
 	forwardEvents(ctx, ds, ch, match)
 }
 
-// forwardEvents sends the matching events of ds to ch until ctx is done. The
-// websocket writer stops reading ch when the client disconnects, so every
-// send must also watch ctx.
-func forwardEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsResponse, match func(*realtime.Event) bool) {
+// parentsReach tells if rootID is dirID or one of its parents. It follows the
+// IDs, which stay the same while a folder moves, unlike the paths.
+func parentsReach(fs vfs.Indexer, rootID, dirID string) (bool, error) {
+	// A loop in a broken tree must not block the events
+	for depth := 0; depth < vfs.MaxDepth; depth++ {
+		switch dirID {
+		case rootID:
+			return true, nil
+		case "", consts.RootDirID, consts.TrashDirID:
+			return false, nil
+		}
+		parent, err := fs.DirByID(dirID)
+		if err != nil {
+			return false, err
+		}
+		dirID = parent.DirID
+	}
+	return false, nil
+}
+
+// folderPlace gives the path and the parent of a folder in an event.
+func folderPlace(doc realtime.Doc) (string, string) {
+	switch d := doc.(type) {
+	case *vfs.DirDoc:
+		return d.Fullpath, d.DirID
+	case *realtime.JSONDoc:
+		p, _ := d.M["path"].(string)
+		parent, _ := d.M["dir_id"].(string)
+		return p, parent
+	}
+	return "", ""
+}
+
+// forwardEvents sends to ch the events of ds that match keeps, in the form it
+// returns, until ctx is done. The websocket writer stops reading ch when the
+// client disconnects, so every send must also watch ctx.
+func forwardEvents(ctx context.Context, ds *realtime.Subscriber, ch chan *wsResponse, match func(*realtime.Event) *realtime.Event) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case e := <-ds.Channel:
-			if !match(e) {
+			e = match(e)
+			if e == nil {
 				continue
 			}
 			res := &wsResponse{
@@ -323,6 +426,7 @@ func wsOwner(c echo.Context, inst *instance.Instance, s *sharing.Sharing) error 
 			}
 		}
 		ds.Subscribe(consts.Files)
+		s.LimitDrivePaths(pdoc)
 		filterMapEvents(ctx, ds, ch, inst, s)
 	}()
 

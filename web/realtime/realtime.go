@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -153,7 +154,7 @@ func authorized(i *instance.Instance, perms permission.Set, verb permission.Verb
 }
 
 func readPump(ctx context.Context, c echo.Context, i *instance.Instance, ws *websocket.Conn,
-	ds *realtime.Subscriber, errc chan *wsError, withAuthentication bool) {
+	ds *realtime.Subscriber, errc chan *wsError, withAuthentication bool, link *atomic.Pointer[linkPaths]) {
 	defer close(errc)
 
 	var err error
@@ -177,6 +178,14 @@ func readPump(ctx context.Context, c echo.Context, i *instance.Instance, ws *web
 		if err != nil {
 			sendErr(ctx, errc, unauthorized(auth))
 			return
+		}
+		paths, err := newLinkPaths(i, pdoc)
+		if err != nil {
+			sendErr(ctx, errc, unauthorized(auth))
+			return
+		}
+		if paths.restricted() {
+			link.Store(paths)
 		}
 	}
 
@@ -278,7 +287,8 @@ func Ws(c echo.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errc := make(chan *wsError)
-	go readPump(ctx, c, inst, ws, ds, errc, withAuthentication)
+	var link atomic.Pointer[linkPaths]
+	go readPump(ctx, c, inst, ws, ds, errc, withAuthentication, &link)
 
 	ticker := time.NewTicker(pingPeriod)
 	defer ticker.Stop()
@@ -299,12 +309,16 @@ func Ws(c echo.Context) error {
 			if err := ws.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 				return err
 			}
+			doc := e.Doc
+			if paths := link.Load(); paths != nil {
+				doc = paths.rewrite(doc)
+			}
 			res := wsResponse{
 				Event: e.Verb,
 				Payload: wsResponsePayload{
 					Type: e.Doc.DocType(),
 					ID:   e.Doc.ID(),
-					Doc:  e.Doc,
+					Doc:  doc,
 				},
 			}
 			if err := ws.WriteJSON(res); err != nil {

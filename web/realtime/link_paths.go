@@ -1,0 +1,75 @@
+package realtime
+
+import (
+	"strings"
+
+	"github.com/cozy/cozy-stack/model/instance"
+	"github.com/cozy/cozy-stack/model/permission"
+	"github.com/cozy/cozy-stack/model/sharing"
+	"github.com/cozy/cozy-stack/model/vfs"
+	"github.com/cozy/cozy-stack/pkg/consts"
+	"github.com/cozy/cozy-stack/pkg/realtime"
+)
+
+// linkPaths rewrites the paths of the documents sent to the holder of a public
+// link, to start at the roots of the link.
+type linkPaths struct {
+	inst  *instance.Instance
+	perm  *permission.Permission
+	roots []vfs.LinkRoot // as read when subscribing
+}
+
+func newLinkPaths(inst *instance.Instance, perm *permission.Permission) (*linkPaths, error) {
+	scope, err := sharing.ResolveFilePaths(inst, perm)
+	if err != nil {
+		return nil, err
+	}
+	return &linkPaths{inst: inst, perm: perm, roots: scope.Roots}, nil
+}
+
+// restricted tells if the paths must be rewritten for this token: a link
+// whose targets are all gone still hides the paths.
+func (l *linkPaths) restricted() bool {
+	return l.roots != nil
+}
+
+// rewrite gives a copy of the document where the paths start at a root of the
+// link like on the HTTP routes, and are left out when they are under none of
+// the roots, the trash included: the watched documents may have left the link.
+func (l *linkPaths) rewrite(doc realtime.Doc) realtime.Doc {
+	// Another doctype can have its own fields named path and restore_path
+	if doc.DocType() != consts.Files {
+		return doc
+	}
+	var roots []vfs.LinkRoot
+	read := false
+	return vfs.RewriteEventPaths(doc, func(_, _, p string) string {
+		if p == "" {
+			return ""
+		}
+		// Read once for each event with a path, as a root can have moved with
+		// no event for this subscription, which watches some documents only
+		if !read {
+			read = true
+			scope, err := sharing.ResolveFilePaths(l.inst, l.perm)
+			if err != nil {
+				l.inst.Logger().WithNamespace("realtime").Warnf("cannot read the roots of a link: %s", err)
+			}
+			roots = scope.Roots
+		}
+		if !under(roots, p) {
+			return ""
+		}
+		return vfs.RelativeToLink(roots, p)
+	})
+}
+
+// under tells if p is one of the roots or under one of them.
+func under(roots []vfs.LinkRoot, p string) bool {
+	for _, root := range roots {
+		if p == root.Path || strings.HasPrefix(p, root.Path+"/") {
+			return true
+		}
+	}
+	return false
+}
