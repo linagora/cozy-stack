@@ -85,7 +85,7 @@ func SearchFiles(c echo.Context) error {
 
 	hits := make([]search.Hit, len(results.Hits))
 	for i, h := range results.Hits {
-		hits[i] = search.Hit{OwnerInstanceID: h.OwnerInstanceID, DirID: h.DirID, DriveID: h.DriveID}
+		hits[i] = h.Hit
 	}
 	paths, err := search.VisiblePaths(inst, hits, results.Drives)
 	if err != nil {
