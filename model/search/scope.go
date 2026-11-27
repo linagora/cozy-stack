@@ -17,7 +17,9 @@ import (
 	"github.com/cozy/cozy-stack/pkg/opensearch"
 )
 
-// Names of the search indices, before the configured prefix.
+// Names of the search indices, before the configured prefix. They are
+// defined in package purge, so that the instance lifecycle can use them
+// without an import cycle.
 const (
 	FilesIndex  = purge.FilesIndex
 	ScopesIndex = purge.ScopesIndex
