@@ -1,7 +1,7 @@
 package realtime
 
 import (
-	"path"
+	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
 	"github.com/cozy/cozy-stack/model/permission"
@@ -18,6 +18,7 @@ type linkPaths struct {
 	inst  *instance.Instance
 	perm  *permission.Permission
 	roots []vfs.LinkRoot
+	fresh bool // the roots have been read for the current event
 }
 
 func newLinkPaths(inst *instance.Instance, perm *permission.Permission) (*linkPaths, error) {
@@ -41,30 +42,43 @@ func (l *linkPaths) rewrite(doc realtime.Doc) realtime.Doc {
 	if doc.DocType() != consts.Files {
 		return doc
 	}
+	l.fresh = false
 	return vfs.RewriteEventPaths(doc, l.relative)
 }
 
+// relative formats p like the HTTP routes, and leaves it out when it is under
+// none of the roots, the trash included: the watched documents may have left
+// the link.
 func (l *linkPaths) relative(id, _, p string) string {
 	if p == "" || len(l.roots) == 0 {
 		return ""
 	}
-	if id != "" {
-		for _, root := range l.roots {
-			if root.ID == id {
-				if p == "/" {
-					return p
-				}
-				return "/" + path.Base(p)
-			}
+	if !placed(l.roots, id, p) {
+		// A root, or a folder above one, may have been renamed, moved or trashed
+		if l.fresh {
+			return ""
+		}
+		scope, err := sharing.ResolveFilePaths(l.inst, l.perm)
+		if err != nil {
+			return ""
+		}
+		l.roots, l.fresh = scope.Roots, true
+		if !placed(l.roots, id, p) {
+			return ""
 		}
 	}
-	if rel := vfs.RelativeToLink(l.roots, p); rel != "" {
-		return rel
+	return vfs.RelativeToLink(l.roots, p)
+}
+
+// placed tells if the roots are up to date for p: the root with this ID is at
+// p, and p is under one of the roots.
+func placed(roots []vfs.LinkRoot, id, p string) bool {
+	under := false
+	for _, root := range roots {
+		if root.ID == id && root.Path != p {
+			return false
+		}
+		under = under || p == root.Path || strings.HasPrefix(p, root.Path+"/")
 	}
-	// A folder above a root may have been renamed or moved.
-	if scope, err := sharing.ResolveFilePaths(l.inst, l.perm); err == nil {
-		l.roots = scope.Roots
-		return vfs.RelativeToLink(l.roots, p)
-	}
-	return ""
+	return under
 }

@@ -23,7 +23,7 @@ type LinkRoot struct {
 // ones given by ID. It is nil when the link can read the whole doctype (a rule
 // with no values, or on the root of the instance), and empty but not nil when
 // none of its targets exists anymore.
-func LinkRoots(fs VFS, perms permission.Set) ([]LinkRoot, error) {
+func LinkRoots(fs Indexer, perms permission.Set) ([]LinkRoot, error) {
 	roots := []LinkRoot{}
 	for _, rule := range perms {
 		if !permission.MatchType(rule, consts.Files) || rule.Selector != "" || !rule.Verbs.Contains(permission.GET) {
@@ -50,7 +50,7 @@ func LinkRoots(fs VFS, perms permission.Set) ([]LinkRoot, error) {
 }
 
 // PathByID gives the instance path of a file or directory.
-func PathByID(fs VFS, id string) (string, error) {
+func PathByID(fs Indexer, id string) (string, error) {
 	dir, file, err := fs.DirOrFileByID(id)
 	if err != nil {
 		return "", err

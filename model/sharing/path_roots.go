@@ -76,9 +76,11 @@ func (s *Sharing) LimitDrivePaths(perm *permission.Permission) {
 // ResolveFilePaths finds the roots for HTTP responses and realtime events.
 func ResolveFilePaths(inst *instance.Instance, perm *permission.Permission) (FilePathScope, error) {
 	var scope FilePathScope
+	// Without the VFS lock, so that realtime events don't wait for a move to end
+	fs := inst.VFS().GetIndexer()
 	switch perm.Type {
 	case permission.TypeShareByLink, permission.TypeSharePreview:
-		roots, err := vfs.LinkRoots(inst.VFS(), perm.Permissions)
+		roots, err := vfs.LinkRoots(fs, perm.Permissions)
 		scope.Roots = roots
 		return scope, err
 	case permission.TypeShareInteract:
@@ -105,7 +107,7 @@ func ResolveFilePaths(inst *instance.Instance, perm *permission.Permission) (Fil
 		if id == "" {
 			return scope, nil
 		}
-		p, err := vfs.PathByID(inst.VFS(), id)
+		p, err := vfs.PathByID(fs, id)
 		if errors.Is(err, os.ErrNotExist) {
 			return scope, nil
 		}

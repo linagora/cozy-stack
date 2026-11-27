@@ -95,4 +95,39 @@ func TestLinkPathsRewrite(t *testing.T) {
 		sub := &vfs.DirDoc{DocID: "sub", Fullpath: "/Private/Renamed/Docs/Sub"}
 		assert.Equal(t, "/Docs/Sub", l.rewrite(sub).(*vfs.DirDoc).Fullpath)
 	})
+
+	t.Run("NestedRootMoved", func(t *testing.T) {
+		child, err := vfs.MkdirAll(fs, "/Private/Meetings/Child")
+		require.NoError(t, err)
+		meetings, err := fs.DirByPath("/Private/Meetings")
+		require.NoError(t, err)
+		nested := &permission.Permission{Type: permission.TypeShareByLink, Permissions: permission.Set{permission.Rule{
+			Type: consts.Files, Verbs: permission.Verbs(permission.GET), Values: []string{meetings.ID(), child.ID()},
+		}}}
+		n, err := newLinkPaths(inst, nested)
+		require.NoError(t, err)
+
+		name := "Reviewed"
+		child, err = vfs.ModifyDirMetadata(fs, child, &vfs.DocPatch{Name: &name})
+		require.NoError(t, err)
+		assert.Equal(t, "/Meetings/Reviewed", n.rewrite(child).(*vfs.DirDoc).Fullpath)
+
+		child, err = vfs.TrashDir(fs, child)
+		require.NoError(t, err)
+		require.Equal(t, "/.cozy_trash/Reviewed", child.Fullpath)
+		assert.Equal(t, "/.cozy_trash/Reviewed", n.rewrite(child).(*vfs.DirDoc).Fullpath)
+	})
+
+	t.Run("AncestorTrashed", func(t *testing.T) {
+		renamed, err := fs.DirByPath("/Private/Renamed")
+		require.NoError(t, err)
+		_, err = vfs.TrashDir(fs, renamed)
+		require.NoError(t, err)
+
+		// Only the event of a document under the root comes
+		sub := &vfs.DirDoc{DocID: "sub", Fullpath: "/.cozy_trash/Renamed/Docs/Sub"}
+		assert.Equal(t, "/.cozy_trash/Docs/Sub", l.rewrite(sub).(*vfs.DirDoc).Fullpath)
+		left := &vfs.DirDoc{DocID: "left", Fullpath: "/.cozy_trash/Other/Left"}
+		assert.Empty(t, l.rewrite(left).(*vfs.DirDoc).Fullpath)
+	})
 }
