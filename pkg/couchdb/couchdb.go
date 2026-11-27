@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -835,9 +836,19 @@ func FindDocsUnoptimizedRaw(db prefixer.Prefixer, doctype string, req *FindReque
 
 func findDocsRaw(db prefixer.Prefixer, doctype string, req interface{}, results interface{}, ignoreUnoptimized bool) (*FindResponse, error) {
 	url := "_find"
-	// prepare a structure to receive the results
+	rv := reflect.ValueOf(results)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return nil, &json.InvalidUnmarshalError{Type: reflect.TypeOf(results)}
+	}
+	// The docs are decoded with the envelope, without copying them into a
+	// RawMessage, into a new value given to the caller once the response is
+	// accepted.
 	var response FindResponse
-	err := makeRequest(db, doctype, http.MethodPost, url, &req, &response)
+	body := struct {
+		*FindResponse
+		Docs findDocs `json:"docs"` // a value, so that a null still calls UnmarshalJSON
+	}{&response, findDocs{dst: reflect.New(rv.Elem().Type())}}
+	err := makeRequest(db, doctype, http.MethodPost, url, &req, &body)
 	if err != nil {
 		if isIndexError(err) {
 			jsonReq, errm := json.Marshal(req)
@@ -858,7 +869,27 @@ func findDocsRaw(db prefixer.Prefixer, doctype string, req interface{}, results 
 		// CouchDB surprisingly returns "nil" when there is no doc
 		response.Bookmark = ""
 	}
-	return &response, json.Unmarshal(response.Docs, results)
+	if !body.Docs.present {
+		return nil, errors.New("couchdb: _find response without docs")
+	}
+	if body.Docs.err != nil {
+		return &response, body.Docs.err
+	}
+	rv.Elem().Set(body.Docs.dst.Elem())
+	return &response, nil
+}
+
+// findDocs decodes the docs of a _find response and records their presence.
+type findDocs struct {
+	present bool
+	dst     reflect.Value
+	err     error // kept until the warning is checked
+}
+
+func (d *findDocs) UnmarshalJSON(b []byte) error {
+	d.present = true
+	d.err = json.Unmarshal(b, d.dst.Interface())
+	return nil
 }
 
 // FindDocsRaw find documents
@@ -931,7 +962,6 @@ type UpdateResponse struct {
 type FindResponse struct {
 	Warning        string          `json:"warning"`
 	Bookmark       string          `json:"bookmark"`
-	Docs           json.RawMessage `json:"docs"`
 	ExecutionStats *ExecutionStats `json:"execution_stats,omitempty"`
 }
 

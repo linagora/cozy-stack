@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/cozy/cozy-stack/pkg/config/config"
+	"github.com/cozy/cozy-stack/pkg/consts"
 	"github.com/cozy/cozy-stack/pkg/couchdb/mango"
 	"github.com/cozy/cozy-stack/pkg/prefixer"
 	"github.com/cozy/cozy-stack/pkg/realtime"
@@ -633,4 +634,99 @@ func assertGotEvent(t *testing.T, eventType, id string) *realtime.Event {
 
 	assert.True(t, ok, "Expected event %s:%s", eventType, id)
 	return event
+}
+
+// serveFind makes the _find requests of FindDocsRaw get body, from a fake CouchDB.
+func serveFind(tb testing.TB, body []byte) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	tb.Cleanup(ts.Close)
+	require.NoError(tb, config.LoadTestFile())
+	tb.Cleanup(func() { require.NoError(tb, config.LoadTestFile()) })
+	u, err := url.Parse(ts.URL + "/")
+	require.NoError(tb, err)
+	cfg := config.GetConfig()
+	cfg.CouchDB.Client = ts.Client()
+	cfg.CouchDB.Global = config.CouchDBCluster{URL: u}
+	cfg.CouchDB.Clusters = nil
+}
+
+func TestFindDocsRawDecodesTheDocs(t *testing.T) {
+	serveFind(t, []byte(`{"docs":[{"_id":"a","test":"x"},{"_id":"b","test":"y"}],"bookmark":"nil","warning":""}`))
+	var docs []testDoc
+	res, err := FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	require.NoError(t, err)
+	assert.Equal(t, "", res.Bookmark)
+	require.Len(t, docs, 2)
+	assert.Equal(t, "y", docs[1].Test)
+
+	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, docs)
+	var invalid *json.InvalidUnmarshalError
+	assert.ErrorAs(t, err, &invalid)
+
+	// A rejected page leaves the results of the previous one untouched.
+	serveFind(t, []byte(`{"docs":[{"_id":"c","test":"z"}],"warning":"No matching index found, create an index to optimize query time."}`))
+	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	assert.Error(t, err)
+	assert.Len(t, docs, 2)
+
+	// A row that fails to decode in a page with the warning: a strict query
+	// still gets no_index, an unoptimized one the decoding error.
+	serveFind(t, []byte(`{"docs":[{"_id":"c","test":42}],"warning":"No matching index found, create an index to optimize query time."}`))
+	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	var couchErr *Error
+	require.ErrorAs(t, err, &couchErr)
+	assert.Equal(t, "no_index", couchErr.Name)
+	assert.Len(t, docs, 2)
+	_, err = FindDocsUnoptimizedRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	var typeErr *json.UnmarshalTypeError
+	assert.ErrorAs(t, err, &typeErr)
+	assert.Len(t, docs, 2)
+
+	// "docs": null empties the results, and a missing "docs" is an error.
+	serveFind(t, []byte(`{"docs":null,"bookmark":"nil"}`))
+	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	require.NoError(t, err)
+	assert.Empty(t, docs)
+	docs = []testDoc{{Test: "previous"}}
+	serveFind(t, []byte(`{"bookmark":"nil"}`))
+	_, err = FindDocsRaw(TestPrefix, TestDoctype, &FindRequest{Selector: mango.Exists("test")}, &docs)
+	assert.Error(t, err)
+}
+
+func BenchmarkFindDocsRaw(b *testing.B) {
+	doc := `{"_id":"%032d","_rev":"3-0123456789abcdef","type":"file","name":"IMG_%04d.jpg","dir_id":"io.cozy.files.root-dir","created_at":"2026-11-27T12:00:00Z","updated_at":"2026-11-27T12:00:00Z","size":"2345678","md5sum":"rL0Y20zC+Fzt72VPzMSk2A==","mime":"image/jpeg","class":"image","executable":false,"trashed":false,"tags":[],"metadata":{"datetime":"2026-11-27T12:00:00Z","extractor_version":2,"height":3024,"width":4032,"gps":{"lat":48.85,"long":2.35}},"cozyMetadata":{"doctypeVersion":"1","metadataVersion":1,"createdAt":"2026-11-27T12:00:00Z","updatedAt":"2026-11-27T12:00:00Z","uploadedAt":"2026-11-27T12:00:00Z","uploadedOn":"https://alice.example.net/"}}`
+	docs := make([]string, 100)
+	for i := range docs {
+		docs[i] = fmt.Sprintf(doc, i, i)
+	}
+	serveFind(b, []byte(`{"docs":[`+strings.Join(docs, ",")+`],"bookmark":"g1AAAAB","warning":""}`))
+	req := &FindRequest{Selector: mango.Exists("name"), Limit: 100}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var results []struct {
+			ID       string `json:"_id"`
+			Rev      string `json:"_rev"`
+			Type     string `json:"type"`
+			Name     string `json:"name"`
+			DirID    string `json:"dir_id"`
+			Size     string `json:"size"`
+			MD5Sum   []byte `json:"md5sum"`
+			Mime     string `json:"mime"`
+			Class    string `json:"class"`
+			Trashed  bool   `json:"trashed"`
+			Tags     []string
+			Metadata struct {
+				Datetime time.Time `json:"datetime"`
+				Height   int       `json:"height"`
+				Width    int       `json:"width"`
+			} `json:"metadata"`
+		}
+		if _, err := FindDocsRaw(TestPrefix, consts.Files, req, &results); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
