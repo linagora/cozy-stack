@@ -97,6 +97,9 @@ func TestMemberScopes(t *testing.T) {
 		data, _ := io.ReadAll(r.Body)
 		body = string(data)
 		_, _ = w.Write([]byte(`{"hits":{"hits":[
+			{"_id":"s0","_source":{"sharing_id":"s0","owner_instance_id":"alice.example.net","root_dir_id":"sub1",
+				"active_member_principals":["bob.example.net"],
+				"subtree_dir_keys":["alice.example.net:sub1"]}},
 			{"_id":"s1","_source":{"sharing_id":"s1","owner_instance_id":"alice.example.net","root_dir_id":"root1",
 				"active_member_principals":["bob.example.net"],
 				"subtree_dir_keys":["alice.example.net:root1","alice.example.net:sub1"]}},
@@ -115,10 +118,11 @@ func TestMemberScopes(t *testing.T) {
 	assert.JSONEq(t, `{"size":10000,"query":{"term":{"active_member_principals":"bob.example.net"}}}`, body)
 	assert.Equal(t, map[string]string{
 		"alice.example.net:root1": "s1",
-		"alice.example.net:sub1":  "s1",
+		"alice.example.net:sub1":  "s1", // in the outermost drive
 		"carol.example.net:root2": "s2",
 	}, keys)
 	assert.Equal(t, map[string]Drive{
+		"s0": {OwnerInstanceID: "alice.example.net", RootDirID: "sub1"},
 		"s1": {OwnerInstanceID: "alice.example.net", RootDirID: "root1"},
 		"s2": {OwnerInstanceID: "carol.example.net", RootDirID: "root2"},
 	}, drives)

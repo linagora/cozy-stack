@@ -1,6 +1,7 @@
 package search
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -143,10 +144,14 @@ func memberScopes(ctx context.Context, client *opensearch.Client, domain string)
 	if err := client.Search(ctx, ScopesIndex, query, &res); err != nil {
 		return nil, nil, err
 	}
+	docs := make([]ScopeDocument, len(res.Hits.Hits))
+	for i, hit := range res.Hits.Hits {
+		docs[i] = hit.Source
+	}
+	slices.SortFunc(docs, compareScopes)
 	driveByKey := make(map[string]string)
-	drives := make(map[string]Drive, len(res.Hits.Hits))
-	for _, hit := range res.Hits.Hits {
-		doc := hit.Source
+	drives := make(map[string]Drive, len(docs))
+	for _, doc := range docs {
 		drives[doc.SharingID] = Drive{OwnerInstanceID: doc.OwnerInstanceID, RootDirID: doc.RootDirID}
 		for _, key := range doc.SubtreeDirKeys {
 			if _, ok := driveByKey[key]; !ok {
@@ -155,6 +160,21 @@ func memberScopes(ctx context.Context, client *opensearch.Client, domain string)
 		}
 	}
 	return driveByKey, drives, nil
+}
+
+// compareScopes orders the drives of the caller, so that a folder in nested
+// drives is in the first one, as compareDriveScopes does for the recents: the
+// roots of these drives are on a single chain, so the outermost one has the
+// most folders; then the smallest sharing id.
+//
+// shortcut: the drives where the caller can write do not come first, as the
+// scope docs do not hold the rights; read the caller's sharings of the nested
+// drives if that matters.
+func compareScopes(a, b ScopeDocument) int {
+	return cmp.Or(
+		cmp.Compare(len(b.SubtreeDirKeys), len(a.SubtreeDirKeys)),
+		cmp.Compare(a.SharingID, b.SharingID),
+	)
 }
 
 // buildQuery returns the body of the search request on the files index.
