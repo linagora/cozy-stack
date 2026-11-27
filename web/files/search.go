@@ -1,6 +1,7 @@
 package files
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -112,8 +113,11 @@ func SearchFiles(c echo.Context) error {
 }
 
 // searchUnavailable logs an error of the search backend, and gives the client
-// a fixed message instead.
+// a fixed message instead. A search canceled by the client, as a client that
+// searches as the user types does on each key, is not logged.
 func searchUnavailable(inst *instance.Instance, err error) error {
-	inst.Logger().WithNamespace("search").Errorf("search failed: %s", err)
+	if !errors.Is(err, context.Canceled) {
+		inst.Logger().WithNamespace("search").Errorf("search failed: %s", err)
+	}
 	return jsonapi.NewError(http.StatusServiceUnavailable, "search is unavailable")
 }
