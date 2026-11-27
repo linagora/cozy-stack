@@ -2,9 +2,11 @@ package search
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 
@@ -23,7 +25,12 @@ const (
 // OpenSearch default of index.max_terms_count (a variable for the tests).
 var termsChunkSize = 65536
 
-// ErrInvalidCursor is returned for a cursor that was not given by Search.
+// rankingVersion is in the cursors, with the name of the index: change it
+// with the ranking, so that the cursors of the previous one are refused.
+const rankingVersion = 1
+
+// ErrInvalidCursor is returned for a cursor that was not given by Search for
+// the same caller and query.
 var ErrInvalidCursor = errors.New("search: invalid cursor")
 
 // SearchHit is a file or folder found by a search.
@@ -58,7 +65,8 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 		limit = DefaultLimit
 	}
 	limit = min(limit, MaxLimit)
-	after, err := decodeCursor(cursor)
+	binding := cursorBinding(caller.Domain, q)
+	after, err := decodeCursor(cursor, binding)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +106,7 @@ func Search(ctx context.Context, client *opensearch.Client, caller *instance.Ins
 		out.Hits = append(out.Hits, hit)
 	}
 	if n := len(res.Hits.Hits); n == limit {
-		if out.Cursor, err = encodeCursor(res.Hits.Hits[n-1].Sort); err != nil {
+		if out.Cursor, err = encodeCursor(res.Hits.Hits[n-1].Sort, binding); err != nil {
 			return nil, err
 		}
 	}
@@ -189,15 +197,22 @@ func buildQuery(domain, q string, dirKeys []string, limit int, after []any) map[
 	return body
 }
 
-func encodeCursor(sortValues []any) (string, error) {
-	data, err := json.Marshal(sortValues)
+// cursorBinding ties a cursor to the caller, the query, the index and the
+// ranking, as ADR 008 asks: another search refuses it.
+func cursorBinding(domain, q string) string {
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s\x00%s", FilesIndex, rankingVersion, domain, q))
+	return base64.RawURLEncoding.EncodeToString(sum[:12])
+}
+
+func encodeCursor(sortValues []any, binding string) (string, error) {
+	data, err := json.Marshal(append(sortValues, binding))
 	if err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(data), nil
 }
 
-func decodeCursor(cursor string) ([]any, error) {
+func decodeCursor(cursor, binding string) ([]any, error) {
 	if cursor == "" {
 		return nil, nil
 	}
@@ -206,7 +221,7 @@ func decodeCursor(cursor string) ([]any, error) {
 		return nil, ErrInvalidCursor
 	}
 	var after []any
-	if err := json.Unmarshal(data, &after); err != nil || len(after) != 2 {
+	if err := json.Unmarshal(data, &after); err != nil || len(after) != 3 || after[2] != binding {
 		return nil, ErrInvalidCursor
 	}
 	if _, ok := after[0].(float64); !ok {
@@ -215,5 +230,5 @@ func decodeCursor(cursor string) ([]any, error) {
 	if _, ok := after[1].(string); !ok {
 		return nil, ErrInvalidCursor
 	}
-	return after, nil
+	return after[:2], nil
 }

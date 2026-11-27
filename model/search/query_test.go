@@ -70,18 +70,23 @@ func TestBuildQuery(t *testing.T) {
 }
 
 func TestCursor(t *testing.T) {
-	cursor, err := encodeCursor([]any{2.25, "alice.example.net:f1"})
+	binding := cursorBinding("bob.example.net", "report")
+	cursor, err := encodeCursor([]any{2.25, "alice.example.net:f1"}, binding)
 	require.NoError(t, err)
-	after, err := decodeCursor(cursor)
+	after, err := decodeCursor(cursor, binding)
 	require.NoError(t, err)
 	assert.Equal(t, []any{2.25, "alice.example.net:f1"}, after)
 
-	after, err = decodeCursor("")
+	after, err = decodeCursor("", binding)
 	require.NoError(t, err)
 	assert.Nil(t, after)
 
+	for _, other := range []string{cursorBinding("bob.example.net", "budget"), cursorBinding("carol.example.net", "report")} {
+		_, err := decodeCursor(cursor, other)
+		assert.ErrorIs(t, err, ErrInvalidCursor, "a cursor is for the same caller and query")
+	}
 	for _, bad := range []string{"%%%", "bm90IGpzb24", "WzEsMiwzXQ", "WyJhIiwiYiJd"} {
-		_, err := decodeCursor(bad)
+		_, err := decodeCursor(bad, binding)
 		assert.ErrorIs(t, err, ErrInvalidCursor, bad)
 	}
 }
@@ -206,6 +211,12 @@ func TestSearchWithOpenSearch(t *testing.T) {
 	t.Run("invalid cursor", func(t *testing.T) {
 		_, err := Search(ctx, client, caller, "report", 0, "nope")
 		assert.ErrorIs(t, err, ErrInvalidCursor)
+		first, err := Search(ctx, client, caller, "report", 1, "")
+		require.NoError(t, err)
+		_, err = Search(ctx, client, caller, "budget", 1, first.Cursor)
+		assert.ErrorIs(t, err, ErrInvalidCursor, "a cursor is for its own query")
+		_, err = Search(ctx, client, owner, "report", 1, first.Cursor)
+		assert.ErrorIs(t, err, ErrInvalidCursor, "and its own caller")
 	})
 }
 
