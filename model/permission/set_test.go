@@ -182,6 +182,10 @@ func TestSetUnmarshalJSONEdgeCases(t *testing.T) {
 	require.Len(t, s, 2)
 	assert.Equal(t, []string{"io.cozy.files", "io.cozy.files"}, []string{s[0].Type, s[1].Type})
 	assert.Error(t, json.Unmarshal([]byte(`{"f":{"type":"io.cozy.files"},"f":1}`), &s))
+	// The same for a string: the old key walker took "x" for a title and
+	// refused this set, which is accepted now.
+	require.NoError(t, json.Unmarshal([]byte(`{"f":"x","f":{"type":"io.cozy.files"}}`), &s))
+	assert.Equal(t, []string{"io.cozy.files", "io.cozy.files"}, []string{s[0].Type, s[1].Type})
 }
 
 func BenchmarkSetUnmarshalJSON(b *testing.B) {
