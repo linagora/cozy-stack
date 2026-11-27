@@ -270,6 +270,9 @@ func BindRelations(req *http.Request) ([]couchdb.DocReference, error) {
 	if err := decoder.Decode(&doc); err != nil {
 		return nil, BadJSON()
 	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, BadJSON()
+	}
 	if doc.Data == nil {
 		return nil, BadJSON()
 	}
@@ -281,8 +284,9 @@ func BindRelations(req *http.Request) ([]couchdb.DocReference, error) {
 		}
 		out = []couchdb.DocReference{ri}
 	}
+	// A DELETE can still remove an incomplete reference stored by an older version.
 	for _, ref := range out {
-		if ref.Type == "" || ref.ID == "" {
+		if (ref.Type == "" || ref.ID == "") && req.Method != http.MethodDelete {
 			return nil, BadJSON()
 		}
 	}

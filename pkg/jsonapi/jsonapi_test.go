@@ -30,13 +30,19 @@ func TestBindRelationsMalformed(t *testing.T) {
 		`{"data":[{"type":"","id":""}]}`,
 		`{"data":{"type":"io.cozy.photos.albums","id":""}}`,
 		`{"data":[{"type":"io.cozy.photos.albums","id":"a"},{"id":"b"}]}`,
+		`{"data":{"type":"io.cozy.photos.albums","id":"a"}} {"data":`,
 	} {
 		_, err := BindRelations(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
 		assert.Equal(t, BadJSON(), err, body)
 	}
-	refs, err := BindRelations(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"data":{"type":"io.cozy.photos.albums","id":"a"}}`)))
+	refs, err := BindRelations(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"data":{"type":"io.cozy.photos.albums","id":"a"}}`+" \n")))
 	assert.NoError(t, err)
 	assert.Equal(t, []couchdb.DocReference{{Type: "io.cozy.photos.albums", ID: "a"}}, refs)
+
+	// An incomplete reference stored by an older version can still be removed.
+	refs, err = BindRelations(httptest.NewRequest(http.MethodDelete, "/", strings.NewReader(`{"data":[{"type":"","id":""}]}`)))
+	assert.NoError(t, err)
+	assert.Equal(t, []couchdb.DocReference{{}}, refs)
 }
 
 func TestJsonapi(t *testing.T) {

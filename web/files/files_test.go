@@ -3959,6 +3959,24 @@ func TestFiles(t *testing.T) {
 		ref.ValueEqual("type", "io.cozy.photos.albums")
 	})
 
+	t.Run("RemoveIncompleteReferencedBy", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, ts.URL)
+		// An older version could store a reference with an empty type or id.
+		album := couchdb.DocReference{Type: consts.PhotosAlbums, ID: "album-kept"}
+		dir, err := vfs.NewDirDocWithPath("WithIncompleteRef", consts.RootDirID, "/", nil)
+		require.NoError(t, err)
+		dir.AddReferencedBy(album, couchdb.DocReference{})
+		require.NoError(t, testInstance.VFS().CreateDir(dir))
+
+		e.DELETE("/files/"+dir.ID()+"/relationships/referenced_by").
+			WithHeader("Authorization", "Bearer "+token).
+			WithJSON(echo.Map{"data": []couchdb.DocReference{{}}}).
+			Expect().Status(http.StatusOK)
+		dir, err = testInstance.VFS().DirByID(dir.ID())
+		require.NoError(t, err)
+		assert.Equal(t, []couchdb.DocReference{album}, dir.ReferencedBy)
+	})
+
 	t.Run("MagicFolder", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, ts.URL)
 		magicPath := "/files/" + url.PathEscape("io.cozy.apps/mail")
