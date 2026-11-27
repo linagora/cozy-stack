@@ -187,6 +187,9 @@ func NewDirDoc(index Indexer, name, dirID string, tags []string) (*DirDoc, error
 		if err != nil {
 			return nil, err
 		}
+		if IsInTrash(parent.Fullpath) {
+			return nil, ErrParentInTrash
+		}
 		dirPath = parent.Fullpath
 	}
 
