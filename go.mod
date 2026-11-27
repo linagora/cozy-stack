@@ -8,7 +8,7 @@ require (
 	github.com/adrg/xdg v0.5.3
 	github.com/andybalholm/brotli v1.2.7
 	github.com/bradfitz/latlong v0.0.0-20170410180902-f3db6d0dff40
-	github.com/cozy/goexif2 v1.3.2
+	github.com/cozy/goexif2 v1.4.0
 	github.com/cozy/gomail v0.0.0-20170313100128-1395d9a6a6c0
 	github.com/cozy/httpcache v0.0.0-20210224123405-3f334f841945
 	github.com/cozy/prosemirror-go v0.6.0
