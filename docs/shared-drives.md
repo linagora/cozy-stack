@@ -444,7 +444,9 @@ root-file semantics for file-root shared drives.
 A member's file paths start at the drive root. A public link to a folder
 inside that drive starts at the linked folder. For example, the same directory
 can appear as `/Team/Meetings/Notes` to a member and `/Meetings/Notes` to a
-link visitor. Each can pass the returned path to `GET /files/metadata`.
+link visitor. A member passes the returned path to
+`GET /sharings/drives/:id/metadata`. A visitor with a link or an interact code
+can also pass it to `GET /files/metadata` on the owner's instance.
 
 When a `share-interact` code covers multiple file roots, clients can still
 use authorized document IDs. The stack omits `path` and `restore_path` and
