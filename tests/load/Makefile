@@ -301,7 +301,7 @@ mixed-workload mixed-soak mixed-capacity: $(NODE_MODULES_MARKER)
 # The search load test (README, Search load test): search-up restarts the Stack with OpenSearch,
 # search-load-prepare builds drives for an organization fixture once, search-load searches as its
 # members at a fixed rate per drive count, and search-down restarts the Stack without search.
-SEARCH_SETTINGS := SEARCH_LEVELS SEARCH_USERS_PER_LEVEL SEARCH_FILES_PER_DRIVE SEARCH_OWN_FILES SEARCH_SETTLE_MS
+SEARCH_SETTINGS := SEARCH_LEVELS SEARCH_USERS_PER_LEVEL SEARCH_FILES_PER_DRIVE SEARCH_OWN_FILES SEARCH_BIG_DRIVE_FOLDERS SEARCH_SETTLE_MS
 $(foreach setting,$(SEARCH_SETTINGS),$(if $(filter undefined,$(origin $(setting))),,$(eval export $(setting))))
 SEARCH_COMPOSE := $(COZY_COMPOSE) -f compose.yaml -f compose.search.yaml
 SEARCH_RATE ?= 5

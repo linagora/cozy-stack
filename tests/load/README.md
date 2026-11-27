@@ -636,14 +636,15 @@ run on shared DEV; process kills and dependency outages stay isolated work.
 ## Search load test
 
 `make search-load` sends searches (`POST /files/search`) at a fixed rate as
-members of 1, 10 and 200 shared drives, and reports p50 and p95 latency and
-errors per drive count, with OpenSearch's CPU sampled meanwhile
+members of 1, 10 and 200 shared drives, and of one big drive of many folders,
+and reports p50 and p95 latency and errors per group, with OpenSearch's CPU
+sampled meanwhile
 ([ADR 008](../../docs/adr/008-adr-server-side-file-search-v2.md)). It runs
 on the bundled Stack only: search is not deployed on shared DEV.
 
 ```console
 $ make search-up
-$ make seed-org SEED_USERS=15 SEED_CONTEXT_NAME=load-org-sharing
+$ make seed-org SEED_USERS=20 SEED_CONTEXT_NAME=load-org-sharing
 $ make search-load-prepare ACTORS_DOMAIN='seed-<32-hex-id>.localhost:8080'
 $ make search-load ACTORS_DOMAIN='seed-<32-hex-id>.localhost:8080' SEARCH_RATE=5 SEARCH_DURATION=1m
 $ make search-down
@@ -657,18 +658,23 @@ search configured, every new instance gets a search-index trigger.
 200 drives of `SEARCH_FILES_PER_DRIVE` files (default 20), named from a few
 words, and shares them through contacts groups with `SEARCH_USERS_PER_LEVEL`
 members per drive count (default 5; `SEARCH_LEVELS`, default `1,10,200`).
-Each member gets `SEARCH_OWN_FILES` files of its own (default 50). The members
+It also creates a big drive of `SEARCH_BIG_DRIVE_FOLDERS` folders (default
+50000), 100 under its root and the others under them, shared with
+`SEARCH_USERS_PER_LEVEL` other members: each search sends all the folder keys
+of the caller's drives to OpenSearch, so this group shows what many folders
+cost. Each member gets `SEARCH_OWN_FILES` files of its own (default 50). The members
 accept on their own; the runner then turns search on and waits, up to
 `SEARCH_SETTLE_MS` (default 30 minutes), until each member finds the last of
 its drives and its own files. A prepared fixture is recorded in
 `data/results/search-load-<prefix>.json` and is not prepared again.
 
 `make search-load` mints the members' tokens and runs k6 with one
-`constant-arrival-rate` scenario per drive count (`SEARCH_RATE` searches per
+`constant-arrival-rate` scenario per group (`SEARCH_RATE` searches per
 second each, default 5, for `SEARCH_DURATION`, default 1m, with at most
 `SEARCH_MAX_VUS` VUs, default 50). Each search picks a member and a word or
 the start of one. `data/results/<EXECUTION_ID>-search-load.json` records the
-latency, errors and searches per drive count, OpenSearch's average and
+latency, errors and searches per group (`drives` is `big` for the big drive),
+OpenSearch's average and
 highest CPU, and dropped iterations. For reference, a search with 200 drives
 took about 30–55 ms locally while the search was built.
 
