@@ -578,6 +578,8 @@ are:
   email is possible
 - `can_auth_with_oidc` is true when delegated authentication with OIDC is
   possible for this instance.
+- `resumable_uploads` is true when the files of this instance can be uploaded
+  with the [resumable uploads](files.md#resumable-uploads) protocol.
 
 **Note:** both `can_auth_with_password` and `can_auth_with_oidc` can be true
 for an instance where the choice is given to the user of how they want to
@@ -603,7 +605,8 @@ Accept: application/vnd.api+json
             "flat_subdomains": false,
             "can_auth_with_password": true,
             "can_auth_with_magic_links": false,
-            "can_auth_with_oidc": false
+            "can_auth_with_oidc": false,
+            "resumable_uploads": true
         },
         "links": {
             "self": "/settings/capabilities"

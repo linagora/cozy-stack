@@ -116,6 +116,9 @@ func Create(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.FileDoc, error) 
 		err = ErrDocTypeInvalid
 	}
 
+	if errors.Is(err, errResponseSent) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, WrapVfsError(err)
 	}
@@ -173,6 +176,16 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 		return nil, err
 	}
 
+	isNote := filepath.Ext(doc.DocName) == ".cozy-note"
+	if sharedDrive != nil || isNote || c.QueryParam("SourceURL") != "" {
+		if refused, err := refuseResumableUpload(c); refused {
+			if err == nil {
+				err = errResponseSent
+			}
+			return nil, err
+		}
+	}
+
 	body := c.Request().Body
 	if sourceURL := c.QueryParam("SourceURL"); sourceURL != "" {
 		req, err := http.NewRequestWithContext(c.Request().Context(), http.MethodGet, sourceURL, nil)
@@ -191,7 +204,7 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 		doc.ByteSize = res.ContentLength
 	}
 
-	if filepath.Ext(doc.DocName) == ".cozy-note" {
+	if isNote {
 		err := note.ImportFile(inst, doc, nil, body)
 		if err != nil {
 			inst.Logger().WithNamespace("files").
@@ -199,6 +212,20 @@ func createFileHandler(c echo.Context, fs vfs.VFS, sharedDrive *sharing.Sharing)
 			return nil, WrapVfsError(err)
 		}
 		return NewFile(doc, inst, sharedDrive), nil
+	}
+
+	if sharedDrive == nil && c.QueryParam("SourceURL") == "" {
+		handled, created, err := startUpload(c, fs, doc, nil, "")
+		if handled {
+			if err != nil {
+				return nil, err
+			}
+			if created == nil {
+				return nil, errResponseSent
+			}
+			maybeNotifyShareByLinkUpload(c, inst, created.DocName, created.ID(), created.DirID, false)
+			return NewFile(created, inst, sharedDrive), nil
+		}
 	}
 
 	file, err := fs.CreateFile(doc, nil)
@@ -372,7 +399,14 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 		return nil, err
 	}
 
-	if filepath.Ext(newdoc.DocName) == ".cozy-note" {
+	isNote := filepath.Ext(newdoc.DocName) == ".cozy-note"
+	if sharedDrive != nil || isNote {
+		if refused, err := refuseResumableUpload(c); refused {
+			return nil, err
+		}
+	}
+
+	if isNote {
 		err := note.ImportFile(instance, newdoc, olddoc, c.Request().Body)
 		if err != nil {
 			instance.Logger().WithNamespace("files").
@@ -381,6 +415,16 @@ func OverwriteFileContent(c echo.Context, sharedDrive *sharing.Sharing) (*vfs.Fi
 		}
 		recordEdit(c, nil, newdoc)
 		return newdoc, FileData(c, http.StatusOK, newdoc, true, nil, sharedDrive)
+	}
+
+	if sharedDrive == nil {
+		handled, updated, err := startUpload(c, instance.VFS(), newdoc, olddoc, wantedRev(c))
+		if handled {
+			if err != nil || updated == nil {
+				return nil, err
+			}
+			return updated, FileData(c, http.StatusOK, updated, true, nil, sharedDrive)
+		}
 	}
 
 	file, err := instance.VFS().CreateFile(newdoc, olddoc)
@@ -2380,6 +2424,9 @@ func Routes(router *echo.Group) {
 	router.POST("/:file-id", CreationHandler)
 	router.PUT("/:file-id", OverwriteFileContentHandler)
 	router.POST("/upload/metadata", UploadMetadataHandler)
+	router.HEAD("/uploads/:upload-id", UploadOffsetHandler)
+	router.PATCH("/uploads/:upload-id", UploadAppendHandler)
+	router.DELETE("/uploads/:upload-id", UploadCancelHandler)
 	router.POST("/:file-id/copy", FileCopyHandler)
 
 	router.GET("/:file-id/thumbnails/:secret/:format", ThumbnailHandler)
@@ -2573,16 +2620,16 @@ func FileDocFromReq(c echo.Context, name, dirID string) (*vfs.FileDoc, error) {
 // CheckIfMatch checks if the revision provided matches the revision number
 // given in the request, in the header and/or the query.
 func CheckIfMatch(c echo.Context, rev string) error {
-	ifMatch := c.Request().Header.Get("If-Match")
-	revQuery := c.QueryParam("rev")
-	var wantedRev string
-	if ifMatch != "" {
-		wantedRev = ifMatch
+	return checkIfMatch(rev, wantedRev(c))
+}
+
+// wantedRev returns the revision given in the If-Match header or in the rev
+// query parameter.
+func wantedRev(c echo.Context) string {
+	if ifMatch := c.Request().Header.Get("If-Match"); ifMatch != "" {
+		return ifMatch
 	}
-	if revQuery != "" && wantedRev == "" {
-		wantedRev = revQuery
-	}
-	return checkIfMatch(rev, wantedRev)
+	return c.QueryParam("rev")
 }
 
 func checkIfMatch(rev, wantedRev string) error {

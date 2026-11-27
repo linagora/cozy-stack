@@ -75,7 +75,8 @@ func (afs *aferoVFS) checkFiles(
 
 		if fullpath == vfs.WebappsDirName ||
 			fullpath == vfs.KonnectorsDirName ||
-			fullpath == vfs.ThumbsDirName {
+			fullpath == vfs.ThumbsDirName ||
+			fullpath == vfs.UploadsDirName {
 			return filepath.SkipDir
 		}
 
