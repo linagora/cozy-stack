@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/cozy/cozy-stack/model/instance"
@@ -81,14 +80,14 @@ func NewScopeDocument(inst *instance.Instance, s *sharing.Sharing) (*ScopeDocume
 	if err != nil {
 		return nil, false, err
 	}
-	if len(ids)+1 > maxScopeKeys {
-		inst.Logger().WithNamespace("search").
-			Warnf("the scope of the drive %s has %d folder keys", s.SID, len(ids)+1)
-	}
 	keys := make([]string, 0, len(ids)+1)
 	keys = append(keys, Key(inst.Domain, rootID))
 	for _, id := range ids {
 		keys = append(keys, Key(inst.Domain, id))
+	}
+	if len(keys) > maxScopeKeys {
+		inst.Logger().WithNamespace("search").
+			Warnf("the scope of the drive %s has %d folder keys", s.SID, len(keys))
 	}
 	return &ScopeDocument{
 		SharingID:              s.SID,
@@ -146,7 +145,7 @@ func subdirIDs(db *instance.Instance, dirPath string, pageSize int) ([]string, e
 		}
 		for _, doc := range docs {
 			// CouchDB compares case last, so the range of /Team also has /team/x
-			if p, _ := doc.M["path"].(string); strings.HasPrefix(p, dirPath+"/") && !inSkippedTree(path.Dir(p)) {
+			if p, _ := doc.M["path"].(string); strings.HasPrefix(p, dirPath+"/") && !folderSkipped(p) {
 				ids = append(ids, doc.ID())
 			}
 		}
