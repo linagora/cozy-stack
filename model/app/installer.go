@@ -649,6 +649,10 @@ func (i *Installer) ManifestChannel() chan Manifest {
 
 // DoLazyUpdate tries to update an application before using it
 func DoLazyUpdate(in *instance.Instance, man Manifest, copier appfs.Copier, registries []*url.URL) Manifest {
+	// An app served from a local directory (--appdir) is not installed.
+	if webapp, ok := man.(*WebappManifest); ok && webapp.FromAppsDir {
+		return man
+	}
 	src, err := url.Parse(man.Source())
 	if err != nil {
 		return man

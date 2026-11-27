@@ -2,6 +2,9 @@ package app
 
 import (
 	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -190,4 +193,33 @@ func TestKonnManifestSourceSurvivesReload(t *testing.T) {
 	var reloaded KonnManifest
 	require.NoError(t, json.Unmarshal(b, &reloaded))
 	assert.Equal(t, "git://example.org/k.git", reloaded.Source())
+}
+
+// failingCopier fails the test as soon as an installer starts to copy files.
+type failingCopier struct{ t *testing.T }
+
+func (c failingCopier) Exist(_, _, _ string) (bool, error) {
+	c.t.Fatal("the app served from a directory is installed again")
+	return false, nil
+}
+func (c failingCopier) Start(_, _, _ string) (bool, error) {
+	c.t.Fatal("the app served from a directory is installed again")
+	return false, nil
+}
+func (c failingCopier) Copy(os.FileInfo, io.Reader) error { return nil }
+func (c failingCopier) Abort() error                      { return nil }
+func (c failingCopier) Commit() error                     { return nil }
+
+func TestLazyUpdateSkipsAppsDir(t *testing.T) {
+	config.UseTestFile(t)
+	dir := t.TempDir()
+	manifest := `{"slug": "lazy-mini", "type": "webapp", "version": "1.0.0", "permissions": {}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, WebappManifestName), []byte(manifest), 0o600))
+	SetupAppsDir(map[string]string{"lazy-mini": dir})
+	t.Cleanup(func() { delete(appsdir, "lazy-mini") })
+
+	inst := &instance.Instance{Domain: "lazy-mini.example", Prefix: "lazy-mini"}
+	man, err := GetWebappBySlug(inst, "lazy-mini")
+	require.NoError(t, err)
+	assert.Same(t, Manifest(man), DoLazyUpdate(inst, man, failingCopier{t}, nil))
 }
