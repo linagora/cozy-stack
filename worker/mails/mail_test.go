@@ -408,3 +408,38 @@ func mailServer(t *testing.T, serverString string, clientStrings []string, expec
 	}
 	assert.EqualValues(t, expectedHeader, headers)
 }
+
+func TestComposeMailChecksRecipients(t *testing.T) {
+	compose := func(to string) ([]string, error) {
+		email, err := composeMail(nil, &mail.Options{
+			Mode:    mail.ModeFromUser,
+			Subject: "o",
+			From:    &mail.Address{Email: "me@me"},
+			To:      []*mail.Address{{Email: to, Name: "Bob"}},
+			Parts:   []*mail.Part{{Type: "text/plain", Body: "x"}},
+		}, "cozy.example")
+		if err != nil {
+			return nil, err
+		}
+		return email.GetHeader("To"), nil
+	}
+
+	to, err := compose(`"Alice" <alice@example.com>`)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{`"Alice" <alice@example.com>`}, to)
+	to, err = compose("bob@example.com")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{`"Bob" <bob@example.com>`}, to)
+
+	// RFC 5321: at most 64 octets for the local part and 254 for the address.
+	for _, bad := range []string{
+		`"" <b@` + strings.Repeat("-", 1000) + `example.com>`,
+		"b@" + strings.Repeat("a", 250) + ".com",
+		strings.Repeat("a", 65) + "@example.com",
+		"Dupont, Jean <j@example.com>",
+		"not an address",
+	} {
+		_, err := compose(bad)
+		assert.Error(t, err, bad)
+	}
+}

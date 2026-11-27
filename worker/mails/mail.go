@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	netmail "net/mail"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -236,16 +237,22 @@ func composeMail(ctx *job.TaskContext, opts *mail.Options, domain string) (*goma
 	}
 	toAddresses := make([]string, len(opts.To))
 	for i, to := range opts.To {
-		// See https://tools.ietf.org/html/rfc5322#section-3.4
-		// We want to use an email address in the "display-name <addr-spec>"
-		// format. If it is the case, the address is taken as is. Else, gomail
-		// is used to format it.
-		to.Email = strings.TrimSpace(to.Email)
-		if strings.HasSuffix(to.Email, ">") {
-			toAddresses[i] = to.Email
-		} else {
-			toAddresses[i] = email.FormatAddress(to.Email, to.Name)
+		// The email is an addr-spec, or "display-name <addr-spec>" (RFC 5322
+		// §3.4). It is parsed and formatted again: gomail folds a header only
+		// at spaces, so an unchecked value can exceed the 998 octets of a line.
+		addr, err := netmail.ParseAddress(strings.TrimSpace(to.Email))
+		if err != nil {
+			return nil, fmt.Errorf("Invalid mail recipient %q: %w", to.Email, err)
 		}
+		// RFC 5321 §4.5.3.1: 64 octets for the local part, 256 for the path.
+		local, _, _ := strings.Cut(addr.Address, "@")
+		if len(local) > 64 || len(addr.Address) > 254 {
+			return nil, fmt.Errorf("Invalid mail recipient %q: too long", to.Email)
+		}
+		if addr.Name == "" {
+			addr.Name = to.Name
+		}
+		toAddresses[i] = email.FormatAddress(addr.Address, addr.Name)
 	}
 
 	var parts []*mail.Part
