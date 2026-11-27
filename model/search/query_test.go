@@ -256,6 +256,39 @@ func TestSearchWithOpenSearch(t *testing.T) {
 		assert.Equal(t, "invoice", res.Hits[0].Name)
 	})
 
+	t.Run("accents and other scripts", func(t *testing.T) {
+		for _, name := range []string{
+			"Отчёт за квартал.pdf", "Straße Plan.txt", "Ελληνικές σημειώσεις.txt",
+			"会议记录.docx", "تقرير سنوي.pdf", "Çalışma raporu.txt", "naïve café.txt",
+			"Ærøskøbing kort.png",
+		} {
+			createTextFile(t, caller, consts.RootDirID, name)
+		}
+		require.NoError(t, Index(ctx, caller, log))
+		for q, expected := range map[string]string{
+			"отчет":       "Отчёт за квартал.pdf",
+			"квартал":     "Отчёт за квартал.pdf",
+			"strasse":     "Straße Plan.txt",
+			"straße":      "Straße Plan.txt",
+			"σημειωσεις":  "Ελληνικές σημειώσεις.txt",
+			"会议":          "会议记录.docx",
+			"记录":          "会议记录.docx",
+			"تقرير":       "تقرير سنوي.pdf",
+			"calisma":     "Çalışma raporu.txt",
+			"cafe":        "naïve café.txt",
+			"aeroskobing": "Ærøskøbing kort.png",
+			"ae":          "Ærøskøbing kort.png",
+		} {
+			var res *Results
+			require.Eventually(t, func() bool {
+				res, err = Search(ctx, client, caller, q, 0, "")
+				return err == nil && len(res.Hits) > 0
+			}, 5*time.Second, 200*time.Millisecond, q)
+			require.Len(t, res.Hits, 1, q)
+			assert.Equal(t, expected, res.Hits[0].Name, q)
+		}
+	})
+
 	t.Run("invalid cursor", func(t *testing.T) {
 		_, err := Search(ctx, client, caller, "report", 0, "nope")
 		assert.ErrorIs(t, err, ErrInvalidCursor)

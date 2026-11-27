@@ -39,6 +39,20 @@ Categories: UX, UI, Product, Architecture, Infra, Tech.
 - Why: the indices only hold docs written by the instances of this stack cluster, so a missing owner is a deleted instance whose purge failed; its former members must not keep finding its file names.
 - Scope: `model/search`, `POST /files/search`; drives of other stack clusters wait for the federated search.
 
+## 2026-11-25, [Product] Search does not fold names stored in NFD yet
+
+- Decision: the search index folds accents only in names stored composed (NFC); a name stored decomposed (NFD) keeps its marks apart and a search inside its words can miss, until #5394 is done.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5273#discussion_r4681187611)
+- Why: the gap is older than the multilingual folding and also hits Latin names, so it gets its own change.
+- Scope: `model/search`, the `cozy_files_v1` index.
+
+## 2026-11-25, [Product] Search folds only the common two-letter letters before the n-grams
+
+- Decision: `filename_fold` expands `ß æ œ þ` before the names are cut in n-grams; rarer letters that `asciifolding` expands to two letters (`ﬁ`, `ĳ`, `ǆ`…) are folded after, so they match a whole word or its start but not a search starting inside the word.
+- Decided by: Anton Shepilov (author), [review comment](https://github.com/linagora/cozy-stack/pull/5273#discussion_r4681187921)
+- Why: these letters are rare in file names and still match whole words through `name.prefix`.
+- Scope: `model/search`, the `cozy_files_v1` index.
+
 ## 2026-11-27, [Tech] Search purges a deleted instance after its databases, without retry
 
 - Decision: `Destroy` removes the search documents of an instance after its CouchDB databases are deleted, and a failure is only logged: nothing retries it.
