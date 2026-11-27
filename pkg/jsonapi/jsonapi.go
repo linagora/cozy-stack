@@ -50,12 +50,28 @@ func WriteData(w io.Writer, o Object, links *LinksList) error {
 		return err
 	}
 
-	doc := Document{
-		Data:     &data,
-		Links:    links,
-		Included: included,
+	return writeDocument(w, data, Document{Links: links, Included: included})
+}
+
+// writeDocument writes doc with data as its data member, like
+// json.NewEncoder(w).Encode(doc) would, without scanning data again: it is
+// already compact and escaped.
+func writeDocument(w io.Writer, data []byte, doc Document) error {
+	rest, err := json.Marshal(doc) // doc.Data is nil, so omitted
+	if err != nil {
+		return err
 	}
-	return json.NewEncoder(w).Encode(doc)
+	if len(rest) > 2 {
+		rest[0] = ','
+	} else {
+		rest = rest[1:]
+	}
+	for _, b := range [][]byte{[]byte(`{"data":`), data, append(rest, '\n')} {
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Data can be called to send an answer with a JSON-API document containing a
@@ -106,21 +122,25 @@ func DataListWithIncluded(c echo.Context, statusCode int, objs []Object, links *
 
 func writeDataList(c echo.Context, statusCode int, meta Meta, objs []Object, links *LinksList, included []interface{}) error {
 	objsMarshaled := make([]json.RawMessage, len(objs))
+	size := 2 + len(objs)
 	for i, o := range objs {
 		j, err := MarshalObject(o)
 		if err != nil {
 			return InternalServerError(err)
 		}
 		objsMarshaled[i] = j
+		size += len(j)
 	}
-
-	data, err := json.Marshal(objsMarshaled)
-	if err != nil {
-		return InternalServerError(err)
+	data := append(make([]byte, 0, size), '[')
+	for i, j := range objsMarshaled {
+		if i > 0 {
+			data = append(data, ',')
+		}
+		data = append(data, j...)
 	}
+	data = append(data, ']')
 
 	doc := Document{
-		Data:     (*json.RawMessage)(&data),
 		Meta:     &meta,
 		Links:    links,
 		Included: included,
@@ -132,7 +152,7 @@ func writeDataList(c echo.Context, statusCode int, meta Meta, objs []Object, lin
 		_ = w.Close()
 	}()
 	resp.WriteHeader(statusCode)
-	return json.NewEncoder(w).Encode(doc)
+	return writeDocument(w, data, doc)
 }
 
 func compressedWriter(req *http.Request, resp *echo.Response) io.WriteCloser {

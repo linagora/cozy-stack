@@ -125,13 +125,27 @@ func MarshalObject(o Object) (json.RawMessage, error) {
 		return nil, err
 	}
 
-	data := ObjectMarshalling{
-		Type:          o.DocType(),
-		ID:            id,
-		Attributes:    (*json.RawMessage)(&b),
-		Meta:          Meta{Rev: rev},
-		Links:         links,
-		Relationships: rels,
+	// The same bytes as json.Marshal(ObjectMarshalling{...}), without scanning
+	// and copying the attributes again: they are already compact and escaped.
+	head, err := json.Marshal(struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}{o.DocType(), id})
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(data)
+	tail, err := json.Marshal(struct {
+		Meta          Meta            `json:"meta"`
+		Links         *LinksList      `json:"links,omitempty"`
+		Relationships RelationshipMap `json:"relationships,omitempty"`
+	}{Meta{Rev: rev}, links, rels})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(head)+len(b)+len(tail)+16)
+	out = append(out, head[:len(head)-1]...)
+	out = append(out, `,"attributes":`...)
+	out = append(out, b...)
+	out = append(out, ',')
+	return append(out, tail[1:]...), nil
 }
