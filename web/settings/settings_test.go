@@ -291,6 +291,59 @@ func TestSettings(t *testing.T) {
 			Expect().Status(200)
 	})
 
+	t.Run("PatchWithValuesTheStackCannotUse", func(t *testing.T) {
+		e := testutils.CreateTestClient(t, tsURL)
+		cliToken, err := testInstance.MakeJWT(consts.CLIAudience, "CLI", consts.Settings, "", time.Now())
+		require.NoError(t, err)
+
+		put := func(attrs, tok string) *httpexpect.Response {
+			doc, err := testInstance.SettingsDocument()
+			require.NoError(t, err)
+			return e.PUT("/settings/instance").
+				WithCookie(sessCookie, "connected").
+				WithHeader("Content-Type", "application/vnd.api+json").
+				WithHeader("Accept", "application/vnd.api+json").
+				WithHeader("Authorization", "Bearer "+tok).
+				WithBytes([]byte(fmt.Sprintf(`{"data": {"type": "io.cozy.settings",
+					"id": "io.cozy.settings.instance", "meta": {"rev": %q},
+					"attributes": {%s}}}`, doc.Rev(), attrs))).
+				Expect()
+		}
+		before, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		for attrs, tok := range map[string]string{
+			`"locale": "xx"`:       token,
+			`"tz": "Mars/Olympus"`: token,
+			`"tz": 1`:              token,
+			`"tz": ""`:             token,
+			`"tz": "Local"`:        token,
+			`"tz": {"name": "x"}`:  token,
+			`"locale": 1`:          token,
+			`"context": "no-such"`: cliToken,
+			`"context": 1`:         cliToken,
+		} {
+			put(attrs, tok).Status(400)
+		}
+		after, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		assert.Equal(t, before.Rev(), after.Rev())
+
+		// A zone stored before this check is still accepted when sent back
+		// unchanged with another edit.
+		after.M["tz"] = "Mars/Olympus"
+		require.NoError(t, couchdb.UpdateDoc(testInstance, after))
+		put(`"tz": "Mars/Olympus", "public_name": "Legacy TZ"`, token).Status(200)
+		put(fmt.Sprintf(`"tz": %q`, before.M["tz"]), token).Status(200)
+
+		// Once the zone is unset, an empty one is not taken for the stored one.
+		unset, err := testInstance.SettingsDocument()
+		require.NoError(t, err)
+		delete(unset.M, "tz")
+		require.NoError(t, couchdb.UpdateDoc(testInstance, unset))
+		put(`"tz": ""`, token).Status(400)
+		put(fmt.Sprintf(`"tz": %q`, before.M["tz"]), token).Status(200)
+	})
+
 	t.Run("PatchWithBadRev", func(t *testing.T) {
 		e := testutils.CreateTestClient(t, tsURL)
 

@@ -5,7 +5,9 @@ package settings
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,6 +114,7 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 		return err
 	}
 
+	var current *couchdb.JSONDoc // the stored settings, when already loaded
 	pdoc, err := middlewares.GetPermission(c)
 	if err != nil || pdoc.Type != permission.TypeCLI {
 		delete(doc.M, "auth_mode")
@@ -140,7 +143,7 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 		if inst.HasSignup() {
 			guarded = append(guarded, "phone", "recovery_email")
 		}
-		current, err := inst.SettingsDocument()
+		current, err = inst.SettingsDocument()
 		if err != nil {
 			return err
 		}
@@ -151,6 +154,10 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 				delete(doc.M, field)
 			}
 		}
+	}
+
+	if err := checkInstanceSettings(inst, doc, current); err != nil {
+		return err
 	}
 
 	if err := lifecycle.Patch(inst, &lifecycle.Options{SettingsObj: doc}); err != nil {
@@ -175,6 +182,72 @@ func (h *HTTPHandler) updateInstance(c echo.Context) error {
 	doc.M["context"] = inst.ContextName
 
 	return jsonapi.Data(c, http.StatusOK, &apiInstance{doc}, nil)
+}
+
+// checkInstanceSettings refuses a new locale, time zone or context that the
+// stack cannot use. current is the stored settings document, or nil if not
+// loaded yet.
+func checkInstanceSettings(inst *instance.Instance, doc, current *couchdb.JSONDoc) error {
+	if same, err := checkSetting(doc, "locale", &inst.Locale, func(l string) bool {
+		return slices.Contains(consts.SupportedLocales, l)
+	}); err != nil {
+		return err
+	} else if same {
+		// Left out of the patch, so a conflict retry cannot write it again
+		// over a concurrent repair.
+		delete(doc.M, "locale")
+	}
+	if same, err := checkSetting(doc, "context", &inst.ContextName, func(name string) bool {
+		_, inContexts := config.GetConfig().Contexts[name]
+		_, inRegistries := config.GetConfig().Registries[name]
+		return inContexts || inRegistries
+	}); err != nil {
+		return err
+	} else if same {
+		delete(doc.M, "context")
+	}
+	if doc.M["tz"] == nil {
+		return nil
+	}
+	if current == nil {
+		var err error
+		if current, err = inst.SettingsDocument(); err != nil {
+			return err
+		}
+	}
+	var stored *string
+	if tz, ok := current.M["tz"].(string); ok {
+		stored = &tz
+	}
+	// The zone stays in doc even when unchanged, as it replaces the whole
+	// settings document. LoadLocation also accepts "" (UTC) and "Local" (the
+	// host's zone), which are not IANA identifiers clients can use.
+	_, err := checkSetting(doc, "tz", stored, func(tz string) bool {
+		_, err := time.LoadLocation(tz)
+		return err == nil && tz != "" && tz != "Local"
+	})
+	return err
+}
+
+// checkSetting checks the attribute key of doc: absent or null is accepted,
+// another value must be a string that is the stored one (when stored is not
+// nil) or that valid accepts. It tells if the value is the stored one.
+func checkSetting(doc *couchdb.JSONDoc, key string, stored *string, valid func(string) bool) (bool, error) {
+	v, ok := doc.M[key]
+	if !ok || v == nil {
+		return false, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return false, jsonapi.BadRequest(fmt.Errorf("%s must be a string", key))
+	}
+	if stored != nil && s == *stored {
+		return true, nil
+	}
+	if !valid(s) {
+		return false, jsonapi.BadRequest(fmt.Errorf("invalid %s %q", key, s))
+	}
+	return false, nil
 }
 
 func (h *HTTPHandler) updateInstanceTOS(c echo.Context) error {
