@@ -136,3 +136,30 @@ func TestApplyStepThatPanicsInProsemirror(t *testing.T) {
 	})
 	assert.Equal(t, int64(0), doc.Version)
 }
+
+func TestMarkdownTableCellEmptyBackground(t *testing.T) {
+	for _, typ := range []string{"tableCell", "tableHeader"} {
+		doc := &Document{
+			SchemaSpec: DefaultSchemaSpecs(),
+			RawContent: map[string]interface{}{
+				"type": "doc",
+				"content": []interface{}{map[string]interface{}{
+					"type": "table",
+					"content": []interface{}{map[string]interface{}{
+						"type": "tableRow",
+						"content": []interface{}{map[string]interface{}{
+							"type":    typ,
+							"attrs":   map[string]interface{}{"background": ""},
+							"content": []interface{}{map[string]interface{}{"type": "paragraph"}},
+						}},
+					}},
+				}},
+			},
+		}
+		require.NotPanics(t, func() {
+			md, err := doc.Markdown(nil)
+			require.NoError(t, err)
+			assert.NotContains(t, string(md), "background=")
+		}, typ)
+	}
+}

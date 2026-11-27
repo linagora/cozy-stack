@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cozy/cozy-stack/model/note/custom"
@@ -173,7 +174,7 @@ func markdownSerializer(images []*Image) *markdown.Serializer {
 
 func cellMarkup(node *model.Node) string {
 	var attrs string
-	if color, ok := node.Attrs["background"].(string); ok && color[0] == '#' {
+	if color, _ := node.Attrs["background"].(string); strings.HasPrefix(color, "#") {
 		attrs += fmt.Sprintf(` background="%s"`, color)
 	}
 	if span, ok := node.Attrs["rowspan"].(float64); ok && span > 1 {
